@@ -176,11 +176,13 @@ fn sparse_partial_mask_produces_correct_subset() {
     // The sparse path should only emit entries for mask indices + theta.
     // NNZ per cut = mask.len() + 1 (theta) = 7
     assert_eq!(batch.num_rows, 1);
-    // col_indices should contain the mask indices plus theta_col
+    // col_indices should contain the remapped LP columns plus theta_col.
+    // state_to_lp_column maps outgoing-state indices to LP columns:
+    // storage → identity; lag 0 → z_inflow; lag l≥1 → incoming lag l−1.
     let theta_col = indexer.theta;
     let expected_cols: Vec<i32> = mask
         .iter()
-        .map(|&j| j as i32)
+        .map(|&j| indexer.state_to_lp_column(j) as i32)
         .chain(std::iter::once(theta_col as i32))
         .collect();
     assert_eq!(

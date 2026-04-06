@@ -5,7 +5,7 @@
 //! stochastic layer:
 //!
 //! - PAR model parameter validation
-//! - Cholesky decomposition of correlation matrices
+//! - Spectral decomposition of correlation matrices
 //! - Correlation profile validation
 //! - Seed derivation for deterministic noise generation
 //! - Noise method dispatch (tree generation)
@@ -30,9 +30,9 @@ pub enum StochasticError {
         reason: String,
     },
 
-    /// Cholesky decomposition of a correlation matrix failed (not positive-definite).
-    #[error("Cholesky decomposition failed for profile '{profile_name}': {reason}")]
-    CholeskyDecompositionFailed {
+    /// Spectral decomposition of a correlation matrix failed (e.g., Jacobi did not converge).
+    #[error("spectral decomposition failed for profile '{profile_name}': {reason}")]
+    SpectralDecompositionFailed {
         /// Name of the correlation profile.
         profile_name: String,
         /// Error description.
@@ -112,7 +112,7 @@ mod tests {
     fn assert_all_variants_debug(err: &StochasticError) {
         match err {
             StochasticError::InvalidParParameters { .. }
-            | StochasticError::CholeskyDecompositionFailed { .. }
+            | StochasticError::SpectralDecompositionFailed { .. }
             | StochasticError::InvalidCorrelation { .. }
             | StochasticError::InsufficientData { .. }
             | StochasticError::SeedDerivationError { .. }
@@ -139,15 +139,15 @@ mod tests {
     }
 
     #[test]
-    fn test_cholesky_decomposition_failed_implements_std_error() {
-        let err = StochasticError::CholeskyDecompositionFailed {
+    fn test_spectral_decomposition_failed_implements_std_error() {
+        let err = StochasticError::SpectralDecompositionFailed {
             profile_name: "southeast_inflows".into(),
             reason: "matrix is not positive-definite".into(),
         };
         assert_std_error(&err);
         let display = format!("{err}");
         assert!(display.contains("southeast_inflows"));
-        assert!(display.contains("positive-definite"));
+        assert!(display.contains("spectral"));
     }
 
     #[test]
@@ -191,7 +191,7 @@ mod tests {
                 stage_id: 0,
                 reason: String::new(),
             },
-            StochasticError::CholeskyDecompositionFailed {
+            StochasticError::SpectralDecompositionFailed {
                 profile_name: String::new(),
                 reason: String::new(),
             },

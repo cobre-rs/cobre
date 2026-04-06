@@ -1094,6 +1094,35 @@ impl StageIndexer {
         Self::new(template.n_hydro, template.max_par_order)
     }
 
+    /// Map a state-vector index to the LP column it should reference in a cut.
+    ///
+    /// The outgoing state after `shift_lag_state` stores:
+    /// - `[0, N)`: outgoing storage → LP column `j` (identity mapping)
+    /// - `[N + 0·N + h]`: outgoing lag 0 for hydro `h` = realised inflow
+    ///   → LP column `z_inflow.start + h`
+    /// - `[N + l·N + h]` for `l ≥ 1`: outgoing lag `l` = incoming lag `l − 1`
+    ///   → LP column `N + (l − 1)·N + h`
+    ///
+    /// When `max_par_order == 0` (no lags), this is the identity for all `j`.
+    #[inline]
+    #[must_use]
+    pub fn state_to_lp_column(&self, j: usize) -> usize {
+        let n = self.hydro_count;
+        if j < n || self.max_par_order == 0 {
+            return j;
+        }
+        let offset = j - n;
+        let h = offset % n;
+        let lag = offset / n;
+        if lag == 0 {
+            // Outgoing lag 0 = realised inflow z_t,h.
+            self.z_inflow.start + h
+        } else {
+            // Outgoing lag l (l ≥ 1) = incoming lag l−1.
+            n + (lag - 1) * n + h
+        }
+    }
+
     /// Compute and store the nonzero state index mask from per-hydro AR orders.
     ///
     /// `ar_orders` must have length `hydro_count`. Each entry is the actual AR

@@ -43,7 +43,10 @@ pub mod non_controllable_stats;
 pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
 pub use correlation::parse_correlation;
-pub use external::{ExternalScenarioRow, parse_external_scenarios};
+pub use external::{
+    ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, parse_external_inflow_scenarios,
+    parse_external_load_scenarios, parse_external_ncs_scenarios,
+};
 pub use inflow_history::{InflowHistoryRow, parse_inflow_history};
 pub use inflow_stats::{InflowSeasonalStatsRow, parse_inflow_seasonal_stats};
 pub use load_factors::{BlockFactor, LoadFactorEntry, parse_load_factors};
@@ -167,15 +170,43 @@ pub fn load_correlation(path: Option<&Path>) -> Result<CorrelationModel, LoadErr
     }
 }
 
-/// Load `scenarios/external_scenarios.parquet`, returning an empty `Vec` when absent.
+/// Load `scenarios/external_inflow_scenarios.parquet`, returning an empty `Vec` when absent.
 ///
 /// # Errors
 ///
 /// Propagates [`LoadError`] from the parser when `path` is `Some`.
-pub fn load_external_scenarios(path: Option<&Path>) -> Result<Vec<ExternalScenarioRow>, LoadError> {
+pub fn load_external_inflow_scenarios(
+    path: Option<&Path>,
+) -> Result<Vec<ExternalScenarioRow>, LoadError> {
     match path {
         None => Ok(Vec::new()),
-        Some(p) => parse_external_scenarios(p),
+        Some(p) => parse_external_inflow_scenarios(p),
+    }
+}
+
+/// Load `scenarios/external_load_scenarios.parquet`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_external_load_scenarios(
+    path: Option<&Path>,
+) -> Result<Vec<ExternalLoadRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_external_load_scenarios(p),
+    }
+}
+
+/// Load `scenarios/external_ncs_scenarios.parquet`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_external_ncs_scenarios(path: Option<&Path>) -> Result<Vec<ExternalNcsRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_external_ncs_scenarios(p),
     }
 }
 
@@ -217,6 +248,8 @@ pub fn load_noise_openings(path: Option<&Path>) -> Result<Vec<NoiseOpeningRow>, 
 ///     correlation: CorrelationModel::default(),
 ///     inflow_history: vec![],
 ///     external_scenarios: vec![],
+///     external_load_scenarios: vec![],
+///     external_ncs_scenarios: vec![],
 ///     load_factors: vec![],
 ///     noise_openings: vec![],
 /// };
@@ -236,8 +269,12 @@ pub struct ScenarioData {
     pub correlation: CorrelationModel,
     /// Inflow history rows, sorted by `(hydro_id, date)`. Empty when absent.
     pub inflow_history: Vec<InflowHistoryRow>,
-    /// External scenario rows, sorted by `(stage_id, scenario_id, hydro_id)`. Empty when absent.
+    /// External inflow scenario rows, sorted by `(stage_id, scenario_id, hydro_id)`. Empty when absent.
     pub external_scenarios: Vec<ExternalScenarioRow>,
+    /// External load scenario rows, sorted by `(stage_id, scenario_id, bus_id)`. Empty when absent.
+    pub external_load_scenarios: Vec<ExternalLoadRow>,
+    /// External NCS scenario rows, sorted by `(stage_id, scenario_id, ncs_id)`. Empty when absent.
+    pub external_ncs_scenarios: Vec<ExternalNcsRow>,
     /// Load factor entries, sorted by `(bus_id, stage_id)`. Empty when absent.
     pub load_factors: Vec<LoadFactorEntry>,
     /// Noise opening rows, sorted by `(stage_id, opening_index, entity_index)`. Empty when absent.
@@ -318,10 +355,22 @@ pub fn load_scenarios(
             .then(|| scenarios_dir.join("correlation.json"))
             .as_deref(),
     )?;
-    let external_scenarios = load_external_scenarios(
+    let external_scenarios = load_external_inflow_scenarios(
         manifest
-            .scenarios_external_scenarios_parquet
-            .then(|| scenarios_dir.join("external_scenarios.parquet"))
+            .scenarios_external_inflow_scenarios_parquet
+            .then(|| scenarios_dir.join("external_inflow_scenarios.parquet"))
+            .as_deref(),
+    )?;
+    let external_load_scenarios = load_external_load_scenarios(
+        manifest
+            .scenarios_external_load_scenarios_parquet
+            .then(|| scenarios_dir.join("external_load_scenarios.parquet"))
+            .as_deref(),
+    )?;
+    let external_ncs_scenarios = load_external_ncs_scenarios(
+        manifest
+            .scenarios_external_ncs_scenarios_parquet
+            .then(|| scenarios_dir.join("external_ncs_scenarios.parquet"))
             .as_deref(),
     )?;
     let noise_openings = load_noise_openings(
@@ -347,6 +396,8 @@ pub fn load_scenarios(
         correlation,
         inflow_history,
         external_scenarios,
+        external_load_scenarios,
+        external_ncs_scenarios,
         load_factors,
         noise_openings,
     })
@@ -410,10 +461,24 @@ mod tests {
         assert!(result.schedule.is_empty());
     }
 
-    /// `load_external_scenarios(None)` returns `Ok(Vec::new())` without I/O.
+    /// `load_external_inflow_scenarios(None)` returns `Ok(Vec::new())` without I/O.
     #[test]
-    fn test_load_external_scenarios_none_returns_empty() {
-        let result = load_external_scenarios(None).unwrap();
+    fn test_load_external_inflow_scenarios_none_returns_empty() {
+        let result = load_external_inflow_scenarios(None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    /// `load_external_load_scenarios(None)` returns `Ok(Vec::new())` without I/O.
+    #[test]
+    fn test_load_external_load_scenarios_none_returns_empty() {
+        let result = load_external_load_scenarios(None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    /// `load_external_ncs_scenarios(None)` returns `Ok(Vec::new())` without I/O.
+    #[test]
+    fn test_load_external_ncs_scenarios_none_returns_empty() {
+        let result = load_external_ncs_scenarios(None).unwrap();
         assert!(result.is_empty());
     }
 
@@ -450,6 +515,14 @@ mod tests {
         assert!(
             data.external_scenarios.is_empty(),
             "external_scenarios should be empty when file absent"
+        );
+        assert!(
+            data.external_load_scenarios.is_empty(),
+            "external_load_scenarios should be empty when file absent"
+        );
+        assert!(
+            data.external_ncs_scenarios.is_empty(),
+            "external_ncs_scenarios should be empty when file absent"
         );
         assert!(
             data.load_factors.is_empty(),

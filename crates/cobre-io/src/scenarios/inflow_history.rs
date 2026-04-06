@@ -39,36 +39,7 @@ use crate::parquet_helpers::{
     extract_required_date32, extract_required_float64, extract_required_int32,
 };
 
-/// A single row from `scenarios/inflow_history.parquet`.
-///
-/// Carries one historical inflow observation for a (hydro, date) pair.
-/// These rows constitute the raw historical record used by PAR(p) fitting
-/// routines in `cobre-stochastic`.
-///
-/// # Examples
-///
-/// ```
-/// use cobre_io::scenarios::InflowHistoryRow;
-/// use cobre_core::EntityId;
-/// use chrono::NaiveDate;
-///
-/// let row = InflowHistoryRow {
-///     hydro_id: EntityId::from(1),
-///     date: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
-///     value_m3s: 500.0,
-/// };
-/// assert_eq!(row.hydro_id, EntityId::from(1));
-/// assert_eq!(row.value_m3s, 500.0);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct InflowHistoryRow {
-    /// Hydro plant this observation belongs to.
-    pub hydro_id: EntityId,
-    /// Date of the observation (timezone-free calendar date).
-    pub date: chrono::NaiveDate,
-    /// Mean inflow for this observation period in m³/s. Must be finite.
-    pub value_m3s: f64,
-}
+pub use cobre_core::scenario::InflowHistoryRow;
 
 /// Parse `scenarios/inflow_history.parquet` and return a sorted row table.
 ///
@@ -167,8 +138,6 @@ pub fn parse_inflow_history(path: &Path) -> Result<Vec<InflowHistoryRow>, LoadEr
     Ok(rows)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 #[allow(
     clippy::doc_markdown,
@@ -187,8 +156,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new("hydro_id", DataType::Int32, false),
@@ -206,7 +173,6 @@ mod tests {
         tmp
     }
 
-    /// Convert a `NaiveDate` to a Date32 value (days since Unix epoch 1970-01-01).
     fn naive_date_to_date32(date: NaiveDate) -> i32 {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         i32::try_from((date - epoch).num_days()).expect("date out of Date32 range")
@@ -224,10 +190,6 @@ mod tests {
         .expect("valid batch")
     }
 
-    // ── AC: valid 24 rows (2 hydros x 12 dates), verify sort ─────────────────
-
-    /// Valid file with 2 hydros × 12 dates = 24 rows, scrambled input.
-    /// Result: 24 rows sorted by (hydro_id, date).
     #[test]
     fn test_valid_24_rows_sorted_by_hydro_date() {
         let base_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
@@ -265,9 +227,6 @@ mod tests {
         }
     }
 
-    // ── AC: value_m3s infinity -> SchemaError ─────────────────────────────────
-
-    /// `value_m3s = +inf` -> SchemaError with field path containing "value_m3s".
     #[test]
     fn test_infinite_value_m3s() {
         let date = naive_date_to_date32(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
@@ -286,9 +245,6 @@ mod tests {
         }
     }
 
-    // ── AC: missing date column -> SchemaError ─────────────────────────────────
-
-    /// File missing `date` column -> SchemaError with field "date".
     #[test]
     fn test_missing_date_column() {
         let schema_no_date = Arc::new(Schema::new(vec![
@@ -321,9 +277,6 @@ mod tests {
         }
     }
 
-    // ── AC: empty file -> Ok(vec![]) ──────────────────────────────────────────
-
-    /// Empty Parquet (0 rows) -> Ok(Vec::new()).
     #[test]
     fn test_empty_parquet_returns_empty_vec() {
         let batch = make_batch(&[], &[], &[]);
@@ -332,9 +285,6 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    // ── AC: date values round-tripped correctly ────────────────────────────────
-
-    /// Date values survive the Parquet round-trip.
     #[test]
     fn test_date_values_preserved() {
         let expected_date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
@@ -349,9 +299,6 @@ mod tests {
         assert!((rows[0].value_m3s - 250.5).abs() < 1e-10);
     }
 
-    // ── AC: NaN value_m3s -> SchemaError ─────────────────────────────────────
-
-    /// `value_m3s = NaN` -> SchemaError.
     #[test]
     fn test_nan_value_m3s() {
         let date = naive_date_to_date32(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());

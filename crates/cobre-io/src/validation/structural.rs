@@ -6,7 +6,7 @@
 //!
 //! Call [`validate_structure`] with a path to the case root and a mutable
 //! [`ValidationContext`].  It returns a [`FileManifest`] that records which of
-//! the 34 input files are present.  Missing required files produce
+//! the 39 input files are present.  Missing required files produce
 //! [`ErrorKind::FileNotFound`] entries in the context.  Missing optional files
 //! leave the corresponding manifest field `false` without adding any error.
 //!
@@ -28,17 +28,16 @@ use super::{ErrorKind, ValidationContext};
 
 // ── FileManifest ─────────────────────────────────────────────────────────────
 
-/// Records whether each of the 34 input files is present in the case directory.
+/// Records whether each of the 39 input files is present in the case directory.
 ///
 /// All fields default to `false`.  After calling [`validate_structure`], each field
 /// is `true` if the corresponding file was found on disk.
 ///
-/// The 36 files are organised by subdirectory following the input directory structure spec.
+/// The 39 files are organised by subdirectory following the input directory structure spec.
 /// Each bool is an independent "present/absent" flag for a distinct file.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
 pub struct FileManifest {
-    // ── Root-level files (4) ──────────────────────────────────────────────────
     /// `config.json` — required
     pub config_json: bool,
     /// `penalties.json` — required
@@ -48,7 +47,6 @@ pub struct FileManifest {
     /// `initial_conditions.json` — required
     pub initial_conditions_json: bool,
 
-    // ── system/ (10 files) ───────────────────────────────────────────────────
     /// `system/buses.json` — required
     pub system_buses_json: bool,
     /// `system/lines.json` — required
@@ -70,15 +68,18 @@ pub struct FileManifest {
     /// `system/fpha_hyperplanes.parquet` — optional
     pub system_fpha_hyperplanes_parquet: bool,
 
-    // ── scenarios/ (8 files) ─────────────────────────────────────────────────
     /// `scenarios/inflow_history.parquet` — optional
     pub scenarios_inflow_history_parquet: bool,
     /// `scenarios/inflow_seasonal_stats.parquet` — optional
     pub scenarios_inflow_seasonal_stats_parquet: bool,
     /// `scenarios/inflow_ar_coefficients.parquet` — optional
     pub scenarios_inflow_ar_coefficients_parquet: bool,
-    /// `scenarios/external_scenarios.parquet` — optional
-    pub scenarios_external_scenarios_parquet: bool,
+    /// `scenarios/external_inflow_scenarios.parquet` — optional
+    pub scenarios_external_inflow_scenarios_parquet: bool,
+    /// `scenarios/external_load_scenarios.parquet` — optional
+    pub scenarios_external_load_scenarios_parquet: bool,
+    /// `scenarios/external_ncs_scenarios.parquet` — optional
+    pub scenarios_external_ncs_scenarios_parquet: bool,
     /// `scenarios/load_seasonal_stats.parquet` — optional
     pub scenarios_load_seasonal_stats_parquet: bool,
     /// `scenarios/load_factors.json` — optional
@@ -92,7 +93,6 @@ pub struct FileManifest {
     /// `scenarios/non_controllable_stats.parquet` — optional
     pub scenarios_non_controllable_stats_parquet: bool,
 
-    // ── constraints/ (12 files) ──────────────────────────────────────────────
     /// `constraints/thermal_bounds.parquet` — optional
     pub constraints_thermal_bounds_parquet: bool,
     /// `constraints/hydro_bounds.parquet` — optional
@@ -131,7 +131,7 @@ struct FileEntry {
     required: bool,
 }
 
-/// All 34 input files in canonical order.
+/// All 39 input files in canonical order.
 const FILE_ENTRIES: &[FileEntry] = &[
     // Root-level — required
     FileEntry {
@@ -206,7 +206,15 @@ const FILE_ENTRIES: &[FileEntry] = &[
         required: false,
     },
     FileEntry {
-        relative: "scenarios/external_scenarios.parquet",
+        relative: "scenarios/external_inflow_scenarios.parquet",
+        required: false,
+    },
+    FileEntry {
+        relative: "scenarios/external_load_scenarios.parquet",
+        required: false,
+    },
+    FileEntry {
+        relative: "scenarios/external_ncs_scenarios.parquet",
         required: false,
     },
     FileEntry {
@@ -290,7 +298,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 
 /// Performs Layer 1 structural validation on the case directory at `case_root`.
 ///
-/// For each of the 34 known input files:
+/// For each of the 39 known input files:
 ///
 /// - If the file is present, the corresponding [`FileManifest`] field is set to `true`.
 /// - If the file is absent **and required**, an [`ErrorKind::FileNotFound`] error is
@@ -303,11 +311,11 @@ const FILE_ENTRIES: &[FileEntry] = &[
 /// # Arguments
 ///
 /// * `case_root` — path to the case directory root.
-/// * `ctx` — mutable validation context that accumulates diagnostics.
+/// * `ctx`       — mutable validation context that accumulates diagnostics.
 ///
 /// # Returns
 ///
-/// A [`FileManifest`] recording presence/absence of all 36 files.
+/// A [`FileManifest`] recording presence/absence of all 39 files.
 #[must_use]
 pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> FileManifest {
     let mut manifest = FileManifest::default();
@@ -337,7 +345,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 ///
 /// This keeps the mapping between entries and manifest fields explicit and avoids
 /// fragile positional indexing elsewhere.
-fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 37] {
+fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 39] {
     [
         // Root (4)
         &mut m.config_json,
@@ -360,7 +368,9 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 37] {
         &mut m.scenarios_inflow_history_parquet,
         &mut m.scenarios_inflow_seasonal_stats_parquet,
         &mut m.scenarios_inflow_ar_coefficients_parquet,
-        &mut m.scenarios_external_scenarios_parquet,
+        &mut m.scenarios_external_inflow_scenarios_parquet,
+        &mut m.scenarios_external_load_scenarios_parquet,
+        &mut m.scenarios_external_ncs_scenarios_parquet,
         &mut m.scenarios_load_seasonal_stats_parquet,
         &mut m.scenarios_load_factors_json,
         &mut m.scenarios_correlation_json,
@@ -555,19 +565,19 @@ mod tests {
 
     #[test]
     fn test_structural_manifest_fields_count() {
-        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (37 entries)
+        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (39 entries)
         assert_eq!(
             FILE_ENTRIES.len(),
-            37,
-            "FILE_ENTRIES should have exactly 37 entries"
+            39,
+            "FILE_ENTRIES should have exactly 39 entries"
         );
 
         let mut manifest = FileManifest::default();
         let fields = manifest_fields_mut(&mut manifest);
         assert_eq!(
             fields.len(),
-            37,
-            "manifest_fields_mut should return exactly 37 fields"
+            39,
+            "manifest_fields_mut should return exactly 39 fields"
         );
     }
 

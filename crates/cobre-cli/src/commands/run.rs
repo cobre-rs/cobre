@@ -29,9 +29,8 @@ use cobre_io::output::{
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
     EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
-    build_hydro_model_summary, build_stochastic_summary, estimation_report_to_fitting_report,
-    inflow_models_to_ar_rows, inflow_models_to_stats_rows, prepare_hydro_models,
-    prepare_stochastic,
+    build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
+    inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
     setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
@@ -167,6 +166,8 @@ struct LoadBroadcastResult {
     root_config: Option<cobre_io::Config>,
     /// Root-only estimation report for summaries (None on non-root ranks).
     root_estimation_report: Option<EstimationReport>,
+    /// Root-only estimation path from stochastic preprocessing (None on non-root ranks).
+    root_estimation_path: Option<cobre_sddp::EstimationPath>,
     /// Whether the training phase is enabled (broadcast from rank 0).
     training_enabled: bool,
     /// Policy initialization mode (broadcast from rank 0).
@@ -211,6 +212,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         mut setup,
         mut root_config,
         root_estimation_report,
+        root_estimation_path,
         training_enabled,
         policy_mode,
     } = broadcast_and_build_setup(&ctx, args)?;
@@ -223,11 +225,18 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         &setup,
         root_config.as_ref(),
         root_estimation_report.as_ref(),
+        root_estimation_path,
     )?;
+
+    // Shared runtime context for metadata output files.
+    let hostname = cobre_io::get_hostname();
+    let mpi_world_size = u32::try_from(ctx.comm.size()).unwrap_or(u32::MAX);
 
     if training_enabled {
         apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
+        let training_started_at = cobre_io::now_iso8601();
         let training = run_training_phase(&ctx, &mut setup)?;
+        let training_completed_at = cobre_io::now_iso8601();
 
         // Write training outputs immediately (before simulation), so training
         // artifacts are persisted even if simulation fails.
@@ -235,6 +244,14 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
             let config = root_config.take().ok_or_else(|| CliError::Internal {
                 message: "root_config was None on rank 0 — internal invariant violated".to_string(),
             })?;
+            let training_ctx = cobre_io::OutputContext {
+                hostname: hostname.clone(),
+                solver: "highs".to_string(),
+                started_at: training_started_at,
+                completed_at: training_completed_at,
+                mpi_world_size,
+                mpi_ranks_participated: mpi_world_size,
+            };
             write_training_outputs(&WriteTrainingArgs {
                 output_dir: &ctx.output_dir,
                 system: &system,
@@ -242,6 +259,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                 training_output: &training.output,
                 setup: &setup,
                 training_result: &training.result,
+                output_ctx: &training_ctx,
                 quiet: ctx.quiet,
                 stderr: &ctx.stderr,
             })?;
@@ -270,13 +288,27 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         }
 
         if setup.n_scenarios() > 0 {
-            run_simulation_phase(&ctx, &system, &mut setup, &training.result)?;
+            run_simulation_phase(
+                &ctx,
+                &system,
+                &mut setup,
+                &training.result,
+                &hostname,
+                mpi_world_size,
+            )?;
         }
     } else if setup.n_scenarios() > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(&ctx, &system, &mut setup, root_config.as_ref())?;
-        run_simulation_phase(&ctx, &system, &mut setup, &training_result)?;
+        run_simulation_phase(
+            &ctx,
+            &system,
+            &mut setup,
+            &training_result,
+            &hostname,
+            mpi_world_size,
+        )?;
     } else {
         // Both training and simulation disabled — nothing to do.
         if ctx.is_root && !ctx.quiet {
@@ -312,14 +344,8 @@ fn load_and_validate_checkpoint(
                 u32::try_from(setup.fcf().state_dimension).map_err(|e| CliError::Internal {
                     message: format!("state_dimension overflows u32: {e}"),
                 })?;
-            cobre_sddp::validate_policy_compatibility(
-                &checkpoint.metadata,
-                state_dim,
-                n_stages,
-                None,
-                None,
-            )
-            .map_err(CliError::from)?;
+            cobre_sddp::validate_policy_compatibility(&checkpoint.metadata, state_dim, n_stages)
+                .map_err(CliError::from)?;
         }
     }
 
@@ -522,6 +548,7 @@ fn broadcast_and_build_setup(
         mut root_config,
         root_stochastic,
         root_estimation_report,
+        root_estimation_path,
         raw_bcast_tree,
         root_hydro_models,
         load_err,
@@ -544,6 +571,7 @@ fn broadcast_and_build_setup(
                     system,
                     stochastic,
                     estimation_report,
+                    estimation_path,
                 } = prepared;
                 (
                     Some(system),
@@ -551,17 +579,19 @@ fn broadcast_and_build_setup(
                     Some(config),
                     Some(stochastic),
                     estimation_report,
+                    Some(estimation_path),
                     Some(bcast_tree),
                     Some(hydro_models),
                     None,
                 )
             }
-            Err(e) => (None, None, None, None, None, None, None, Some(e)),
+            Err(e) => (None, None, None, None, None, None, None, None, Some(e)),
         }
     } else {
-        (None, None, None, None, None, None, None, None)
+        (None, None, None, None, None, None, None, None, None)
     };
     let root_estimation_report: Option<EstimationReport> = root_estimation_report;
+    let root_estimation_path: Option<cobre_sddp::EstimationPath> = root_estimation_path;
 
     let system_result = broadcast_value(raw_system, &ctx.comm);
     let bcast_config_result = broadcast_value(raw_bcast_config, &ctx.comm);
@@ -626,6 +656,11 @@ fn broadcast_and_build_setup(
             &load_entity_factors,
             &ncs_entity_factors,
             user_tree,
+            cobre_stochastic::ClassSchemes {
+                inflow: Some(system.scenario_source().inflow_scheme),
+                load: Some(system.scenario_source().load_scheme),
+                ncs: Some(system.scenario_source().ncs_scheme),
+            },
         )
         .map_err(|e| CliError::Internal {
             message: format!("stochastic context error: {e}"),
@@ -653,6 +688,7 @@ fn broadcast_and_build_setup(
         setup,
         root_config: root_config.take(),
         root_estimation_report,
+        root_estimation_path,
         training_enabled,
         policy_mode,
     })
@@ -697,17 +733,32 @@ fn run_pre_training(
     setup: &StudySetup,
     root_config: Option<&cobre_io::Config>,
     root_estimation_report: Option<&EstimationReport>,
+    root_estimation_path: Option<cobre_sddp::EstimationPath>,
 ) -> Result<(), CliError> {
     if !ctx.quiet && ctx.is_root {
-        let stochastic_summary = build_stochastic_summary(
-            system,
-            setup.stochastic(),
-            root_estimation_report,
-            setup.seed(),
-        );
-        crate::summary::print_stochastic_summary(&ctx.stderr, &stochastic_summary);
         let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
         crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
+    }
+
+    // Build and emit provenance report.
+    if ctx.is_root {
+        if let Some(path) = root_estimation_path {
+            let provenance = cobre_sddp::build_provenance_report(
+                path,
+                root_estimation_report,
+                setup.stochastic().provenance(),
+                system.hydros().len(),
+            );
+            if !ctx.quiet {
+                crate::summary::print_provenance_summary(&ctx.stderr, &provenance);
+            }
+            let provenance_path = ctx.output_dir.join("training/model_provenance.json");
+            cobre_io::write_provenance_report(&provenance_path, &provenance).map_err(|e| {
+                CliError::Internal {
+                    message: format!("failed to write provenance report: {e}"),
+                }
+            })?;
+        }
     }
 
     if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {
@@ -926,6 +977,8 @@ fn run_simulation_phase(
     system: &System,
     setup: &mut StudySetup,
     training_result: &cobre_sddp::TrainingResult,
+    hostname: &str,
+    mpi_world_size: u32,
 ) -> Result<(), CliError> {
     let solver_factory = HighsSolver::new;
     let n_scenarios = setup.n_scenarios();
@@ -976,6 +1029,7 @@ fn run_simulation_phase(
         (sim_writer, failed)
     });
 
+    let sim_started_at = cobre_io::now_iso8601();
     let sim_start = std::time::Instant::now();
 
     let sim_result = setup
@@ -1034,16 +1088,44 @@ fn run_simulation_phase(
     }
 
     if ctx.is_root {
-        write_simulation_outputs(&WriteSimulationArgs {
-            output_dir: &ctx.output_dir,
-            sim_output: &merged_sim_output,
-            sim_solver_stats: &global_scenario_stats,
-            quiet: ctx.quiet,
-            stderr: &ctx.stderr,
-        })?;
+        write_sim_outputs_on_root(
+            ctx,
+            hostname,
+            mpi_world_size,
+            sim_started_at,
+            &merged_sim_output,
+            &global_scenario_stats,
+        )?;
     }
 
     Ok(())
+}
+
+/// Write simulation output files on rank 0.
+fn write_sim_outputs_on_root(
+    ctx: &RunContext<impl Communicator>,
+    hostname: &str,
+    mpi_world_size: u32,
+    sim_started_at: String,
+    merged_sim_output: &cobre_io::SimulationOutput,
+    global_scenario_stats: &[(u32, cobre_sddp::SolverStatsDelta)],
+) -> Result<(), CliError> {
+    let sim_ctx = cobre_io::OutputContext {
+        hostname: hostname.to_string(),
+        solver: "highs".to_string(),
+        started_at: sim_started_at,
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size,
+        mpi_ranks_participated: mpi_world_size,
+    };
+    write_simulation_outputs(&WriteSimulationArgs {
+        output_dir: &ctx.output_dir,
+        sim_output: merged_sim_output,
+        sim_solver_stats: global_scenario_stats,
+        output_ctx: &sim_ctx,
+        quiet: ctx.quiet,
+        stderr: &ctx.stderr,
+    })
 }
 
 /// Print the simulation summary from aggregated solver stats and cost statistics.
@@ -1299,6 +1381,7 @@ struct WriteTrainingArgs<'a> {
     training_output: &'a cobre_io::TrainingOutput,
     setup: &'a StudySetup,
     training_result: &'a cobre_sddp::TrainingResult,
+    output_ctx: &'a cobre_io::OutputContext,
     quiet: bool,
     stderr: &'a Term,
 }
@@ -1332,6 +1415,7 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
         args.training_output,
         args.system,
         args.config,
+        args.output_ctx,
     )
     .map_err(CliError::from)?;
 
@@ -1373,6 +1457,7 @@ struct WriteSimulationArgs<'a> {
     output_dir: &'a Path,
     sim_output: &'a cobre_io::SimulationOutput,
     sim_solver_stats: &'a [(u32, cobre_sddp::SolverStatsDelta)],
+    output_ctx: &'a cobre_io::OutputContext,
     quiet: bool,
     stderr: &'a Term,
 }
@@ -1387,7 +1472,8 @@ fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliErr
     }
     let write_start = std::time::Instant::now();
 
-    cobre_io::write_simulation_results(args.output_dir, args.sim_output).map_err(CliError::from)?;
+    cobre_io::write_simulation_results(args.output_dir, args.sim_output, args.output_ctx)
+        .map_err(CliError::from)?;
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
     if !args.sim_solver_stats.is_empty() {

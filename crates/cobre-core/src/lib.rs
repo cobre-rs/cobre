@@ -77,8 +77,9 @@ pub use resolved::{
 };
 pub use scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
-    CorrelationScheduleEntry, ExternalSelectionMode, InflowModel, LoadModel, NcsModel,
-    SamplingScheme, ScenarioSource,
+    CorrelationScheduleEntry, ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow,
+    HistoricalYears, InflowHistoryRow, InflowModel, LoadModel, NcsModel, SamplingScheme,
+    ScenarioSource,
 };
 pub use system::{System, SystemBuilder};
 pub use temporal::{

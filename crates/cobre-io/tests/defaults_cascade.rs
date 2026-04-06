@@ -1,10 +1,4 @@
-//! Integration tests for the config/stages defaults cascade.
-//!
-//! Each test exercises `parse_config` or `parse_stages` with various
-//! combinations of present/absent optional fields and asserts that the
-//! resulting structs reflect documented default values.  Error paths are
-//! deliberately excluded here — they are covered by the unit tests in
-//! `crates/cobre-io/src/config.rs` and `crates/cobre-io/src/stages.rs`.
+//! Integration tests for config/stages defaults cascade.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::doc_markdown)]
 
 use cobre_core::scenario::SamplingScheme;
@@ -13,22 +7,12 @@ use cobre_io::stages::parse_stages;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-// ── helper ────────────────────────────────────────────────────────────────────
-
 fn write_json(content: &str) -> NamedTempFile {
     let mut f = NamedTempFile::new().unwrap();
     f.write_all(content.as_bytes()).unwrap();
     f
 }
 
-// ── config.json defaults cascade ─────────────────────────────────────────────
-
-/// Given a minimal `config.json` with only `training.forward_passes` and
-/// `training.stopping_rules` present, every optional section must fall back to
-/// its documented default.
-///
-/// Acceptance criterion: modeling, training flags, simulation, policy, and
-/// exports all resolve to their specification defaults.
 #[test]
 fn test_minimal_config_all_defaults() {
     let f = write_json(
@@ -97,14 +81,12 @@ fn test_minimal_config_all_defaults() {
     );
 }
 
-/// Given a `config.json` with `training.tree_seed: 99`, `parse_config` must
-/// preserve the seed as `Some(99)`.
 #[test]
 fn test_config_explicit_seed_preserved() {
     let f = write_json(
         r#"{
           "training": {
-            "seed": 99,
+            "tree_seed": 99,
             "forward_passes": 50,
             "stopping_rules": [{"type": "iteration_limit", "limit": 10}]
           }
@@ -119,8 +101,6 @@ fn test_config_explicit_seed_preserved() {
     );
 }
 
-/// Given a `config.json` without `training.tree_seed`, `parse_config` must return
-/// `training.tree_seed == None`.
 #[test]
 fn test_config_absent_seed_is_none() {
     let f = write_json(
@@ -139,8 +119,6 @@ fn test_config_absent_seed_is_none() {
     );
 }
 
-/// Given a full `config.json` with non-default values in every section,
-/// no field should fall through to its default — explicit values are preserved.
 #[test]
 fn test_config_all_sections_explicit_no_defaults_applied() {
     let f = write_json(
@@ -153,7 +131,7 @@ fn test_config_all_sections_explicit_no_defaults_applied() {
           },
           "training": {
             "enabled": false,
-            "seed": 7,
+            "tree_seed": 7,
             "forward_passes": 192,
             "stopping_rules": [{"type": "iteration_limit", "limit": 200}],
             "stopping_mode": "all"
@@ -237,8 +215,6 @@ fn test_config_absent_modeling_uses_defaults() {
     );
 }
 
-/// Given a `config.json` where the `simulation` section is absent, the
-/// defaults must be: `enabled = false`, `num_scenarios = 2000`.
 #[test]
 fn test_config_absent_simulation_uses_defaults() {
     let f = write_json(
@@ -261,8 +237,6 @@ fn test_config_absent_simulation_uses_defaults() {
     );
 }
 
-/// Given a `config.json` where the `exports` section is absent, the defaults
-/// must be: `training = true`, `forward_detail = false`.
 #[test]
 fn test_config_absent_exports_uses_defaults() {
     let f = write_json(
@@ -285,11 +259,6 @@ fn test_config_absent_exports_uses_defaults() {
     );
 }
 
-// ── stages.json defaults cascade ─────────────────────────────────────────────
-
-/// Minimal stages.json fixture used across scenario-source tests.
-///
-/// Includes the mandatory `policy_graph` and one study stage.
 fn minimal_stages_json_with(scenario_source_fragment: &str) -> String {
     format!(
         r#"{{
@@ -310,8 +279,6 @@ fn minimal_stages_json_with(scenario_source_fragment: &str) -> String {
     )
 }
 
-/// Given a `stages.json` without a `scenario_source` field, `parse_stages`
-/// must return `ScenarioSource::default()`: InSample, seed = None, selection_mode = None.
 #[test]
 fn test_stages_absent_scenario_source_uses_defaults() {
     let json = minimal_stages_json_with("");
@@ -319,17 +286,13 @@ fn test_stages_absent_scenario_source_uses_defaults() {
     let data = parse_stages(f.path()).unwrap();
 
     assert_eq!(
-        data.scenario_source.sampling_scheme,
+        data.scenario_source.inflow_scheme,
         SamplingScheme::InSample,
-        "absent scenario_source must default sampling_scheme to InSample"
+        "absent scenario_source must default inflow_scheme to InSample"
     );
     assert!(
         data.scenario_source.seed.is_none(),
         "absent scenario_source must default seed to None"
-    );
-    assert!(
-        data.scenario_source.selection_mode.is_none(),
-        "absent scenario_source must default selection_mode to None"
     );
 }
 
@@ -337,9 +300,7 @@ fn test_stages_absent_scenario_source_uses_defaults() {
 /// must preserve the seed as `Some(42)`.
 #[test]
 fn test_stages_scenario_source_seed_preserved() {
-    let json = minimal_stages_json_with(
-        r#""scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },"#,
-    );
+    let json = minimal_stages_json_with(r#""scenario_source": { "seed": 42 },"#);
     let f = write_json(&json);
     let data = parse_stages(f.path()).unwrap();
 
@@ -349,13 +310,9 @@ fn test_stages_scenario_source_seed_preserved() {
         "scenario_source.seed must be Some(42) when explicitly set"
     );
     assert_eq!(
-        data.scenario_source.sampling_scheme,
+        data.scenario_source.inflow_scheme,
         SamplingScheme::InSample,
-        "sampling_scheme must be InSample"
-    );
-    assert!(
-        data.scenario_source.selection_mode.is_none(),
-        "selection_mode must be None for InSample"
+        "inflow_scheme must be InSample (default when class key absent)"
     );
 }
 

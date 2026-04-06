@@ -24,6 +24,7 @@ use cobre_core::{
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -31,7 +32,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    build_stochastic_context,
+    ClassDimensions, ClassSchemes, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
     tree::lhs::{LhsPointSpec, sample_lhs_point},
@@ -128,7 +129,7 @@ fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -158,7 +159,7 @@ fn correlated_correlation(entity_ids: &[i32], rho: f64) -> DecomposedCorrelation
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -188,7 +189,7 @@ fn identity_correlation_model(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -298,8 +299,20 @@ fn build_lhs_context(
         .build()
         .expect("build_lhs_context: system build must succeed");
 
-    build_stochastic_context(&system, base_seed, None, &[], &[], None)
-        .expect("build_lhs_context: build_stochastic_context must succeed")
+    build_stochastic_context(
+        &system,
+        base_seed,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_lhs_context: build_stochastic_context must succeed")
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +331,7 @@ fn lhs_marginal_uniformity() {
     let n = 100_usize;
     let dim = 5_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4, 5]);
+    let corr = identity_correlation(&[1, 2, 3, 4, 5]);
     let entity_order = vec![
         EntityId(1),
         EntityId(2),
@@ -327,7 +340,12 @@ fn lhs_marginal_uniformity() {
         EntityId(5),
     ];
 
-    let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -363,10 +381,15 @@ fn lhs_no_stratum_collision() {
     let n = 80_usize;
     let dim = 4_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4]);
+    let corr = identity_correlation(&[1, 2, 3, 4]);
     let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
-    let tree = generate_opening_tree(99, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(99, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let n_f = n as f64;
@@ -400,10 +423,15 @@ fn lhs_normal_statistics() {
     let n = 1000_usize;
     let dim = 1_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1]);
+    let corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
-    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -429,17 +457,22 @@ fn lhs_normal_statistics() {
 ///
 /// With a 2×2 correlation matrix with off-diagonal rho=0.8 and N=2000 openings,
 /// the sample Pearson correlation between the two dimensions must be within 0.1
-/// of the target 0.8. This exercises the Cholesky correlation transform applied
+/// of the target 0.8. This exercises the spectral correlation transform applied
 /// after LHS stratified sampling inside `generate_opening_tree`.
 #[test]
 fn lhs_correlation_applied() {
     let n = 2000_usize;
     let rho = 0.8_f64;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = correlated_correlation(&[1, 2], rho);
+    let corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: 2,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)
@@ -466,7 +499,7 @@ fn lhs_correlation_applied() {
     assert!(
         (sample_corr - rho).abs() < 0.1,
         "sample correlation {sample_corr:.4} too far from target {rho} (tolerance 0.1); \
-         Cholesky correlation transform may not be applied correctly for LHS"
+         spectral correlation transform may not be applied correctly for LHS"
     );
 }
 

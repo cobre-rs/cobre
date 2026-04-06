@@ -16,11 +16,11 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.3.2)
+## Current State (v0.4.0)
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,130 tests, including 23 deterministic regression cases (D01–D16, D19–D25)
+3,400+ tests, including 23 deterministic regression cases (D01–D16, D19–D25)
 and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
@@ -35,7 +35,11 @@ optimisations, solver safeguards (12-level retry escalation with wall-clock
 budgets), MPI distribution, Python bindings with Arrow zero-copy, CLI with 7 
 subcommands, policy warm-start and resume-from-checkpoint, cost decomposition,
 per-block operational violations, bidirectional withdrawal/evaporation slacks,
-per-plant inflow penalty via cascade, discount rate, visited state persistence.
+per-plant inflow penalty via cascade, discount rate, visited state persistence,
+per-class scenario sampling (Historical, External, InSample, OutOfSample per
+entity class), composite ForwardSampler with ClassSampler dispatch,
+HistoricalScenarioLibrary and ExternalScenarioLibrary, historical window
+discovery, per-class external scenario files, same-type correlation enforcement.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 

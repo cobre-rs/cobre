@@ -23,6 +23,7 @@ use cobre_core::{
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -30,7 +31,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    build_stochastic_context,
+    ClassDimensions, ClassSchemes, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
     tree::qmc_sobol::{SobolPointSpec, scrambled_sobol_point},
@@ -130,7 +131,7 @@ fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -160,7 +161,7 @@ fn correlated_correlation(entity_ids: &[i32], rho: f64) -> DecomposedCorrelation
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -190,7 +191,7 @@ fn identity_correlation_model(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -300,8 +301,20 @@ fn build_sobol_context(
         .build()
         .expect("build_sobol_context: system build must succeed");
 
-    build_stochastic_context(&system, base_seed, None, &[], &[], None)
-        .expect("build_sobol_context: build_stochastic_context must succeed")
+    build_stochastic_context(
+        &system,
+        base_seed,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_sobol_context: build_stochastic_context must succeed")
 }
 
 // ---------------------------------------------------------------------------
@@ -324,10 +337,15 @@ fn build_sobol_context(
 fn sobol_2d_star_discrepancy() {
     let n = 64_usize;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2]);
+    let corr = identity_correlation(&[1, 2]);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: 2,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -376,10 +394,15 @@ fn sobol_normal_statistics() {
     let n = 256_usize;
     let dim = 1_usize;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = identity_correlation(&[1]);
+    let corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
-    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: dim,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -405,17 +428,22 @@ fn sobol_normal_statistics() {
 ///
 /// With a 2×2 correlation matrix with off-diagonal rho=0.8 and N=256 openings,
 /// the sample Pearson correlation between the two dimensions must be within 0.15
-/// of the target 0.8. This exercises the Cholesky correlation transform applied
+/// of the target 0.8. This exercises the spectral correlation transform applied
 /// after Sobol sampling inside `generate_opening_tree`.
 #[test]
 fn sobol_correlation_applied() {
     let n = 256_usize;
     let rho = 0.8_f64;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = correlated_correlation(&[1, 2], rho);
+    let corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
-    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order)
+    let dims = ClassDimensions {
+        n_hydros: 2,
+        n_load_buses: 0,
+        n_ncs: 0,
+    };
+    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)
@@ -442,7 +470,7 @@ fn sobol_correlation_applied() {
     assert!(
         (sample_corr - rho).abs() < 0.15,
         "sample correlation {sample_corr:.4} too far from target {rho} (tolerance 0.15); \
-         Cholesky correlation transform may not be applied correctly for Sobol QMC"
+         spectral correlation transform may not be applied correctly for Sobol QMC"
     );
 }
 

@@ -70,7 +70,7 @@ const VALID_STAGES_JSON: &str = r#"{
         "annual_discount_rate": 0.06,
         "transitions": []
     },
-    "scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },
+    "scenario_source": { "seed": 42 },
     "stages": [
         {
             "id": 0,
@@ -167,7 +167,7 @@ pub fn make_multi_entity_case(dir: &TempDir) {
             { "source_id": 0, "target_id": 1, "probability": 1.0 }
         ]
     },
-    "scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },
+    "scenario_source": { "seed": 42 },
     "stages": [
         {
             "id": 0,

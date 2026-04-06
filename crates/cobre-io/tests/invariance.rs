@@ -52,7 +52,7 @@ fn make_shuffled_multi_entity_case(dir: &TempDir) {
             { "source_id": 0, "target_id": 1, "probability": 1.0 }
         ]
     },
-    "scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },
+    "scenario_source": { "seed": 42 },
     "stages": [
         {
             "id": 1,

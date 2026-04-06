@@ -33,11 +33,14 @@ Controls the SDDP training phase.
 
 ### Optional Fields
 
-| Field           | Type               | Default | Description                                                                                                                                     |
-| --------------- | ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                             |
-| `seed`          | integer            | `42`    | Random seed for reproducible scenario generation.                                                                                               |
-| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously. |
+| Field           | Type               | Default | Description                                                                                                                                                                             |
+| --------------- | ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                                                                     |
+| `tree_seed`     | integer            | `null`  | Random seed for the opening scenario tree. When `null`, derived from OS entropy (non-reproducible). See [Stochastic Modeling](./stochastic-modeling.md) for the dual-seed architecture. |
+| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously.                                         |
+
+For the per-class `scenario_source` configuration in `stages.json`, see
+[Stochastic Modeling](./stochastic-modeling.md).
 
 ### Stopping Rules
 
@@ -311,7 +314,7 @@ Controls which outputs are written to the results directory.
 {
   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
-    "seed": 42,
+    "tree_seed": 42,
     "forward_passes": 50,
     "stopping_rules": [
       { "type": "iteration_limit", "limit": 200 },

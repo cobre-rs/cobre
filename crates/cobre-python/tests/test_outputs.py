@@ -37,9 +37,8 @@ def test_training_output_files_exist(run_output: pathlib.Path) -> None:
     markers = {"training/_SUCCESS"}
     expected = [
         "training/_SUCCESS",
-        "training/_manifest.json",
-        "training/convergence.parquet",
         "training/metadata.json",
+        "training/convergence.parquet",
         "training/scaling_report.json",
         "training/solver/iterations.parquet",
         "training/timing/iterations.parquet",
@@ -66,7 +65,7 @@ def test_simulation_output_files_exist(run_output: pathlib.Path) -> None:
         assert len(parquets) > 0, f"no parquet files in {rel}"
 
     assert (run_output / "simulation/_SUCCESS").exists()
-    assert (run_output / "simulation/_manifest.json").exists()
+    assert (run_output / "simulation/metadata.json").exists()
 
 
 def test_convergence_parquet_schema(run_output: pathlib.Path) -> None:
@@ -90,10 +89,10 @@ def test_convergence_parquet_schema(run_output: pathlib.Path) -> None:
 
 
 def test_training_manifest_structure(run_output: pathlib.Path) -> None:
-    """_manifest.json has expected top-level keys."""
-    manifest = json.loads((run_output / "training" / "_manifest.json").read_text())
+    """metadata.json has expected top-level keys."""
+    manifest = json.loads((run_output / "training" / "metadata.json").read_text())
     assert isinstance(manifest, dict)
-    assert "version" in manifest
+    assert "cobre_version" in manifest
     assert "status" in manifest
     assert "convergence" in manifest
 

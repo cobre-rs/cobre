@@ -25,15 +25,17 @@ for deterministic noise generation.
 | `noise`                   | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                                                                           |
 | `noise::quantile`         | Beasley-Springer-Moro inverse normal CDF (`norm_quantile`)                                                                                                                          |
 | `normal`                  | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                                                                             |
-| `correlation`             | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                                                                   |
+| `correlation`             | Spectral spatial correlation: eigendecomposition (`spectral`) and profile resolution (`resolve`)                                                                                    |
 | `tree`                    | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                                                                     |
 | `tree::lhs`               | Latin Hypercube Sampling: batch `generate_lhs` and point-wise `sample_lhs_point`                                                                                                    |
 | `tree::qmc_sobol`         | Sobol QMC sequence generation with Joe-Kuo direction tables and Matousek scrambling                                                                                                 |
 | `tree::qmc_halton`        | Halton QMC sequence generation with Owen-style digit scrambling and prime sieve                                                                                                     |
-| `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
+| `sampling`                | Forward-pass sampling abstraction: `ForwardSampler` struct (composite sampler), `ClassSampler` enum, `build_forward_sampler` factory, `SampleRequest` and `ForwardNoise` types; `insample` sub-module for tree-based selection |
 | `sampling::out_of_sample` | Out-of-sample fresh noise generation dispatching over `NoiseMethod`                                                                                                                 |
-| `sampling::historical`    | Historical replay stub (not yet implemented)                                                                                                                                        |
-| `sampling::external`      | External scenario file stub (not yet implemented)                                                                                                                                   |
+| `sampling::historical`    | Historical inflow replay: `HistoricalScenarioLibrary` construction, window discovery, eta standardization, lag seeding, and forward-pass window selection                           |
+| `sampling::external`      | External scenario sources: `ExternalScenarioLibrary` construction, per-class standardization (PAR inversion for inflow, mean/std for load and NCS), and forward-pass scenario lookup |
+| `sampling::class_sampler` | Per-class noise source enum (`ClassSampler`): InSample tree segment copy, OutOfSample fresh noise, Historical window replay, and External library lookup                         |
+| `sampling::window`        | Historical window discovery: `discover_historical_windows` finds contiguous year spans covering the study period in `inflow_history.parquet`                                     |
 | `context`                 | `StochasticContext` integration type and `build_stochastic_context` pipeline entry point                                                                                            |
 | `error`                   | `StochasticError` with nine variants covering six failure domains of the stochastic layer                                                                                           |
 
@@ -99,18 +101,19 @@ PCG family provides good statistical quality with fast generation, suitable
 for producing large numbers of standard-normal samples via the `StandardNormal`
 distribution.
 
-### Cholesky-based spatial correlation
+### Spectral spatial correlation
 
 Hydro inflow series at neighboring plants are spatially correlated. `cobre-stochastic`
-applies a Cholesky transformation to convert independent standard-normal samples
+applies a spectral transformation to convert independent standard-normal samples
 into correlated samples.
 
-The Cholesky decomposition is hand-rolled using the Cholesky-Banachiewicz
-algorithm (~150 lines). No external linear algebra crate is added to the
-dependency tree. The lower-triangular factor `L` (such that `Sigma = L * L^T`)
-is stored in **packed lower-triangular format**: element `(i, j)` with `j <=
-i` is at index `i*(i+1)/2 + j`. This eliminates the zero upper-triangle
-entries and halves memory usage.
+The spectral decomposition uses a cyclic Jacobi eigendecomposition (~200 lines).
+No external linear algebra crate is added to the dependency tree. The symmetric
+matrix square root `D = V * diag(sqrt(lambda)) * V^T` (where `V` is the matrix
+of eigenvectors and `lambda` are the eigenvalues) is stored in **dense n x n
+format**. Negative eigenvalues are clipped to zero before the square root,
+making the method robust to estimated correlation matrices that are not
+positive-definite or are rank-deficient.
 
 Correlation profiles can be defined per-season. `DecomposedCorrelation` holds
 all profiles in a `BTreeMap<String, Vec<GroupFactor>>` — the `BTreeMap`
@@ -125,7 +128,7 @@ canonical entity order and stores them on each `GroupFactor` as
 avoids a per-call O(n) linear scan and heap allocation on the hot path.
 
 If a correlation group's entity IDs are only partially present in
-`entity_order`, the Cholesky transform is skipped for that group entirely.
+`entity_order`, the spectral transform is skipped for that group entirely.
 Entities not in any group retain their independent noise values unchanged.
 
 ### Opening tree structure
@@ -240,70 +243,91 @@ external numerical library is required.
 
 ### Forward sampler architecture
 
-The `ForwardSampler` enum provides a unified dispatch point for all supported
-forward-pass sampling strategies. This avoids `Box<dyn Trait>` (prohibited by
-project convention for closed variant sets) while allowing the optimizer's
-forward pass to call a single `sampler.sample(req)` regardless of which
-strategy is active.
+`ForwardSampler<'a>` is a composite struct that unifies all supported
+forward-pass sampling strategies under a single `sample()` dispatch method.
+It holds three `ClassSampler<'a>` instances — one per entity class (inflow,
+load, NCS) — and applies per-class spectral correlation only for
+`OutOfSample` class samplers. Use `build_forward_sampler` to construct the
+appropriate sampler from a `ForwardSamplerConfig` and a `StochasticContext`.
 
-#### `ForwardSampler<'a>` enum
+#### `ForwardSampler<'a>` struct
 
-Four variants:
-
-- **`InSample`**: forward pass selects noise from the pre-generated opening
-  tree. Stores `tree: OpeningTreeView<'a>` (a zero-copy borrowed view) and
-  `base_seed: u64`. Delegates to `sampling::insample::sample_forward`.
-- **`OutOfSample`**: forward pass generates fresh noise on-the-fly. Stores
-  `forward_seed`, `dim`, `noise_methods: Box<[NoiseMethod]>` (one per stage),
-  `entity_order: &'a [EntityId]`, and `correlation: &'a DecomposedCorrelation`.
-- **`Historical`**: stub, not yet implemented. Returns
-  `StochasticError::UnsupportedSamplingScheme`.
-- **`External`**: stub, not yet implemented. Returns
-  `StochasticError::UnsupportedSamplingScheme`.
+```rust,no_run
+pub struct ForwardSampler<'a> {
+    inflow: ClassSampler<'a>,
+    load: ClassSampler<'a>,
+    ncs: ClassSampler<'a>,
+    dims: ClassDimensions,
+    inflow_correlation: Option<CorrelationRef<'a>>,
+    load_correlation: Option<CorrelationRef<'a>>,
+    ncs_correlation: Option<CorrelationRef<'a>>,
+}
+```
 
 The lifetime `'a` refers to the `StochasticContext` that owns the opening
 tree, entity order, and correlation data. The sampler is constructed once and
-reused across all `(iteration, scenario, stage)` calls.
+reused across all `(iteration, scenario, stage)` calls without per-call
+allocation.
+
+The `sample()` method splits the caller-supplied `noise_buf` into three
+segments `[hydros | load_buses | ncs]`, delegates to each class sampler's
+`fill()`, then applies per-class spectral correlation where
+`Some(CorrelationRef)` is present. Correlation is only applied to
+`OutOfSample` class samplers; `InSample`, `Historical`, and `External`
+samplers produce pre-correlated noise that must not be transformed again.
+
+#### `ClassSampler<'a>` enum
+
+`ClassSampler<'a>` is the per-entity-class noise source. Four variants:
+
+- **`InSample`**: copies a segment from the pre-generated opening tree.
+  Stores `tree: OpeningTreeView<'a>`, `base_seed: u64`, `offset: usize`,
+  and `len: usize`. Delegates to `sampling::insample::sample_forward`.
+- **`OutOfSample`**: generates fresh independent N(0,1) noise on-the-fly.
+  Stores `forward_seed: u64`, `dim: usize`, and
+  `noise_methods: Box<[NoiseMethod]>` (one per stage).
+- **`Historical`**: replays a pre-standardized inflow window from a
+  `HistoricalScenarioLibrary`. Only supported for the inflow class.
+- **`External`**: reads from a pre-standardized `ExternalScenarioLibrary`.
+  Supported for inflow, load, and NCS classes.
 
 #### `build_forward_sampler` factory
 
 ```rust,no_run
-pub fn build_forward_sampler<'a>(
-    scheme: SamplingScheme,
-    ctx: &'a StochasticContext,
-    stages: &'a [Stage],
-) -> Result<ForwardSampler<'a>, StochasticError>
+pub fn build_forward_sampler(
+    config: ForwardSamplerConfig<'_>,
+) -> Result<ForwardSampler<'_>, StochasticError>
 ```
 
-Constructs the appropriate `ForwardSampler` variant from a `SamplingScheme`:
+Constructs a `ForwardSampler` from a `ForwardSamplerConfig` struct that
+bundles all construction parameters:
 
-- `InSample` — always succeeds; borrows `ctx.tree_view()` and `ctx.base_seed()`.
-- `OutOfSample` — requires `ctx.forward_seed()` to be `Some`; collects
-  per-stage `NoiseMethod` values from `stages` into a `Box<[NoiseMethod]>`.
-  Returns `StochasticError::MissingScenarioSource` if no forward seed is
-  configured.
-- `Historical` / `External` — return `StochasticError::MissingScenarioSource`
-  (not yet implemented).
+- `class_schemes` — per-class `SamplingScheme` selections (inflow, load, NCS).
+  A `None` scheme defaults to `InSample`.
+- `ctx` — `&StochasticContext` providing the opening tree, seeds, correlation,
+  and entity order.
+- `stages` — `&[Stage]` used by `OutOfSample` to read per-stage noise methods.
+- `dims` — `ClassDimensions` with per-class entity counts for buffer splitting.
+- `historical_library` — required when inflow scheme is `Historical`.
+- `external_inflow_library`, `external_load_library`, `external_ncs_library` —
+  required when the corresponding class scheme is `External`.
 
-#### `ForwardNoise<'a, 'b>` dual-lifetime return type
+Returns `StochasticError::MissingScenarioSource` when:
+- `OutOfSample` is requested but no `forward_seed` is configured in `ctx`.
+- `Historical` is requested for the inflow class but `historical_library` is `None`.
+- `Historical` is requested for load or NCS (only inflow is supported).
+- `External` is requested but the corresponding library is `None`.
+
+#### `ForwardNoise<'b>` return type
 
 ```rust,no_run
-pub enum ForwardNoise<'a, 'b> {
-    TreeSlice(&'a [f64]),
-    FreshNoise(&'b [f64]),
-}
+pub struct ForwardNoise<'b>(pub &'b [f64]);
 ```
 
-The two lifetime parameters allow the two variants to borrow from different
-allocations:
-
-- `'a` — lifetime of the `StochasticContext` (opening tree data). Used by
-  `InSample`: the returned slice is a sub-slice of the pre-generated tree.
-- `'b` — lifetime of the caller-supplied `noise_buf`. Used by `OutOfSample`:
-  the sampler writes into the buffer and returns a slice borrowing from it.
-
-`ForwardNoise::as_slice()` extracts the underlying `&[f64]` regardless of
-which variant is active, allowing callers to consume the noise uniformly.
+A newtype wrapping a borrowed slice of noise values. The lifetime `'b` is
+tied to the caller-supplied `noise_buf`. `ForwardNoise::as_slice()` returns
+the underlying `&[f64]`, allowing callers to consume the noise uniformly
+regardless of which sampling variant produced it.
 
 #### `SampleRequest<'b>` argument bundle
 
@@ -320,7 +344,7 @@ pub struct SampleRequest<'b> {
 ```
 
 Bundles seven per-call arguments to keep `ForwardSampler::sample()` within the
-project's argument-budget convention. `noise_buf` must be at least `dim`
+project's argument-budget convention. `noise_buf` must be at least `dims.total`
 elements long; `perm_scratch` must be at least `total_scenarios` elements long.
 Both are caller-owned, pre-allocated working buffers — no allocation inside
 `sample()`.
@@ -328,35 +352,37 @@ Both are caller-owned, pre-allocated working buffers — no allocation inside
 #### `FreshNoiseSpec` internal bundle
 
 `FreshNoiseSpec` (in `sampling::out_of_sample`) bundles seed, dimension, and
-method parameters for `sample_fresh`. It is `pub(crate)` and not part of the
-public API.
+method parameters for `fill_uncorrelated`. It is `pub(crate)` and not part of
+the public API.
 
 #### OutOfSample dispatch path
 
-When `ForwardSampler::OutOfSample` is active, `sample()` performs the
-following steps:
+When a `ClassSampler::OutOfSample` is active, its `fill()` method performs
+the following steps:
 
 1. Look up `noise_methods[stage_idx]` to determine the `NoiseMethod` for the
    current stage. Returns `StochasticError::InsufficientData` if `stage_idx`
    is out of bounds.
-2. Build a `FreshNoiseSpec` bundling the forward seed, iteration, scenario,
-   stage ID, dim, and total scenario count.
-3. Call `out_of_sample::sample_fresh(spec, noise_buf, perm_scratch, correlation,
-entity_order)`, which:
-   a. Dispatches on `NoiseMethod`: calls `fill_saa` (SAA), `sample_lhs_point`
-   (LHS), `scrambled_sobol_point` (QmcSobol), or `scrambled_halton_point`
+2. Build a `FreshNoiseSpec` bundling the forward seed, noise method, iteration,
+   scenario, stage ID, dim, and total scenario count.
+3. Call `fill_uncorrelated(spec, output, perm_scratch)`, which dispatches on
+   `NoiseMethod`: calls `fill_saa` (SAA), `sample_lhs_point` (LHS),
+   `scrambled_sobol_point` (QmcSobol), or `scrambled_halton_point`
    (QmcHalton). `Selective` falls back to SAA with a `tracing::warn!`.
-   b. Applies `correlation.apply_correlation(stage_id, &mut noise_buf[..dim],
-   entity_order)` in-place, transforming independent noise to correlated noise.
-4. Return `ForwardNoise::FreshNoise(&noise_buf[..dim])`.
 
+After all three class buffers are filled, `ForwardSampler::sample()` applies
+per-class spectral correlation for each class that has `Some(CorrelationRef)`.
+The correlation transform calls `decomposed.apply_correlation_for_class(stage,
+buf, entity_order, class_name)` in-place, transforming the independent N(0,1)
+noise to spatially correlated noise. The final `ForwardNoise` wraps the full
+combined buffer slice.
 ### `StochasticContext` as the integration entry point
 
 `StochasticContext` bundles the three independently-built components into a
 single ready-to-use value:
 
 1. `PrecomputedPar` — PAR coefficient cache for LP RHS patching.
-2. `DecomposedCorrelation` — pre-decomposed Cholesky factors for all profiles.
+2. `DecomposedCorrelation` — pre-decomposed spectral factors for all profiles.
 3. `OpeningTree` — pre-generated noise realizations for the backward pass.
 
 `build_stochastic_context(&system, base_seed)` runs the full preprocessing
@@ -508,7 +534,7 @@ order wins (parsimony principle).
 `estimate_correlation` computes the Pearson correlation matrix of PAR model
 residuals across entities. Residuals are the standardized deviations of
 historical observations from their seasonal means. The output is a
-`CorrelationModel` (from `cobre-core`) suitable for downstream Cholesky
+`CorrelationModel` (from `cobre-core`) suitable for downstream spectral
 decomposition.
 
 ## Public types
@@ -551,7 +577,7 @@ as an empty sentinel for systems without normal-noise entities.
 
 ### `DecomposedCorrelation`
 
-Holds Cholesky-decomposed correlation factors for all profiles, keyed by
+Holds spectrally decomposed correlation factors for all profiles, keyed by
 profile name in a `BTreeMap`. Built via `DecomposedCorrelation::build`, which
 validates and decomposes all profiles eagerly — errors surface at initialization,
 not at per-stage lookup time. Call `resolve_positions` once with the canonical
@@ -573,36 +599,40 @@ A zero-copy borrowed view over an `OpeningTree`, with the same accessor API:
 
 ### `ForwardSampler<'a>`
 
-Unified forward-pass sampler enum. Constructed once per run via
+Composite forward-pass sampler struct holding one `ClassSampler<'a>` per
+entity class (inflow, load, NCS). Constructed once per run via
 `build_forward_sampler` and reused across all `(iteration, scenario, stage)`
-calls without per-call allocation. Four variants:
+calls without per-call allocation. The lifetime `'a` borrows from the
+`StochasticContext` that owns the opening tree, entity order, and correlation
+data. See "Forward sampler architecture" above.
+
+### `ClassSampler<'a>`
+
+Per-entity-class noise source enum. Four variants:
 
 | Variant       | Description                                                      |
 | ------------- | ---------------------------------------------------------------- |
-| `InSample`    | Selects noise from the pre-generated opening tree                |
-| `OutOfSample` | Generates fresh noise on-the-fly using the stage's `NoiseMethod` |
-| `Historical`  | Stub — not yet implemented                                       |
-| `External`    | Stub — not yet implemented                                       |
+| `InSample`    | Copies a segment from the pre-generated opening tree             |
+| `OutOfSample` | Generates fresh independent N(0,1) noise on-the-fly              |
+| `Historical`  | Replays a pre-standardized window from `HistoricalScenarioLibrary` |
+| `External`    | Reads from a pre-standardized `ExternalScenarioLibrary`          |
 
-The lifetime `'a` borrows from the `StochasticContext` that owns the tree,
-entity order, and correlation data. See "Forward sampler architecture" above.
+The `fill()` method writes exactly `output.len()` f64 values into the
+caller-provided buffer. For `InSample`, `Historical`, and `External` the
+noise is pre-correlated; for `OutOfSample` the noise is independent N(0,1)
+and correlation is applied at the `ForwardSampler` level.
 
-### `ForwardNoise<'a, 'b>`
+### `ForwardNoise<'b>`
 
-Noise payload returned by `ForwardSampler::sample`. Two variants:
-
-| Variant      | Source                      | Lifetime |
-| ------------ | --------------------------- | -------- |
-| `TreeSlice`  | Sub-slice of opening tree   | `'a`     |
-| `FreshNoise` | Caller-supplied `noise_buf` | `'b`     |
-
-`as_slice() -> &[f64]` extracts the underlying slice regardless of variant.
+Noise payload returned by `ForwardSampler::sample`. A newtype wrapping
+`&'b [f64]`. The lifetime `'b` is tied to the caller-supplied `noise_buf`.
+`as_slice() -> &[f64]` extracts the underlying slice.
 
 ### `SampleRequest<'b>`
 
 Per-call argument bundle for `ForwardSampler::sample`. Fields: `iteration`,
 `scenario`, `stage` (domain ID as `u32`), `stage_idx` (array position as
-`usize`), `noise_buf: &'b mut [f64]` (at least `dim` elements),
+`usize`), `noise_buf: &'b mut [f64]` (at least `dims.total` elements),
 `perm_scratch: &'b mut [usize]` (at least `total_scenarios` elements),
 `total_scenarios: u32`.
 
@@ -611,17 +641,14 @@ Per-call argument bundle for `ForwardSampler::sample`. Fields: `iteration`,
 Factory function:
 
 ```rust,no_run
-pub fn build_forward_sampler<'a>(
-    scheme: SamplingScheme,
-    ctx: &'a StochasticContext,
-    stages: &'a [Stage],
-) -> Result<ForwardSampler<'a>, StochasticError>
+pub fn build_forward_sampler(
+    config: ForwardSamplerConfig<'_>,
+) -> Result<ForwardSampler<'_>, StochasticError>
 ```
 
-Returns `StochasticError::MissingScenarioSource` for `OutOfSample` without a
-configured `forward_seed`, and for `Historical` / `External` (not yet
-implemented).
-
+Constructs a `ForwardSampler` from a `ForwardSamplerConfig` struct. Returns
+`StochasticError::MissingScenarioSource` when required resources are absent
+for the configured scheme. See "Forward sampler architecture" above.
 ### `StochasticError`
 
 Returned by all fallible APIs. Nine variants covering six failure domains:
@@ -629,7 +656,7 @@ Returned by all fallible APIs. Nine variants covering six failure domains:
 | Variant                       | When it occurs                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------- |
 | `InvalidParParameters`        | AR order > 0 with zero standard deviation, or ill-conditioned coefficients        |
-| `CholeskyDecompositionFailed` | Correlation matrix is not positive-definite                                       |
+| `SpectralDecompositionFailed` | Eigendecomposition of correlation matrix failed to converge                       |
 | `InvalidCorrelation`          | Missing default profile, ambiguous profile set, or out-of-range correlation entry |
 | `InsufficientData`            | Fewer historical records than the PAR order requires, or index out of bounds      |
 | `SeedDerivationError`         | Hash computation produces an invalid result during seed derivation                |
@@ -686,16 +713,18 @@ Output of `select_order_aic`. Fields: `selected_order` (0 for white noise),
 
 ### `GroupFactor`
 
-A single correlation group's Cholesky factor with its associated entity ID
-mapping. Fields: `factor: CholeskyFactor`, `entity_ids: Vec<EntityId>`, and
+A single correlation group's spectral factor with its associated entity ID
+mapping. Fields: `factor: SpectralFactor`, `entity_ids: Vec<EntityId>`, and
 pre-computed `positions: Option<Box<[usize]>>` (filled by `resolve_positions`).
 
-### `CholeskyFactor`
+### `SpectralFactor`
 
-The lower-triangular Cholesky factor `L` of a correlation matrix, stored in
-packed row-major form. Element `(i, j)` with `j <= i` is at index
-`i*(i+1)/2 + j`. Constructed via `CholeskyFactor::decompose(&matrix)` and
-applied via `transform(&input, &mut output)`.
+The symmetric matrix square root `D = V * diag(sqrt(lambda)) * V^T` of a
+correlation matrix, stored in dense n x n format. Computed via cyclic Jacobi
+eigendecomposition with negative-eigenvalue clipping (robustness to
+non-positive-definite and rank-deficient matrices). Constructed via
+`SpectralFactor::decompose(&matrix)` and applied via
+`transform(&input, &mut output)`.
 
 ## Usage examples
 
@@ -818,19 +847,20 @@ heap-allocated `Vec`. The fast path covers the overwhelming majority of
 practical correlation groups, eliminating heap allocation from the inner loop
 for typical study configurations.
 
-### Incremental `row_base` in Cholesky transform
+### Dense mat-vec in spectral transform
 
-The packed lower-triangular storage index for element `(i, j)` is
-`i*(i+1)/2 + j`. Rather than recomputing the triangular index from scratch for
-each row, the `transform` method maintains an incremental `row_base` variable
-that is incremented by `i+1` at the end of each row. This eliminates a
-multiplication per row iteration on the hot path of the Cholesky forward
-substitution.
+The spectral `SpectralFactor` stores the matrix square root `D` in dense n x n
+format (replacing the packed lower-triangular storage used by the former Cholesky
+approach). The `transform` method computes `y = D * x` via a straightforward
+dense matrix-vector multiply. For typical small-to-medium correlation groups
+(n ≤ 64), this fits in L1/L2 cache and avoids indirect indexed loads, making
+the extra memory usage (n² vs n(n+1)/2 words) a worthwhile trade-off for
+simpler code and robustness to rank-deficient matrices.
 
 ### `Box<[f64]>` for the no-resize invariant
 
 All fixed-size hot-path arrays in `PrecomputedPar`, `PrecomputedNormal`,
-`OpeningTree`, and `CholeskyFactor` use `Box<[f64]>` rather than `Vec<f64>`.
+`OpeningTree`, and `SpectralFactor` use `Box<[f64]>` rather than `Vec<f64>`.
 The boxed-slice type communicates that these arrays are immutable after
 construction, eliminates the capacity word from each allocation, and allows
 the optimizer to treat the length as a compile-time-stable bound.
@@ -895,7 +925,7 @@ for correct behavior in a distributed, multi-run setting:
 - **Declaration-order invariance**: inserting hydros in reversed order into a
   `SystemBuilder` (which sorts by `EntityId` internally) produces a
   `StochasticContext` with bitwise-identical PAR arrays, opening tree, and
-  Cholesky transform output. This verifies the canonical-order invariant across
+  spectral transform output. This verifies the canonical-order invariant across
   the full preprocessing pipeline.
 - **Infrastructure genericity gate**: a grep audit confirms that no algorithm-specific
   references appear anywhere in the crate source tree. The gate is encoded as a

@@ -27,13 +27,14 @@ use cobre_core::{
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
 };
-use cobre_stochastic::{build_stochastic_context, sample_forward};
+use cobre_stochastic::{ClassSchemes, build_stochastic_context, sample_forward};
 
 fn make_bus(id: i32) -> Bus {
     Bus {
@@ -153,7 +154,7 @@ fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -183,8 +184,20 @@ fn build_fixture(hydros: Vec<Hydro>, base_seed: u64) -> cobre_stochastic::Stocha
         .build()
         .expect("build_fixture: system build must succeed");
 
-    build_stochastic_context(&system, base_seed, None, &[], &[], None)
-        .expect("build_fixture: build_stochastic_context must succeed")
+    build_stochastic_context(
+        &system,
+        base_seed,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_fixture: build_stochastic_context must succeed")
 }
 
 #[test]

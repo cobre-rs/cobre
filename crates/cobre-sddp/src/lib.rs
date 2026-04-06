@@ -56,6 +56,7 @@ pub mod lp_builder;
 pub(crate) mod noise;
 pub mod policy_export;
 pub mod policy_load;
+pub mod provenance;
 pub mod risk_measure;
 pub mod scaling_report;
 pub mod setup;
@@ -80,7 +81,9 @@ pub use cut_selection::{
 };
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
-pub use estimation::{EstimationError, EstimationReport};
+pub use estimation::{
+    EstimationError, EstimationPath, EstimationReport, LagScaleWarning, StdRatioDivergence,
+};
 pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
 pub use horizon_mode::HorizonMode;
 pub use hydro_models::{
@@ -100,6 +103,7 @@ pub use lp_builder::{
     build_stage_templates,
 };
 pub use policy_load::{build_basis_cache_from_checkpoint, validate_policy_compatibility};
+pub use provenance::{ModelProvenanceReport, ProvenanceSource, build_provenance_report};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{

@@ -198,7 +198,8 @@ fn accumulate_batch(batch: &RecordBatch, totals: &mut BatchTotals) -> Result<(),
 mod tests {
     use super::*;
     use crate::output::{
-        CutStatistics, IterationRecord, SimulationOutput, TrainingOutput, write_results,
+        CutStatistics, IterationRecord, OutputContext, SimulationOutput, TrainingOutput,
+        write_results,
     };
 
     fn make_iteration_record(iteration: u32, lp_solves: u32) -> IterationRecord {
@@ -302,6 +303,17 @@ mod tests {
         }
     }
 
+    fn make_output_context() -> OutputContext {
+        OutputContext {
+            hostname: "test-host".to_string(),
+            solver: "highs".to_string(),
+            started_at: "2026-01-17T08:00:00Z".to_string(),
+            completed_at: "2026-01-17T12:30:00Z".to_string(),
+            mpi_world_size: 1,
+            mpi_ranks_participated: 1,
+        }
+    }
+
     fn write_convergence(
         tmp: &tempfile::TempDir,
         records: Vec<IterationRecord>,
@@ -313,6 +325,7 @@ mod tests {
             None::<&SimulationOutput>,
             &make_system(),
             &make_config(),
+            &make_output_context(),
         )
         .expect("write_results must succeed");
         tmp.path().join("training/convergence.parquet")

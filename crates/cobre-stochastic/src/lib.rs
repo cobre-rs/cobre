@@ -22,8 +22,8 @@ pub mod provenance;
 pub mod sampling;
 pub mod tree;
 
-pub use context::{StochasticContext, build_stochastic_context};
-pub use correlation::{CholeskyFactor, DecomposedCorrelation, GroupFactor};
+pub use context::{ClassSchemes, StochasticContext, build_stochastic_context};
+pub use correlation::{DecomposedCorrelation, GroupFactor, SpectralFactor};
 pub use error::StochasticError;
 pub use noise::quantile::norm_quantile;
 pub use noise::rng::rng_from_seed;
@@ -31,15 +31,21 @@ pub use noise::seed::{derive_forward_seed, derive_opening_seed, derive_stage_see
 pub use normal::precompute::{BlockFactorPair, EntityFactorEntry, PrecomputedNormal};
 #[allow(deprecated)]
 pub use par::{
-    ArCoefficientEstimate, LevinsonDurbinResult, ParValidationReport, ParWarning, PrecomputedPar,
-    SeasonalStats, estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par,
-    evaluate_par_batch, evaluate_par_inflow, evaluate_par_inflows, levinson_durbin,
-    solve_par_noise, solve_par_noise_batch, solve_par_noises, validate_par_parameters,
+    ArCoefficientEstimate, ParValidationReport, ParWarning, PrecomputedPar, SeasonalStats,
+    estimate_ar_coefficients, estimate_seasonal_stats, evaluate_par, evaluate_par_batch,
+    evaluate_par_inflow, evaluate_par_inflows, solve_par_noise, solve_par_noise_batch,
+    solve_par_noises, validate_par_parameters,
 };
 pub use provenance::{ComponentProvenance, StochasticProvenance};
 pub use sampling::insample::sample_forward;
-pub use sampling::{ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
-pub use tree::{OpeningTree, OpeningTreeView, generate_opening_tree};
+pub use sampling::{
+    ClassSampleRequest, ClassSampler, ExternalScenarioLibrary, ForwardNoise, ForwardSampler,
+    ForwardSamplerConfig, HistoricalScenarioLibrary, SampleRequest, build_forward_sampler,
+    discover_historical_windows, standardize_external_inflow, standardize_external_load,
+    standardize_external_ncs, standardize_historical_windows, validate_external_library,
+    validate_historical_library,
+};
+pub use tree::{ClassDimensions, OpeningTree, OpeningTreeView, generate_opening_tree};
 
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -55,8 +61,8 @@ mod tests {
     #[test]
     fn all_public_modules_accessible() {
         use crate::context as _;
-        use crate::correlation::cholesky as _;
         use crate::correlation::resolve as _;
+        use crate::correlation::spectral as _;
         use crate::noise::quantile as _;
         use crate::noise::rng as _;
         use crate::noise::seed as _;

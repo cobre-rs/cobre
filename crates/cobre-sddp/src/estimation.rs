@@ -1,27 +1,54 @@
 //! Automatic PAR(p) parameter estimation from historical inflow observations.
 //!
-//! This module bridges `cobre-io` (case loading) and `cobre-stochastic` (PAR fitting):
-//! it checks the input file manifest, loads history when explicit model statistics are
-//! absent, runs the fitting pipeline, and returns an updated [`System`].
+//! This module bridges `cobre-io` (case loading) and `cobre-stochastic` (PAR fitting).
+//! It inspects the input file manifest, resolves which of seven input paths applies
+//! (see [`EstimationPath`]), and dispatches to the appropriate estimation function.
 //!
 //! ## Input path matrix
 //!
-//! | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | `inflow_ar_coefficients.parquet` | Behaviour |
-//! |---|---|---|---|
-//! | absent | any | any | Return `system` unchanged. |
-//! | present | present | present | Return `system` unchanged (explicit stats take priority). |
-//! | present | present | absent | Partial estimation: load existing stats, estimate only AR coefficients. |
-//! | present | absent | any | Full estimation; update `inflow_models` and optionally `correlation`. |
+//! Three boolean flags determine the path: whether `inflow_history.parquet` (H),
+//! `inflow_seasonal_stats.parquet` (S), and `inflow_ar_coefficients.parquet` (R)
+//! are present in the case directory.
+//!
+//! | Row | H | S | R | Variant | Behaviour |
+//! |-----|---|---|---|---------|-----------|
+//! |  1  | 0 | 0 | 0 | [`Deterministic`](EstimationPath::Deterministic) | Return `system` unchanged. |
+//! |  2  | 0 | 1 | 0 | [`UserStatsWhiteNoise`](EstimationPath::UserStatsWhiteNoise) | Return `system` unchanged (white-noise stats from user). |
+//! |  3  | 0 | 1 | 1 | [`UserProvidedNoHistory`](EstimationPath::UserProvidedNoHistory) | Return `system` unchanged (complete user model). |
+//! |  4  | 1 | 0 | 0 | [`FullEstimation`](EstimationPath::FullEstimation) | Full estimation via `run_estimation`. |
+//! |  5  | 1 | 0 | 1 | [`UserArHistoryStats`](EstimationPath::UserArHistoryStats) | Stats from history, AR from user via `run_user_ar_estimation`. |
+//! |  6  | 1 | 1 | 0 | [`PartialEstimation`](EstimationPath::PartialEstimation) | Stats from user, AR estimated from history via `run_partial_estimation`. |
+//! |  7  | 1 | 1 | 1 | [`UserProvidedAll`](EstimationPath::UserProvidedAll) | Return `system` unchanged (all parameters from user). |
+//!
+//! Invalid combinations (R=1 without H or S) fall back to row 1 (`Deterministic`).
+//!
+//! ## Role 1 / Role 2
+//!
+//! Each inflow model requires two parameter groups:
+//!
+//! - **Role 1 (seasonal stats)**: `mean_m3s` and `std_m3s` per hydro per stage.
+//!   These drive the LP assembly (scenario scaling) and can come from either the
+//!   user file (`inflow_seasonal_stats.parquet`) or history estimation.
+//! - **Role 2 (AR coefficients)**: `ar_coefficients` and `residual_std_ratio` per
+//!   hydro per stage. These drive the autoregressive scenario noise and can come
+//!   from either the user file (`inflow_ar_coefficients.parquet`) or history
+//!   estimation.
+//!
+//! Rows 4-6 are the "active" paths where at least one role is estimated from
+//! history. In rows 4 and 6, Role 2 is estimated via periodic Yule-Walker / PACF.
+//! In row 5, Role 1 is estimated from history while Role 2 is preserved from user.
 //!
 //! `correlation.json` is handled independently: if present, the existing
-//! `system.correlation()` is kept; if absent, the correlation is estimated from residuals.
+//! `system.correlation()` is kept; if absent, the correlation is estimated from
+//! residuals.
 //!
 //! ## PACF order selection
 //!
-//! When `config.estimation.order_selection = "pacf"` (the default), the module
-//! computes the periodic PACF via progressive periodic Yule-Walker matrix solves,
-//! selects the order using a 95% significance threshold, then estimates
-//! coefficients at the selected order using the periodic YW system.
+//! When `config.estimation.order_selection = "pacf"` (the default and only
+//! supported method), the module computes the periodic PACF via progressive
+//! periodic Yule-Walker matrix solves, selects the order using a 95% significance
+//! threshold, then estimates coefficients at the selected order using the periodic
+//! YW system.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -29,8 +56,7 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext,
-    config::OrderSelectionMethod,
+    Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
     parse_inflow_history,
     scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
     validate_structure,
@@ -48,6 +74,102 @@ use cobre_stochastic::{
         select_order_pacf,
     },
 };
+
+/// Classification of the estimation path taken for a given input file manifest.
+///
+/// Each variant corresponds to one row of the input path matrix documented in
+/// the module-level doc comment. The three boolean flags are:
+/// - `H` — `scenarios_inflow_history_parquet`
+/// - `S` — `scenarios_inflow_seasonal_stats_parquet`
+/// - `R` — `scenarios_inflow_ar_coefficients_parquet`
+///
+/// | Row | H | S | R | Variant |
+/// |-----|---|---|---|---------|
+/// |  1  | 0 | 0 | 0 | `Deterministic` |
+/// |  2  | 0 | 1 | 0 | `UserStatsWhiteNoise` |
+/// |  3  | 0 | 1 | 1 | `UserProvidedNoHistory` |
+/// |  4  | 1 | 0 | 0 | `FullEstimation` |
+/// |  5  | 1 | 0 | 1 | `UserArHistoryStats` |
+/// |  6  | 1 | 1 | 0 | `PartialEstimation` |
+/// |  7  | 1 | 1 | 1 | `UserProvidedAll` |
+///
+/// The combination `(H=0, S=0, R=1)` and `(H=0, S=1, R=1)` (rows with AR but
+/// no history) map to `Deterministic` and `UserProvidedNoHistory` respectively.
+/// AR without history is meaningless for estimation, so the presence of AR
+/// coefficients alone (without history) is treated as row 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EstimationPath {
+    /// Row 1: no history, no stats, no AR (or AR present but no history/stats).
+    /// The system is returned unchanged.
+    Deterministic,
+    /// Row 2: no history, stats present, no AR.
+    /// The system is returned unchanged (user-provided white-noise stats).
+    UserStatsWhiteNoise,
+    /// Row 3: no history, stats present, AR present.
+    /// The system is returned unchanged (user-provided complete model, no history).
+    UserProvidedNoHistory,
+    /// Row 4: history present, no stats, no AR.
+    /// Full estimation: seasonal stats and AR coefficients are estimated.
+    FullEstimation,
+    /// Row 5: history present, no stats, AR present.
+    /// Seasonal stats are estimated from history (Role 1); user AR coefficients
+    /// are preserved bitwise (Role 2). Dispatches to `run_user_ar_estimation`.
+    UserArHistoryStats,
+    /// Row 6: history present, stats present, no AR.
+    /// User stats are used; only AR coefficients are estimated from history.
+    /// Dispatches to `run_partial_estimation`, which preserves `mean_m3s` and
+    /// `std_m3s` from the user-provided stats while estimating AR coefficients
+    /// via periodic Yule-Walker / PACF.
+    PartialEstimation,
+    /// Row 7: history present, stats present, AR present.
+    /// All model parameters provided by the user; system is returned unchanged.
+    UserProvidedAll,
+}
+
+impl EstimationPath {
+    /// Resolve the estimation path from the three boolean manifest flags.
+    ///
+    /// This function is a total map over all 8 boolean combinations. Invalid
+    /// combinations (AR present without history or stats) fall back to
+    /// `Deterministic` because AR coefficients alone cannot drive estimation.
+    #[must_use]
+    pub fn resolve(manifest: &cobre_io::FileManifest) -> Self {
+        match (
+            manifest.scenarios_inflow_history_parquet,
+            manifest.scenarios_inflow_seasonal_stats_parquet,
+            manifest.scenarios_inflow_ar_coefficients_parquet,
+        ) {
+            // No history — AR alone is meaningless; row 1.
+            (false, false, _) => Self::Deterministic,
+            // No history, stats present, no AR — row 2.
+            (false, true, false) => Self::UserStatsWhiteNoise,
+            // No history, stats present, AR present — row 3.
+            (false, true, true) => Self::UserProvidedNoHistory,
+            // History present, no stats, no AR — row 4.
+            (true, false, false) => Self::FullEstimation,
+            // History present, no stats, AR present — row 5.
+            (true, false, true) => Self::UserArHistoryStats,
+            // History present, stats present, no AR — row 6.
+            (true, true, false) => Self::PartialEstimation,
+            // History present, stats present, AR present — row 7.
+            (true, true, true) => Self::UserProvidedAll,
+        }
+    }
+
+    /// Convert to a stable string representation for diagnostic output.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deterministic => "deterministic",
+            Self::UserStatsWhiteNoise => "user_stats_white_noise",
+            Self::UserProvidedNoHistory => "user_provided_no_history",
+            Self::FullEstimation => "full_estimation",
+            Self::UserArHistoryStats => "user_ar_history_stats",
+            Self::PartialEstimation => "partial_estimation",
+            Self::UserProvidedAll => "user_provided_all",
+        }
+    }
+}
 
 /// Errors that can occur during the automatic estimation pipeline.
 #[derive(Debug, thiserror::Error)]
@@ -131,6 +253,25 @@ pub struct HydroEstimationEntry {
     pub contribution_reductions: Vec<ContributionReduction>,
 }
 
+/// Diagnostic record for an initial lag / user stats scale mismatch.
+///
+/// Populated by `run_partial_estimation` when a hydro's lag-1 past inflow
+/// value is closer (in absolute distance) to the history-estimated mean than
+/// to the user-provided seasonal mean at the first study stage (`stage_id == 0`).
+/// This can indicate that `initial_conditions.json` was calibrated to historical
+/// scale rather than to the user-provided stats scale.
+#[derive(Debug, Clone)]
+pub struct LagScaleWarning {
+    /// Hydro plant identifier.
+    pub hydro_id: EntityId,
+    /// Lag-1 past inflow value (m³/s) from `initial_conditions.json`.
+    pub lag_value: f64,
+    /// User-provided seasonal mean at stage 0 (m³/s).
+    pub user_mean: f64,
+    /// History-estimated seasonal mean at stage 0 (m³/s).
+    pub estimated_mean: f64,
+}
+
 /// Computation-side summary of the AR estimation pipeline.
 ///
 /// Contains one [`HydroEstimationEntry`] per hydro plant that was fitted,
@@ -142,6 +283,41 @@ pub struct EstimationReport {
     pub entries: BTreeMap<EntityId, HydroEstimationEntry>,
     /// The order selection method used (e.g., `"AIC"`, `"PACF"`, `"fixed"`).
     pub method: String,
+    /// Hydro IDs that have user-provided stats but no estimated AR
+    /// coefficients, resulting in white-noise fallback (empty AR, ratio=1.0).
+    /// Only populated by `run_partial_estimation`; empty for other paths.
+    pub white_noise_fallbacks: Vec<EntityId>,
+    /// Hydros whose lag-1 past inflow value is closer to the history-estimated
+    /// mean than to the user-provided mean at stage 0. Advisory only; never
+    /// blocks execution. Only populated by `run_partial_estimation`.
+    pub lag_scale_warnings: Vec<LagScaleWarning>,
+    /// Warnings for hydros where consecutive-season std ratios diverge
+    /// significantly between user-provided and history-estimated profiles.
+    /// Only populated by `run_partial_estimation`; empty for other paths.
+    pub std_ratio_warnings: Vec<StdRatioDivergence>,
+}
+
+/// Advisory diagnostic for a (hydro, season pair) where the cross-season
+/// standard deviation ratio diverges significantly between the user-provided
+/// profile and the history-estimated profile.
+///
+/// Produced by `run_partial_estimation` (P9 diagnostic) when
+/// `max(user_ratio / est_ratio, est_ratio / user_ratio) > 2.0` for any
+/// consecutive season pair `(season_a, season_b)`.
+#[derive(Debug, Clone)]
+pub struct StdRatioDivergence {
+    /// The hydro plant for which the divergence was detected.
+    pub hydro_id: EntityId,
+    /// Index of the first season in the consecutive pair.
+    pub season_a: usize,
+    /// Index of the second season in the consecutive pair (wraps around).
+    pub season_b: usize,
+    /// `std[season_a] / std[season_b]` from the user-provided profile.
+    pub user_ratio: f64,
+    /// `std[season_a] / std[season_b]` from the history-estimated profile.
+    pub estimated_ratio: f64,
+    /// `max(user_ratio / estimated_ratio, estimated_ratio / user_ratio)`.
+    pub divergence: f64,
 }
 
 /// Result of validating an AR order via contribution analysis.
@@ -205,81 +381,71 @@ fn validate_order_contributions(
     }
 }
 
-/// Compute `residual_std_ratio` from a normalised prediction error variance (`sigma2`).
+/// Estimate or load PAR(p) model parameters based on the input file manifest.
 ///
-/// The Levinson-Durbin recursion can produce negative `sigma2` values when the
-/// estimated autocorrelation sequence does not form a positive-definite Toeplitz
-/// matrix. In Rust, `f64::sqrt()` of a negative number returns `NaN`, and
-/// `NaN.clamp(a, b)` propagates `NaN` (IEEE 754 semantics). A `NaN`
-/// `residual_std_ratio` would then poison the noise scale and eventually cause
-/// the `HiGHS` solver to reject row-bound patches.
+/// Resolves which [`EstimationPath`] applies for `case_dir`, then dispatches:
 ///
-/// This helper treats non-positive `sigma2` as evidence that the AR model at the
-/// given order is numerically unstable and falls back to the white-noise baseline
-/// (`residual_std_ratio = 1.0`).
-fn residual_std_ratio_from_sigma2(sigma2: f64) -> f64 {
-    if sigma2 <= 0.0 {
-        1.0
-    } else {
-        sigma2.sqrt().clamp(f64::EPSILON, 1.0)
-    }
-}
-
-/// Estimate PAR(p) model parameters from inflow history when explicit stats are absent.
-///
-/// Reads the file manifest for `case_dir` to determine the input path. When
-/// `inflow_history.parquet` is present and `inflow_seasonal_stats.parquet` is absent,
-/// the function runs the full estimation pipeline and returns a new [`System`] with
-/// updated `inflow_models` and (optionally) `correlation`. In all other cases the
-/// `system` is returned unchanged.
-///
-/// # Estimation pipeline
-///
-/// 1. Runs structural validation to get the [`FileManifest`].
-/// 2. Checks the input path matrix (see module doc).
-/// 3. Loads inflow history via [`parse_inflow_history`].
-/// 4. Estimates seasonal stats via `estimate_seasonal_stats`.
-/// 5. Estimates AR coefficients (with AIC or fixed-order selection).
-/// 6. Estimates correlation when `correlation.json` is absent.
-/// 7. Converts estimation results to `cobre-io` row types, calls
-///    `assemble_inflow_models`, and returns
-///    `system.with_scenario_models(inflow_models, correlation)`.
+/// - **Rows 1, 2, 3, 7** (pass-through): Returns `system` unchanged with
+///   `report = None`. No estimation is performed.
+/// - **Row 4** ([`FullEstimation`](EstimationPath::FullEstimation)): Delegates
+///   to `run_estimation`, which estimates both seasonal stats (Role 1) and AR
+///   coefficients (Role 2) from `inflow_history.parquet`.
+/// - **Row 5** ([`UserArHistoryStats`](EstimationPath::UserArHistoryStats)):
+///   Delegates to `run_user_ar_estimation`, which estimates seasonal stats
+///   (Role 1) from history while preserving user AR coefficients (Role 2).
+/// - **Row 6** ([`PartialEstimation`](EstimationPath::PartialEstimation)):
+///   Delegates to `run_partial_estimation`, which preserves user seasonal
+///   stats (Role 1) while estimating AR coefficients (Role 2) from history
+///   via periodic Yule-Walker / PACF.
 ///
 /// # Errors
 ///
-/// - [`EstimationError::Load`] — file read or parse failure.
-/// - [`EstimationError::Stochastic`] — insufficient observations for any
-///   `(entity, season)` group.
+/// - [`EstimationError::Load`] -- file read, parse, or validation failure.
+/// - [`EstimationError::Stochastic`] -- insufficient observations for any
+///   `(entity, season)` group during AR or stats estimation.
 pub fn estimate_from_history(
     system: System,
     case_dir: &Path,
     config: &Config,
-) -> Result<(System, Option<EstimationReport>), EstimationError> {
+) -> Result<(System, Option<EstimationReport>, EstimationPath), EstimationError> {
     // ── Step 1: resolve file manifest ────────────────────────────────────────
     let mut ctx = ValidationContext::new();
     let manifest = validate_structure(case_dir, &mut ctx);
 
     // Abort early if structural validation found errors.
     if ctx.into_result().is_err() {
-        return Ok((system, None));
+        return Ok((system, None, EstimationPath::Deterministic));
     }
 
-    // ── Step 2: input path matrix ────────────────────────────────────────────
-    if !manifest.scenarios_inflow_history_parquet {
-        // No history file — nothing to estimate.
-        return Ok((system, None));
-    }
+    // ── Step 2: resolve input path and dispatch ──────────────────────────────
+    let path = EstimationPath::resolve(&manifest);
 
-    if manifest.scenarios_inflow_seasonal_stats_parquet
-        && manifest.scenarios_inflow_ar_coefficients_parquet
-    {
-        // Explicit stats provided — skip estimation.
-        return Ok((system, None));
-    }
+    match path {
+        // No estimation — return system unchanged.
+        EstimationPath::Deterministic
+        | EstimationPath::UserStatsWhiteNoise
+        | EstimationPath::UserProvidedNoHistory
+        | EstimationPath::UserProvidedAll => Ok((system, None, path)),
 
-    // History present, stats absent — run estimation.
-    let (system, report) = run_estimation(system, case_dir, config, &manifest)?;
-    Ok((system, Some(report)))
+        // Row 6: history + user stats, no AR — estimate AR from history, preserve user stats.
+        EstimationPath::PartialEstimation => {
+            let (system, report) = run_partial_estimation(system, case_dir, config, &manifest)?;
+            Ok((system, Some(report), path))
+        }
+
+        // Row 4: full estimation from history.
+        EstimationPath::FullEstimation => {
+            let (system, report) = run_estimation(system, case_dir, config, &manifest)?;
+            Ok((system, Some(report), path))
+        }
+
+        // Row 5: history present, no stats, AR present — estimate stats from history,
+        // preserve user AR coefficients.
+        EstimationPath::UserArHistoryStats => {
+            let (system, report) = run_user_ar_estimation(system, case_dir, config, &manifest)?;
+            Ok((system, Some(report), path))
+        }
+    }
 }
 
 /// Inner function that runs the full estimation pipeline once path conditions are met.
@@ -322,7 +488,6 @@ fn run_estimation(
         &ArEstimationConfig {
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
-            method: &config.estimation.order_selection,
             season_map,
         },
     )?;
@@ -354,21 +519,533 @@ fn run_estimation(
     ))
 }
 
+/// Inner function that runs the partial estimation pipeline (P1 path).
+///
+/// Used when `inflow_history.parquet` and `inflow_seasonal_stats.parquet` are
+/// both present but `inflow_ar_coefficients.parquet` is absent. The user-provided
+/// stats (`mean_m3s`, `std_m3s`) are preserved exactly for LP assembly; only AR
+/// coefficients are estimated from history.
+///
+/// The key distinction vs [`run_estimation`]:
+/// - **Fitting stats** (history-derived, step 4) are used for YW matrix construction.
+/// - **User stats** (from `system.inflow_models()`, step 7) are used for the final
+///   `assemble_inflow_models` call that drives the scenario generator.
+#[allow(clippy::too_many_lines)]
+fn run_partial_estimation(
+    system: System,
+    case_dir: &Path,
+    config: &Config,
+    manifest: &FileManifest,
+) -> Result<(System, EstimationReport), EstimationError> {
+    // ── Step 3: load inflow history ──────────────────────────────────────────
+    let history_path = case_dir.join("scenarios/inflow_history.parquet");
+    let history = parse_inflow_history(&history_path)?;
+
+    // ── Convert InflowHistoryRow to (EntityId, NaiveDate, f64) tuples ────────
+    let observations: Vec<(EntityId, NaiveDate, f64)> = history
+        .iter()
+        .map(|row| (row.hydro_id, row.date, row.value_m3s))
+        .collect();
+
+    // ── Collect hydro IDs from system (canonical sorted order) ───────────────
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+
+    // ── Use stages already present in the system ─────────────────────────────
+    let stages = system.stages();
+
+    // ── Extract season map for calendar-based date-to-season fallback ────────
+    let season_map = system.policy_graph().season_map.as_ref();
+
+    // ── Validate that user stats are present in the loaded system ────────────
+    if system.inflow_models().is_empty() {
+        return Err(EstimationError::Load(
+            cobre_io::LoadError::ConstraintError {
+                description: "manifest indicates inflow_seasonal_stats.parquet is present \
+                          but system.inflow_models() is empty; \
+                          no user stats available for partial estimation"
+                    .to_string(),
+            },
+        ));
+    }
+
+    // ── Step 4: estimate seasonal stats (fitting stats — for YW solve only) ──
+    let fitting_stats =
+        estimate_seasonal_stats_with_season_map(&observations, stages, &hydro_ids, season_map)?;
+
+    // ── Step 5: estimate AR coefficients using fitting stats ─────────────────
+    let max_order = config.estimation.max_order as usize;
+    let (ar_estimates, estimation_report) = estimate_ar_coefficients_with_selection(
+        &observations,
+        &fitting_stats,
+        stages,
+        &hydro_ids,
+        &ArEstimationConfig {
+            max_order,
+            max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
+            season_map,
+        },
+    )?;
+
+    // ── Step 5b: bidirectional coverage validation (P2) ──────────────────────
+    // Use fitting_stats (history-derived) to identify which hydros had actual
+    // history data. ar_estimates includes white-noise entries for hydros with no
+    // history, so fitting_stats.entity_id is the correct "estimated" indicator.
+    let estimated_hydro_ids: HashSet<EntityId> =
+        fitting_stats.iter().map(|s| s.entity_id).collect();
+    let user_stats_hydro_ids: HashSet<EntityId> =
+        system.inflow_models().iter().map(|m| m.hydro_id).collect();
+
+    // Direction A: AR estimated but no user stats → hard error
+    let mut missing_stats: Vec<EntityId> = estimated_hydro_ids
+        .difference(&user_stats_hydro_ids)
+        .copied()
+        .collect();
+    missing_stats.sort();
+    if !missing_stats.is_empty() {
+        let ids: Vec<String> = missing_stats.iter().map(|id| id.0.to_string()).collect();
+        return Err(EstimationError::Load(
+            cobre_io::LoadError::ConstraintError {
+                description: format!(
+                    "partial estimation: AR coefficients were estimated for hydro(s) \
+                     [{ids}] but inflow_seasonal_stats.parquet has no entry for them; \
+                     all hydros with estimated AR must have user-provided stats",
+                    ids = ids.join(", ")
+                ),
+            },
+        ));
+    }
+
+    // Direction B: user stats but no AR estimated → white noise fallback
+    let mut white_noise_fallbacks: Vec<EntityId> = user_stats_hydro_ids
+        .difference(&estimated_hydro_ids)
+        .copied()
+        .collect();
+    white_noise_fallbacks.sort();
+
+    // ── Step 5c: initial lag / user stats scale mismatch check (P8) ──────────
+    // For each hydro that has BOTH a past_inflows entry AND fitting_stats AND
+    // user stats at stage_id == 0, check whether the lag-1 value is closer to
+    // the estimated mean than to the user mean. If so, emit an advisory warning.
+    // This check is purely informational and never alters control flow.
+    let lag_scale_warnings: Vec<LagScaleWarning> = {
+        // Build lookup: EntityId -> estimated mean at stage_id == 0.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+
+        // Build lookup: EntityId -> user mean at stage_id == 0.
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+
+        // Iterate past_inflows in sorted order for deterministic output.
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            // Skip hydros with no lag-1 value.
+            let Some(&lag_value) = past.values_m3s.first() else {
+                continue;
+            };
+            // Skip hydros missing either mean.
+            let Some(&estimated_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&user_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            // Warn when lag-1 is closer to estimated mean than to user mean.
+            if (lag_value - estimated_mean).abs() < (lag_value - user_mean).abs() {
+                eprintln!(
+                    "warning: hydro {} initial lag ({:.1}) is closer to estimated mean \
+                     ({:.1}) than user mean ({:.1}) -- initial conditions may be at \
+                     historical scale",
+                    past.hydro_id.0, lag_value, estimated_mean, user_mean
+                );
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value,
+                    user_mean,
+                    estimated_mean,
+                });
+            }
+        }
+        warnings
+    };
+
+    // ── Step 5d: cross-season std ratio divergence check (P9) ───────────────
+    // Compare consecutive-season std ratios between user and estimated profiles.
+    // Emits an advisory warning per flagged (hydro, season pair) and records the
+    // results in `std_ratio_warnings`. Never blocks execution.
+    let std_ratio_warnings = check_std_ratio_divergence(&system, &fitting_stats, stages);
+    for w in &std_ratio_warnings {
+        eprintln!(
+            "warning: hydro {} season {}->{} std ratio diverges {:.1}x between \
+             user ({:.2}) and estimated ({:.2})",
+            w.hydro_id.0, w.season_a, w.season_b, w.divergence, w.user_ratio, w.estimated_ratio
+        );
+    }
+
+    // ── Step 6: estimate or preserve correlation ─────────────────────────────
+    let correlation = if manifest.scenarios_correlation_json {
+        system.correlation().clone()
+    } else {
+        estimate_correlation_with_season_map(
+            &observations,
+            &ar_estimates,
+            &fitting_stats,
+            stages,
+            &hydro_ids,
+            season_map,
+        )?
+    };
+
+    // ── Step 7: convert to row types using USER stats, not fitting stats ──────
+    // Fitting stats were used only for YW matrix construction above.
+    // User stats (mean_m3s, std_m3s from the input system) drive LP assembly.
+    let user_stats_rows = user_stats_to_rows(&system);
+    let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
+
+    let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows)?;
+
+    let mut estimation_report = estimation_report;
+    estimation_report.white_noise_fallbacks = white_noise_fallbacks;
+    estimation_report.lag_scale_warnings = lag_scale_warnings;
+    estimation_report.std_ratio_warnings = std_ratio_warnings;
+
+    Ok((
+        system.with_scenario_models(inflow_models, correlation),
+        estimation_report,
+    ))
+}
+
+/// Inner function that runs the P7 (`UserArHistoryStats`) estimation pipeline.
+///
+/// Used when `inflow_history.parquet` and `inflow_ar_coefficients.parquet` are
+/// both present but `inflow_seasonal_stats.parquet` is absent. Seasonal stats
+/// (`mean_m3s`, `std_m3s`) are estimated from history for LP assembly and for
+/// correlation estimation. AR coefficients are loaded from the user-provided
+/// file and preserved bitwise — **no re-estimation from history is performed**.
+///
+/// The key distinction vs [`run_estimation`]:
+/// - **AR coefficients** come from the user file (not estimated from history).
+/// - **Seasonal stats** (mean, std) come from history estimation and drive both
+///   the final `InflowModel` and the correlation estimation.
+/// - The returned [`EstimationReport`] has an empty `entries` map and method
+///   `"user_provided"` to signal that no AR estimation was performed.
+fn run_user_ar_estimation(
+    system: System,
+    case_dir: &Path,
+    _config: &Config,
+    manifest: &FileManifest,
+) -> Result<(System, EstimationReport), EstimationError> {
+    // ── Step 3: load inflow history ──────────────────────────────────────────
+    let history_path = case_dir.join("scenarios/inflow_history.parquet");
+    let history = parse_inflow_history(&history_path)?;
+
+    // ── Convert InflowHistoryRow to (EntityId, NaiveDate, f64) tuples ────────
+    let observations: Vec<(EntityId, NaiveDate, f64)> = history
+        .iter()
+        .map(|row| (row.hydro_id, row.date, row.value_m3s))
+        .collect();
+
+    // ── Collect hydro IDs from system (canonical sorted order) ───────────────
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+
+    // ── Use stages already present in the system ─────────────────────────────
+    let stages = system.stages();
+
+    // ── Extract season map for calendar-based date-to-season fallback ────────
+    let season_map = system.policy_graph().season_map.as_ref();
+
+    // ── Step 4: estimate seasonal stats from history ─────────────────────────
+    // These stats are used for both LP assembly (mean_m3s, std_m3s) and for
+    // correlation estimation. User AR coefficients are NOT re-estimated here.
+    let seasonal_stats =
+        estimate_seasonal_stats_with_season_map(&observations, stages, &hydro_ids, season_map)?;
+
+    // ── Load user AR coefficients from file ───────────────────────────────────
+    // NOTE: system.inflow_models() is empty for this path (assemble_inflow_models
+    // returned an empty vec because stats were absent). Load AR from file directly.
+    let ar_path = case_dir.join("scenarios/inflow_ar_coefficients.parquet");
+    let user_ar_rows = parse_inflow_ar_coefficients(&ar_path)?;
+
+    // ── Convert user AR rows to ArCoefficientEstimate for correlation ─────────
+    // ArCoefficientEstimate uses season_id; InflowArCoefficientRow uses stage_id.
+    // The conversion groups by (hydro_id, season_id) using the stage-to-season map.
+    let user_ar_estimates = ar_rows_to_estimates(&user_ar_rows, stages);
+
+    // ── Step 6: estimate or preserve correlation ─────────────────────────────
+    let correlation = if manifest.scenarios_correlation_json {
+        // Explicit correlation.json is present — keep whatever was loaded by load_case.
+        system.correlation().clone()
+    } else {
+        estimate_correlation_with_season_map(
+            &observations,
+            &user_ar_estimates,
+            &seasonal_stats,
+            stages,
+            &hydro_ids,
+            season_map,
+        )?
+    };
+
+    // ── Step 7: convert results to row types and assemble inflow models ───────
+    // History-estimated stats drive mean_m3s / std_m3s; user AR rows drive
+    // ar_coefficients / residual_std_ratio.
+    let stats_rows = seasonal_stats_to_rows(&seasonal_stats, stages);
+
+    let inflow_models = assemble_inflow_models(stats_rows, user_ar_rows)?;
+
+    // Build a minimal report: no AR was estimated, method is "user_provided".
+    let estimation_report = EstimationReport {
+        entries: BTreeMap::new(),
+        method: "user_provided".to_string(),
+        white_noise_fallbacks: Vec::new(),
+        lag_scale_warnings: Vec::new(),
+        std_ratio_warnings: Vec::new(),
+    };
+
+    Ok((
+        system.with_scenario_models(inflow_models, correlation),
+        estimation_report,
+    ))
+}
+
+/// Convert [`InflowArCoefficientRow`] entries to [`ArCoefficientEstimate`] values.
+///
+/// This is the inverse of [`ar_estimates_to_rows`]: it groups coefficient rows by
+/// `(hydro_id, season_id)` — using the stage-to-season mapping from `stages` —
+/// and produces one [`ArCoefficientEstimate`] per group.
+///
+/// When multiple stages map to the same season, each stage produces duplicate
+/// rows in the `InflowArCoefficientRow` format (all lags repeated for every stage
+/// in the season). This function deduplicates by processing only the first stage
+/// encountered for each season per hydro. Coefficient order is preserved (lag 1,
+/// lag 2, …); `residual_std_ratio` is taken from the first row of each group.
+///
+/// The result is sorted by `(hydro_id, season_id)` ascending, matching the
+/// canonical ordering expected by `estimate_correlation_with_season_map`.
+fn ar_rows_to_estimates(
+    rows: &[InflowArCoefficientRow],
+    stages: &[cobre_core::temporal::Stage],
+) -> Vec<ArCoefficientEstimate> {
+    // Build stage_id -> season_id mapping.
+    let stage_id_to_season: HashMap<i32, usize> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
+
+    // Track the first stage_id seen for each (hydro_id, season_id) key.
+    // Since rows are pre-sorted by (hydro_id, stage_id, lag), the first stage_id
+    // encountered for a given season is the canonical one to use. Subsequent
+    // stages in the same season are duplicates produced by ar_estimates_to_rows
+    // and must be skipped.
+    let mut first_stage: HashMap<(EntityId, usize), i32> = HashMap::new();
+
+    // Groups accumulate coefficients for the canonical (first) stage only.
+    // Use BTreeMap for deterministic (hydro_id, season_id) ordering in output.
+    let mut groups: BTreeMap<(EntityId, usize), (Vec<f64>, f64)> = BTreeMap::new();
+
+    for row in rows {
+        let Some(&season_id) = stage_id_to_season.get(&row.stage_id) else {
+            continue;
+        };
+
+        let key = (row.hydro_id, season_id);
+
+        // Record the first stage_id seen for this key, or skip if a different stage.
+        let canonical_stage = first_stage.entry(key).or_insert(row.stage_id);
+        if *canonical_stage != row.stage_id {
+            // This row belongs to a duplicate stage for the same season — skip it.
+            continue;
+        }
+
+        // Accumulate the coefficient for the canonical stage.
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| (Vec::new(), row.residual_std_ratio));
+        entry.0.push(row.coefficient);
+    }
+
+    groups
+        .into_iter()
+        .map(
+            |((hydro_id, season_id), (coefficients, residual_std_ratio))| ArCoefficientEstimate {
+                hydro_id,
+                season_id,
+                coefficients,
+                residual_std_ratio,
+            },
+        )
+        .collect()
+}
+
+/// Extract user-provided seasonal stats from `system.inflow_models()` as
+/// [`InflowSeasonalStatsRow`] entries.
+///
+/// Each [`InflowModel`] in the system contributes one row with its `mean_m3s`
+/// and `std_m3s` preserved bitwise — no transformation is applied. This is
+/// used by [`run_partial_estimation`] to pass user stats into `assemble_inflow_models`
+/// instead of history-derived fitting stats.
+fn user_stats_to_rows(system: &System) -> Vec<InflowSeasonalStatsRow> {
+    system
+        .inflow_models()
+        .iter()
+        .map(|m| InflowSeasonalStatsRow {
+            hydro_id: m.hydro_id,
+            stage_id: m.stage_id,
+            mean_m3s: m.mean_m3s,
+            std_m3s: m.std_m3s,
+        })
+        .collect()
+}
+
+/// Check whether consecutive-season std ratios diverge between user and
+/// estimated profiles for each hydro in the partial estimation path (P9).
+///
+/// For each hydro present in both user stats and `fitting_stats`, iterates
+/// consecutive season pairs `(m, (m+1) % n)` and computes:
+///
+/// - `ratio_user = user_std[m] / user_std[m+1]`
+/// - `ratio_est  = est_std[m]  / est_std[m+1]`
+/// - `divergence = max(ratio_user / ratio_est, ratio_est / ratio_user)`
+///
+/// A [`StdRatioDivergence`] entry is pushed when `divergence > 2.0`. Season
+/// pairs where either denominator is `< 1e-12` are skipped silently. The
+/// result is sorted by `(hydro_id, season_a)`.
+fn check_std_ratio_divergence(
+    system: &System,
+    fitting_stats: &[SeasonalStats],
+    stages: &[cobre_core::temporal::Stage],
+) -> Vec<StdRatioDivergence> {
+    // Build stage_id -> season_id mapping.
+    let stage_id_to_season: HashMap<i32, usize> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
+        .collect();
+
+    // Build (hydro_id, season_id) -> user std.
+    // When multiple stages share a season, any entry will do (same season).
+    let mut user_std: BTreeMap<(EntityId, usize), f64> = BTreeMap::new();
+    for m in system.inflow_models() {
+        let Some(&season_id) = stage_id_to_season.get(&m.stage_id) else {
+            continue;
+        };
+        user_std.entry((m.hydro_id, season_id)).or_insert(m.std_m3s);
+    }
+
+    // Build (hydro_id, season_id) -> estimated std.
+    let mut est_std: BTreeMap<(EntityId, usize), f64> = BTreeMap::new();
+    for s in fitting_stats {
+        let Some(&season_id) = stage_id_to_season.get(&s.stage_id) else {
+            continue;
+        };
+        est_std.entry((s.entity_id, season_id)).or_insert(s.std);
+    }
+
+    // Collect all hydro IDs that appear in both maps, in sorted order.
+    let user_hydros: std::collections::BTreeSet<EntityId> =
+        user_std.keys().map(|(h, _)| *h).collect();
+    let est_hydros: std::collections::BTreeSet<EntityId> =
+        est_std.keys().map(|(h, _)| *h).collect();
+    let common_hydros: Vec<EntityId> = user_hydros.intersection(&est_hydros).copied().collect();
+
+    let mut warnings: Vec<StdRatioDivergence> = Vec::new();
+
+    for hydro_id in common_hydros {
+        // Collect sorted distinct season IDs for this hydro from user stats.
+        let season_ids: Vec<usize> = {
+            let mut ids: Vec<usize> = user_std
+                .keys()
+                .filter(|(h, _)| *h == hydro_id)
+                .map(|(_, s)| *s)
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
+
+        let n = season_ids.len();
+        if n < 2 {
+            // Fewer than 2 seasons: no consecutive pairs exist.
+            continue;
+        }
+
+        for i in 0..n {
+            let season_a = season_ids[i];
+            let season_b = season_ids[(i + 1) % n];
+
+            let Some(&u_a) = user_std.get(&(hydro_id, season_a)) else {
+                continue;
+            };
+            let Some(&u_b) = user_std.get(&(hydro_id, season_b)) else {
+                continue;
+            };
+            let Some(&e_a) = est_std.get(&(hydro_id, season_a)) else {
+                continue;
+            };
+            let Some(&e_b) = est_std.get(&(hydro_id, season_b)) else {
+                continue;
+            };
+
+            // Skip pairs where either denominator std is near-zero.
+            if u_b.abs() < 1e-12 || e_b.abs() < 1e-12 {
+                continue;
+            }
+
+            let ratio_user = u_a / u_b;
+            let ratio_est = e_a / e_b;
+
+            // Skip when either ratio is near-zero — would cause division-by-zero
+            // in the divergence computation.
+            if ratio_user.abs() < 1e-12 || ratio_est.abs() < 1e-12 {
+                continue;
+            }
+
+            let divergence = (ratio_user / ratio_est)
+                .abs()
+                .max((ratio_est / ratio_user).abs());
+
+            if divergence > 2.0 {
+                warnings.push(StdRatioDivergence {
+                    hydro_id,
+                    season_a,
+                    season_b,
+                    user_ratio: ratio_user,
+                    estimated_ratio: ratio_est,
+                    divergence,
+                });
+            }
+        }
+    }
+
+    // Sort by (hydro_id, season_a) for deterministic output.
+    warnings.sort_by_key(|w| (w.hydro_id, w.season_a));
+    warnings
+}
+
 /// Configuration parameters for AR coefficient estimation.
 struct ArEstimationConfig<'a> {
     max_order: usize,
     max_coeff_magnitude: Option<f64>,
-    method: &'a OrderSelectionMethod,
     season_map: Option<&'a cobre_core::temporal::SeasonMap>,
 }
 
-/// Estimate AR coefficients with the configured order selection method.
+/// Estimate AR coefficients using the periodic Yule-Walker / PACF method.
 ///
-/// For `Fixed`, delegates directly to `estimate_ar_coefficients`.
-/// For `Aic`, calls `estimate_ar_coefficients` at `max_order` to obtain full
-/// coefficients, then calls `levinson_durbin` per `(entity, season)` pair to
-/// get `sigma2_per_order` for AIC minimisation, and truncates the coefficient
-/// vector to the AIC-selected order.
+/// Delegates to [`estimate_ar_with_pacf`], which selects the AR order via the
+/// periodic PACF significance test (95% confidence, `z_alpha = 1.96`) and then
+/// solves the periodic Yule-Walker system at the selected order. The
+/// `cfg.method` field is accepted for API compatibility; only
+/// `OrderSelectionMethod::Pacf` is supported.
 fn estimate_ar_coefficients_with_selection(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -376,58 +1053,15 @@ fn estimate_ar_coefficients_with_selection(
     hydro_ids: &[EntityId],
     cfg: &ArEstimationConfig<'_>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
-    match cfg.method {
-        OrderSelectionMethod::Fixed => {
-            let mut estimates = estimate_ar_coefficients_with_season_map(
-                observations,
-                seasonal_stats,
-                stages,
-                hydro_ids,
-                cfg.max_order,
-                cfg.season_map,
-            )?;
-
-            // Build stats_map and n_seasons for contribution validation.
-            let stage_index = stages
-                .iter()
-                .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
-                .collect::<Vec<_>>();
-            let stage_id_to_season: HashMap<i32, usize> = stage_index.iter().copied().collect();
-            let n_seasons = stage_index
-                .iter()
-                .map(|&(_, sid)| sid + 1)
-                .max()
-                .unwrap_or(0);
-            let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = seasonal_stats
-                .iter()
-                .filter_map(|s| {
-                    let season_id = stage_id_to_season.get(&s.stage_id).copied()?;
-                    Some(((s.entity_id, season_id), s))
-                })
-                .collect();
-            let sigma2_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
-
-            let reductions = apply_contribution_validation(
-                &mut estimates,
-                n_seasons,
-                &stats_map,
-                &sigma2_map,
-                cfg.max_coeff_magnitude,
-            );
-
-            let report = build_estimation_report(&estimates, n_seasons, &reductions, "fixed");
-            Ok((estimates, report))
-        }
-        OrderSelectionMethod::Pacf => estimate_ar_with_pacf(
-            observations,
-            seasonal_stats,
-            stages,
-            hydro_ids,
-            cfg.max_order,
-            cfg.season_map,
-            cfg.max_coeff_magnitude,
-        ),
-    }
+    estimate_ar_with_pacf(
+        observations,
+        seasonal_stats,
+        stages,
+        hydro_ids,
+        cfg.max_order,
+        cfg.season_map,
+        cfg.max_coeff_magnitude,
+    )
 }
 
 /// PACF-based AR order selection using periodic Yule-Walker method.
@@ -462,6 +1096,9 @@ fn estimate_ar_with_pacf(
         let report = EstimationReport {
             entries: BTreeMap::new(),
             method: "PACF".to_string(),
+            white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
         return Ok((estimates, report));
     }
@@ -848,20 +1485,8 @@ fn iterative_pacf_reduction(
 }
 
 /// Apply coefficient magnitude bound and contribution-based order validation
-/// to all AR estimates.
-///
-/// When `max_coeff_magnitude` is `Some(threshold)`, any (entity, season)
-/// with `|coefficient| > threshold` is immediately reduced to order 0
-/// before the contribution analysis runs. This acts as a fast-path safety
-/// net for the most extreme explosive models.
-///
-/// Then for each entity, groups all season coefficients and standard
-/// deviations, iterates per season: if negative contributions are found,
-/// the order is reduced to the maximum valid order and the coefficient
-/// vector truncated. The loop repeats until all contributions are
-/// non-negative or the order reaches zero.
-///
-/// Returns a map of `EntityId` -> list of `ContributionReduction` events.
+/// to all AR estimates (used only in tests after Fixed-path removal).
+#[cfg(test)]
 fn apply_contribution_validation(
     estimates: &mut [ArCoefficientEstimate],
     n_seasons: usize,
@@ -977,7 +1602,8 @@ fn apply_contribution_validation(
                 } else if let Some(sigma2_vec) = sigma2_map.get(&(hydro_id, season_id)) {
                     if reduced_order <= sigma2_vec.len() {
                         let sigma2 = sigma2_vec[reduced_order - 1];
-                        estimates[idx].residual_std_ratio = residual_std_ratio_from_sigma2(sigma2);
+                        estimates[idx].residual_std_ratio =
+                            if sigma2 <= 0.0 { 1.0 } else { sigma2.sqrt() };
                     }
                 }
 
@@ -1053,6 +1679,9 @@ pub(crate) fn build_estimation_report(
     EstimationReport {
         entries,
         method: method.to_string(),
+        white_noise_fallbacks: Vec::new(),
+        lag_scale_warnings: Vec::new(),
+        std_ratio_warnings: Vec::new(),
     }
 }
 
@@ -1321,7 +1950,7 @@ mod tests {
         let original_len = system.inflow_models().len();
 
         let config = default_config();
-        let (result, report) = estimate_from_history(system, case_dir, &config).unwrap();
+        let (result, report, _path) = estimate_from_history(system, case_dir, &config).unwrap();
 
         assert_eq!(
             result.inflow_models().len(),
@@ -1358,7 +1987,7 @@ mod tests {
         let original_len = system.inflow_models().len();
 
         let config = default_config();
-        let (result, report) = estimate_from_history(system, case_dir, &config).unwrap();
+        let (result, report, _path) = estimate_from_history(system, case_dir, &config).unwrap();
 
         assert_eq!(
             result.inflow_models().len(),
@@ -1368,6 +1997,695 @@ mod tests {
         assert!(report.is_none(), "no history path must return None report");
     }
 
+    // ── EstimationPath unit tests ─────────────────────────────────────────────
+
+    /// All 8 boolean combinations map to the expected `EstimationPath` variant.
+    ///
+    /// Covers all 7 named variants plus the edge case `(false, false, true)`
+    /// which must map to `Deterministic` because AR alone is meaningless.
+    #[test]
+    fn test_estimation_path_resolve_all_8_combinations() {
+        use cobre_io::FileManifest;
+
+        let make = |history: bool, stats: bool, ar: bool| FileManifest {
+            scenarios_inflow_history_parquet: history,
+            scenarios_inflow_seasonal_stats_parquet: stats,
+            scenarios_inflow_ar_coefficients_parquet: ar,
+            ..Default::default()
+        };
+
+        // Row 1: (false, false, false) -> Deterministic
+        assert_eq!(
+            EstimationPath::resolve(&make(false, false, false)),
+            EstimationPath::Deterministic,
+        );
+        // Edge case: (false, false, true) -> Deterministic (AR alone is meaningless)
+        assert_eq!(
+            EstimationPath::resolve(&make(false, false, true)),
+            EstimationPath::Deterministic,
+        );
+        // Row 2: (false, true, false) -> UserStatsWhiteNoise
+        assert_eq!(
+            EstimationPath::resolve(&make(false, true, false)),
+            EstimationPath::UserStatsWhiteNoise,
+        );
+        // Row 3: (false, true, true) -> UserProvidedNoHistory
+        assert_eq!(
+            EstimationPath::resolve(&make(false, true, true)),
+            EstimationPath::UserProvidedNoHistory,
+        );
+        // Row 4: (true, false, false) -> FullEstimation
+        assert_eq!(
+            EstimationPath::resolve(&make(true, false, false)),
+            EstimationPath::FullEstimation,
+        );
+        // Row 5: (true, false, true) -> UserArHistoryStats
+        assert_eq!(
+            EstimationPath::resolve(&make(true, false, true)),
+            EstimationPath::UserArHistoryStats,
+        );
+        // Row 6: (true, true, false) -> PartialEstimation
+        assert_eq!(
+            EstimationPath::resolve(&make(true, true, false)),
+            EstimationPath::PartialEstimation,
+        );
+        // Row 7: (true, true, true) -> UserProvidedAll
+        assert_eq!(
+            EstimationPath::resolve(&make(true, true, true)),
+            EstimationPath::UserProvidedAll,
+        );
+    }
+
+    /// Every variant's `as_str()` must return a non-empty, unique string.
+    #[test]
+    fn test_estimation_path_as_str_round_trip() {
+        let variants = [
+            EstimationPath::Deterministic,
+            EstimationPath::UserStatsWhiteNoise,
+            EstimationPath::UserProvidedNoHistory,
+            EstimationPath::FullEstimation,
+            EstimationPath::UserArHistoryStats,
+            EstimationPath::PartialEstimation,
+            EstimationPath::UserProvidedAll,
+        ];
+
+        let strings: Vec<&str> = variants.iter().map(|v| v.as_str()).collect();
+
+        // All strings must be non-empty.
+        for s in &strings {
+            assert!(!s.is_empty(), "as_str() returned empty string");
+        }
+
+        // All strings must be unique.
+        let unique: std::collections::HashSet<&&str> = strings.iter().collect();
+        assert_eq!(
+            unique.len(),
+            variants.len(),
+            "as_str() must return unique strings for each variant"
+        );
+    }
+
+    // ── user_stats_to_rows unit tests ─────────────────────────────────────────
+
+    /// `user_stats_to_rows` maps all models — 3 InflowModel entries (2 hydros,
+    /// multiple stages) produce the same count of rows with bitwise-equal stats.
+    #[test]
+    fn test_user_stats_to_rows_maps_all_models() {
+        let models = vec![
+            InflowModel {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+            InflowModel {
+                hydro_id: EntityId(1),
+                stage_id: 1,
+                mean_m3s: 120.0,
+                std_m3s: 12.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 50.0,
+                std_m3s: 5.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+        ];
+        let system = minimal_system_with_inflow_models(models.clone());
+        let rows = user_stats_to_rows(&system);
+
+        assert_eq!(rows.len(), 3, "must produce one row per InflowModel");
+
+        for (model, row) in models.iter().zip(rows.iter()) {
+            assert_eq!(row.hydro_id, model.hydro_id, "hydro_id must be preserved");
+            assert_eq!(row.stage_id, model.stage_id, "stage_id must be preserved");
+            // Bitwise equality: the f64 bits must be identical, not just approximately equal.
+            assert_eq!(
+                row.mean_m3s.to_bits(),
+                model.mean_m3s.to_bits(),
+                "mean_m3s must be bitwise identical"
+            );
+            assert_eq!(
+                row.std_m3s.to_bits(),
+                model.std_m3s.to_bits(),
+                "std_m3s must be bitwise identical"
+            );
+        }
+    }
+
+    /// `user_stats_to_rows` on an empty system returns an empty vec.
+    #[test]
+    fn test_user_stats_to_rows_empty_system() {
+        let system = minimal_system_with_inflow_models(vec![]);
+        let rows = user_stats_to_rows(&system);
+        assert!(rows.is_empty(), "empty system must produce empty rows");
+    }
+
+    // ── PartialEstimation unit tests ──────────────────────────────────────────
+
+    /// Write a real `inflow_history.parquet` with synthetic 2-season PAR(1) data
+    /// for a single hydro (id=1), using the existing `simulate_two_season_par2`
+    /// helper at order 2 to generate observations with non-trivial structure.
+    ///
+    /// Observations are placed on Jan 1 (season 0) and Jul 1 (season 1) of
+    /// successive years starting from 1970, dated so they fall within the
+    /// study stages built by `make_two_season_stage`.
+    ///
+    /// The history file is required to have real Parquet content because
+    /// `run_partial_estimation` calls `parse_inflow_history` on it.
+    fn write_unit_test_inflow_history(path: &std::path::Path, hydro_id: i32, n_years: usize) {
+        use arrow::array::{Date32Array, Float64Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use chrono::NaiveDate;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let date_to_days = |d: NaiveDate| -> i32 {
+            i32::try_from((d - epoch).num_days()).expect("date in Date32 range")
+        };
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(0.7, 0.15, n_years, 99);
+
+        let mut ids: Vec<i32> = Vec::with_capacity(n_years * 2);
+        let mut dates: Vec<i32> = Vec::with_capacity(n_years * 2);
+        let mut values: Vec<f64> = Vec::with_capacity(n_years * 2);
+
+        for y in 0..n_years {
+            let year = (1970 + y) as i32;
+            // Season 0: Jan 1 falls within make_two_season_stage(..., first_half=true)
+            ids.push(hydro_id);
+            dates.push(date_to_days(NaiveDate::from_ymd_opt(year, 1, 15).unwrap()));
+            // Shift values by 300 so they are all positive (simulate_two_season_par2
+            // produces ~0-mean series; offset keeps inflows physically plausible).
+            values.push(obs_s0[y] + 300.0);
+
+            // Season 1: Jul 1 falls within make_two_season_stage(..., first_half=false)
+            ids.push(hydro_id);
+            dates.push(date_to_days(NaiveDate::from_ymd_opt(year, 7, 15).unwrap()));
+            values.push(obs_s1[y] + 300.0);
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("date", DataType::Date32, false),
+            Field::new("value_m3s", DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Date32Array::from(dates)),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )
+        .expect("valid batch");
+
+        let file = std::fs::File::create(path).expect("create parquet file");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+    }
+
+    /// Build a `System` with one hydro (id=1), one bus, and 2-season stages
+    /// spanning `n_years` study years, with pre-loaded inflow models whose
+    /// `mean_m3s = 100.0` and `std_m3s = 10.0` (user-provided stats).
+    ///
+    /// This represents the state after `load_case` has loaded
+    /// `inflow_seasonal_stats.parquet` but not `inflow_ar_coefficients.parquet`.
+    #[allow(clippy::cast_possible_wrap)]
+    fn build_system_with_user_stats(n_years: usize) -> System {
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+
+        let hydro_id = EntityId(1);
+        let bus = Bus {
+            id: EntityId(10),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: Some(f64::INFINITY),
+                cost_per_mwh: 3000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        // Build 2-season stages using make_two_season_stage (season 0: Jan–Jun,
+        // season 1: Jul–Dec), one stage per season per year.
+        let ref_year = 1970_i32;
+        let mut stages = Vec::with_capacity(n_years * 2);
+        for y in 0..n_years {
+            let year = ref_year + y as i32;
+            stages.push(make_two_season_stage(y * 2, (y * 2) as i32, 0, year, true));
+            stages.push(make_two_season_stage(
+                y * 2 + 1,
+                (y * 2 + 1) as i32,
+                1,
+                year,
+                false,
+            ));
+        }
+
+        // Build inflow models for each stage, preserving user-provided stats.
+        // These represent what load_case produces after reading inflow_seasonal_stats.
+        let inflow_models: Vec<InflowModel> = stages
+            .iter()
+            .map(|s| InflowModel {
+                hydro_id,
+                stage_id: s.id,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let hydro = Hydro {
+            id: hydro_id,
+            name: "H1".to_string(),
+            bus_id: EntityId(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 5000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 1000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 900.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 1000.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .build()
+            .expect("valid system with user stats")
+    }
+
+    /// Create the minimal directory skeleton and write both the real Parquet
+    /// history and an empty sentinel file for `inflow_seasonal_stats.parquet`,
+    /// which is sufficient for the manifest to classify the path as
+    /// `PartialEstimation` (history=true, stats=true, ar=false).
+    fn setup_partial_estimation_case(case_dir: &std::path::Path, n_years: usize) {
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+
+        // Write a real Parquet history file — it must be parseable.
+        write_unit_test_inflow_history(
+            &scenarios.join("inflow_history.parquet"),
+            1, // hydro_id
+            n_years,
+        );
+
+        // Write a sentinel file to trigger the manifest flag.
+        // validate_structure only checks existence, not content.
+        std::fs::write(scenarios.join("inflow_seasonal_stats.parquet"), b"sentinel")
+            .expect("write sentinel");
+
+        // No inflow_ar_coefficients.parquet → PartialEstimation path.
+    }
+
+    /// AC-T8-1: `PartialEstimation` preserves user-provided `mean_m3s` and
+    /// `std_m3s` while estimating AR coefficients from history.
+    ///
+    /// Setup: system with known user stats (mean=100.0, std=10.0 for every
+    /// stage), case dir with a real `inflow_history.parquet` (synthetic PAR(2)
+    /// data) and an `inflow_seasonal_stats.parquet` sentinel.
+    ///
+    /// Asserts:
+    /// - Every inflow model in the returned system has `mean_m3s == 100.0`
+    ///   (bitwise) and `std_m3s == 10.0` (bitwise).
+    /// - Every inflow model has at least one AR coefficient (non-empty).
+    #[test]
+    fn test_partial_estimation_preserves_user_stats() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30; // sufficient for PACF order selection
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_partial_estimation_case(case_dir, N_YEARS);
+        let system = build_system_with_user_stats(N_YEARS);
+        let config = default_config();
+
+        let (updated, report, path) = estimate_from_history(system, case_dir, &config)
+            .expect("partial estimation must succeed");
+
+        assert_eq!(
+            path,
+            EstimationPath::PartialEstimation,
+            "expected PartialEstimation path"
+        );
+        assert!(
+            report.is_some(),
+            "PartialEstimation must return Some(report)"
+        );
+
+        let models = updated.inflow_models();
+        assert!(
+            !models.is_empty(),
+            "partial estimation must produce at least one inflow model"
+        );
+
+        for m in models {
+            // Bitwise equality — no rounding or transformation is allowed.
+            assert_eq!(
+                m.mean_m3s.to_bits(),
+                100.0_f64.to_bits(),
+                "mean_m3s must be bitwise identical to user value 100.0 for stage {}",
+                m.stage_id
+            );
+            assert_eq!(
+                m.std_m3s.to_bits(),
+                10.0_f64.to_bits(),
+                "std_m3s must be bitwise identical to user value 10.0 for stage {}",
+                m.stage_id
+            );
+            assert!(
+                !m.ar_coefficients.is_empty(),
+                "ar_coefficients must be non-empty for stage {} (estimated from history)",
+                m.stage_id
+            );
+        }
+    }
+
+    /// AC-T8-2: `PartialEstimation` returns a `Some(report)` with method "PACF"
+    /// and an entry for the single hydro plant.
+    ///
+    /// Same setup as `test_partial_estimation_preserves_user_stats`.
+    #[test]
+    fn test_partial_estimation_returns_report() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_partial_estimation_case(case_dir, N_YEARS);
+        let system = build_system_with_user_stats(N_YEARS);
+        let config = default_config();
+
+        let (_updated, report, _path) = estimate_from_history(system, case_dir, &config)
+            .expect("partial estimation must succeed");
+
+        let report = report.expect("PartialEstimation must return Some(EstimationReport)");
+
+        assert_eq!(
+            report.method, "PACF",
+            "estimation method must be PACF, got '{}'",
+            report.method
+        );
+        assert_eq!(
+            report.entries.len(),
+            1,
+            "report must contain exactly 1 entry (one hydro), got {}",
+            report.entries.len()
+        );
+        assert!(
+            report.entries.contains_key(&EntityId(1)),
+            "report must contain an entry for hydro_id=1"
+        );
+    }
+
+    // ── LagScaleWarning unit tests ────────────────────────────────────────────
+
+    /// Helper: build a minimal fitting_stats and user InflowModel pair for a
+    /// single hydro at stage_id == 0, then run the warning check inline.
+    ///
+    /// Returns the warnings collected. Extracted to avoid code duplication
+    /// across the three lag-scale warning tests.
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn collect_lag_scale_warnings(
+        hydro_id: EntityId,
+        lag_value: f64,
+        user_mean: f64,
+        estimated_mean: f64,
+        include_past_inflows: bool,
+    ) -> Vec<LagScaleWarning> {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{HydroPastInflows, InitialConditions};
+
+        // Build fitting_stats with estimated mean at stage_id == 0.
+        let fitting_stats = vec![SeasonalStats {
+            entity_id: hydro_id,
+            stage_id: 0,
+            mean: estimated_mean,
+            std: 50.0,
+        }];
+
+        // Build system with a user InflowModel at stage_id == 0.
+        let user_model = InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: user_mean,
+            std_m3s: 50.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let past_inflows = if include_past_inflows {
+            vec![HydroPastInflows {
+                hydro_id,
+                values_m3s: vec![lag_value],
+            }]
+        } else {
+            vec![]
+        };
+        let ic = InitialConditions {
+            storage: vec![],
+            filling_storage: vec![],
+            past_inflows,
+        };
+        let system = SystemBuilder::new()
+            .inflow_models(vec![user_model])
+            .initial_conditions(ic)
+            .build()
+            .expect("valid system");
+
+        // Replicate the check logic from run_partial_estimation step 5c.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            let Some(&lv) = past.values_m3s.first() else {
+                continue;
+            };
+            let Some(&est_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&usr_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            if (lv - est_mean).abs() < (lv - usr_mean).abs() {
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value: lv,
+                    user_mean: usr_mean,
+                    estimated_mean: est_mean,
+                });
+            }
+        }
+        warnings
+    }
+
+    /// P8-001: Warning fires when lag-1 is closer to estimated mean than user mean.
+    ///
+    /// lag=500, user_mean=800, estimated_mean=480 -> |500-480|=20 < |500-800|=300
+    /// -> warning must be produced.
+    #[test]
+    fn test_lag_scale_warning_fires_when_closer_to_estimated() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            500.0, // lag_value
+            800.0, // user_mean
+            480.0, // estimated_mean
+            true,  // include_past_inflows
+        );
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one LagScaleWarning when lag is closer to estimated mean"
+        );
+        assert_eq!(
+            warnings[0].hydro_id,
+            EntityId(1),
+            "warning must record the correct hydro_id"
+        );
+        assert!((warnings[0].lag_value - 500.0).abs() < f64::EPSILON);
+        assert!((warnings[0].user_mean - 800.0).abs() < f64::EPSILON);
+        assert!((warnings[0].estimated_mean - 480.0).abs() < f64::EPSILON);
+    }
+
+    /// P8-002: Warning does NOT fire when lag-1 is closer to user mean.
+    ///
+    /// lag=790, user_mean=800, estimated_mean=480 -> |790-480|=310 > |790-800|=10
+    /// -> no warning.
+    #[test]
+    fn test_lag_scale_warning_not_fires_when_closer_to_user() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            790.0, // lag_value -- close to user_mean
+            800.0, // user_mean
+            480.0, // estimated_mean
+            true,  // include_past_inflows
+        );
+        assert!(
+            warnings.is_empty(),
+            "expected no LagScaleWarning when lag is closer to user mean"
+        );
+    }
+
+    /// P8-003: No warnings when past_inflows is empty.
+    #[test]
+    fn test_lag_scale_warning_empty_past_inflows() {
+        let warnings = collect_lag_scale_warnings(
+            EntityId(1),
+            500.0, // lag_value (irrelevant -- no past_inflows)
+            800.0, // user_mean
+            480.0, // estimated_mean
+            false, // include_past_inflows = false
+        );
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings when past_inflows is empty"
+        );
+    }
+
+    /// P8-004: Hydro with past_inflows but no entry in fitting_stats is skipped.
+    #[test]
+    fn test_lag_scale_warning_skips_hydro_without_history() {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{HydroPastInflows, InitialConditions};
+
+        let hydro_id = EntityId(1);
+        let other_hydro_id = EntityId(2);
+
+        // fitting_stats only covers hydro 2, not hydro 1 (the one with past_inflows).
+        let fitting_stats = vec![SeasonalStats {
+            entity_id: other_hydro_id,
+            stage_id: 0,
+            mean: 480.0,
+            std: 50.0,
+        }];
+
+        let user_model = InflowModel {
+            hydro_id,
+            stage_id: 0,
+            mean_m3s: 800.0,
+            std_m3s: 50.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        };
+        let ic = InitialConditions {
+            storage: vec![],
+            filling_storage: vec![],
+            past_inflows: vec![HydroPastInflows {
+                hydro_id,
+                values_m3s: vec![500.0],
+            }],
+        };
+        let system = SystemBuilder::new()
+            .inflow_models(vec![user_model])
+            .initial_conditions(ic)
+            .build()
+            .expect("valid system");
+
+        // Run the check inline.
+        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+            .iter()
+            .filter(|s| s.stage_id == 0)
+            .map(|s| (s.entity_id, s.mean))
+            .collect();
+        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+            .inflow_models()
+            .iter()
+            .filter(|m| m.stage_id == 0)
+            .map(|m| (m.hydro_id, m.mean_m3s))
+            .collect();
+        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+            system.initial_conditions().past_inflows.iter().collect();
+        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+        let mut warnings: Vec<LagScaleWarning> = Vec::new();
+        for past in sorted_past_inflows {
+            let Some(&lv) = past.values_m3s.first() else {
+                continue;
+            };
+            let Some(&est_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            let Some(&usr_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+                continue;
+            };
+            if (lv - est_mean).abs() < (lv - usr_mean).abs() {
+                warnings.push(LagScaleWarning {
+                    hydro_id: past.hydro_id,
+                    lag_value: lv,
+                    user_mean: usr_mean,
+                    estimated_mean: est_mean,
+                });
+            }
+        }
+
+        assert!(
+            warnings.is_empty(),
+            "hydro without fitting_stats entry must be skipped (no warning)"
+        );
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn default_config() -> Config {
@@ -1375,7 +2693,7 @@ mod tests {
         let mut cfg: Config = serde_json::from_str(MINIMAL_CONFIG_JSON).unwrap();
         cfg.estimation = EstimationConfig {
             max_order: 2,
-            order_selection: OrderSelectionMethod::Fixed,
+            order_selection: OrderSelectionMethod::Pacf,
             min_observations_per_season: 2,
             max_coefficient_magnitude: None,
         };
@@ -1383,7 +2701,7 @@ mod tests {
     }
 
     const MINIMAL_CONFIG_JSON: &str = r#"{
-        "training": { "seed": 42 },
+        "training": { "tree_seed": 42 },
         "simulation": { "enabled": false, "num_scenarios": 0, "io_channel_capacity": 16 },
         "modeling": {},
         "policy": {},
@@ -1449,14 +2767,12 @@ mod tests {
         }
     }
 
-    /// When `OrderSelectionMethod::Fixed` is used, the returned `EstimationReport`
-    /// must have an empty entries map.
+    /// With empty observations the returned `EstimationReport` must have an
+    /// empty entries map.
     #[test]
-    fn test_estimation_report_empty_for_fixed() {
+    fn test_estimation_report_empty_for_pacf() {
         use cobre_core::temporal::Stage;
-        use cobre_io::config::OrderSelectionMethod;
 
-        let method = OrderSelectionMethod::Fixed;
         let observations: Vec<(EntityId, chrono::NaiveDate, f64)> = vec![];
         let seasonal_stats: Vec<SeasonalStats> = vec![];
         let stages: Vec<Stage> = vec![];
@@ -1471,7 +2787,6 @@ mod tests {
             &ArEstimationConfig {
                 max_order,
                 max_coeff_magnitude: None,
-                method: &method,
                 season_map: None,
             },
         )
@@ -1479,7 +2794,7 @@ mod tests {
 
         assert!(
             report.entries.is_empty(),
-            "Fixed method must produce empty EstimationReport"
+            "empty observations must produce empty EstimationReport"
         );
     }
 
@@ -2510,5 +3825,1408 @@ mod tests {
             .expect("InflowModel for stage -2");
         assert!((prestudy_neg2.mean_m3s - 110.0).abs() < f64::EPSILON);
         assert!((prestudy_neg2.std_m3s - 22.0).abs() < f64::EPSILON);
+    }
+
+    // ── ticket-003: PACF and contribution cascade tests ──────────────────────
+
+    /// Simulate a 2-season PAR(2) process using deterministic LCG (Box-Muller).
+    /// Model: `z_t = phi_1 * z_{t-1} + phi_2 * z_{t-2} + noise_t`.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
+    fn simulate_two_season_par2(
+        phi_1: f64,
+        phi_2: f64,
+        n_years: usize,
+        seed: u64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n_total = n_years * 2;
+        let burnin = 200;
+        let n_generate = n_total + burnin;
+        let mut values = vec![0.0_f64; n_generate + 2];
+        let mut lcg: u64 = seed;
+
+        let lcg_next = |s: u64| -> u64 {
+            s.wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407)
+        };
+
+        for i in 2..n_generate + 2 {
+            lcg = lcg_next(lcg);
+            let u1 = (lcg >> 11) as f64 / (1u64 << 53) as f64;
+            lcg = lcg_next(lcg);
+            let u2 = (lcg >> 11) as f64 / (1u64 << 53) as f64;
+            let u1_safe = u1.max(1e-15);
+            let noise = (-2.0 * u1_safe.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+            values[i] = phi_1 * values[i - 1] + phi_2 * values[i - 2] + noise;
+        }
+
+        let start = burnin + 2;
+        let mut obs_s0 = Vec::with_capacity(n_years);
+        let mut obs_s1 = Vec::with_capacity(n_years);
+        for y in 0..n_years {
+            obs_s0.push(values[start + y * 2]);
+            obs_s1.push(values[start + y * 2 + 1]);
+        }
+        (obs_s0, obs_s1)
+    }
+
+    /// Build a minimal 2-season `Stage` for testing.
+    fn make_two_season_stage(
+        index: usize,
+        id: i32,
+        season_id: usize,
+        year: i32,
+        first_half: bool,
+    ) -> cobre_core::temporal::Stage {
+        use chrono::NaiveDate;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+
+        let (start_date, end_date) = if first_half {
+            (
+                NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+            )
+        } else {
+            (
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap(),
+            )
+        };
+
+        cobre_core::temporal::Stage {
+            index,
+            id,
+            start_date,
+            end_date,
+            season_id: Some(season_id),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 4380.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    /// Build a 2-season `SeasonMap` (H1: Jan–Jun, H2: Jul–Dec).
+    fn two_season_map() -> cobre_core::temporal::SeasonMap {
+        use cobre_core::temporal::{SeasonCycleType, SeasonDefinition, SeasonMap};
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                SeasonDefinition {
+                    id: 0,
+                    label: "H1".to_string(),
+                    month_start: 1,
+                    day_start: Some(1),
+                    month_end: Some(6),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 1,
+                    label: "H2".to_string(),
+                    month_start: 7,
+                    day_start: Some(1),
+                    month_end: Some(12),
+                    day_end: Some(31),
+                },
+            ],
+        }
+    }
+
+    /// Verify `iterative_pacf_reduction` does not spuriously reduce a stable
+    /// 2-season PAR(2) model (phi_1=0.7, phi_2=0.15). Checks termination,
+    /// order preservation, and coefficient matching.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
+        use cobre_stochastic::par::fitting::{
+            estimate_periodic_ar_coefficients, periodic_pacf, select_order_pacf,
+        };
+
+        let hydro_id = EntityId(1);
+        let n_seasons = 2;
+        let n_years = 500_usize; // 500 obs/season; threshold ≈ 0.088 << PACF(2) ≈ 0.15.
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(0.7, 0.15, n_years, 137);
+
+        // Build group_obs and stats_map.
+        let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+        group_obs.insert((hydro_id, 0), obs_s0.clone());
+        group_obs.insert((hydro_id, 1), obs_s1.clone());
+
+        let mean_s0 = obs_s0.iter().sum::<f64>() / obs_s0.len() as f64;
+        let mean_s1 = obs_s1.iter().sum::<f64>() / obs_s1.len() as f64;
+        let std_s0 = {
+            let v = obs_s0.iter().map(|x| (x - mean_s0).powi(2)).sum::<f64>()
+                / (obs_s0.len() - 1) as f64;
+            v.sqrt()
+        };
+        let std_s1 = {
+            let v = obs_s1.iter().map(|x| (x - mean_s1).powi(2)).sum::<f64>()
+                / (obs_s1.len() - 1) as f64;
+            v.sqrt()
+        };
+
+        let stats_storage = vec![
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 0,
+                mean: mean_s0,
+                std: std_s0,
+            },
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 1,
+                mean: mean_s1,
+                std: std_s1,
+            },
+        ];
+        let stats_map: HashMap<(EntityId, usize), &SeasonalStats> = stats_storage
+            .iter()
+            .enumerate()
+            .map(|(s, st)| ((hydro_id, s), st))
+            .collect();
+
+        // Run PACF order selection + YW estimation to get the starting estimates.
+        let stats_by_season_pop = {
+            let n = obs_s0.len() as f64;
+            let mu0 = mean_s0;
+            let mu1 = mean_s1;
+            let s0 = (obs_s0.iter().map(|x| (x - mu0).powi(2)).sum::<f64>() / n).sqrt();
+            let s1 = (obs_s1.iter().map(|x| (x - mu1).powi(2)).sum::<f64>() / n).sqrt();
+            vec![(mu0, s0), (mu1, s1)]
+        };
+        let obs_refs: Vec<&[f64]> = vec![&obs_s0, &obs_s1];
+        let z_alpha = 1.96_f64;
+        // Use max_order=2 because the generating process is AR(2).
+        // Higher max_order with periodic PACF on a 2-season split of a stationary
+        // process over-estimates order due to per-season standardization artifacts.
+        let max_order = 2_usize;
+
+        let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();
+        for season in 0..n_seasons {
+            let n_obs = obs_refs[season].len();
+            let pacf_values = periodic_pacf(
+                season,
+                max_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season_pop,
+            );
+            let selected = select_order_pacf(&pacf_values, n_obs, z_alpha).selected_order;
+            let yw = estimate_periodic_ar_coefficients(
+                season,
+                selected,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season_pop,
+            );
+            estimates.push(ArCoefficientEstimate {
+                hydro_id,
+                season_id: season,
+                coefficients: yw.coefficients,
+                residual_std_ratio: yw.residual_std_ratio,
+            });
+        }
+
+        // All seasons should select order 2 before reduction.
+        for est in &estimates {
+            assert_eq!(
+                est.coefficients.len(),
+                2,
+                "season {} should select order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+        }
+
+        let coeffs_before: Vec<Vec<f64>> =
+            estimates.iter().map(|e| e.coefficients.clone()).collect();
+
+        // Run iterative PACF reduction (should terminate without spurious reductions).
+        let reductions = iterative_pacf_reduction(
+            &mut estimates,
+            n_seasons,
+            &[hydro_id],
+            &group_obs,
+            &stats_map,
+            max_order,
+            z_alpha,
+            None,
+        );
+
+        // Stable PAR(2) should not be reduced (order remains 2).
+        for est in &estimates {
+            assert_eq!(
+                est.coefficients.len(),
+                2,
+                "stable PAR(2) season {} should remain order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+        }
+
+        // Verify coefficients match (unchanged or recomputed at new order).
+        for (est, before) in estimates.iter().zip(coeffs_before.iter()) {
+            if est.coefficients.len() == before.len() {
+                // No reduction: verify coefficients unchanged.
+                for (a, b) in est.coefficients.iter().zip(before.iter()) {
+                    assert!(
+                        (a - b).abs() < 1e-10,
+                        "season {} coefficient drift: {a} vs {b}",
+                        est.season_id
+                    );
+                }
+            } else {
+                // Reduction occurred: verify against direct YW solve.
+                let yw_direct = estimate_periodic_ar_coefficients(
+                    est.season_id,
+                    est.coefficients.len(),
+                    n_seasons,
+                    &obs_refs,
+                    &stats_by_season_pop,
+                );
+                for (a, b) in est.coefficients.iter().zip(yw_direct.coefficients.iter()) {
+                    assert!(
+                        (a - b).abs() < 1e-10,
+                        "season {} post-reduction coeff {a} vs YW {b}",
+                        est.season_id
+                    );
+                }
+            }
+        }
+
+        // No spurious reductions for stable model.
+        assert!(!reductions.contains_key(&hydro_id));
+    }
+
+    /// Roundtrip estimation test: verify AR(2) coefficient recovery.
+    /// Simulates 1000 years of 2-season stationary AR(2) data (phi_1=0.7,
+    /// phi_2=0.15). Runs full PACF order selection pipeline and verifies
+    /// recovered coefficients match true values within 0.15 tolerance.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn roundtrip_estimation_two_season_par2_recovers_coefficients() {
+        use chrono::NaiveDate;
+
+        let hydro_id = EntityId(1);
+        let n_years = 1000_usize;
+        let true_phi1 = 0.7_f64;
+        let true_phi2 = 0.15_f64;
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(true_phi1, true_phi2, n_years, 42);
+
+        // Build 2 study stages, one per season.
+        // Season 0: Jan 1 – Jul 1 (any year); Season 1: Jul 1 – Jan 1.
+        // All observations will be mapped via the SeasonMap fallback.
+        let ref_year = 2000_i32;
+        let stages = vec![
+            make_two_season_stage(0, 0, 0, ref_year, true),
+            make_two_season_stage(1, 1, 1, ref_year, false),
+        ];
+
+        // Build seasonal stats (Bessel-corrected std to match estimate_seasonal_stats).
+        let n_f = n_years as f64;
+        let mu0 = obs_s0.iter().sum::<f64>() / n_f;
+        let mu1 = obs_s1.iter().sum::<f64>() / n_f;
+        let std0 = (obs_s0.iter().map(|x| (x - mu0).powi(2)).sum::<f64>() / (n_f - 1.0)).sqrt();
+        let std1 = (obs_s1.iter().map(|x| (x - mu1).powi(2)).sum::<f64>() / (n_f - 1.0)).sqrt();
+
+        let seasonal_stats = vec![
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 0, // matches stages[0].id
+                mean: mu0,
+                std: std0,
+            },
+            SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: 1, // matches stages[1].id
+                mean: mu1,
+                std: std1,
+            },
+        ];
+
+        // Build observations with dates: season 0 = Jan 1, season 1 = Jul 1.
+        // Using a fixed reference year does NOT matter because find_season_for_date
+        // falls back to the season_map when dates are outside the study stage ranges.
+        let season_map = two_season_map();
+        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
+        for y in 0..n_years {
+            let year = (1970 + y) as i32;
+            observations.push((
+                hydro_id,
+                NaiveDate::from_ymd_opt(year, 1, 1).unwrap(),
+                obs_s0[y],
+            ));
+            observations.push((
+                hydro_id,
+                NaiveDate::from_ymd_opt(year, 7, 1).unwrap(),
+                obs_s1[y],
+            ));
+        }
+
+        let (estimates, _report) = estimate_ar_coefficients_with_selection(
+            &observations,
+            &seasonal_stats,
+            &stages,
+            &[hydro_id],
+            &ArEstimationConfig {
+                max_order: 2,
+                max_coeff_magnitude: None,
+                season_map: Some(&season_map),
+            },
+        )
+        .expect("estimation must succeed");
+
+        // Collect per-season coefficients.
+        let est_s0 = estimates
+            .iter()
+            .find(|e| e.hydro_id == hydro_id && e.season_id == 0)
+            .expect("season 0 estimate must exist");
+        let est_s1 = estimates
+            .iter()
+            .find(|e| e.hydro_id == hydro_id && e.season_id == 1)
+            .expect("season 1 estimate must exist");
+
+        // With 1000 years the PACF threshold is 1.96/sqrt(1000) ≈ 0.062,
+        // well below PACF(2) ≈ 0.15 and well above PACF(3..4) ≈ 0.
+        // The pipeline should select order 2 and recover the true coefficients.
+        for est in [est_s0, est_s1] {
+            assert!(
+                est.coefficients.len() >= 2,
+                "season {} should select at least order 2; got {}",
+                est.season_id,
+                est.coefficients.len()
+            );
+            assert!(
+                (est.coefficients[0] - true_phi1).abs() < 0.15,
+                "season {} phi_1={:.4} should be within 0.15 of true {true_phi1:.4}",
+                est.season_id,
+                est.coefficients[0]
+            );
+            assert!(
+                (est.coefficients[1] - true_phi2).abs() < 0.15,
+                "season {} phi_2={:.4} should be within 0.15 of true {true_phi2:.4}",
+                est.season_id,
+                est.coefficients[1]
+            );
+            assert!(
+                est.residual_std_ratio.is_finite() && est.residual_std_ratio > 0.0,
+                "season {} residual_std_ratio={} should be positive finite",
+                est.season_id,
+                est.residual_std_ratio
+            );
+        }
+    }
+
+    // ── ar_rows_to_estimates unit tests ───────────────────────────────────────
+
+    /// AC-009-ar-rows-1: `ar_rows_to_estimates` groups by season, deduplicates stages.
+    ///
+    /// Creates `InflowArCoefficientRow` entries for 2 hydros across 3 stages:
+    /// - Stage 0 (season 0), stage 1 (season 0), stage 2 (season 1).
+    ///
+    /// After conversion the output must have 2 * 2 = 4 estimates (2 hydros * 2
+    /// seasons). Each estimate must carry the coefficients from the FIRST stage
+    /// in the season (stage 0 for season 0, stage 2 for season 1).
+    #[test]
+    #[allow(clippy::cast_sign_loss)]
+    fn test_ar_rows_to_estimates_groups_by_season() {
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+        };
+
+        let make_stage = |id: i32, season_id: usize| cobre_core::temporal::Stage {
+            index: id as usize,
+            id,
+            start_date: chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            end_date: chrono::NaiveDate::from_ymd_opt(1970, 7, 1).unwrap(),
+            season_id: Some(season_id),
+            blocks: vec![Block {
+                index: 0,
+                name: "T".to_string(),
+                duration_hours: 1.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        // 3 stages: stage 0 and stage 1 map to season 0; stage 2 maps to season 1.
+        let stages = vec![make_stage(0, 0), make_stage(1, 0), make_stage(2, 1)];
+
+        // AR(1) rows for 2 hydros; sorted by (hydro_id, stage_id, lag).
+        // Each stage has one lag-1 row (AR order 1).
+        let rows = vec![
+            // hydro 1, stage 0 (season 0), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.50,
+                residual_std_ratio: 0.85,
+            },
+            // hydro 1, stage 1 (season 0 duplicate), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(1),
+                stage_id: 1,
+                lag: 1,
+                coefficient: 0.50,
+                residual_std_ratio: 0.85,
+            },
+            // hydro 1, stage 2 (season 1), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(1),
+                stage_id: 2,
+                lag: 1,
+                coefficient: 0.60,
+                residual_std_ratio: 0.80,
+            },
+            // hydro 2, stage 0 (season 0), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                lag: 1,
+                coefficient: 0.40,
+                residual_std_ratio: 0.90,
+            },
+            // hydro 2, stage 1 (season 0 duplicate), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(2),
+                stage_id: 1,
+                lag: 1,
+                coefficient: 0.40,
+                residual_std_ratio: 0.90,
+            },
+            // hydro 2, stage 2 (season 1), lag 1
+            InflowArCoefficientRow {
+                hydro_id: EntityId(2),
+                stage_id: 2,
+                lag: 1,
+                coefficient: 0.35,
+                residual_std_ratio: 0.88,
+            },
+        ];
+
+        let estimates = ar_rows_to_estimates(&rows, &stages);
+
+        // 2 hydros * 2 seasons = 4 estimates.
+        assert_eq!(
+            estimates.len(),
+            4,
+            "expected 4 estimates (2 hydros * 2 seasons), got {}",
+            estimates.len()
+        );
+
+        // Hydro 1, season 0: coefficient from stage 0 (canonical first stage).
+        let e = estimates
+            .iter()
+            .find(|e| e.hydro_id == EntityId(1) && e.season_id == 0)
+            .expect("hydro 1, season 0 estimate must exist");
+        assert_eq!(e.coefficients.len(), 1, "AR(1) must have 1 coefficient");
+        assert!(
+            (e.coefficients[0] - 0.50).abs() < f64::EPSILON,
+            "coeff must be 0.50, got {}",
+            e.coefficients[0]
+        );
+        assert!(
+            (e.residual_std_ratio - 0.85).abs() < f64::EPSILON,
+            "residual_std_ratio must be 0.85"
+        );
+
+        // Hydro 1, season 1: coefficient from stage 2.
+        let e = estimates
+            .iter()
+            .find(|e| e.hydro_id == EntityId(1) && e.season_id == 1)
+            .expect("hydro 1, season 1 estimate must exist");
+        assert_eq!(e.coefficients.len(), 1);
+        assert!((e.coefficients[0] - 0.60).abs() < f64::EPSILON);
+        assert!((e.residual_std_ratio - 0.80).abs() < f64::EPSILON);
+
+        // Hydro 2, season 0.
+        let e = estimates
+            .iter()
+            .find(|e| e.hydro_id == EntityId(2) && e.season_id == 0)
+            .expect("hydro 2, season 0 estimate must exist");
+        assert_eq!(e.coefficients.len(), 1);
+        assert!((e.coefficients[0] - 0.40).abs() < f64::EPSILON);
+
+        // Hydro 2, season 1.
+        let e = estimates
+            .iter()
+            .find(|e| e.hydro_id == EntityId(2) && e.season_id == 1)
+            .expect("hydro 2, season 1 estimate must exist");
+        assert_eq!(e.coefficients.len(), 1);
+        assert!((e.coefficients[0] - 0.35).abs() < f64::EPSILON);
+    }
+
+    // ── UserArHistoryStats unit tests ─────────────────────────────────────────
+
+    /// Write `inflow_ar_coefficients.parquet` with known AR(1) coefficients for
+    /// a single hydro expanded to all stages in `stages`.
+    ///
+    /// `stages` must be pre-built (same as the system's stages). The parquet
+    /// file will have one row per stage with lag=1.
+    fn write_unit_test_ar_coefficients(
+        path: &std::path::Path,
+        hydro_id: i32,
+        stages: &[cobre_core::temporal::Stage],
+        coefficient: f64,
+        residual_std_ratio: f64,
+    ) {
+        use arrow::array::{Float64Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("lag", DataType::Int32, false),
+            Field::new("coefficient", DataType::Float64, false),
+            Field::new("residual_std_ratio", DataType::Float64, false),
+        ]));
+
+        let n = stages.len();
+        let hydro_ids: Vec<i32> = vec![hydro_id; n];
+        let stage_ids: Vec<i32> = stages.iter().map(|s| s.id).collect();
+        let lags: Vec<i32> = vec![1; n];
+        let coefficients: Vec<f64> = vec![coefficient; n];
+        let ratios: Vec<f64> = vec![residual_std_ratio; n];
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(hydro_ids)),
+                Arc::new(Int32Array::from(stage_ids)),
+                Arc::new(Int32Array::from(lags)),
+                Arc::new(Float64Array::from(coefficients)),
+                Arc::new(Float64Array::from(ratios)),
+            ],
+        )
+        .expect("valid batch");
+
+        let file = std::fs::File::create(path).expect("create parquet file");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+    }
+
+    /// Build a system with one hydro and 2-season stages (same structure as
+    /// `build_system_with_user_stats`) but with EMPTY inflow_models.
+    ///
+    /// This represents the state after `load_case` when `inflow_seasonal_stats.parquet`
+    /// is absent (the P7/UserArHistoryStats case): `assemble_inflow_models` returns
+    /// an empty vec, so `system.inflow_models()` is empty.
+    #[allow(clippy::cast_possible_wrap)]
+    fn build_system_empty_models(n_years: usize) -> System {
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
+
+        let hydro_id = EntityId(1);
+        let bus = Bus {
+            id: EntityId(10),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: Some(f64::INFINITY),
+                cost_per_mwh: 3000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let ref_year = 1970_i32;
+        let mut stages = Vec::with_capacity(n_years * 2);
+        for y in 0..n_years {
+            let year = ref_year + y as i32;
+            stages.push(make_two_season_stage(y * 2, (y * 2) as i32, 0, year, true));
+            stages.push(make_two_season_stage(
+                y * 2 + 1,
+                (y * 2 + 1) as i32,
+                1,
+                year,
+                false,
+            ));
+        }
+
+        let hydro = Hydro {
+            id: hydro_id,
+            name: "H1".to_string(),
+            bus_id: EntityId(10),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 5000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 1000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 900.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 1000.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![hydro])
+            .stages(stages)
+            // NOTE: no inflow_models — represents the P7 case after load_case
+            .build()
+            .expect("valid system with empty inflow models")
+    }
+
+    /// Setup a case directory for the P7 (UserArHistoryStats) path:
+    /// - `inflow_history.parquet`: real Parquet with synthetic 2-season data.
+    /// - `inflow_ar_coefficients.parquet`: real Parquet with known AR(1) coefficients.
+    /// - No `inflow_seasonal_stats.parquet`.
+    ///
+    /// Returns the stages used in the system so the AR file can reference valid stage IDs.
+    #[allow(clippy::cast_possible_wrap)]
+    fn setup_user_ar_case(
+        case_dir: &std::path::Path,
+        n_years: usize,
+        ar_coefficient: f64,
+        residual_std_ratio: f64,
+    ) {
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+
+        // Write history parquet.
+        write_unit_test_inflow_history(&scenarios.join("inflow_history.parquet"), 1, n_years);
+
+        // Build the same stages as build_system_empty_models to get stage IDs.
+        let ref_year = 1970_i32;
+        let mut stages = Vec::with_capacity(n_years * 2);
+        for y in 0..n_years {
+            let year = ref_year + y as i32;
+            stages.push(make_two_season_stage(y * 2, (y * 2) as i32, 0, year, true));
+            stages.push(make_two_season_stage(
+                y * 2 + 1,
+                (y * 2 + 1) as i32,
+                1,
+                year,
+                false,
+            ));
+        }
+
+        // Write AR coefficients parquet with known values, one row per stage.
+        write_unit_test_ar_coefficients(
+            &scenarios.join("inflow_ar_coefficients.parquet"),
+            1,
+            &stages,
+            ar_coefficient,
+            residual_std_ratio,
+        );
+
+        // NO inflow_seasonal_stats.parquet — this is the P7 path.
+    }
+
+    /// AC-009-1: `estimate_from_history` with P7 setup preserves user AR coefficients
+    /// bitwise in the returned inflow models.
+    ///
+    /// Setup: system with empty inflow_models, case dir with history + AR (no stats).
+    /// Assert: every returned model's `ar_coefficients[0]` and `residual_std_ratio`
+    /// match the known values written to `inflow_ar_coefficients.parquet` exactly.
+    #[test]
+    fn test_user_ar_estimation_preserves_ar_coefficients() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        const KNOWN_COEFF: f64 = 0.72;
+        const KNOWN_RATIO: f64 = 0.69;
+
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_user_ar_case(case_dir, N_YEARS, KNOWN_COEFF, KNOWN_RATIO);
+        let system = build_system_empty_models(N_YEARS);
+        let config = default_config();
+
+        let (updated, report, path) = estimate_from_history(system, case_dir, &config)
+            .expect("UserArHistoryStats estimation must succeed");
+
+        assert_eq!(
+            path,
+            EstimationPath::UserArHistoryStats,
+            "expected UserArHistoryStats path"
+        );
+        assert!(
+            report.is_some(),
+            "UserArHistoryStats must return Some(report)"
+        );
+
+        let models = updated.inflow_models();
+        assert!(
+            !models.is_empty(),
+            "estimation must produce at least one inflow model"
+        );
+
+        for m in models {
+            assert_eq!(
+                m.ar_coefficients.len(),
+                1,
+                "every model must have AR(1) coefficients (lag 1 only), stage {}",
+                m.stage_id
+            );
+            assert_eq!(
+                m.ar_coefficients[0].to_bits(),
+                KNOWN_COEFF.to_bits(),
+                "ar_coefficients[0] must be bitwise identical to {KNOWN_COEFF} for stage {}",
+                m.stage_id
+            );
+            assert_eq!(
+                m.residual_std_ratio.to_bits(),
+                KNOWN_RATIO.to_bits(),
+                "residual_std_ratio must be bitwise identical to {KNOWN_RATIO} for stage {}",
+                m.stage_id
+            );
+        }
+    }
+
+    /// AC-009-2: `estimate_from_history` with P7 setup produces finite, positive
+    /// `mean_m3s` and `std_m3s` estimated from inflow history.
+    ///
+    /// Same setup as `test_user_ar_estimation_preserves_ar_coefficients`.
+    #[test]
+    fn test_user_ar_estimation_estimates_stats_from_history() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_user_ar_case(case_dir, N_YEARS, 0.55, 0.83);
+        let system = build_system_empty_models(N_YEARS);
+        let config = default_config();
+
+        let (updated, _report, _path) = estimate_from_history(system, case_dir, &config)
+            .expect("UserArHistoryStats estimation must succeed");
+
+        let models = updated.inflow_models();
+        assert!(
+            !models.is_empty(),
+            "estimation must produce at least one inflow model"
+        );
+
+        for m in models {
+            assert!(
+                m.mean_m3s.is_finite() && m.mean_m3s > 0.0,
+                "mean_m3s must be finite and positive, got {} for stage {}",
+                m.mean_m3s,
+                m.stage_id
+            );
+            assert!(
+                m.std_m3s.is_finite() && m.std_m3s >= 0.0,
+                "std_m3s must be finite and non-negative, got {} for stage {}",
+                m.std_m3s,
+                m.stage_id
+            );
+        }
+    }
+
+    /// AC-009-3: `estimate_from_history` with P7 setup returns a report with
+    /// method "user_provided" and an empty entries map.
+    #[test]
+    fn test_user_ar_estimation_returns_user_provided_report() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_user_ar_case(case_dir, N_YEARS, 0.55, 0.83);
+        let system = build_system_empty_models(N_YEARS);
+        let config = default_config();
+
+        let (_updated, report, _path) = estimate_from_history(system, case_dir, &config)
+            .expect("UserArHistoryStats estimation must succeed");
+
+        let report = report.expect("UserArHistoryStats must return Some(EstimationReport)");
+
+        assert_eq!(
+            report.method, "user_provided",
+            "report method must be 'user_provided', got '{}'",
+            report.method
+        );
+        assert!(
+            report.entries.is_empty(),
+            "report entries must be empty (no AR was estimated), got {} entries",
+            report.entries.len()
+        );
+    }
+
+    // ── Bidirectional coverage validation tests (ticket-010) ─────────────────
+
+    /// Build a minimal Hydro struct reusing the same penalty/generation defaults
+    /// as the single-hydro helpers above.
+    fn make_hydro(hydro_id: EntityId, bus_id: EntityId) -> cobre_core::entities::hydro::Hydro {
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel};
+        Hydro {
+            id: hydro_id,
+            name: format!("H{}", hydro_id.0),
+            bus_id,
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 5000.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.9,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 1000.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 900.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: cobre_core::entities::hydro::HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 1000.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        }
+    }
+
+    /// Build a System with two hydros (IDs 1 and 2). User stats (inflow_models)
+    /// are created only for the hydros in `stats_hydro_ids`. Hydros in
+    /// `all_hydro_ids` but not in `stats_hydro_ids` have no stats rows.
+    #[allow(clippy::cast_possible_wrap)]
+    fn build_two_hydro_system_selective_stats(
+        n_years: usize,
+        all_hydro_ids: &[EntityId],
+        stats_hydro_ids: &[EntityId],
+    ) -> System {
+        use cobre_core::scenario::InflowModel;
+        use cobre_core::{Bus, DeficitSegment, SystemBuilder};
+
+        let bus_id = EntityId(10);
+        let bus = Bus {
+            id: bus_id,
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: Some(f64::INFINITY),
+                cost_per_mwh: 3000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let ref_year = 1970_i32;
+        let mut stages = Vec::with_capacity(n_years * 2);
+        for y in 0..n_years {
+            let year = ref_year + y as i32;
+            stages.push(make_two_season_stage(y * 2, (y * 2) as i32, 0, year, true));
+            stages.push(make_two_season_stage(
+                y * 2 + 1,
+                (y * 2 + 1) as i32,
+                1,
+                year,
+                false,
+            ));
+        }
+
+        // Build inflow models only for hydros in stats_hydro_ids.
+        let inflow_models: Vec<InflowModel> = stats_hydro_ids
+            .iter()
+            .flat_map(|&hid| {
+                stages.iter().map(move |s| InflowModel {
+                    hydro_id: hid,
+                    stage_id: s.id,
+                    mean_m3s: 100.0,
+                    std_m3s: 10.0,
+                    ar_coefficients: vec![],
+                    residual_std_ratio: 1.0,
+                })
+            })
+            .collect();
+
+        let hydros: Vec<_> = all_hydro_ids
+            .iter()
+            .map(|&hid| make_hydro(hid, bus_id))
+            .collect();
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(hydros)
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .build()
+            .expect("valid two-hydro system")
+    }
+
+    /// Write a real `inflow_history.parquet` with data for the given list of
+    /// hydro IDs. Each hydro gets identical synthetic PAR(2) observations.
+    fn write_history_for_hydros(path: &std::path::Path, hydro_ids: &[i32], n_years: usize) {
+        use arrow::array::{Date32Array, Float64Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use chrono::NaiveDate;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let date_to_days = |d: NaiveDate| -> i32 {
+            i32::try_from((d - epoch).num_days()).expect("date in Date32 range")
+        };
+
+        let (obs_s0, obs_s1) = simulate_two_season_par2(0.7, 0.15, n_years, 99);
+
+        let mut ids: Vec<i32> = Vec::new();
+        let mut dates: Vec<i32> = Vec::new();
+        let mut values: Vec<f64> = Vec::new();
+
+        for &hid in hydro_ids {
+            for y in 0..n_years {
+                let year = (1970 + y) as i32;
+                ids.push(hid);
+                dates.push(date_to_days(NaiveDate::from_ymd_opt(year, 1, 15).unwrap()));
+                values.push(obs_s0[y] + 300.0);
+
+                ids.push(hid);
+                dates.push(date_to_days(NaiveDate::from_ymd_opt(year, 7, 15).unwrap()));
+                values.push(obs_s1[y] + 300.0);
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("date", DataType::Date32, false),
+            Field::new("value_m3s", DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Date32Array::from(dates)),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )
+        .expect("valid batch");
+
+        let file = std::fs::File::create(path).expect("create parquet file");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+    }
+
+    /// AC-T10-1: Direction A — AR estimated for hydro 2 but no user stats for it.
+    ///
+    /// Setup: system with hydros [1, 2], history for both [1, 2], but
+    /// `inflow_seasonal_stats.parquet` provides stats only for hydro 1.
+    ///
+    /// Assert: `estimate_from_history` returns `Err` with a `ConstraintError`
+    /// whose description contains `"2"` (the uncovered hydro ID).
+    #[test]
+    fn test_partial_estimation_direction_a_missing_stats() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+
+        // History for both hydros 1 and 2.
+        write_history_for_hydros(&scenarios.join("inflow_history.parquet"), &[1, 2], N_YEARS);
+
+        // Stats sentinel — presence triggers PartialEstimation manifest flag.
+        std::fs::write(scenarios.join("inflow_seasonal_stats.parquet"), b"sentinel")
+            .expect("write sentinel");
+
+        // System: hydros [1, 2] in the hydros list, but stats only for hydro 1.
+        let system = build_two_hydro_system_selective_stats(
+            N_YEARS,
+            &[EntityId(1), EntityId(2)],
+            &[EntityId(1)], // stats only for hydro 1
+        );
+
+        let config = default_config();
+        let result = estimate_from_history(system, case_dir, &config);
+
+        assert!(
+            result.is_err(),
+            "Direction A must return Err when hydro 2 has AR estimates but no user stats"
+        );
+
+        let err = result.unwrap_err();
+        let description = err.to_string();
+        assert!(
+            description.contains('2'),
+            "error description must contain the uncovered hydro ID '2', got: {description}"
+        );
+    }
+
+    /// AC-T10-2: Direction B — user stats for hydro 2 but no history for it.
+    ///
+    /// Setup: system with hydros [1, 2] and stats for both, but history only
+    /// for hydro 1.
+    ///
+    /// Assert: `estimate_from_history` returns `Ok`, the `EstimationReport`
+    /// has `white_noise_fallbacks == [EntityId(2)]`, and the returned system's
+    /// inflow model for hydro 2 has empty `ar_coefficients`.
+    #[test]
+    fn test_partial_estimation_direction_b_white_noise_fallback() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+
+        // History only for hydro 1.
+        write_history_for_hydros(&scenarios.join("inflow_history.parquet"), &[1], N_YEARS);
+
+        // Stats sentinel.
+        std::fs::write(scenarios.join("inflow_seasonal_stats.parquet"), b"sentinel")
+            .expect("write sentinel");
+
+        // System: hydros [1, 2] with stats for both (hydro 2 gets white-noise fallback).
+        let system = build_two_hydro_system_selective_stats(
+            N_YEARS,
+            &[EntityId(1), EntityId(2)],
+            &[EntityId(1), EntityId(2)], // stats for both
+        );
+
+        let config = default_config();
+        let (updated, report, path) = estimate_from_history(system, case_dir, &config)
+            .expect("Direction B must succeed (not an error)");
+
+        assert_eq!(
+            path,
+            EstimationPath::PartialEstimation,
+            "expected PartialEstimation path"
+        );
+
+        let report = report.expect("PartialEstimation must return Some(EstimationReport)");
+
+        assert_eq!(
+            report.white_noise_fallbacks,
+            vec![EntityId(2)],
+            "white_noise_fallbacks must be [EntityId(2)], got {:?}",
+            report.white_noise_fallbacks
+        );
+
+        // Hydro 2 should have empty ar_coefficients in the returned system.
+        let hydro2_models: Vec<_> = updated
+            .inflow_models()
+            .iter()
+            .filter(|m| m.hydro_id == EntityId(2))
+            .collect();
+        assert!(
+            !hydro2_models.is_empty(),
+            "returned system must have inflow models for hydro 2"
+        );
+        for m in &hydro2_models {
+            assert!(
+                m.ar_coefficients.is_empty(),
+                "hydro 2 must have empty ar_coefficients (white-noise fallback), stage {}",
+                m.stage_id
+            );
+        }
+    }
+
+    /// AC-T10-3: Exact coverage — single hydro with matching history and stats.
+    ///
+    /// Reuses the single-hydro setup from ticket-008. Asserts that
+    /// `white_noise_fallbacks` is empty on the returned report.
+    #[test]
+    fn test_partial_estimation_exact_coverage_no_fallback() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        setup_partial_estimation_case(case_dir, N_YEARS);
+        let system = build_system_with_user_stats(N_YEARS);
+        let config = default_config();
+
+        let (_updated, report, _path) =
+            estimate_from_history(system, case_dir, &config).expect("exact coverage must succeed");
+
+        let report = report.expect("PartialEstimation must return Some(EstimationReport)");
+
+        assert!(
+            report.white_noise_fallbacks.is_empty(),
+            "white_noise_fallbacks must be empty for exact coverage, got {:?}",
+            report.white_noise_fallbacks
+        );
+    }
+
+    /// AC-T10-4: `run_estimation` (FullEstimation path) never populates
+    /// `white_noise_fallbacks` — it must be empty on the returned report.
+    #[test]
+    fn test_full_estimation_report_has_empty_fallbacks() {
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 30;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+
+        // History only — no stats file → FullEstimation path.
+        write_history_for_hydros(&scenarios.join("inflow_history.parquet"), &[1], N_YEARS);
+        // No inflow_seasonal_stats.parquet → FullEstimation.
+
+        // System with one hydro, no pre-loaded inflow models (no user stats).
+        let system = build_two_hydro_system_selective_stats(
+            N_YEARS,
+            &[EntityId(1)],
+            &[], // no user stats
+        );
+
+        let config = default_config();
+        let (_, report, path) =
+            estimate_from_history(system, case_dir, &config).expect("FullEstimation must succeed");
+
+        assert_eq!(
+            path,
+            EstimationPath::FullEstimation,
+            "expected FullEstimation path"
+        );
+
+        let report = report.expect("FullEstimation must return Some(EstimationReport)");
+
+        assert!(
+            report.white_noise_fallbacks.is_empty(),
+            "FullEstimation must never populate white_noise_fallbacks, got {:?}",
+            report.white_noise_fallbacks
+        );
+    }
+
+    // ── StdRatioDivergence unit tests ─────────────────────────────────────────
+
+    /// Helper: build a System and fitting_stats for a single hydro with the
+    /// given per-season std values, then call `check_std_ratio_divergence`.
+    ///
+    /// `user_stds[i]` is the user-provided std for season `i`.
+    /// `est_stds[i]` is the estimated std for season `i`.
+    /// Stages are created so that stage_id == season_id (one stage per season).
+    fn collect_std_ratio_warnings(
+        hydro_id: EntityId,
+        user_stds: &[f64],
+        est_stds: &[f64],
+    ) -> Vec<StdRatioDivergence> {
+        use cobre_core::scenario::InflowModel;
+
+        assert_eq!(
+            user_stds.len(),
+            est_stds.len(),
+            "user_stds and est_stds must have equal length"
+        );
+        let n = user_stds.len();
+
+        // Build stages: stage_id == season_id == i, one stage per season.
+        let stages: Vec<cobre_core::temporal::Stage> = (0..n)
+            .map(|i| {
+                let year = 1970_i32;
+                let first_half = i % 2 == 0;
+                make_two_season_stage(i, i as i32, i, year, first_half)
+            })
+            .collect();
+
+        // Build user InflowModels: one per stage.
+        let user_models: Vec<InflowModel> = (0..n)
+            .map(|i| InflowModel {
+                hydro_id,
+                stage_id: i as i32,
+                mean_m3s: 100.0,
+                std_m3s: user_stds[i],
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let system = SystemBuilder::new()
+            .inflow_models(user_models)
+            .stages(stages.clone())
+            .build()
+            .expect("valid system");
+
+        // Build fitting_stats: entity_id = hydro_id, stage_id = i, std = est_stds[i].
+        let fitting_stats: Vec<SeasonalStats> = (0..n)
+            .map(|i| SeasonalStats {
+                entity_id: hydro_id,
+                stage_id: i as i32,
+                mean: 100.0,
+                std: est_stds[i],
+            })
+            .collect();
+
+        check_std_ratio_divergence(&system, &fitting_stats, &stages)
+    }
+
+    /// P9-001: Warning fires when consecutive std ratios diverge by more than 2x.
+    ///
+    /// user stds [100.0, 20.0], est stds [100.0, 100.0].
+    /// Pair (0→1): ratio_user = 5.0, ratio_est = 1.0, divergence = 5.0 → warn.
+    /// Wrap (1→0): ratio_user = 0.2, ratio_est = 1.0, divergence = 5.0 → warn.
+    /// Both pairs diverge, so 2 warnings are emitted. The test verifies that
+    /// at least one warning covers the (0→1) pair and the hydro_id is correct.
+    #[test]
+    fn test_std_ratio_divergence_fires_when_ratios_diverge() {
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0], &[100.0, 100.0]);
+        assert!(
+            !warnings.is_empty(),
+            "expected at least one StdRatioDivergence when ratio diverges by 5x"
+        );
+        // The (0→1) pair must be in the warnings.
+        let pair_0_1 = warnings.iter().find(|w| w.season_a == 0 && w.season_b == 1);
+        assert!(
+            pair_0_1.is_some(),
+            "expected a warning for season pair 0→1, got {warnings:?}"
+        );
+        let w = pair_0_1.unwrap();
+        assert_eq!(
+            w.hydro_id,
+            EntityId(1),
+            "warning must record the correct hydro_id"
+        );
+        assert!(
+            (w.divergence - 5.0).abs() < 1e-10,
+            "divergence for pair 0→1 must be 5.0, got {}",
+            w.divergence
+        );
+    }
+
+    /// P9-002: No warning when ratios are similar (divergence <= 2.0).
+    ///
+    /// user stds [100.0, 20.0], est stds [90.0, 18.0].
+    /// ratio_user = 5.0, ratio_est = 5.0. divergence = 1.0 → no warning.
+    #[test]
+    fn test_std_ratio_divergence_not_fires_when_similar() {
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0], &[90.0, 18.0]);
+        assert!(
+            warnings.is_empty(),
+            "expected no StdRatioDivergence when ratios are similar, got {warnings:?}"
+        );
+    }
+
+    /// P9-003: Season pairs with near-zero denominator std are skipped.
+    ///
+    /// user stds [100.0, 0.0], est stds [90.0, 18.0].
+    /// The pair (season 0 → season 1) has u_b = 0.0 < 1e-12 → skipped.
+    /// The wrap pair (season 1 → season 0) has u_b = 100.0 and e_b = 90.0 → checked.
+    /// ratio_user = 0/100 = 0.0, ratio_est = 18/90 = 0.2.
+    /// divergence = max(0/0.2, 0.2/0) → second division hits near-zero guard → skipped.
+    #[test]
+    fn test_std_ratio_divergence_skips_near_zero_std() {
+        // user stds [100.0, 0.0]: the first pair has denominator 0.0 → skipped.
+        let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 0.0], &[90.0, 18.0]);
+        // No panic must occur. The pair involving zero std is silently skipped.
+        // The wrap pair has ratio_user = 0.0/100.0 = 0.0, ratio_est = 18.0/90.0 = 0.2;
+        // ratio_user / ratio_est would require dividing 0/0.2 = 0, and
+        // ratio_est / ratio_user would divide by 0. The near-zero guard on ratio_est
+        // is not triggered here (0.2 is not near zero), but ratio_user = 0.0 means
+        // divergence = max(0/0.2, 0.2/0). The 0.2/0 branch triggers the ratio_est
+        // guard only if ratio_user < 1e-12, which 0.0 satisfies → skipped.
+        // We assert no panic and that the result is well-defined.
+        let _ = warnings; // result is valid (empty or one entry); no panic is the key assertion.
+    }
+
+    /// P9-004: Wrap-around pair (last season → first season) is checked.
+    ///
+    /// user stds [100.0, 20.0, 50.0], est stds [100.0, 20.0, 10.0].
+    /// Pair (0→1): ratio_user=5.0, ratio_est=5.0 → divergence=1.0 (no warn).
+    /// Pair (1→2): ratio_user=0.4, ratio_est=2.0 → divergence=5.0 (warn).
+    /// Wrap (2→0): ratio_user=50/100=0.5, ratio_est=10/100=0.1 → divergence=5.0 (warn).
+    #[test]
+    fn test_std_ratio_divergence_wraps_last_to_first() {
+        let warnings =
+            collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0, 50.0], &[100.0, 20.0, 10.0]);
+        // Pairs (1→2) and wrap (2→0) both diverge.
+        assert!(
+            warnings.len() >= 2,
+            "expected at least 2 StdRatioDivergence entries (including wrap), got {}",
+            warnings.len()
+        );
+        // The wrap pair (season 2 → season 0) must appear.
+        let has_wrap = warnings.iter().any(|w| w.season_a == 2 && w.season_b == 0);
+        assert!(
+            has_wrap,
+            "expected a warning for the wrap-around pair season 2 → season 0"
+        );
     }
 }

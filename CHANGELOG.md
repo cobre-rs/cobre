@@ -7,6 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.0] - 2026-04-06
+
+### Added
+
+- **Per-class scenario sampling** -- Each entity class (inflow, load, NCS)
+  can independently use `InSample`, `OutOfSample`, `Historical`, or `External`
+  sampling schemes via per-class sub-objects in `scenario_source` in
+  `stages.json`.
+- **Historical inflow sampling** -- Replays standardized noise drawn from
+  historical observation windows discovered in `inflow_history.parquet`.
+  The window pool is controlled by the new `historical_years` field in
+  `stages.json`, which accepts a list of years or a `{from, to}` range.
+- **External scenario sources** -- Reads pre-generated scenario realizations
+  from per-class Parquet files: `external_inflow_scenarios.parquet`,
+  `external_load_scenarios.parquet`, and `external_ncs_scenarios.parquet`.
+  Replaces the old single `external_scenarios.parquet`.
+- **`HistoricalScenarioLibrary` and `ExternalScenarioLibrary`** -- New types
+  in `cobre-stochastic` for pre-computed scenario storage shared across
+  forward-pass iterations.
+- **`ClassSampler` enum** -- Per-class noise dispatch type in
+  `cobre-stochastic` routing each entity class to its configured sampling
+  scheme during the forward pass.
+- **Composite `ForwardSampler` architecture** -- Holds per-class
+  `ClassSampler` instances and applies inter-class correlation after
+  per-class noise generation, replacing the previous monolithic sampler.
+- **`historical_years` config** -- New field in the `stages.json`
+  `scenario_source` object for specifying which historical years are
+  eligible as inflow replay windows. Accepts a list (`[2010, 2015, 2020]`) or a
+  range (`{from: 2010, to: 2023}`).
+- **Same-type enforcement for correlation groups** -- All entities in a
+  correlation group must share the same `entity_type`. Mixed-type groups
+  are rejected at parse time with a descriptive error.
+- **`LoadModel` and `NcsModel` types** -- New types in `cobre-core` for
+  per-class external standardization, mirroring the existing `InflowModel`.
+- **Window discovery algorithm** -- Historical sampling uses an automatic
+  window discovery pass over `inflow_history.parquet` to build the eligible
+  replay pool before the first forward iteration.
+- **Noise method dispatch** -- `cobre-stochastic` supports pluggable noise
+  generation methods (`InSample`, `LatinHypercube`, `QmcSobol`, `QmcHalton`)
+  via the `noise_method` field in `config.json`. Latin Hypercube Sampling,
+  Sobol, and Halton quasi-Monte Carlo sequences are new options for
+  low-discrepancy scenario generation.
+- **Per-season correlation estimation** -- Correlation matrices are now
+  estimated independently for each season when sufficient paired observations
+  exist, with fallback to the pooled matrix for seasons below the
+  `MIN_CORRELATION_PAIRS` threshold.
+- **Stochastic provenance summary** -- New `stochastic_provenance.json` output
+  file records PAR model fitting diagnostics, correlation estimation metadata,
+  and sampler configuration for reproducibility auditing.
+
+### Changed
+
+- **Replace Cholesky-based spatial correlation with spectral decomposition** --
+  Correlation matrices are now factored via eigendecomposition and a symmetric
+  matrix square root `D = V * diag(sqrt(lambda)) * V^T` (cyclic Jacobi
+  algorithm with negative-eigenvalue clipping). This eliminates
+  positive-definiteness requirements on estimated correlation matrices and
+  handles rank-deficient matrices naturally. The `method` field in
+  `correlation.json` now defaults to `"spectral"`; `"cholesky"` is accepted
+  for backward compatibility.
+- **Degenerate hydro filtering removed** -- The `classify_degenerate_hydros`
+  function and associated constants (`MAX_NEGATIVE_FRACTION`,
+  `MIN_RESIDUAL_STD`) have been removed. With spectral decomposition,
+  degenerate hydros are included in correlation estimation; their near-zero
+  correlations produce near-zero eigenvalues naturally.
+- **Output metadata overhaul** -- Training and simulation output directories
+  now write structured `metadata.json` files with timing, iteration counts,
+  and completion status. The retry histogram is normalized into a separate
+  Parquet file.
+- **Solver retry budget table** -- The 12-level retry escalation ladder is
+  decoupled from a magic constant and uses a configurable budget table.
+- **`training.seed` renamed to `training.tree_seed`** -- The `config.json`
+  field controlling the scenario-tree random seed is now `tree_seed`. No
+  backward-compatible alias is provided; old configs must be updated.
+- **`scenario_source` per-class format** -- The `stages.json`
+  `scenario_source` object changed from a flat `sampling_scheme` string to
+  per-class sub-objects with `inflow`, `load`, and `ncs` keys, each
+  carrying its own `scheme` field. The `historical_years` field is at the
+  top-level `scenario_source` object, not per-class.
+  The old flat format is detected at parse time and produces a clear error.
+- **`InflowHistoryRow` and `ExternalScenarioRow` relocated** -- These row
+  types moved from `cobre-io` to `cobre-core::scenario` so that
+  `cobre-stochastic` can reference them without depending on `cobre-io`.
+- **Per-class external files** -- `external_scenarios.parquet` is replaced
+  by three separate files (`external_inflow_scenarios.parquet`,
+  `external_load_scenarios.parquet`, `external_ncs_scenarios.parquet`),
+  one per entity class.
+- **Correlation `entity_type` expanded** -- Correlation groups previously
+  accepted only `"inflow"` as the entity type. The field now accepts
+  `"inflow"`, `"load"`, and `"ncs"`.
+
+### Removed
+
+- **`ExternalSelectionMode` type** -- Sequential and random selection modes
+  for external scenarios have been removed. External scenarios are now
+  selected by scenario index, consistent with the other sampling schemes.
+- **`selection_mode` field** -- Removed from `scenario_source`; no
+  replacement.
+- **`seed` alias in `config.json`** -- The deprecated `seed` alias for
+  `tree_seed` has been removed. Use `training.tree_seed` directly.
+- **Flat `sampling_scheme` field** -- The old top-level `sampling_scheme`
+  string in `scenario_source` is gone. Configs using the flat format
+  receive a descriptive parse-time error directing them to the per-class
+  format.
+- **`classify_degenerate_hydros` function** -- Removed from `fitting.rs`
+  along with `MAX_NEGATIVE_FRACTION` and `MIN_RESIDUAL_STD` constants.
+  Spectral decomposition handles degenerate series naturally.
+
+### Fixed
+
+- **MPI reproducibility** -- Fixed four bugs affecting multi-rank training
+  reproducibility: NCS/load factors and `forward_seed` are now broadcast to
+  non-root MPI ranks; training stats and simulation costs are aggregated
+  across ranks.
+- **Cut lag coefficient remapping** -- Fixed incorrect LP column mapping for
+  cut lag coefficients in backward pass.
+- **Periodic Yule-Walker solver** -- Fixed forward periodic YW equation
+  assembly that could produce incorrect PAR coefficients for multi-season
+  models.
+
 ## [0.3.2] - 2026-03-30
 
 ### Added

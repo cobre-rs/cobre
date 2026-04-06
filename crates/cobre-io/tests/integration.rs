@@ -195,6 +195,469 @@ fn test_referential_integrity_violation() {
     }
 }
 
+// ── test_inflow_history_wired_into_system ─────────────────────────────────────
+
+/// Given a case directory with `scenarios/inflow_history.parquet` containing
+/// 1 hydro x 10 years of monthly data (120 rows), `load_case` must return a
+/// `System` whose `inflow_history()` slice has exactly 120 entries, all with
+/// finite `value_m3s`.
+///
+/// The case also includes `inflow_seasonal_stats.parquet` (one row per stage for
+/// the single hydro) so that the estimation path is bypassed and no
+/// `season_definitions` are required in `stages.json`.
+#[test]
+fn test_inflow_history_wired_into_system() {
+    use arrow::array::{Date32Array, Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use chrono::NaiveDate;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_multi_entity_case(&dir);
+
+    // Overwrite hydros.json with 3 hydros (all on bus_id=1).
+    std::fs::write(
+        dir.path().join("system/hydros.json"),
+        r#"{ "hydros": [
+            { "id": 1, "name": "H1", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 1000.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 200.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 200.0 } },
+            { "id": 2, "name": "H2", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 500.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 100.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 100.0 } },
+            { "id": 3, "name": "H3", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 300.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 80.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 80.0 } }
+        ] }"#,
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+
+    // ── Write inflow_seasonal_stats.parquet (3 hydros × 2 stages) ────────────
+    {
+        let stats_schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("mean_m3s", DataType::Float64, false),
+            Field::new("std_m3s", DataType::Float64, false),
+        ]));
+        let stats_batch = RecordBatch::try_new(
+            Arc::clone(&stats_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 2, 3, 3])),
+                Arc::new(Int32Array::from(vec![0, 1, 0, 1, 0, 1])),
+                Arc::new(Float64Array::from(vec![
+                    150.0, 120.0, 80.0, 70.0, 50.0, 45.0,
+                ])),
+                Arc::new(Float64Array::from(vec![20.0, 15.0, 10.0, 8.0, 6.0, 5.0])),
+            ],
+        )
+        .unwrap();
+        let file =
+            std::fs::File::create(dir.path().join("scenarios/inflow_seasonal_stats.parquet"))
+                .unwrap();
+        let mut writer = ArrowWriter::try_new(file, stats_batch.schema(), None).unwrap();
+        writer.write(&stats_batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    // ── Write inflow_ar_coefficients.parquet (3 hydros × 2 stages, lag=1) ────
+    // Both stats AND coefficients must be present to skip estimation.
+    {
+        let ar_schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("lag", DataType::Int32, false),
+            Field::new("coefficient", DataType::Float64, false),
+            Field::new("residual_std_ratio", DataType::Float64, false),
+        ]));
+        let ar_batch = RecordBatch::try_new(
+            Arc::clone(&ar_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 2, 3, 3])),
+                Arc::new(Int32Array::from(vec![0, 1, 0, 1, 0, 1])),
+                Arc::new(Int32Array::from(vec![1, 1, 1, 1, 1, 1])),
+                Arc::new(Float64Array::from(vec![0.3, 0.25, 0.4, 0.35, 0.2, 0.15])),
+                Arc::new(Float64Array::from(vec![0.95, 0.92, 0.90, 0.88, 0.93, 0.91])),
+            ],
+        )
+        .unwrap();
+        let file =
+            std::fs::File::create(dir.path().join("scenarios/inflow_ar_coefficients.parquet"))
+                .unwrap();
+        let mut writer = ArrowWriter::try_new(file, ar_batch.schema(), None).unwrap();
+        writer.write(&ar_batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    // ── Write inflow_history.parquet (3 hydros × 10 years × 12 months = 360) ─
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let mut hydro_ids: Vec<i32> = Vec::with_capacity(360);
+    let mut dates: Vec<i32> = Vec::with_capacity(360);
+    let mut values: Vec<f64> = Vec::with_capacity(360);
+
+    for hid in 1_i32..=3 {
+        for year in 2000_i32..=2009 {
+            for month in 1_u32..=12 {
+                let date = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+                let days = i32::try_from((date - epoch).num_days()).unwrap();
+                hydro_ids.push(hid);
+                dates.push(days);
+                values.push(f64::from(hid) * 100.0 + f64::from(month));
+            }
+        }
+    }
+
+    let history_schema = Arc::new(Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("date", DataType::Date32, false),
+        Field::new("value_m3s", DataType::Float64, false),
+    ]));
+    let history_batch = RecordBatch::try_new(
+        Arc::clone(&history_schema),
+        vec![
+            Arc::new(Int32Array::from(hydro_ids)),
+            Arc::new(Date32Array::from(dates)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+    let file = std::fs::File::create(dir.path().join("scenarios/inflow_history.parquet")).unwrap();
+    let mut writer = ArrowWriter::try_new(file, history_batch.schema(), None).unwrap();
+    writer.write(&history_batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for inflow_history case: {e}"));
+
+    assert_eq!(
+        system.inflow_history().len(),
+        360,
+        "system.inflow_history() must have 360 rows (3 hydros × 10 years × 12 months)"
+    );
+    for row in system.inflow_history() {
+        assert!(
+            row.value_m3s.is_finite(),
+            "every inflow_history row must have a finite value_m3s"
+        );
+    }
+}
+
+// ── test_external_scenarios_wired_into_system ─────────────────────────────────
+
+/// Given a case directory with `scenarios/external_inflow_scenarios.parquet` containing
+/// 2 stages × 5 scenarios × 3 hydros (30 rows), `load_case` must return a
+/// `System` whose `external_scenarios()` slice has exactly 30 entries.
+#[test]
+fn test_external_scenarios_wired_into_system() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_multi_entity_case(&dir);
+
+    // Overwrite hydros.json with 3 hydros (all on bus_id=1).
+    std::fs::write(
+        dir.path().join("system/hydros.json"),
+        r#"{ "hydros": [
+            { "id": 1, "name": "H1", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 1000.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 200.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 200.0 } },
+            { "id": 2, "name": "H2", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 500.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 100.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 100.0 } },
+            { "id": 3, "name": "H3", "bus_id": 1, "downstream_id": null,
+              "reservoir": { "min_storage_hm3": 0.0, "max_storage_hm3": 300.0 },
+              "outflow": { "min_outflow_m3s": 0.0, "max_outflow_m3s": null },
+              "generation": { "model": "constant_productivity", "productivity_mw_per_m3s": 1.0,
+                "min_turbined_m3s": 0.0, "max_turbined_m3s": 80.0,
+                "min_generation_mw": 0.0, "max_generation_mw": 80.0 } }
+        ] }"#,
+    )
+    .unwrap();
+
+    // Build 2 stages × 5 scenarios × 3 hydros = 30 rows.
+    let mut stage_ids: Vec<i32> = Vec::with_capacity(30);
+    let mut scenario_ids: Vec<i32> = Vec::with_capacity(30);
+    let mut hydro_ids: Vec<i32> = Vec::with_capacity(30);
+    let mut values: Vec<f64> = Vec::with_capacity(30);
+
+    for stage_id in 0_i32..2 {
+        for scenario_id in 0_i32..5 {
+            for hid in 1_i32..=3 {
+                stage_ids.push(stage_id);
+                scenario_ids.push(scenario_id);
+                hydro_ids.push(hid);
+                values.push(
+                    f64::from(stage_id) * 1000.0 + f64::from(scenario_id) * 10.0 + f64::from(hid),
+                );
+            }
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("scenario_id", DataType::Int32, false),
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("value_m3s", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(stage_ids)),
+            Arc::new(Int32Array::from(scenario_ids)),
+            Arc::new(Int32Array::from(hydro_ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    let file = std::fs::File::create(
+        dir.path()
+            .join("scenarios/external_inflow_scenarios.parquet"),
+    )
+    .unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for external_inflow_scenarios case: {e}"));
+
+    assert_eq!(
+        system.external_scenarios().len(),
+        30,
+        "system.external_scenarios() must have 30 rows (2 stages × 5 scenarios × 3 hydros)"
+    );
+    for row in system.external_scenarios() {
+        assert!(
+            row.value_m3s.is_finite(),
+            "every external_scenarios row must have a finite value_m3s"
+        );
+    }
+}
+
+// ── test_inflow_history_absent_returns_empty ──────────────────────────────────
+
+/// Given a case directory without `scenarios/inflow_history.parquet`, `load_case`
+/// must return a `System` whose `inflow_history()` is an empty slice.
+#[test]
+fn test_inflow_history_absent_returns_empty() {
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // No inflow_history.parquet is written — absence is the default.
+    let system =
+        load_case(dir.path()).unwrap_or_else(|e| panic!("load_case failed for minimal case: {e}"));
+
+    assert!(
+        system.inflow_history().is_empty(),
+        "system.inflow_history() must be empty when inflow_history.parquet is absent"
+    );
+}
+
+// ── test_external_scenarios_absent_returns_empty ──────────────────────────────
+
+/// Given a case directory without `scenarios/external_inflow_scenarios.parquet`, `load_case`
+/// must return a `System` whose `external_scenarios()` is an empty slice.
+#[test]
+fn test_external_scenarios_absent_returns_empty() {
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // No external_inflow_scenarios.parquet is written — absence is the default.
+    let system =
+        load_case(dir.path()).unwrap_or_else(|e| panic!("load_case failed for minimal case: {e}"));
+
+    assert!(
+        system.external_scenarios().is_empty(),
+        "system.external_scenarios() must be empty when external_inflow_scenarios.parquet is absent"
+    );
+}
+
+// ── test_external_load_scenarios_wired_into_system ───────────────────────────
+
+/// Given a case directory with `scenarios/external_load_scenarios.parquet`
+/// containing 2 stages × 3 scenarios × 1 bus (6 rows), `load_case` must return
+/// a `System` whose `external_load_scenarios()` slice has exactly 6 entries,
+/// all with finite `value_mw`.
+#[test]
+fn test_external_load_scenarios_wired_into_system() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // Build 2 stages × 3 scenarios × 1 bus = 6 rows.
+    let mut stage_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut scenario_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut bus_ids: Vec<i32> = Vec::with_capacity(6);
+    let mut values: Vec<f64> = Vec::with_capacity(6);
+
+    for stage_id in 0_i32..2 {
+        for scenario_id in 0_i32..3 {
+            stage_ids.push(stage_id);
+            scenario_ids.push(scenario_id);
+            bus_ids.push(1);
+            values.push(100.0 + f64::from(stage_id) * 50.0 + f64::from(scenario_id) * 10.0);
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("scenario_id", DataType::Int32, false),
+        Field::new("bus_id", DataType::Int32, false),
+        Field::new("value_mw", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(stage_ids)),
+            Arc::new(Int32Array::from(scenario_ids)),
+            Arc::new(Int32Array::from(bus_ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    let file = std::fs::File::create(dir.path().join("scenarios/external_load_scenarios.parquet"))
+        .unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for external_load_scenarios case: {e}"));
+
+    assert_eq!(
+        system.external_load_scenarios().len(),
+        6,
+        "system.external_load_scenarios() must have 6 rows (2 stages × 3 scenarios × 1 bus)"
+    );
+    for row in system.external_load_scenarios() {
+        assert!(
+            row.value_mw.is_finite(),
+            "every external_load_scenarios row must have a finite value_mw"
+        );
+    }
+}
+
+// ── test_external_ncs_scenarios_wired_into_system ─────────────────────────────
+
+/// Given a case directory with `scenarios/external_ncs_scenarios.parquet`
+/// containing 2 stages × 4 scenarios × 2 NCS sources (16 rows), `load_case`
+/// must return a `System` whose `external_ncs_scenarios()` slice has exactly
+/// 16 entries, all with finite `value`.
+#[test]
+fn test_external_ncs_scenarios_wired_into_system() {
+    use arrow::array::{Float64Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
+
+    let dir = TempDir::new().unwrap();
+    helpers::make_minimal_case(&dir);
+
+    // The referential validator checks that every ncs_id exists in the NCS
+    // registry.  Write a non_controllable_sources.json declaring NCS 1 and 2
+    // on bus_id=1 (the only bus in the minimal case).
+    helpers::write_file(
+        dir.path(),
+        "system/non_controllable_sources.json",
+        r#"{
+    "non_controllable_sources": [
+        { "id": 1, "name": "NCS_A", "bus_id": 1, "max_generation_mw": 50.0 },
+        { "id": 2, "name": "NCS_B", "bus_id": 1, "max_generation_mw": 30.0 }
+    ]
+}"#,
+    );
+
+    // Build 2 stages × 4 scenarios × 2 NCS sources = 16 rows.
+    let mut stage_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut scenario_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut ncs_ids: Vec<i32> = Vec::with_capacity(16);
+    let mut values: Vec<f64> = Vec::with_capacity(16);
+
+    for stage_id in 0_i32..2 {
+        for scenario_id in 0_i32..4 {
+            for ncs_id in 1_i32..=2 {
+                stage_ids.push(stage_id);
+                scenario_ids.push(scenario_id);
+                ncs_ids.push(ncs_id);
+                // availability factor in (0, 1]
+                values.push(0.5 + 0.1 * f64::from(scenario_id) + 0.05 * f64::from(ncs_id - 1));
+            }
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("scenario_id", DataType::Int32, false),
+        Field::new("ncs_id", DataType::Int32, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(stage_ids)),
+            Arc::new(Int32Array::from(scenario_ids)),
+            Arc::new(Int32Array::from(ncs_ids)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    let file =
+        std::fs::File::create(dir.path().join("scenarios/external_ncs_scenarios.parquet")).unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let system = load_case(dir.path())
+        .unwrap_or_else(|e| panic!("load_case failed for external_ncs_scenarios case: {e}"));
+
+    assert_eq!(
+        system.external_ncs_scenarios().len(),
+        16,
+        "system.external_ncs_scenarios() must have 16 rows (2 stages × 4 scenarios × 2 NCS)"
+    );
+    for row in system.external_ncs_scenarios() {
+        assert!(
+            row.value.is_finite(),
+            "every external_ncs_scenarios row must have a finite value"
+        );
+    }
+}
+
 // ── test_postcard_round_trip ──────────────────────────────────────────────────
 
 /// Given a System produced by `load_case`, serializing it with `serialize_system`

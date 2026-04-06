@@ -47,7 +47,11 @@ use std::time::Instant;
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{ForwardSampler, SampleRequest, build_forward_sampler};
+use cobre_stochastic::context::ClassSchemes;
+use cobre_stochastic::{
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
+};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
@@ -78,15 +82,10 @@ use crate::{
 /// Both fit in `u32`; the offset guarantees no overlap for practical scenario counts.
 const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 
-/// Per-worker scenario cost accumulation type.
-///
-/// Each parallel worker returns `Ok(WorkerCosts)` for its assigned scenarios.
-/// The outer function flattens and sorts the results.
+/// Per-worker scenario cost accumulation: `(scenario_id, total_cost, category_costs)`.
 type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 
-/// Per-worker solver statistics accumulation type.
-///
-/// Each entry is `(scenario_id, delta)` for one scenario.
+/// Per-worker solver statistics: `(scenario_id, delta)`.
 type WorkerStats = Vec<(u32, SolverStatsDelta)>;
 
 /// Result of a simulation run, containing per-scenario costs and solver statistics.
@@ -586,6 +585,14 @@ fn process_scenario_stages<S: SolverInterface>(
     // Reset workspace state to the initial conditions for this scenario.
     ws.current_state.clear();
     ws.current_state.extend_from_slice(initial_state);
+    let class_req = ClassSampleRequest {
+        iteration: 0,
+        scenario: ids.global_scenario,
+        stage: 0,
+        stage_idx: 0,
+        total_scenarios: ids.total_scenarios,
+    };
+    sampler.apply_initial_state(&class_req, &mut ws.current_state, indexer.inflow_lags.start);
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
@@ -824,11 +831,24 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     let sim_start = Instant::now();
     let scenarios_complete = AtomicU32::new(0);
 
-    let sampler = build_forward_sampler(
-        training_ctx.sampling_scheme,
-        training_ctx.stochastic,
-        training_ctx.stages,
-    )?;
+    let sampler = build_forward_sampler(ForwardSamplerConfig {
+        class_schemes: ClassSchemes {
+            inflow: Some(training_ctx.inflow_scheme),
+            load: Some(training_ctx.load_scheme),
+            ncs: Some(training_ctx.ncs_scheme),
+        },
+        ctx: training_ctx.stochastic,
+        stages: training_ctx.stages,
+        dims: ClassDimensions {
+            n_hydros: training_ctx.stochastic.n_hydros(),
+            n_load_buses: training_ctx.stochastic.n_load_buses(),
+            n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
+        },
+        historical_library: training_ctx.historical_library,
+        external_inflow_library: training_ctx.external_inflow_library,
+        external_load_library: training_ctx.external_load_library,
+        external_ncs_library: training_ctx.external_ncs_library,
+    })?;
 
     let worker_results: Vec<Result<(WorkerCosts, WorkerStats), SimulationError>> = workspaces
         .par_iter_mut()
@@ -1162,7 +1182,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus = Bus {
             id: EntityId(0),
@@ -1268,7 +1288,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -1280,7 +1300,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1375,8 +1408,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1473,8 +1512,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1561,8 +1606,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1647,8 +1698,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1735,8 +1792,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1820,8 +1883,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1905,8 +1974,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -1987,8 +2062,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2057,8 +2138,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2169,8 +2256,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2275,8 +2368,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2366,8 +2465,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2468,8 +2573,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2569,8 +2680,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2685,8 +2802,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -2747,7 +2870,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -2848,7 +2971,7 @@ mod tests {
             std_mw,
         };
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: vec![],
         };
@@ -2861,7 +2984,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// When a simulation has 1 stochastic load bus (mean=300, std=30),
@@ -2965,8 +3101,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -3101,8 +3243,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -3241,8 +3389,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -3305,7 +3459,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::build_stochastic_context;
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus = Bus {
             id: EntityId(0),
@@ -3405,7 +3559,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -3417,7 +3571,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// Build a stage template for N=1 hydro, L=0 PAR, with `row_lower[0] = base_rhs`.
@@ -3550,8 +3717,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::Truncation,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {
@@ -3650,8 +3823,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &config,
             SimulationOutputSpec {

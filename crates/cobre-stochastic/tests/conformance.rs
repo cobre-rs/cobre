@@ -15,13 +15,14 @@ use cobre_core::{
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+        SamplingScheme,
     },
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
 };
-use cobre_stochastic::{build_stochastic_context, sample_forward};
+use cobre_stochastic::{ClassSchemes, build_stochastic_context, sample_forward};
 
 fn make_bus(id: i32) -> Bus {
     Bus {
@@ -148,7 +149,7 @@ fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -194,8 +195,20 @@ fn shared_fixture() -> cobre_core::System {
 #[test]
 fn pipeline_builds_with_correct_dimensions() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42, None, &[], &[], None)
-        .expect("build_stochastic_context must succeed for the shared fixture");
+    let ctx = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed for the shared fixture");
 
     assert_eq!(ctx.dim(), 2, "expected dim=2 (two hydros)");
     assert_eq!(ctx.n_stages(), 3, "expected n_stages=3 (study stages only)");
@@ -221,8 +234,20 @@ fn pipeline_builds_with_correct_dimensions() {
 #[test]
 fn par_lp_coefficients_match_hand_computed() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42, None, &[], &[], None)
-        .expect("build_stochastic_context must succeed for the shared fixture");
+    let ctx = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed for the shared fixture");
 
     let par = ctx.par();
     let tol = 1e-10;
@@ -285,8 +310,20 @@ fn par_lp_coefficients_match_hand_computed() {
 #[test]
 fn opening_tree_structure_correct() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42, None, &[], &[], None)
-        .expect("build_stochastic_context must succeed for the shared fixture");
+    let ctx = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed for the shared fixture");
 
     let tree = ctx.opening_tree();
 
@@ -312,8 +349,20 @@ fn opening_tree_structure_correct() {
 #[test]
 fn sample_forward_returns_valid_output() {
     let system = shared_fixture();
-    let ctx = build_stochastic_context(&system, 42, None, &[], &[], None)
-        .expect("build_stochastic_context must succeed for the shared fixture");
+    let ctx = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed for the shared fixture");
 
     let view = ctx.tree_view();
     let base_seed = ctx.base_seed();
@@ -380,8 +429,20 @@ fn opening_tree_marginal_statistics() {
         .build()
         .expect("system build must succeed for marginal statistics test");
 
-    let ctx = build_stochastic_context(&system, 42, None, &[], &[], None)
-        .expect("build_stochastic_context must succeed for marginal statistics test");
+    let ctx = build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .expect("build_stochastic_context must succeed for marginal statistics test");
 
     let tree = ctx.opening_tree();
 

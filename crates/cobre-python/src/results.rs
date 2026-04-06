@@ -114,14 +114,14 @@ fn read_json_file(path: &std::path::Path) -> PyResult<serde_json::Value> {
 /// ```python
 /// {
 ///     "training": {
-///         "manifest": { ... },           # contents of training/_manifest.json
+///         "manifest": { ... },           # contents of training/metadata.json
 ///         "metadata": { ... },           # contents of training/metadata.json
 ///         "convergence_path": "/abs/...", # absolute path to convergence.parquet
 ///         "timing_path": "/abs/...",      # absolute path to timing/iterations.parquet
 ///         "complete": True,               # whether training/_SUCCESS exists
 ///     },
 ///     "simulation": {
-///         "manifest": { ... } | None,    # contents of simulation/_manifest.json, or None
+///         "manifest": { ... } | None,    # contents of simulation/metadata.json, or None
 ///         "complete": False,             # whether simulation/_SUCCESS exists
 ///     },
 /// }
@@ -158,7 +158,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> 
         )));
     }
 
-    let manifest_val = read_json_file(&training_dir.join("_manifest.json"))?;
+    let manifest_val = read_json_file(&training_dir.join("metadata.json"))?;
     let metadata_val = read_json_file(&training_dir.join("metadata.json"))?;
 
     let convergence_path = training_dir
@@ -172,7 +172,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> 
         .into_owned();
 
     let simulation_dir = output_dir.join("simulation");
-    let sim_manifest_path = simulation_dir.join("_manifest.json");
+    let sim_manifest_path = simulation_dir.join("metadata.json");
     let sim_manifest = if sim_manifest_path.exists() {
         json_value_to_py(py, &read_json_file(&sim_manifest_path)?)?
     } else {

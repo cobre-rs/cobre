@@ -1,15 +1,15 @@
 //! `cobre summary <OUTPUT_DIR>` subcommand.
 //!
-//! Reads the training manifest and convergence log from a completed run's output
+//! Reads the training metadata and convergence log from a completed run's output
 //! directory and prints the same human-readable summary as `cobre run` to stderr.
 //! This lets users inspect a past run without re-executing the study.
 //!
 //! # Behavior
 //!
-//! - `training/_manifest.json` — required; missing file returns [`CliError::Io`].
+//! - `training/metadata.json` — required; missing file returns [`CliError::Io`].
 //! - `training/convergence.parquet` — optional; missing file falls back to
 //!   zero-valued bounds (`lp_solves` and timing reported as 0).
-//! - `simulation/_manifest.json` — optional; missing file silently skips the
+//! - `simulation/metadata.json` — optional; missing file silently skips the
 //!   simulation section in the output.
 //!
 //! All output goes to stderr, matching the `cobre run` convention. stdout is
@@ -21,8 +21,8 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    ConvergenceSummary, OutputError, SimulationManifest, TrainingManifest,
-    read_convergence_summary, read_simulation_manifest, read_training_manifest,
+    ConvergenceSummary, OutputError, SimulationMetadata, TrainingMetadata,
+    read_convergence_summary, read_simulation_metadata, read_training_metadata,
 };
 
 use crate::{
@@ -32,7 +32,7 @@ use crate::{
     },
 };
 
-// ── Arguments ─────────────────────────────────────────────────────────────────
+// ── Arguments ────────────────────────────────────────────────────────────────
 
 /// Arguments for the `cobre summary` subcommand.
 #[derive(Debug, Args)]
@@ -42,19 +42,19 @@ pub struct SummaryArgs {
     pub output_dir: PathBuf,
 }
 
-// ── Execute ───────────────────────────────────────────────────────────────────
+// ── Execute ──────────────────────────────────────────────────────────────────
 
 /// Execute the `summary` subcommand.
 ///
-/// Reads manifests and convergence data from `args.output_dir` and prints
+/// Reads metadata and convergence data from `args.output_dir` and prints
 /// the human-readable training (and optionally simulation) summary to stderr.
 /// The format matches what `cobre run` prints at the end of a completed study.
 ///
 /// # Errors
 ///
 /// - [`CliError::Io`] when the output directory does not exist or
-///   `training/_manifest.json` cannot be read.
-/// - [`CliError::Internal`] when a manifest file contains malformed JSON.
+///   `training/metadata.json` cannot be read.
+/// - [`CliError::Internal`] when a metadata file contains malformed JSON.
 pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
     let output_dir = args.output_dir;
 
@@ -69,27 +69,27 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
         });
     }
 
-    // training/_manifest.json is required; absence is an error.
-    let training_manifest_path = output_dir.join("training/_manifest.json");
-    let manifest: TrainingManifest =
-        read_training_manifest(&training_manifest_path).map_err(CliError::from)?;
+    // training/metadata.json is required; absence is an error.
+    let training_metadata_path = output_dir.join("training/metadata.json");
+    let metadata: TrainingMetadata =
+        read_training_metadata(&training_metadata_path).map_err(CliError::from)?;
 
     // training/convergence.parquet is optional; fall back to zero-valued summary on error.
     let convergence_path = output_dir.join("training/convergence.parquet");
     let convergence = read_convergence_summary(&convergence_path)
-        .unwrap_or_else(|_| convergence_fallback(&manifest));
+        .unwrap_or_else(|_| convergence_fallback(&metadata));
 
-    // simulation/_manifest.json is optional; missing file is silently skipped.
-    let simulation_manifest_path = output_dir.join("simulation/_manifest.json");
-    let simulation: Option<SimulationManifest> =
-        read_optional_simulation_manifest(&simulation_manifest_path)?;
+    // simulation/metadata.json is optional; missing file is silently skipped.
+    let simulation_metadata_path = output_dir.join("simulation/metadata.json");
+    let simulation: Option<SimulationMetadata> =
+        read_optional_simulation_metadata(&simulation_metadata_path)?;
 
     // Build and print training summary.
-    let training_summary = build_training_summary(&manifest, &convergence);
+    let training_summary = build_training_summary(&metadata, &convergence);
     let stderr = Term::stderr();
     print_training_summary(&stderr, &training_summary);
 
-    // Build and print simulation summary if the manifest was present.
+    // Build and print simulation summary if the metadata was present.
     if let Some(sim) = simulation {
         let simulation_summary = build_simulation_summary(&sim);
         let _ = stderr.write_line("");
@@ -99,45 +99,41 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────────
+// ── Private helpers ──────────────────────────────────────────────────────────
 
 /// Construct a zero-valued [`ConvergenceSummary`] that derives bounds from the
-/// manifest's `convergence.final_gap_percent` field.
+/// metadata's `convergence.final_gap_percent` field.
 ///
-/// Used when `convergence.parquet` is missing or unreadable. The `lp_solves` and
-/// timing fields are set to 0; bounds are 0.0 since the manifest does not carry
-/// them separately.
-fn convergence_fallback(manifest: &TrainingManifest) -> ConvergenceSummary {
+/// Used when `convergence.parquet` is missing or unreadable.
+fn convergence_fallback(metadata: &TrainingMetadata) -> ConvergenceSummary {
     ConvergenceSummary {
         total_lp_solves: 0,
         total_time_ms: 0,
         final_lower_bound: 0.0,
         final_upper_bound_mean: 0.0,
         final_upper_bound_std: 0.0,
-        final_gap_percent: manifest.convergence.final_gap_percent,
+        final_gap_percent: metadata.convergence.final_gap_percent,
     }
 }
 
-/// Build a [`TrainingSummary`] by mapping fields from the manifest and convergence data.
+/// Build a [`TrainingSummary`] by mapping fields from the metadata and convergence data.
 fn build_training_summary(
-    manifest: &TrainingManifest,
+    metadata: &TrainingMetadata,
     convergence: &ConvergenceSummary,
 ) -> TrainingSummary {
     TrainingSummary {
-        iterations: u64::from(manifest.iterations.completed),
-        converged: manifest.convergence.achieved,
-        converged_at: manifest.iterations.converged_at.map(u64::from),
-        reason: manifest.convergence.termination_reason.clone(),
+        iterations: u64::from(metadata.iterations.completed),
+        converged: metadata.convergence.achieved,
+        converged_at: metadata.iterations.converged_at.map(u64::from),
+        reason: metadata.convergence.termination_reason.clone(),
         lower_bound: convergence.final_lower_bound,
         upper_bound: convergence.final_upper_bound_mean,
         upper_bound_std: convergence.final_upper_bound_std,
         gap_percent: convergence.final_gap_percent.unwrap_or(0.0),
-        total_cuts_active: manifest.cuts.total_active,
-        total_cuts_generated: manifest.cuts.total_generated,
+        total_cuts_active: metadata.cuts.total_active,
+        total_cuts_generated: metadata.cuts.total_generated,
         total_lp_solves: convergence.total_lp_solves,
         total_time_ms: convergence.total_time_ms,
-        // Solver detail fields are not available from the manifest; filled when
-        // reading solver stats Parquet in a future version.
         total_first_try: 0,
         total_retried: 0,
         total_failed: 0,
@@ -148,19 +144,15 @@ fn build_training_summary(
     }
 }
 
-/// Build a [`SimulationSummary`] from a [`SimulationManifest`].
-///
-/// The simulation manifest does not carry timing data, so `total_time_ms` is
-/// set to 0.
-fn build_simulation_summary(manifest: &SimulationManifest) -> SimulationSummary {
+/// Build a [`SimulationSummary`] from a [`SimulationMetadata`].
+fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary {
     SimulationSummary {
-        n_scenarios: manifest.scenarios.total,
-        completed: manifest.scenarios.completed,
-        failed: manifest.scenarios.failed,
+        n_scenarios: metadata.scenarios.total,
+        completed: metadata.scenarios.completed,
+        failed: metadata.scenarios.failed,
         total_time_ms: 0,
         mean_cost: None,
         std_cost: None,
-        // Solver stats are not stored in the manifest; zero-filled for `cobre summary`.
         total_lp_solves: 0,
         total_first_try: 0,
         total_retried: 0,
@@ -172,16 +164,14 @@ fn build_simulation_summary(manifest: &SimulationManifest) -> SimulationSummary 
     }
 }
 
-/// Attempt to read an optional simulation manifest.
+/// Attempt to read an optional simulation metadata file.
 ///
-/// Returns `Ok(None)` when the file does not exist (file-not-found I/O error).
-/// Propagates all other [`OutputError`] variants as [`CliError`] via the
-/// existing [`From<OutputError>`] implementation.
-fn read_optional_simulation_manifest(
+/// Returns `Ok(None)` when the file does not exist.
+fn read_optional_simulation_metadata(
     path: &std::path::Path,
-) -> Result<Option<SimulationManifest>, CliError> {
-    match read_simulation_manifest(path) {
-        Ok(manifest) => Ok(Some(manifest)),
+) -> Result<Option<SimulationMetadata>, CliError> {
+    match read_simulation_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
         Err(OutputError::IoError { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
@@ -191,7 +181,7 @@ fn read_optional_simulation_manifest(
     }
 }
 
-// ── Unit tests ────────────────────────────────────────────────────────────────
+// ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -199,35 +189,53 @@ mod tests {
     use std::path::PathBuf;
 
     use cobre_io::{
-        ConvergenceSummary, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
-        TrainingManifest,
+        ConvergenceSummary, MetadataConfiguration, MetadataConvergence, MetadataCuts,
+        MetadataIterations, MetadataProblemDimensions, MpiInfo, TrainingMetadata,
     };
 
     use super::{SummaryArgs, build_training_summary, convergence_fallback};
 
-    fn make_training_manifest() -> TrainingManifest {
-        TrainingManifest {
-            version: "2.0.0".to_string(),
+    fn make_training_metadata() -> TrainingMetadata {
+        TrainingMetadata {
+            cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+            hostname: "test-host".to_string(),
+            solver: "highs".to_string(),
+            started_at: "2026-01-17T08:00:00Z".to_string(),
+            completed_at: "2026-01-17T12:30:00Z".to_string(),
+            duration_seconds: 16_200.0,
             status: "complete".to_string(),
-            started_at: Some("2026-01-17T08:00:00Z".to_string()),
-            completed_at: Some("2026-01-17T12:30:00Z".to_string()),
-            iterations: ManifestIterations {
+            configuration: MetadataConfiguration {
+                seed: Some(42),
                 max_iterations: Some(100),
+                forward_passes: Some(192),
+                stopping_mode: "any".to_string(),
+                policy_mode: "fresh".to_string(),
+            },
+            problem_dimensions: MetadataProblemDimensions {
+                num_stages: 12,
+                num_hydros: 160,
+                num_thermals: 200,
+                num_buses: 5,
+                num_lines: 8,
+            },
+            iterations: MetadataIterations {
                 completed: 42,
                 converged_at: Some(42),
             },
-            convergence: ManifestConvergence {
+            convergence: MetadataConvergence {
                 achieved: true,
                 final_gap_percent: Some(0.45),
                 termination_reason: "gap_tolerance".to_string(),
             },
-            cuts: ManifestCuts {
+            cuts: MetadataCuts {
                 total_generated: 1_250_000,
                 total_active: 980_000,
                 peak_active: 1_100_000,
             },
-            checksum: None,
-            mpi_info: ManifestMpiInfo::default(),
+            mpi: MpiInfo {
+                world_size: 1,
+                ranks_participated: 1,
+            },
         }
     }
 
@@ -242,8 +250,6 @@ mod tests {
         }
     }
 
-    // ── summary_args_parses_output_dir ─────────────────────────────────────
-
     #[test]
     fn summary_args_parses_output_dir() {
         let args = SummaryArgs {
@@ -252,128 +258,70 @@ mod tests {
         assert_eq!(args.output_dir, PathBuf::from("/tmp/out"));
     }
 
-    // ── construct_training_summary_from_manifest ───────────────────────────
-
     #[test]
-    fn construct_training_summary_from_manifest() {
-        let manifest = make_training_manifest();
+    fn construct_training_summary_from_metadata() {
+        let metadata = make_training_metadata();
         let convergence = make_convergence_summary();
 
-        let summary = build_training_summary(&manifest, &convergence);
+        let summary = build_training_summary(&metadata, &convergence);
 
-        assert_eq!(
-            summary.iterations, 42,
-            "iterations must equal manifest.iterations.completed"
-        );
-        assert!(
-            summary.converged,
-            "converged must match manifest.convergence.achieved"
-        );
-        assert_eq!(
-            summary.converged_at,
-            Some(42),
-            "converged_at must be mapped from manifest.iterations.converged_at"
-        );
-        assert_eq!(
-            summary.reason, "gap_tolerance",
-            "reason must equal manifest.convergence.termination_reason"
-        );
-        assert!(
-            (summary.lower_bound - 48_500.0).abs() < f64::EPSILON,
-            "lower_bound must come from convergence data"
-        );
-        assert!(
-            (summary.upper_bound - 49_000.0).abs() < f64::EPSILON,
-            "upper_bound must come from convergence data"
-        );
-        assert!(
-            (summary.upper_bound_std - 250.0).abs() < f64::EPSILON,
-            "upper_bound_std must come from convergence data"
-        );
-        assert!(
-            (summary.gap_percent - 1.03).abs() < 1e-9,
-            "gap_percent must come from convergence data"
-        );
-        assert_eq!(
-            summary.total_cuts_active, 980_000,
-            "total_cuts_active must come from manifest.cuts"
-        );
-        assert_eq!(
-            summary.total_cuts_generated, 1_250_000,
-            "total_cuts_generated must come from manifest.cuts"
-        );
-        assert_eq!(
-            summary.total_lp_solves, 84_000,
-            "total_lp_solves must come from convergence data"
-        );
-        assert_eq!(
-            summary.total_time_ms, 12_345,
-            "total_time_ms must come from convergence data"
-        );
+        assert_eq!(summary.iterations, 42);
+        assert!(summary.converged);
+        assert_eq!(summary.converged_at, Some(42));
+        assert_eq!(summary.reason, "gap_tolerance");
+        assert!((summary.lower_bound - 48_500.0).abs() < f64::EPSILON);
+        assert!((summary.upper_bound - 49_000.0).abs() < f64::EPSILON);
+        assert!((summary.upper_bound_std - 250.0).abs() < f64::EPSILON);
+        assert!((summary.gap_percent - 1.03).abs() < 1e-9);
+        assert_eq!(summary.total_cuts_active, 980_000);
+        assert_eq!(summary.total_cuts_generated, 1_250_000);
+        assert_eq!(summary.total_lp_solves, 84_000);
+        assert_eq!(summary.total_time_ms, 12_345);
     }
 
     #[test]
-    fn convergence_fallback_uses_manifest_gap_percent() {
-        let manifest = make_training_manifest();
-        let fallback = convergence_fallback(&manifest);
+    fn convergence_fallback_uses_metadata_gap_percent() {
+        let metadata = make_training_metadata();
+        let fallback = convergence_fallback(&metadata);
 
-        assert_eq!(
-            fallback.total_lp_solves, 0,
-            "fallback total_lp_solves must be 0"
-        );
-        assert_eq!(
-            fallback.total_time_ms, 0,
-            "fallback total_time_ms must be 0"
-        );
-        assert_eq!(
-            fallback.final_gap_percent,
-            Some(0.45),
-            "fallback gap_percent must come from manifest.convergence.final_gap_percent"
-        );
+        assert_eq!(fallback.total_lp_solves, 0);
+        assert_eq!(fallback.total_time_ms, 0);
+        assert_eq!(fallback.final_gap_percent, Some(0.45));
     }
 
     #[test]
-    fn convergence_fallback_gap_none_when_manifest_has_no_gap() {
-        let mut manifest = make_training_manifest();
-        manifest.convergence.final_gap_percent = None;
+    fn convergence_fallback_gap_none_when_metadata_has_no_gap() {
+        let mut metadata = make_training_metadata();
+        metadata.convergence.final_gap_percent = None;
 
-        let fallback = convergence_fallback(&manifest);
+        let fallback = convergence_fallback(&metadata);
 
-        assert!(
-            fallback.final_gap_percent.is_none(),
-            "fallback gap_percent must be None when manifest has no gap"
-        );
+        assert!(fallback.final_gap_percent.is_none());
     }
 
     #[test]
     fn build_training_summary_gap_defaults_to_zero_when_none() {
-        let manifest = make_training_manifest();
+        let metadata = make_training_metadata();
         let convergence = ConvergenceSummary {
             final_gap_percent: None,
             ..make_convergence_summary()
         };
 
-        let summary = build_training_summary(&manifest, &convergence);
+        let summary = build_training_summary(&metadata, &convergence);
 
-        assert!(
-            summary.gap_percent.abs() < f64::EPSILON,
-            "gap_percent must default to 0.0 when convergence summary has None"
-        );
+        assert!(summary.gap_percent.abs() < f64::EPSILON);
     }
 
     #[test]
-    fn build_training_summary_converged_at_none_when_manifest_has_none() {
-        let mut manifest = make_training_manifest();
-        manifest.iterations.converged_at = None;
-        manifest.convergence.achieved = false;
+    fn build_training_summary_converged_at_none_when_metadata_has_none() {
+        let mut metadata = make_training_metadata();
+        metadata.iterations.converged_at = None;
+        metadata.convergence.achieved = false;
 
         let convergence = make_convergence_summary();
-        let summary = build_training_summary(&manifest, &convergence);
+        let summary = build_training_summary(&metadata, &convergence);
 
-        assert!(
-            summary.converged_at.is_none(),
-            "converged_at must be None when manifest has no converged_at"
-        );
-        assert!(!summary.converged, "converged must be false");
+        assert!(summary.converged_at.is_none());
+        assert!(!summary.converged);
     }
 }

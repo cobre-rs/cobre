@@ -30,9 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
-    build_hydro_model_summary, build_stochastic_summary, prepare_hydro_models, prepare_stochastic,
-    ArOrderSummary, EstimationReport, FutureCostFunction, HydroModelSummary, SolverStatsDelta,
-    StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
+    build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
+    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
+    StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -48,6 +49,7 @@ struct RunSummary {
     simulation: Option<SimSummary>,
     stochastic: Option<StochasticSummary>,
     hydro_models: Option<HydroModelSummary>,
+    provenance: Option<ModelProvenanceReport>,
 }
 
 struct SimSummary {
@@ -90,22 +92,14 @@ fn write_policy_checkpoint(
     let (basis_col_u8, basis_row_u8) = convert_basis_cache(training_result);
     let stage_bases = build_stage_basis_records(fcf, training_result, &basis_col_u8, &basis_row_u8);
 
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| format!("{}s-since-epoch", d.as_secs()))
-        .unwrap_or_else(|_| "unknown".to_string());
-
     let metadata = PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at,
+        created_at: cobre_io::now_iso8601(),
         completed_iterations: training_result.iterations as u32,
         final_lower_bound: training_result.final_lb,
         best_upper_bound: Some(training_result.final_ub),
         state_dimension: state_dimension as u32,
         num_stages: n_stages as u32,
-        config_hash: String::new(),
-        system_hash: String::new(),
         max_iterations: max_iterations as u32,
         forward_passes,
         warm_start_cuts: fcf.pools.first().map_or(0, |p| p.warm_start_count),
@@ -262,6 +256,7 @@ struct TrainingPhaseResult {
     result: cobre_sddp::TrainingResult,
     output: cobre_io::TrainingOutput,
     error: Option<cobre_sddp::SddpError>,
+    started_at: String,
 }
 
 /// Run the training phase: solver init, train, write outputs.
@@ -269,6 +264,7 @@ fn run_training_phase_py(
     setup: &mut StudySetup,
     n_threads: usize,
 ) -> Result<TrainingPhaseResult, String> {
+    let started_at = cobre_io::now_iso8601();
     let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
     let training_outcome = setup
@@ -290,6 +286,7 @@ fn run_training_phase_py(
         result: training_result,
         output: training_output,
         error: training_outcome.error,
+        started_at,
     })
 }
 
@@ -337,7 +334,15 @@ fn write_training_artifacts(
         .map_err(|e| format!("cut selection output: {e}"))?;
     }
 
-    cobre_io::write_training_results(output_dir, &training.output, system, config)
+    let training_ctx = cobre_io::OutputContext {
+        hostname: cobre_io::get_hostname(),
+        solver: "highs".to_string(),
+        started_at: training.started_at.clone(),
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size: 1,
+        mpi_ranks_participated: 1,
+    };
+    cobre_io::write_training_results(output_dir, &training.output, system, config, &training_ctx)
         .map_err(|e| format!("training results output: {e}"))?;
 
     Ok(())
@@ -351,6 +356,7 @@ fn run_simulation_phase_py(
     training_result: &cobre_sddp::TrainingResult,
     n_threads: usize,
 ) -> Result<SimSummary, String> {
+    let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
         .create_workspace_pool(n_threads, HighsSolver::new)
@@ -406,7 +412,15 @@ fn run_simulation_phase_py(
         n_scenarios: sim_out.n_scenarios,
         completed: sim_out.completed,
     };
-    cobre_io::write_simulation_results(output_dir, &sim_out)
+    let sim_ctx = cobre_io::OutputContext {
+        hostname: cobre_io::get_hostname(),
+        solver: "highs".to_string(),
+        started_at: sim_started_at,
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size: 1,
+        mpi_ranks_participated: 1,
+    };
+    cobre_io::write_simulation_results(output_dir, &sim_out, &sim_ctx)
         .map_err(|e| format!("simulation results output: {e}"))?;
 
     Ok(sim_summary)
@@ -437,6 +451,7 @@ fn run_inner(
         .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
     let system = result.system;
     let estimation_report = result.estimation_report;
+    let estimation_path = result.estimation_path;
 
     let hydro_models_result = prepare_hydro_models(&system, case_dir)
         .map_err(|e| format!("hydro model preprocessing error: {e}"))?;
@@ -444,6 +459,13 @@ fn run_inner(
     let mut setup = StudySetup::new(&system, &config, result.stochastic, hydro_models_result)
         .map_err(|e| e.to_string())?;
     setup.set_export_states(config.exports.states);
+
+    let provenance_report = build_provenance_report(
+        estimation_path,
+        estimation_report.as_ref(),
+        setup.stochastic().provenance(),
+        system.hydros().len(),
+    );
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(
@@ -457,6 +479,11 @@ fn run_inner(
     let scaling_path = output_dir.join("training/scaling_report.json");
     cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
+
+    let provenance_path = output_dir.join("training/model_provenance.json");
+    if let Err(e) = cobre_io::write_provenance_report(&provenance_path, &provenance_report) {
+        eprintln!("cobre-python: provenance output warning: {e}");
+    }
 
     let stochastic_summary = build_stochastic_summary(
         &system,
@@ -491,8 +518,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }
@@ -526,8 +551,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }
@@ -579,6 +602,7 @@ fn run_inner(
             simulation,
             stochastic: Some(stochastic_summary),
             hydro_models: hydro_models_summary,
+            provenance: Some(provenance_report),
         })
     } else {
         // Training disabled: check if simulation is requested.
@@ -605,8 +629,6 @@ fn run_inner(
                     &checkpoint.metadata,
                     state_dim,
                     n_stages,
-                    None,
-                    None,
                 )
                 .map_err(|e| format!("policy validation error: {e}"))?;
             }
@@ -659,6 +681,7 @@ fn run_inner(
                 simulation,
                 stochastic: Some(stochastic_summary),
                 hydro_models: hydro_models_summary,
+                provenance: Some(provenance_report),
             });
         }
 
@@ -674,6 +697,7 @@ fn run_inner(
             simulation: None,
             stochastic: Some(stochastic_summary),
             hydro_models: hydro_models_summary,
+            provenance: Some(provenance_report),
         })
     }
 }
@@ -749,10 +773,41 @@ fn stochastic_summary_to_dict<'py>(
     Ok(dict)
 }
 
+/// Convert a [`ModelProvenanceReport`] to a Python dict.
+fn provenance_to_dict<'py>(
+    py: Python<'py>,
+    report: &ModelProvenanceReport,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("estimation_path", &report.estimation_path)?;
+    dict.set_item(
+        "seasonal_stats_source",
+        report.seasonal_stats_source.to_string(),
+    )?;
+    dict.set_item(
+        "ar_coefficients_source",
+        report.ar_coefficients_source.to_string(),
+    )?;
+    dict.set_item("correlation_source", report.correlation_source.to_string())?;
+    dict.set_item(
+        "opening_tree_source",
+        report.opening_tree_source.to_string(),
+    )?;
+    dict.set_item("n_hydros", report.n_hydros)?;
+    dict.set_item("ar_method", report.ar_method.as_deref())?;
+    dict.set_item("ar_max_order", report.ar_max_order)?;
+    dict.set_item(
+        "white_noise_fallbacks",
+        report.white_noise_fallbacks.clone(),
+    )?;
+    Ok(dict)
+}
+
 /// Load a case, train an SDDP policy, optionally simulate, and write results.
 /// GIL is released for the entire Rust computation.
 /// Returns a dict with keys: `"converged"`, `"iterations"`, `"lower_bound"`, `"upper_bound"`,
-/// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`.
+/// `"gap_percent"`, `"total_time_ms"`, `"output_dir"`, `"simulation"`, `"stochastic"`,
+/// `"hydro_models"`, `"provenance"`.
 #[allow(clippy::needless_pass_by_value)]
 #[pyfunction]
 #[pyo3(signature = (case_dir, output_dir=None, threads=None, skip_simulation=None))]
@@ -813,6 +868,13 @@ pub fn run(
             };
             dict.set_item("hydro_models", hydro_val)?;
 
+            let provenance_val = if let Some(prov) = &summary.provenance {
+                provenance_to_dict(py, prov)?.into()
+            } else {
+                py.None()
+            };
+            dict.set_item("provenance", provenance_val)?;
+
             Ok(dict.into())
         }
         Err(msg) => {
@@ -825,5 +887,35 @@ pub fn run(
             };
             Err(err_fn(msg))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use cobre_sddp::setup::prepare_stochastic;
+
+    #[test]
+    fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
+        let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cobre-python parent")
+            .parent()
+            .expect("crates parent")
+            .join("examples/deterministic/d01-thermal-dispatch");
+
+        let system = cobre_io::load_case(&case_dir).expect("load_case must succeed for D01");
+        let config = cobre_io::parse_config(&case_dir.join("config.json"))
+            .expect("parse_config must succeed for D01");
+
+        let seed = config.training.tree_seed.map_or(42_u64, i64::unsigned_abs);
+
+        let result = prepare_stochastic(system, &case_dir, &config, seed);
+        assert!(
+            result.is_ok(),
+            "prepare_stochastic failed for D01 via Python path: {:?}",
+            result.err()
+        );
     }
 }

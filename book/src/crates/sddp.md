@@ -105,6 +105,7 @@ near zero.
 | `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                |
 | `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                           |
 | `fpha_fitting`   | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry |
+| `setup`          | `StudySetup`: pre-built study state constructed once before training and simulation; holds four optional scenario libraries (`historical_library`, `external_inflow_library`, `external_load_library`, `external_ncs_library`) built conditionally from per-class `SamplingScheme` selections |
 
 ## Configuration
 
@@ -197,6 +198,21 @@ All variants respect a `check_frequency` parameter: selection only runs at
 iterations that are multiples of `check_frequency` and never at iteration 0.
 
 ## Key data structures
+
+### `StudySetup`
+
+`StudySetup` is constructed once by `StudySetup::new` from a validated `System` and `Config`. It owns all precomputed state — stage templates, stochastic context, FCF, indexer, initial state, risk measures, and entity counts — and holds it across async boundaries without lifetime issues.
+
+Four optional library fields are built conditionally based on per-class `SamplingScheme` selections:
+
+| Field | Type | Built when |
+| ----- | ---- | ---------- |
+| `historical_library` | `Option<HistoricalScenarioLibrary>` | `inflow_scheme == SamplingScheme::Historical` |
+| `external_inflow_library` | `Option<ExternalScenarioLibrary>` | `inflow_scheme == SamplingScheme::External` |
+| `external_load_library` | `Option<ExternalScenarioLibrary>` | `load_scheme == SamplingScheme::External` |
+| `external_ncs_library` | `Option<ExternalScenarioLibrary>` | `ncs_scheme == SamplingScheme::External` |
+
+Callers borrow `StudySetup` to construct `TrainingContext` and `StageContext`; the public accessor methods (`historical_library()`, `external_inflow_library()`, etc.) return `Option<&T>` and are `None` for sampling schemes that do not use those libraries.
 
 ### `FutureCostFunction`
 

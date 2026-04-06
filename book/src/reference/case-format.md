@@ -34,7 +34,9 @@ my_case/
 │   ├── inflow_history.parquet               # Historical inflow series (optional)
 │   ├── inflow_seasonal_stats.parquet        # PAR model seasonal statistics (optional)
 │   ├── inflow_ar_coefficients.parquet       # PAR autoregressive coefficients (optional)
-│   ├── external_scenarios.parquet           # Pre-generated external scenarios (optional)
+│   ├── external_inflow_scenarios.parquet    # External inflow scenarios (optional)
+│   ├── external_load_scenarios.parquet      # External load scenarios (optional)
+│   ├── external_ncs_scenarios.parquet       # External NCS scenarios (optional)
 │   ├── load_seasonal_stats.parquet          # Load model seasonal statistics (optional)
 │   ├── load_factors.json                    # Load scaling factors (optional)
 │   ├── non_controllable_factors.json        # NCS block scaling factors (optional)
@@ -78,7 +80,9 @@ my_case/
 | `scenarios/inflow_history.parquet`              | Parquet | No       | Historical inflow time series                 |
 | `scenarios/inflow_seasonal_stats.parquet`       | Parquet | No       | PAR model seasonal statistics                 |
 | `scenarios/inflow_ar_coefficients.parquet`      | Parquet | No       | PAR autoregressive coefficients               |
-| `scenarios/external_scenarios.parquet`          | Parquet | No       | Pre-generated scenario inflows                |
+| `scenarios/external_inflow_scenarios.parquet`   | Parquet | No       | External inflow scenario realizations (hydro_id, stage_id, scenario_id, value_m3s) |
+| `scenarios/external_load_scenarios.parquet`     | Parquet | No       | External load scenario realizations (bus_id, stage_id, scenario_id, value_mw)       |
+| `scenarios/external_ncs_scenarios.parquet`      | Parquet | No       | External NCS scenario realizations (ncs_id, stage_id, scenario_id, value)           |
 | `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics                |
 | `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage            |
 | `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage    |

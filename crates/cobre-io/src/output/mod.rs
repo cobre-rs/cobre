@@ -14,6 +14,7 @@ pub mod hydro_models;
 pub mod manifest;
 pub mod parquet_config;
 pub mod policy;
+pub mod provenance;
 pub mod results_writer;
 pub mod scaling_report;
 pub(crate) mod schemas;
@@ -27,13 +28,13 @@ pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
-    ManifestChecksum, ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo,
-    ManifestScenarios, MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment,
-    MetadataPerformanceSummary, MetadataProblemDimensions, MetadataRunInfo, SimulationManifest,
-    TrainingManifest, TrainingMetadata, read_simulation_manifest, read_training_manifest,
-    write_metadata, write_simulation_manifest, write_training_manifest,
+    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, MpiInfo, OutputContext, SimulationMetadata,
+    TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
+    write_simulation_metadata, write_training_metadata,
 };
 pub use parquet_config::ParquetWriterConfig;
+pub use provenance::write_provenance_report;
 pub use results_writer::{write_results, write_simulation_results, write_training_results};
 pub use scaling_report::write_scaling_report;
 pub use simulation_writer::SimulationParquetWriter;
@@ -333,7 +334,6 @@ impl SimulationOutput {
 /// output_dir/
 ///   training/
 ///     _SUCCESS
-///     _manifest.json
 ///     metadata.json
 ///     convergence.parquet
 ///     dictionaries/
@@ -346,7 +346,7 @@ impl SimulationOutput {
 ///       iterations.parquet
 ///   simulation/
 ///     _SUCCESS              (only when simulation_output is Some)
-///     _manifest.json        (only when simulation_output is Some)
+///     metadata.json         (only when simulation_output is Some)
 /// ```
 ///
 /// # Parameters

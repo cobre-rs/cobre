@@ -9,7 +9,7 @@
 //! other callers without pulling in CLI-specific display dependencies. Display/formatting
 //! methods that use `console::style` remain in `cobre-cli`.
 
-use cobre_core::System;
+use cobre_core::{System, scenario::SamplingScheme};
 use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
 use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
 use cobre_stochastic::{ComponentProvenance, StochasticContext};
@@ -129,8 +129,72 @@ pub struct StochasticSummary {
     pub n_stages: usize,
     /// Number of buses with stochastic load noise.
     pub n_load_buses: usize,
+    /// Number of stochastic NCS entities in the noise dimension.
+    pub n_stochastic_ncs: usize,
+    /// Sampling scheme for the inflow entity class (`None` when not configured).
+    pub inflow_scheme: Option<SamplingScheme>,
+    /// Sampling scheme for the load entity class (`None` when not configured).
+    pub load_scheme: Option<SamplingScheme>,
+    /// Sampling scheme for the NCS entity class (`None` when not configured).
+    pub ncs_scheme: Option<SamplingScheme>,
     /// Random seed used for noise generation.
     pub seed: u64,
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Build the AR order summary from the estimation report or loaded inflow models.
+///
+/// Returns `None` when `n_hydros == 0`.
+fn build_ar_order_summary(
+    system: &System,
+    estimation_report: Option<&EstimationReport>,
+    n_hydros: usize,
+) -> Option<ArOrderSummary> {
+    if n_hydros == 0 {
+        return None;
+    }
+
+    let (method, orders): (String, Vec<usize>) = if let Some(report) = estimation_report {
+        let orders: Vec<usize> = report
+            .entries
+            .values()
+            .map(|entry| entry.selected_order as usize)
+            .collect();
+        (report.method.clone(), orders)
+    } else {
+        // Derive from loaded inflow models: use max AR coefficient length per hydro.
+        let orders: Vec<usize> = system
+            .hydros()
+            .iter()
+            .map(|h| {
+                system
+                    .inflow_models()
+                    .iter()
+                    .filter(|m| m.hydro_id == h.id)
+                    .map(|m| m.ar_coefficients.len())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        ("fixed".to_string(), orders)
+    };
+
+    let min_order = orders.iter().copied().min().unwrap_or(0);
+    let max_order = orders.iter().copied().max().unwrap_or(0);
+
+    let mut order_counts = vec![0usize; max_order + 1];
+    for &ord in &orders {
+        order_counts[ord] += 1;
+    }
+
+    Some(ArOrderSummary {
+        method,
+        order_counts,
+        min_order,
+        max_order,
+        n_hydros,
+    })
 }
 
 // ── Builder function ──────────────────────────────────────────────────────────
@@ -179,50 +243,7 @@ pub fn build_stochastic_summary(
     };
 
     // Build AR order summary from estimation report or inflow model coefficients.
-    let ar_summary = if n_hydros > 0 {
-        let (method, orders): (String, Vec<usize>) = if let Some(report) = estimation_report {
-            let orders: Vec<usize> = report
-                .entries
-                .values()
-                .map(|entry| entry.selected_order as usize)
-                .collect();
-            (report.method.clone(), orders)
-        } else {
-            // Derive from loaded inflow models: use max AR coefficient length per hydro.
-            let orders: Vec<usize> = system
-                .hydros()
-                .iter()
-                .map(|h| {
-                    system
-                        .inflow_models()
-                        .iter()
-                        .filter(|m| m.hydro_id == h.id)
-                        .map(|m| m.ar_coefficients.len())
-                        .max()
-                        .unwrap_or(0)
-                })
-                .collect();
-            ("fixed".to_string(), orders)
-        };
-
-        let min_order = orders.iter().copied().min().unwrap_or(0);
-        let max_order = orders.iter().copied().max().unwrap_or(0);
-
-        let mut order_counts = vec![0usize; max_order + 1];
-        for &ord in &orders {
-            order_counts[ord] += 1;
-        }
-
-        Some(ArOrderSummary {
-            method,
-            order_counts,
-            min_order,
-            max_order,
-            n_hydros,
-        })
-    } else {
-        None
-    };
+    let ar_summary = build_ar_order_summary(system, estimation_report, n_hydros);
 
     // Correlation source from provenance — replaces the heuristic that mirrored
     // inflow source. When the correlation was Generated from system data, its
@@ -242,9 +263,12 @@ pub fn build_stochastic_summary(
         ComponentProvenance::NotApplicable => StochasticSource::None,
     };
 
-    // Correlation dimension is n_hydros × n_hydros (hydro-to-hydro spatial correlation).
-    let correlation_dim = if n_hydros > 0 {
-        Some(format!("{n_hydros}x{n_hydros}"))
+    // Correlation dimension spans all correlated entities: hydros + load buses + NCS.
+    // `stochastic.dim()` returns `n_hydros + n_load_buses + n_stochastic_ncs`, which is
+    // the full noise dimension that the spectral decomposition operates on.
+    let n_correlated = stochastic.dim();
+    let correlation_dim = if n_correlated > 0 {
+        Some(format!("{n_correlated}x{n_correlated}"))
     } else {
         None
     };
@@ -262,6 +286,8 @@ pub fn build_stochastic_summary(
     let openings_per_stage: Vec<usize> = opening_tree.openings_per_stage_slice().to_vec();
     let n_stages = stochastic.n_stages();
     let n_load_buses = stochastic.n_load_buses();
+    let n_stochastic_ncs = stochastic.n_stochastic_ncs();
+    let provenance = stochastic.provenance();
 
     StochasticSummary {
         inflow_source,
@@ -274,6 +300,10 @@ pub fn build_stochastic_summary(
         openings_per_stage,
         n_stages,
         n_load_buses,
+        n_stochastic_ncs,
+        inflow_scheme: provenance.inflow_scheme,
+        load_scheme: provenance.load_scheme,
+        ncs_scheme: provenance.ncs_scheme,
         seed,
     }
 }
@@ -372,13 +402,13 @@ mod tests {
     use cobre_core::{
         Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
-        scenario::{CorrelationModel, InflowModel},
+        scenario::{CorrelationModel, InflowModel, SamplingScheme},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
     };
-    use cobre_stochastic::build_stochastic_context;
+    use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 
     use super::{
         StochasticSource, build_stochastic_summary, estimation_report_to_fitting_report,
@@ -508,7 +538,7 @@ mod tests {
             },
         );
         cobre_core::scenario::CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -554,6 +584,9 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
         let fitting = estimation_report_to_fitting_report(&report);
 
@@ -649,7 +682,20 @@ mod tests {
     #[test]
     fn build_stochastic_summary_loaded_source_when_no_estimation_report() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -667,7 +713,20 @@ mod tests {
     #[test]
     fn build_stochastic_summary_estimated_source_with_estimation_report() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            7,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         let mut entries = BTreeMap::new();
         entries.insert(
@@ -681,6 +740,9 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 7);
@@ -711,7 +773,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            0,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 0);
 
         assert!(
@@ -728,7 +803,20 @@ mod tests {
     #[test]
     fn build_stochastic_summary_stages_and_load_buses() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            1,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 1);
 
         assert_eq!(
@@ -750,8 +838,20 @@ mod tests {
         let system = make_system_with_hydro();
         // 2 stages × 2 openings × 1 dim = 4 entries
         let user_tree = OpeningTree::from_parts(vec![1.0_f64; 2 * 2], vec![2, 2], 1);
-        let stochastic =
-            build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            Some(user_tree),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -764,7 +864,20 @@ mod tests {
     #[test]
     fn opening_tree_source_generated() {
         let system = make_system_with_hydro();
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 42);
 
         assert!(
@@ -787,7 +900,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            1,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         let mut entries = BTreeMap::new();
         entries.insert(
@@ -801,6 +927,9 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "AIC".to_string(),
+            white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
 
         let summary = build_stochastic_summary(&system, &stochastic, Some(&report), 1);
@@ -825,7 +954,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 1, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            1,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 1);
 
         assert!(
@@ -845,13 +987,133 @@ mod tests {
             .build()
             .unwrap();
 
-        let stochastic = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
+        let stochastic = build_stochastic_context(
+            &system,
+            0,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let summary = build_stochastic_summary(&system, &stochastic, None, 0);
 
         assert!(
             matches!(summary.correlation_source, StochasticSource::None),
             "NotApplicable correlation must produce None, got {:?}",
             summary.correlation_source
+        );
+    }
+
+    // ── build_stochastic_summary field and correlation_dim tests ─────────────
+
+    /// Verify that the new per-class scheme fields are populated from provenance
+    /// and that `correlation_dim` reflects the full noise dimension (not just
+    /// `n_hydros`).
+    #[test]
+    fn build_stochastic_summary_new_fields_and_correlation_dim() {
+        let system = make_system_with_hydro();
+        let stochastic = build_stochastic_context(
+            &system,
+            99,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::OutOfSample),
+                ncs: Some(SamplingScheme::Historical),
+            },
+        )
+        .unwrap();
+
+        let summary = build_stochastic_summary(&system, &stochastic, None, 99);
+
+        // Per-class scheme fields must reflect what was passed to the context.
+        assert_eq!(
+            summary.inflow_scheme,
+            Some(SamplingScheme::InSample),
+            "inflow_scheme must be InSample"
+        );
+        assert_eq!(
+            summary.load_scheme,
+            Some(SamplingScheme::OutOfSample),
+            "load_scheme must be OutOfSample"
+        );
+        assert_eq!(
+            summary.ncs_scheme,
+            Some(SamplingScheme::Historical),
+            "ncs_scheme must be Historical"
+        );
+
+        // n_stochastic_ncs must be 0 for a hydro-only system.
+        assert_eq!(
+            summary.n_stochastic_ncs, 0,
+            "n_stochastic_ncs must be 0 when no NCS entities"
+        );
+
+        // correlation_dim must be derived from stochastic.dim(), not just n_hydros.
+        // For this single-hydro system with no load buses and no NCS: dim == 1.
+        let expected_dim = stochastic.dim();
+        let expected_str = format!("{expected_dim}x{expected_dim}");
+        // correlation_dim is Some("NxN") when dim > 0, None when dim == 0.
+        // The dimension reflects the noise vector size, not the correlation model presence.
+        assert_eq!(
+            summary.correlation_dim,
+            if stochastic.dim() > 0 {
+                Some(expected_str)
+            } else {
+                None
+            },
+            "correlation_dim must be derived from stochastic.dim()"
+        );
+    }
+
+    /// Verify that `correlation_dim` for a system with a real correlation model
+    /// uses `dim()` (hydros + load buses + NCS), not just `n_hydros`.
+    #[test]
+    fn build_stochastic_summary_correlation_dim_uses_full_dim() {
+        let stages = vec![make_stage(0, 0), make_stage(1, 1)];
+        let inflow_models = vec![make_inflow_model(10, 0), make_inflow_model(10, 1)];
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(1)])
+            .hydros(vec![make_hydro(10)])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .correlation(identity_correlation(&[10]))
+            .build()
+            .unwrap();
+
+        let stochastic = build_stochastic_context(
+            &system,
+            0,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
+
+        let summary = build_stochastic_summary(&system, &stochastic, None, 0);
+
+        // One hydro, zero load buses, zero NCS: dim == 1.
+        let dim = stochastic.dim();
+        assert_eq!(dim, 1, "expected dim == 1 for single-hydro system");
+        assert_eq!(
+            summary.correlation_dim,
+            Some("1x1".to_string()),
+            "correlation_dim must be '1x1' for a single-hydro system (dim==1)"
         );
     }
 
@@ -905,6 +1167,9 @@ mod tests {
         let report = EstimationReport {
             entries,
             method: "PACF".to_string(),
+            white_noise_fallbacks: Vec::new(),
+            lag_scale_warnings: Vec::new(),
+            std_ratio_warnings: Vec::new(),
         };
 
         let fitting = estimation_report_to_fitting_report(&report);

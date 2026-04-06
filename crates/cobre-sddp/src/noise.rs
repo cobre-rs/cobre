@@ -15,18 +15,11 @@ use crate::{
 
 /// Compute effective (possibly clamped) eta for each hydro.
 ///
-/// When the inflow method requires truncation and any PAR(p) inflow is
-/// negative, clamps each negative hydro's eta upward to the precomputed
-/// floor that produces zero inflow. Otherwise writes raw eta unchanged.
+/// When truncation is active and any PAR(p) inflow is negative, clamps each
+/// negative hydro's eta upward to the floor that produces zero inflow.
+/// Otherwise writes raw eta unchanged.
 ///
-/// Writes `n_hydros` values into `effective_eta` (cleared on entry).
-///
-/// The caller must precompute:
-/// - `eta_floor` via `solve_par_noise_batch(par_lp, stage, lag_matrix, zeros, out)`
-/// - `par_inflows` via `evaluate_par_batch(par_lp, stage, lag_matrix, raw_noise, out)`
-///
-/// For non-truncation methods (`None`, `Penalty`), writes raw eta directly
-/// (no PAR evaluation needed -- caller may skip precomputation).
+/// For non-truncation methods (`None`, `Penalty`), writes raw eta directly.
 pub(crate) fn compute_effective_eta(
     raw_noise: &[f64],
     n_hydros: usize,
@@ -59,40 +52,11 @@ pub(crate) fn compute_effective_eta(
 
 /// Transform raw inflow noise `η` into patched water-balance RHS values.
 ///
-/// Writes one patched RHS value per hydro plant into `scratch.noise_buf`.  The
-/// patched value is:
+/// Writes `noise_buf[h] = base_rhs + noise_scale[stage * n_hydros + h] * η_effective[h]`
+/// for each hydro, where `η_effective` is clamped when truncation is active
+/// and negative inflow would occur.
 ///
-/// ```text
-/// noise_buf[h] = base_rhs + noise_scale[stage * n_hydros + h] * η_effective[h]
-/// ```
-///
-/// where `η_effective[h]` equals `η[h]` when truncation is inactive, or the
-/// η clamped to the floor that produces zero inflow when truncation is active.
-///
-/// ## Behaviour by inflow method
-///
-/// - `None` / `Penalty`: applies the raw η directly (no clamping).
-/// - `Truncation`: evaluates the full PAR inflow, and when the result would be
-///   negative for any hydro, solves for the η floor that drives inflow to zero
-///   and clamps the noise before computing the RHS.
-///
-/// ## Allocation discipline
-///
-/// No heap allocations are made inside this function.  All scratch work is
-/// done via pre-allocated buffers in `scratch` which are cleared and resized
-/// in place.
-///
-/// ## Arguments
-///
-/// - `raw_noise` — raw η sample (length `>= n_hydros`).
-/// - `stage` — 0-based stage index.
-/// - `current_state` — current state vector (used to extract inflow lags for
-///   truncation).
-/// - `ctx` — stage LP layout: provides `noise_scale`, `n_hydros`, `base_rows`,
-///   and `templates`.
-/// - `training_ctx` — algorithm configuration: provides `inflow_method`,
-///   `stochastic`, and `indexer`.
-/// - `scratch` — pre-allocated scratch buffers; `noise_buf` receives the output.
+/// No heap allocations; all scratch work uses pre-allocated buffers from `scratch`.
 pub(crate) fn transform_inflow_noise(
     raw_noise: &[f64],
     stage: usize,
@@ -188,32 +152,10 @@ pub(crate) fn transform_inflow_noise(
     }
 }
 
-/// Shift the lag portion of the outgoing state vector using realized inflow
-/// from the LP primal solution.
+/// Shift the lag portion of the outgoing state vector using realized inflow.
 ///
-/// After solving a stage LP, reads `Z_t_h = unscaled_primal[z_inflow.start + h]`
-/// for each hydro and writes:
-///
-/// ```text
-/// state[lag_start + lag * n_h + 0 + h] = Z_t_h           (newest = realized inflow)
-/// state[lag_start + lag * n_h + h]      = incoming[lag_start + (lag-1) * n_h + h]  for lag in 1..L
-/// ```
-///
-/// When `max_par_order == 0`, this is a no-op.
-///
-/// ## Allocation discipline
-///
-/// Zero heap allocations. Pure in-place mutation of `state` from read-only
-/// `incoming_lags` and `unscaled_primal` sources.
-///
-/// ## Arguments
-///
-/// - `state` -- outgoing state vector (already has `v_out` from primal copy).
-/// - `incoming_lags` -- incoming lag values (read-only snapshot taken before
-///   primal copy overwrote `current_state`). Layout is lag-major:
-///   `incoming_lags[lag * n_h + h]` for lag `lag`, hydro `h`.
-/// - `unscaled_primal` -- full LP primal solution (read-only).
-/// - `indexer` -- LP layout providing `z_inflow` range and lag layout.
+/// Shifts older lags backward, with newest lag = realized inflow from LP primal.
+/// No-op when `max_par_order == 0`. Zero heap allocations.
 pub(crate) fn shift_lag_state(
     state: &mut [f64],
     incoming_lags: &[f64],
@@ -240,30 +182,8 @@ pub(crate) fn shift_lag_state(
 
 /// Transform raw load noise `η` into patched load-balance RHS values.
 ///
-/// Writes `n_load_buses * block_count` values into `load_rhs_buf`.  For each
-/// load bus `lb` and block `blk`:
-///
-/// ```text
-/// load_rhs_buf[lb * block_count + blk] =
-///     (mean(stage, lb) + std(stage, lb) * η[n_hydros + lb]).max(0.0)
-///     * block_factor(stage, lb, blk)
-/// ```
-///
-/// The realization is clamped to zero so that load demand is never negative.
-///
-/// ## Allocation discipline
-///
-/// No heap allocations.  `load_rhs_buf` is cleared and populated in place.
-///
-/// ## Arguments
-///
-/// - `raw_noise` — raw η sample; load bus entries start at index `n_hydros`.
-/// - `n_hydros` — number of hydro plants (offset into `raw_noise`).
-/// - `n_load_buses` — number of buses with stochastic load noise.
-/// - `stochastic` — stochastic context providing the normal LP.
-/// - `stage` — 0-based stage index.
-/// - `block_count` — number of load blocks at this stage.
-/// - `load_rhs_buf` — output buffer; cleared and populated with RHS values.
+/// Writes `(mean + std * η).max(0.0) * block_factor` for each load bus and block.
+/// Clamped to zero so load demand is never negative. No heap allocations.
 pub(crate) fn transform_load_noise(
     raw_noise: &[f64],
     n_hydros: usize,
@@ -292,10 +212,8 @@ pub(crate) fn transform_load_noise(
 
 /// Transform raw NCS noise into per-block column upper bound values.
 ///
-/// For each stochastic NCS entity, computes the stage-level availability
-/// `A_r = max_gen * clamp(mean + std * epsilon, 0, 1)` where `mean` and `std`
-/// are dimensionless availability factors, and then scales by the per-block
-/// factor: `col_upper = A_r * block_factor`.
+/// Computes `max_gen * clamp(mean + std * η, 0, 1) * block_factor` for each
+/// NCS entity and block, where `mean` and `std` are dimensionless factors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
@@ -346,7 +264,7 @@ mod tests {
     use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
     use cobre_solver::StageTemplate;
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
     use std::collections::BTreeMap;
 
     use crate::{
@@ -523,7 +441,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -537,7 +455,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// One-hydro, one-load-bus, n-stage `StochasticContext`.
@@ -657,7 +588,7 @@ mod tests {
             .collect();
 
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: vec![],
         };
@@ -672,7 +603,20 @@ mod tests {
             .build()
             .unwrap();
 
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── transform_inflow_noise: None method ──────────────────────────────────
@@ -714,8 +658,14 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
         };
         let mut scratch = make_scratch(1);
 
@@ -773,8 +723,14 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
         };
         let mut scratch = make_scratch(1);
 
@@ -832,8 +788,14 @@ mod tests {
             inflow_method: &inflow_method,
             stochastic: &stochastic,
             initial_state: &current_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
         };
         let mut scratch = make_scratch(1);
 

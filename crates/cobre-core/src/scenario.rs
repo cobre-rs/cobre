@@ -19,7 +19,7 @@
 //! - [`CorrelationModel`] — named correlation profiles with entity groups
 //!   and correlation matrices
 //!
-//! Performance-adapted views (`PrecomputedPar`, Cholesky-decomposed matrices)
+//! Performance-adapted views (`PrecomputedPar`, spectrally decomposed matrices)
 //! belong in downstream solver crates (`cobre-stochastic`).
 //!
 //! ## Declaration-order invariance
@@ -36,10 +36,6 @@
 use std::collections::BTreeMap;
 
 use crate::EntityId;
-
-// ---------------------------------------------------------------------------
-// SamplingScheme (SS14 scenario source)
-// ---------------------------------------------------------------------------
 
 /// Forward-pass noise source for multi-stage optimization solvers.
 ///
@@ -77,37 +73,19 @@ pub enum SamplingScheme {
     Historical,
 }
 
-// ---------------------------------------------------------------------------
-// ExternalSelectionMode
-// ---------------------------------------------------------------------------
-
-/// Scenario selection mode when [`SamplingScheme::External`] is active.
-///
-/// Controls whether external scenarios are replayed sequentially (useful for
-/// deterministic replay of a fixed test set) or drawn at random (useful for
-/// Monte Carlo evaluation with a large external library).
-///
-/// See [Input Scenarios §1.8](input-scenarios.md).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ExternalSelectionMode {
-    /// Scenarios are drawn uniformly at random from the external library.
-    Random,
-    /// Scenarios are replayed in file order, cycling when the end is reached.
-    Sequential,
-}
-
-// ---------------------------------------------------------------------------
 // ScenarioSource (SS14 top-level config)
-// ---------------------------------------------------------------------------
 
 /// Top-level scenario source configuration, parsed from `stages.json`.
 ///
-/// Groups the sampling scheme, random seed, and external selection mode
-/// that govern how forward-pass scenarios are produced. Populated during
-/// case loading by `cobre-io` from the `scenario_source` field in
-/// `stages.json`. Distinct from [`ScenarioSourceConfig`](crate::temporal::ScenarioSourceConfig),
+/// Groups the sampling scheme and random seed that govern how forward-pass
+/// scenarios are produced. Populated during case loading by `cobre-io` from
+/// the `scenario_source` field in `stages.json`. Distinct from
+/// [`ScenarioSourceConfig`](crate::temporal::ScenarioSourceConfig),
 /// which also holds the branching factor (`num_scenarios`).
+///
+/// Each entity class (inflow, load, NCS) independently specifies its
+/// forward-pass noise source via a dedicated `SamplingScheme` field.
+/// The `seed` and `historical_years` fields are shared across all classes.
 ///
 /// See [Input Scenarios §1.4, §1.8](input-scenarios.md).
 ///
@@ -117,30 +95,107 @@ pub enum ExternalSelectionMode {
 /// use cobre_core::scenario::{SamplingScheme, ScenarioSource};
 ///
 /// let source = ScenarioSource {
-///     sampling_scheme: SamplingScheme::InSample,
+///     inflow_scheme: SamplingScheme::InSample,
+///     load_scheme: SamplingScheme::OutOfSample,
+///     ncs_scheme: SamplingScheme::InSample,
 ///     seed: Some(42),
-///     selection_mode: None,
+///     historical_years: None,
 /// };
-/// assert_eq!(source.sampling_scheme, SamplingScheme::InSample);
+/// assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
+/// assert_eq!(source.load_scheme, SamplingScheme::OutOfSample);
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScenarioSource {
-    /// Noise source used during the forward pass.
-    pub sampling_scheme: SamplingScheme,
+    /// Noise source used during the inflow forward pass.
+    pub inflow_scheme: SamplingScheme,
+
+    /// Noise source used during the load forward pass.
+    pub load_scheme: SamplingScheme,
+
+    /// Noise source used during the NCS (non-controllable source) forward pass.
+    pub ncs_scheme: SamplingScheme,
 
     /// Random seed for reproducible opening tree generation.
     /// `None` means non-deterministic (OS entropy).
     pub seed: Option<i64>,
 
-    /// Selection mode when `sampling_scheme` is [`SamplingScheme::External`].
-    /// `None` for `InSample` and `Historical` schemes.
-    pub selection_mode: Option<ExternalSelectionMode>,
+    /// Historical year pool for [`SamplingScheme::Historical`] inflow sampling.
+    /// When `None`, all valid windows are auto-discovered at validation time.
+    pub historical_years: Option<HistoricalYears>,
 }
 
-// ---------------------------------------------------------------------------
+// HistoricalYears (SS14 — year pool for Historical sampling)
+
+/// Specifies which historical years to draw from when using
+/// [`SamplingScheme::Historical`] sampling.
+///
+/// Preserves user intent (list vs range) so that validation and error messages
+/// can reference the original specification form. Expansion into a concrete
+/// year list is deferred to `cobre-io` validation (Tier 1) and Epic 04 library
+/// construction.
+///
+/// When absent (represented as `Option<HistoricalYears>::None` at the
+/// `ScenarioSource` level), all valid windows are auto-discovered at
+/// validation time.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::scenario::HistoricalYears;
+///
+/// // Explicit list of years
+/// let list = HistoricalYears::List(vec![1940, 1953, 1971]);
+/// assert!(matches!(list, HistoricalYears::List(_)));
+///
+/// // Inclusive range shorthand
+/// let range = HistoricalYears::Range { from: 1940, to: 2010 };
+/// assert!(matches!(range, HistoricalYears::Range { from: 1940, to: 2010 }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HistoricalYears {
+    /// Explicit list of historical years (e.g., `[1940, 1953, 1971]`).
+    List(Vec<i32>),
+
+    /// Inclusive range shorthand (e.g., years 1940 through 2010).
+    /// `from` and `to` are both inclusive. Validation of `from <= to`
+    /// is performed by `cobre-io` (ticket-014 Tier 1 validation).
+    Range {
+        /// First year of the range (inclusive).
+        from: i32,
+        /// Last year of the range (inclusive).
+        to: i32,
+    },
+}
+
+impl HistoricalYears {
+    /// Expand the year specification into a concrete sorted list.
+    ///
+    /// - `List` — returns the years as-is (caller order is preserved).
+    /// - `Range` — expands the inclusive range `[from, to]` into a full list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cobre_core::scenario::HistoricalYears;
+    ///
+    /// let list = HistoricalYears::List(vec![1995, 2000, 2005]);
+    /// assert_eq!(list.to_years(), vec![1995, 2000, 2005]);
+    ///
+    /// let range = HistoricalYears::Range { from: 2000, to: 2003 };
+    /// assert_eq!(range.to_years(), vec![2000, 2001, 2002, 2003]);
+    /// ```
+    #[must_use]
+    pub fn to_years(&self) -> Vec<i32> {
+        match self {
+            HistoricalYears::List(years) => years.clone(),
+            HistoricalYears::Range { from, to } => (*from..=*to).collect(),
+        }
+    }
+}
+
 // InflowModel (SS14 — per hydro, per stage)
-// ---------------------------------------------------------------------------
 
 /// Raw PAR(p) model parameters for a single (hydro, stage) pair.
 ///
@@ -216,9 +271,7 @@ impl InflowModel {
     }
 }
 
-// ---------------------------------------------------------------------------
 // LoadModel (SS14 — per bus, per stage)
-// ---------------------------------------------------------------------------
 
 /// Raw load seasonal statistics for a single (bus, stage) pair.
 ///
@@ -259,9 +312,7 @@ pub struct LoadModel {
     pub std_mw: f64,
 }
 
-// ---------------------------------------------------------------------------
 // NcsModel (per NCS entity, per stage)
-// ---------------------------------------------------------------------------
 
 /// Per-stage normal noise model parameters for a non-controllable source.
 ///
@@ -305,9 +356,153 @@ pub struct NcsModel {
     pub std: f64,
 }
 
-// ---------------------------------------------------------------------------
+// InflowHistoryRow (SS2.4 — raw historical observation)
+
+/// A single row from `scenarios/inflow_history.parquet`.
+///
+/// Carries one historical inflow observation for a (hydro, date) pair.
+/// These rows constitute the raw historical record used by PAR(p) fitting
+/// routines in `cobre-stochastic` and by the historical scenario library
+/// constructed during solver setup.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::InflowHistoryRow};
+/// use chrono::NaiveDate;
+///
+/// let row = InflowHistoryRow {
+///     hydro_id: EntityId::from(1),
+///     date: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+///     value_m3s: 500.0,
+/// };
+/// assert_eq!(row.hydro_id, EntityId::from(1));
+/// assert_eq!(row.value_m3s, 500.0);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InflowHistoryRow {
+    /// Hydro plant this observation belongs to.
+    pub hydro_id: EntityId,
+    /// Date of the observation (timezone-free calendar date).
+    pub date: chrono::NaiveDate,
+    /// Mean inflow for this observation period in m³/s. Must be finite.
+    pub value_m3s: f64,
+}
+
+// ExternalScenarioRow (SS2.5 — pre-computed external scenario value)
+
+/// A single row from `scenarios/external_inflow_scenarios.parquet`.
+///
+/// Each row defines the pre-computed inflow value for one (stage, scenario, hydro)
+/// triple. Used when [`SamplingScheme::External`] is active.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalScenarioRow};
+///
+/// let row = ExternalScenarioRow {
+///     stage_id: 0,
+///     scenario_id: 2,
+///     hydro_id: EntityId::from(5),
+///     value_m3s: 320.5,
+/// };
+/// assert_eq!(row.scenario_id, 2);
+/// assert!((row.value_m3s - 320.5).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalScenarioRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// Hydro plant this inflow value belongs to.
+    pub hydro_id: EntityId,
+
+    /// Pre-computed inflow value in m³/s. Must be finite.
+    pub value_m3s: f64,
+}
+
+// ExternalLoadRow (E2 — pre-computed external load scenario value)
+
+/// A single row from `scenarios/external_load_scenarios.parquet`.
+///
+/// Each row defines the pre-computed load value for one (stage, scenario, bus)
+/// triple. Used when [`SamplingScheme::External`] is active for load variables.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalLoadRow};
+///
+/// let row = ExternalLoadRow {
+///     stage_id: 0,
+///     scenario_id: 2,
+///     bus_id: EntityId::from(3),
+///     value_mw: 150.0,
+/// };
+/// assert_eq!(row.scenario_id, 2);
+/// assert!((row.value_mw - 150.0).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalLoadRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// Bus this load value belongs to.
+    pub bus_id: EntityId,
+
+    /// Pre-computed load value in MW. Must be finite.
+    pub value_mw: f64,
+}
+
+// ExternalNcsRow (E2 — pre-computed external NCS scenario value)
+
+/// A single row from `scenarios/external_ncs_scenarios.parquet`.
+///
+/// Each row defines the pre-computed dimensionless availability factor for one
+/// (stage, scenario, ncs) triple. Used when [`SamplingScheme::External`] is
+/// active for NCS availability variables.
+///
+/// # Examples
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::ExternalNcsRow};
+///
+/// let row = ExternalNcsRow {
+///     stage_id: 1,
+///     scenario_id: 0,
+///     ncs_id: EntityId::from(7),
+///     value: 0.85,
+/// };
+/// assert_eq!(row.ncs_id, EntityId::from(7));
+/// assert!((row.value - 0.85).abs() < 1e-10);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalNcsRow {
+    /// Stage index (0-based within `System::stages`).
+    pub stage_id: i32,
+
+    /// Scenario index (0-based). Must be >= 0.
+    pub scenario_id: i32,
+
+    /// NCS source this availability factor belongs to.
+    pub ncs_id: EntityId,
+
+    /// Pre-computed dimensionless availability factor. Must be finite.
+    pub value: f64,
+}
+
 // CorrelationEntity
-// ---------------------------------------------------------------------------
 
 /// A single entity reference within a correlation group.
 ///
@@ -333,9 +528,7 @@ pub struct CorrelationEntity {
     pub id: EntityId,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationGroup
-// ---------------------------------------------------------------------------
 
 /// A named group of correlated entities and their correlation matrix.
 ///
@@ -344,7 +537,7 @@ pub struct CorrelationEntity {
 /// coefficient between `entities[i]` and `entities[j]`.
 /// `matrix.len()` must equal `entities.len()`.
 ///
-/// Cholesky decomposition of the matrix is NOT performed here; that
+/// Spectral decomposition of the matrix is NOT performed here; that
 /// belongs to `cobre-stochastic`.
 ///
 /// See [Input Scenarios §5](input-scenarios.md).
@@ -382,9 +575,7 @@ pub struct CorrelationGroup {
     pub matrix: Vec<Vec<f64>>,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationProfile
-// ---------------------------------------------------------------------------
 
 /// A named correlation profile containing one or more correlation groups.
 ///
@@ -423,9 +614,7 @@ pub struct CorrelationProfile {
     pub groups: Vec<CorrelationGroup>,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationScheduleEntry
-// ---------------------------------------------------------------------------
 
 /// Maps a stage to its active correlation profile name.
 ///
@@ -446,9 +635,7 @@ pub struct CorrelationScheduleEntry {
     pub profile_name: String,
 }
 
-// ---------------------------------------------------------------------------
 // CorrelationModel
-// ---------------------------------------------------------------------------
 
 /// Top-level correlation configuration for the scenario pipeline.
 ///
@@ -460,8 +647,9 @@ pub struct CorrelationScheduleEntry {
 /// deterministic iteration order, satisfying the declaration-order
 /// invariance requirement (design-principles.md §3).
 ///
-/// `method` is always `"cholesky"` for the minimal viable solver but stored
-/// as a `String` for forward compatibility with future decomposition methods.
+/// `method` defaults to `"spectral"`. The value `"cholesky"` is accepted for
+/// backward compatibility with existing case files. Stored as a `String` for
+/// forward compatibility with future decomposition methods.
 ///
 /// Source: `correlation.json`.
 /// See [Input Scenarios §5](input-scenarios.md) and
@@ -488,7 +676,7 @@ pub struct CorrelationScheduleEntry {
 /// });
 ///
 /// let model = CorrelationModel {
-///     method: "cholesky".to_string(),
+///     method: "spectral".to_string(),
 ///     profiles,
 ///     schedule: vec![],
 /// };
@@ -497,8 +685,9 @@ pub struct CorrelationScheduleEntry {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CorrelationModel {
-    /// Decomposition method. Always `"cholesky"` for the minimal viable solver.
-    /// Stored as `String` for forward compatibility.
+    /// Decomposition method. Defaults to `"spectral"`. `"cholesky"` is also
+    /// accepted for backward compatibility with existing case files.
+    /// Stored as `String` for forward compatibility with future methods.
     pub method: String,
 
     /// Named correlation profiles keyed by profile name.
@@ -513,9 +702,11 @@ pub struct CorrelationModel {
 impl Default for ScenarioSource {
     fn default() -> Self {
         Self {
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
             seed: None,
-            selection_mode: None,
+            historical_years: None,
         }
     }
 }
@@ -523,27 +714,25 @@ impl Default for ScenarioSource {
 impl Default for CorrelationModel {
     fn default() -> Self {
         Self {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: Vec::new(),
         }
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    #[cfg(feature = "serde")]
+    use super::ScenarioSource;
     use super::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry, InflowModel, NcsModel, SamplingScheme,
     };
-    #[cfg(feature = "serde")]
-    use super::{ExternalSelectionMode, ScenarioSource};
     use crate::EntityId;
 
     #[test]
@@ -620,7 +809,7 @@ mod tests {
         profiles.insert("dry".to_string(), make_profile(&[1, 2]));
 
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![
                 CorrelationScheduleEntry {
@@ -681,45 +870,122 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn test_scenario_source_serde_roundtrip() {
-        // InSample with seed
+        use super::HistoricalYears;
+
+        // All three schemes set to different values with seed and no historical_years
         let source = ScenarioSource {
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::OutOfSample,
+            ncs_scheme: SamplingScheme::External,
             seed: Some(12345),
-            selection_mode: None,
+            historical_years: None,
         };
         let json = serde_json::to_string(&source).unwrap();
         let deserialized: ScenarioSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, deserialized);
 
-        // OutOfSample with seed
-        let source_oos = ScenarioSource {
-            sampling_scheme: SamplingScheme::OutOfSample,
-            seed: Some(7),
-            selection_mode: None,
-        };
-        let json_oos = serde_json::to_string(&source_oos).unwrap();
-        let deserialized_oos: ScenarioSource = serde_json::from_str(&json_oos).unwrap();
-        assert_eq!(source_oos, deserialized_oos);
-
-        // External with selection mode
-        let source_ext = ScenarioSource {
-            sampling_scheme: SamplingScheme::External,
-            seed: Some(99),
-            selection_mode: Some(ExternalSelectionMode::Sequential),
-        };
-        let json_ext = serde_json::to_string(&source_ext).unwrap();
-        let deserialized_ext: ScenarioSource = serde_json::from_str(&json_ext).unwrap();
-        assert_eq!(source_ext, deserialized_ext);
-
-        // Historical without seed
+        // Historical inflow with historical_years list
         let source_hist = ScenarioSource {
-            sampling_scheme: SamplingScheme::Historical,
-            seed: None,
-            selection_mode: None,
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: Some(7),
+            historical_years: Some(HistoricalYears::List(vec![1990, 2000, 2010])),
         };
         let json_hist = serde_json::to_string(&source_hist).unwrap();
         let deserialized_hist: ScenarioSource = serde_json::from_str(&json_hist).unwrap();
         assert_eq!(source_hist, deserialized_hist);
+
+        // Historical inflow with historical_years range and no seed
+        let source_range = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: Some(HistoricalYears::Range {
+                from: 1940,
+                to: 2010,
+            }),
+        };
+        let json_range = serde_json::to_string(&source_range).unwrap();
+        let deserialized_range: ScenarioSource = serde_json::from_str(&json_range).unwrap();
+        assert_eq!(source_range, deserialized_range);
+
+        // All InSample, no seed, no historical_years (default-like)
+        let source_default = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let json_default = serde_json::to_string(&source_default).unwrap();
+        let deserialized_default: ScenarioSource = serde_json::from_str(&json_default).unwrap();
+        assert_eq!(source_default, deserialized_default);
+    }
+
+    #[test]
+    fn test_scenario_source_default() {
+        let source = ScenarioSource::default();
+        assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
+        assert_eq!(source.load_scheme, SamplingScheme::InSample);
+        assert_eq!(source.ncs_scheme, SamplingScheme::InSample);
+        assert!(source.seed.is_none());
+        assert!(source.historical_years.is_none());
+    }
+
+    #[test]
+    fn test_historical_years_list_construction() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::List(vec![1940, 1953, 1971]);
+        match &years {
+            HistoricalYears::List(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v[0], 1940);
+                assert_eq!(v[1], 1953);
+                assert_eq!(v[2], 1971);
+            }
+            HistoricalYears::Range { .. } => panic!("expected List variant"),
+        }
+    }
+
+    #[test]
+    fn test_historical_years_range_construction() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::Range {
+            from: 1940,
+            to: 2010,
+        };
+        match years {
+            HistoricalYears::Range { from, to } => {
+                assert_eq!(from, 1940);
+                assert_eq!(to, 2010);
+            }
+            HistoricalYears::List(_) => panic!("expected Range variant"),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_historical_years_list_serde_roundtrip() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::List(vec![1940, 1953, 1971]);
+        let json = serde_json::to_string(&years).unwrap();
+        let deserialized: HistoricalYears = serde_json::from_str(&json).unwrap();
+        assert_eq!(years, deserialized);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_historical_years_range_serde_roundtrip() {
+        use super::HistoricalYears;
+        let years = HistoricalYears::Range {
+            from: 1940,
+            to: 2010,
+        };
+        let json = serde_json::to_string(&years).unwrap();
+        let deserialized: HistoricalYears = serde_json::from_str(&json).unwrap();
+        assert_eq!(years, deserialized);
     }
 
     #[cfg(feature = "serde")]
@@ -800,7 +1066,7 @@ mod tests {
             },
         );
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };

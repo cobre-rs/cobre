@@ -24,7 +24,7 @@ conditions, generic constraints, and pre-resolved penalty/bound tables.
 | `initial_conditions` | Reservoir storage levels at study start                      |
 | `penalty`            | Global defaults, entity overrides, and resolution functions  |
 | `resolved`           | Pre-resolved penalty/bound tables with O(1) lookup           |
-| `scenario`           | PAR model parameters, load statistics, and correlation model |
+| `scenario`           | PAR model parameters, load and NCS statistics, correlation model, sampling scheme enum (`SamplingScheme` with InSample, OutOfSample, Historical, External variants), per-class scenario source config (`ScenarioSource`), historical years pool (`HistoricalYears`), and external scenario row types (`ExternalLoadRow`, `ExternalNcsRow`) |
 | `system`             | `System` container and `SystemBuilder`                       |
 | `temporal`           | Stages, blocks, seasons, and the policy graph                |
 | `topology`           | `CascadeTopology` and `NetworkTopology` derived structures   |
@@ -220,7 +220,7 @@ Fields: `id`, `name`, `bus_id`, `entry_stage_id`, `exit_stage_id`,
 | `GnlConfig`          | `lag_stages: i32`                                | Dispatch anticipation lag for GNL thermal units        |
 | `DiversionChannel`   | `downstream_id: EntityId`, `max_flow_m3s: f64`   | Water diversion bypassing turbines and spillways       |
 | `FillingConfig`      | `start_stage_id: i32`, `filling_inflow_m3s: f64` | Reservoir filling operation from a fixed inflow source |
-| `HydroPenalties`     | 11 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
+| `HydroPenalties`     | 16 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
 
 ## EntityId
 
@@ -407,7 +407,7 @@ let cost    = resolve_ncs_curtailment_cost(entity_override, &global);
 let hydro_p = resolve_hydro_penalties(&entity_overrides, &global);
 ```
 
-`HydroPenalties` holds 11 pre-resolved `f64` fields:
+`HydroPenalties` holds 16 pre-resolved `f64` fields:
 
 | Field                             | Unit   | Description                                        |
 | --------------------------------- | ------ | -------------------------------------------------- |
@@ -422,6 +422,11 @@ let hydro_p = resolve_hydro_penalties(&entity_overrides, &global);
 | `generation_violation_below_cost` | $/MW   | Penalty per MW of generation below minimum         |
 | `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation |
 | `water_withdrawal_violation_cost` | $/m³/s | Penalty per m³/s of water withdrawal violation     |
+| `water_withdrawal_violation_pos_cost` | $/m³/s | Penalty per m³/s of over-withdrawal              |
+| `water_withdrawal_violation_neg_cost` | $/m³/s | Penalty per m³/s of under-withdrawal             |
+| `evaporation_violation_pos_cost`      | $/mm   | Penalty per mm of over-evaporation               |
+| `evaporation_violation_neg_cost`      | $/mm   | Penalty per mm of under-evaporation              |
+| `inflow_nonnegativity_cost`           | $/m³/s | Penalty per m³/s of inflow non-negativity slack  |
 
 The optional `HydroPenaltyOverrides` struct mirrors `HydroPenalties` with all
 fields as `Option<f64>`. It is an intermediate type used during case loading;
@@ -649,7 +654,7 @@ is the user-facing clarity-first representation.
 
 The `scenario` module holds clarity-first data containers for the raw scenario
 pipeline parameters loaded from input files. These are raw input-facing types;
-performance-adapted views (pre-computed LP arrays, Cholesky-decomposed matrices)
+performance-adapted views (pre-computed LP arrays, spectrally decomposed matrices)
 belong in downstream crates (`cobre-stochastic`, `cobre-sddp`).
 
 ### SamplingScheme and ScenarioSource
@@ -745,7 +750,7 @@ and `id: EntityId`. Using `String` rather than an enum preserves forward
 compatibility when additional stochastic variable types are added.
 
 `profiles` uses `BTreeMap` rather than `HashMap` to preserve deterministic
-iteration order (declaration-order invariance). Cholesky decomposition of the
+iteration order (declaration-order invariance). Spectral decomposition of the
 correlation matrices is NOT performed here; that belongs to `cobre-stochastic`.
 
 ```rust
@@ -767,7 +772,7 @@ profiles.insert("default".to_string(), CorrelationProfile {
 });
 
 let model = CorrelationModel {
-    method: "cholesky".to_string(),
+    method: "spectral".to_string(), // "cholesky" also accepted for backward compatibility
     profiles,
     schedule: vec![],
 };

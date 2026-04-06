@@ -11,7 +11,7 @@
 //!
 //! 1. Validate PAR model parameters (fatal errors stop the pipeline).
 //! 2. Build the [`PrecomputedPar`] coefficient cache.
-//! 3. Decompose the spatial correlation matrix via Cholesky.
+//! 3. Decompose the spatial correlation matrix via spectral factorisation.
 //! 4. Generate the opening scenario tree.
 //! 5. Build the [`PrecomputedNormal`] cache for stochastic load buses.
 //!
@@ -20,7 +20,19 @@
 //! the `None` case with OS entropy — is an application-level concern that
 //! belongs in the calling crate.
 
-use cobre_core::{EntityId, LoadModel, System};
+use cobre_core::{EntityId, LoadModel, System, scenario::SamplingScheme};
+
+/// Per-class sampling scheme selections passed to [`build_stochastic_context`]
+/// for provenance tracking.
+#[derive(Debug, Clone, Copy)]
+pub struct ClassSchemes {
+    /// Inflow class sampling scheme, or `None` if not configured.
+    pub inflow: Option<SamplingScheme>,
+    /// Load class sampling scheme, or `None` if not configured.
+    pub load: Option<SamplingScheme>,
+    /// NCS class sampling scheme, or `None` if not configured.
+    pub ncs: Option<SamplingScheme>,
+}
 
 use crate::{
     StochasticError,
@@ -28,7 +40,10 @@ use crate::{
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
-    tree::{generate::generate_opening_tree, opening_tree::OpeningTreeView},
+    tree::{
+        generate::{ClassDimensions, generate_opening_tree},
+        opening_tree::OpeningTreeView,
+    },
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -55,7 +70,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     },
 ///     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
 /// };
-/// use cobre_stochastic::context::build_stochastic_context;
+/// use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 /// use chrono::NaiveDate;
 ///
 /// # fn make_bus(id: i32) -> Bus {
@@ -137,7 +152,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 /// #             matrix,
 /// #         }],
 /// #     });
-/// #     CorrelationModel { method: "cholesky".to_string(), profiles, schedule: vec![] }
+/// #     CorrelationModel { method: "spectral".to_string(), profiles, schedule: vec![] }
 /// # }
 /// let hydros = vec![make_hydro(1), make_hydro(2)];
 /// let stages = vec![make_stage(0, 0, 3), make_stage(1, 1, 3), make_stage(2, 2, 3)];
@@ -155,7 +170,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     .build()
 ///     .unwrap();
 ///
-/// let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+/// let ctx = build_stochastic_context(&system, 42, None, &[], &[], None, ClassSchemes { inflow: None, load: None, ncs: None }).unwrap();
 /// assert_eq!(ctx.dim(), 2);
 /// assert_eq!(ctx.n_stages(), 3);
 /// assert_eq!(ctx.base_seed(), 42);
@@ -226,7 +241,7 @@ impl StochasticContext {
         self.forward_seed
     }
 
-    /// Returns the noise dimension (`n_hydros + n_load_buses`).
+    /// Returns the noise dimension (`n_hydros + n_load_buses + n_stochastic_ncs`).
     #[must_use]
     pub fn dim(&self) -> usize {
         self.dim
@@ -267,6 +282,15 @@ impl StochasticContext {
         self.n_stochastic_ncs
     }
 
+    /// Returns the number of hydro entities in the stochastic model.
+    ///
+    /// Equal to `dim() - n_load_buses() - n_stochastic_ncs()`. Exposed here
+    /// to avoid repeating the three-term subtraction at every call site.
+    #[must_use]
+    pub fn n_hydros(&self) -> usize {
+        self.dim - self.n_load_buses - self.n_stochastic_ncs
+    }
+
     /// Returns the number of study stages in the opening tree.
     #[must_use]
     pub fn n_stages(&self) -> usize {
@@ -293,7 +317,8 @@ impl StochasticContext {
 /// 5. Build [`PrecomputedPar`] from PAR model parameters and study stages.
 /// 6. Build [`DecomposedCorrelation`] from the system correlation model.
 /// 7. Generate the opening scenario tree from the expanded entity order
-///    (`hydro_ids` followed by `load_bus_ids`) with `dim = n_hydros + n_load_buses`.
+///    (`hydro_ids` followed by `load_bus_ids` followed by `ncs_ids`) with
+///    `dim = n_hydros + n_load_buses + n_stochastic_ncs`.
 /// 8. Build [`PrecomputedNormal`] for the stochastic load buses.
 ///
 /// The `base_seed` parameter must be supplied explicitly by the caller.
@@ -317,7 +342,7 @@ impl StochasticContext {
 ///   with zero standard deviation.
 /// - [`StochasticError::InvalidCorrelation`]: the correlation model is empty,
 ///   ambiguous, or contains an invalid matrix.
-/// - [`StochasticError::CholeskyDecompositionFailed`]: a correlation matrix
+/// - [`StochasticError::SpectralDecompositionFailed`]: a correlation matrix
 ///   is not positive-definite.
 ///
 /// [`LoadModel`]: cobre_core::scenario::LoadModel
@@ -329,6 +354,7 @@ pub fn build_stochastic_context(
     load_factors: &[EntityFactorEntry<'_>],
     ncs_factors: &[EntityFactorEntry<'_>],
     user_opening_tree: Option<OpeningTree>,
+    schemes: ClassSchemes,
 ) -> Result<StochasticContext, StochasticError> {
     let _report = validate_par_parameters(system.inflow_models())?;
 
@@ -393,12 +419,15 @@ pub fn build_stochastic_context(
             opening_tree: opening_tree_prov,
             correlation: correlation_prov,
             inflow_model: inflow_prov,
+            inflow_scheme: schemes.inflow,
+            load_scheme: schemes.load,
+            ncs_scheme: schemes.ncs,
         }
     };
 
     let par_lp = PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids)?;
 
-    let mut correlation = if dim == 0 || system.correlation().profiles.is_empty() {
+    let correlation = if dim == 0 || system.correlation().profiles.is_empty() {
         DecomposedCorrelation::empty()
     } else {
         DecomposedCorrelation::build(system.correlation())?
@@ -418,8 +447,13 @@ pub fn build_stochastic_context(
             base_seed,
             &study_stages,
             dim,
-            &mut correlation,
+            &correlation,
             &entity_order,
+            ClassDimensions {
+                n_hydros: hydro_ids.len(),
+                n_load_buses,
+                n_ncs: n_stochastic_ncs,
+            },
         )?
     };
 
@@ -490,7 +524,7 @@ mod tests {
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
-            LoadModel,
+            LoadModel, SamplingScheme,
         },
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -498,7 +532,7 @@ mod tests {
         },
     };
 
-    use super::build_stochastic_context;
+    use super::{ClassSchemes, build_stochastic_context};
     use crate::StochasticError;
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
@@ -619,7 +653,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -658,7 +692,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.dim(), 2);
         assert_eq!(ctx.n_stages(), 3);
@@ -692,7 +739,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.par().n_hydros(), 2);
         assert_eq!(ctx.par().n_stages(), 3);
@@ -725,7 +785,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.opening_tree().n_stages(), 3);
         assert_eq!(ctx.opening_tree().dim(), 2);
@@ -752,7 +825,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            7,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
         let view = ctx.tree_view();
 
         assert_eq!(view.n_stages(), ctx.opening_tree().n_stages());
@@ -778,7 +864,19 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, None, &[], &[], None);
+        let result = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        );
 
         assert!(
             matches!(result, Err(StochasticError::InvalidParParameters { .. })),
@@ -786,9 +884,9 @@ mod tests {
         );
     }
 
-    /// AC: non-positive-definite correlation matrix returns `CholeskyDecompositionFailed`.
+    /// AC: non-positive-definite correlation matrix succeeds with spectral decomposition.
     #[test]
-    fn build_fails_on_invalid_correlation() {
+    fn build_succeeds_on_non_pd_correlation() {
         let hydros = vec![make_hydro(1), make_hydro(2)];
         let stages = vec![make_stage(0, 0, 3)];
         let inflow_models = vec![
@@ -823,7 +921,7 @@ mod tests {
             },
         );
         let bad_correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -837,14 +935,25 @@ mod tests {
             .build()
             .unwrap();
 
-        let result = build_stochastic_context(&system, 42, None, &[], &[], None);
+        let result = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        );
 
+        // With spectral decomposition, negative eigenvalues are clipped to
+        // zero instead of failing. The build should succeed.
         assert!(
-            matches!(
-                result,
-                Err(StochasticError::CholeskyDecompositionFailed { .. })
-            ),
-            "expected CholeskyDecompositionFailed, got: {result:?}"
+            result.is_ok(),
+            "spectral decomposition should handle non-PD matrix, got: {result:?}"
         );
     }
 
@@ -873,7 +982,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.dim(), 1);
         assert_eq!(ctx.n_stages(), 2);
@@ -904,7 +1026,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 0, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            0,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         // The opening tree must contain only the 2 study stages.
         assert_eq!(
@@ -956,12 +1091,25 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.dim(),
             3,
-            "dim must equal n_hydros + n_load_buses = 2 + 1"
+            "dim must equal n_hydros + n_load_buses + n_ncs = 2 + 1 + 0"
         );
         assert_eq!(ctx.n_load_buses(), 1, "one load bus with std_mw > 0");
     }
@@ -993,7 +1141,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.dim(), 2, "dim must equal n_hydros when no load buses");
         assert_eq!(
@@ -1028,7 +1189,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.n_load_buses(),
@@ -1068,7 +1242,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 7, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            7,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.dim(), 3, "expanded dim must be 2 hydros + 1 load bus");
         // Each opening noise vector must have length = dim.
@@ -1111,7 +1298,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(ctx.n_load_buses(), 1);
         let nlp = ctx.normal();
@@ -1166,7 +1366,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         // Dimensions must match expectations for a 2-hydro, 3-stage, BF=3 system.
         assert_eq!(ctx.dim(), 2, "dim should be 2 (2 hydros, no load buses)");
@@ -1224,7 +1437,20 @@ mod tests {
         let openings_per_stage = vec![n_openings; n_stages];
         let user_tree = OpeningTree::from_parts(data, openings_per_stage, dim);
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            Some(user_tree),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         // Tree dimensions must match the user-supplied tree, not the system's
         // branching factors.
@@ -1292,7 +1518,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.entity_order(),
@@ -1337,7 +1576,20 @@ mod tests {
         let openings_per_stage = vec![n_openings; n_stages];
         let user_tree = OpeningTree::from_parts(data, openings_per_stage, dim);
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            Some(user_tree),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.entity_order(),
@@ -1377,7 +1629,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, Some(123), &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            Some(123),
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.forward_seed(),
@@ -1413,7 +1678,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.forward_seed(),

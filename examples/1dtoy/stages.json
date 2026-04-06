@@ -4,6 +4,12 @@
     "type": "finite_horizon",
     "annual_discount_rate": 0.12
   },
+  "scenario_source": {
+    "seed": 42,
+    "inflow": { "scheme": "in_sample" },
+    "load": { "scheme": "in_sample" },
+    "ncs": { "scheme": "in_sample" }
+  },
   "stages": [
     {
       "id": 0,

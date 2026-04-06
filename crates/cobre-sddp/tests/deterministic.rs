@@ -1014,7 +1014,6 @@ fn d12_checkpoint_round_trip() {
 
     let n_stages = fcf.pools.len();
     let policy_metadata = PolicyCheckpointMetadata {
-        version: "1.0.0".to_string(),
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-16T00:00:00Z".to_string(),
         completed_iterations: result.iterations as u32,
@@ -1022,8 +1021,6 @@ fn d12_checkpoint_round_trip() {
         best_upper_bound: Some(result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: n_stages as u32,
-        config_hash: "d12-config-hash".to_string(),
-        system_hash: "d12-system-hash".to_string(),
         max_iterations: 100,
         forward_passes: 1,
         warm_start_cuts: 0,
@@ -1432,7 +1429,7 @@ fn d16_par1_lag_shift() {
     // The expected cost with correct lag shift differs from the PAR(0)-equivalent
     // cost. With psi=0.5 and initial lag=200, inflows decrease across stages
     // (150, 125, 112.5), producing higher deficits than if the lag never shifted.
-    assert_cost(result.final_lb, 5_475_000.0, 1.0, "D16");
+    assert_cost(result.final_lb, 7_756_250.0, 1.0, "D16");
 }
 
 /// Regression guard for the model-persistence optimization (S1).
@@ -1676,7 +1673,7 @@ fn d19_multi_hydro_par_truncation() {
 ///
 /// If the lag-major/hydro-major indexing bug regresses, different lag values
 /// are read for each hydro during PAR evaluation, producing a different cost.
-pub const D19_EXPECTED_COST: f64 = 1_218_090.894_148_668;
+pub const D19_EXPECTED_COST: f64 = 1_332_425.292_764_49;
 
 /// Operational violation slacks: 1 hydro with active min_outflow, max_outflow,
 /// min_turbined, and min_generation bounds.
@@ -2587,5 +2584,60 @@ fn d25_simulation_discount_factors() {
     assert!(
         (df1 - d0).abs() < 1e-10,
         "D25: stage 1 discount_factor expected {d0}, got {df1}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D26: Estimated PAR(2) — regression guard for the forward-prediction fix
+// ---------------------------------------------------------------------------
+
+/// D26 expected lower bound: recorded with corrected forward-prediction fix.
+/// Regression guard against backward-prediction (P5) bug.
+pub const D26_EXPECTED_COST: f64 = 47_721_588.894_912_5;
+
+/// D26: PAR(2) estimation from inflow history (regression guard for forward-prediction fix).
+/// Exercises full PAR(p) pipeline with PACF order selection and Yule-Walker fitting.
+#[test]
+fn d26_estimated_par2() {
+    let case_dir = Path::new("../../examples/deterministic/d26-estimated-par2");
+    let result = run_deterministic(case_dir);
+
+    assert!(
+        result.final_lb > 0.0,
+        "D26: lower bound must be positive, got {}",
+        result.final_lb
+    );
+    assert_cost(result.final_lb, D26_EXPECTED_COST, 1.0, "D26");
+    assert!(
+        result.iterations <= 100,
+        "D26: must converge within 100 iterations, got {}",
+        result.iterations
+    );
+}
+
+/// D26: Verify PACF order selection picks AR order 2.
+#[test]
+fn d26_estimated_par2_order_selection() {
+    use cobre_sddp::setup::prepare_stochastic;
+
+    let case_dir = Path::new("../../examples/deterministic/d26-estimated-par2");
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let prepare_result =
+        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+
+    let report = prepare_result
+        .estimation_report
+        .expect("estimation report must be Some");
+
+    assert_eq!(report.entries.len(), 1, "expected 1 hydro entry");
+
+    let (hydro_id, entry) = report.entries.iter().next().expect("entry exists");
+    assert_eq!(
+        entry.selected_order, 2,
+        "expected AR order 2 for hydro {hydro_id}, got {}",
+        entry.selected_order
     );
 }

@@ -1,10 +1,10 @@
 //! Aggregate output writers that combine training and simulation artifacts.
 //!
 //! [`write_training_results`] creates the full `training/` directory tree
-//! (dictionaries, convergence Parquet, manifest, metadata, `_SUCCESS` marker)
+//! (dictionaries, convergence Parquet, metadata, `_SUCCESS` marker)
 //! and an empty `simulation/` directory.
 //!
-//! [`write_simulation_results`] writes the `simulation/` manifest and
+//! [`write_simulation_results`] writes the `simulation/metadata.json` and
 //! `_SUCCESS` marker.
 //!
 //! [`write_results`] is a convenience wrapper that calls both in sequence.
@@ -16,25 +16,22 @@ use cobre_core::System;
 use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
-    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
-    MetadataConfigSnapshot, MetadataEnvironment, MetadataProblemDimensions, MetadataRunInfo,
-    SimulationManifest, TrainingManifest, TrainingMetadata, write_metadata,
-    write_simulation_manifest, write_training_manifest,
+    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, MpiInfo, OutputContext, SimulationMetadata,
+    TrainingMetadata, write_simulation_metadata, write_training_metadata,
 };
 use super::parquet_config::ParquetWriterConfig;
 use super::training_writer::TrainingParquetWriter;
 use super::{SimulationOutput, TrainingOutput};
 use crate::Config;
+use crate::config::StoppingRuleConfig;
 
 /// Write all training artifacts to the output directory.
 ///
 /// Creates the `training/` subdirectory structure (dictionaries, convergence
-/// Parquet, timing, manifest, metadata) and writes the `training/_SUCCESS`
-/// marker on completion. Also creates an empty `simulation/` directory so
-/// downstream code can unconditionally write into it.
-///
-/// This function is one half of the split from [`write_results`]; it can be
-/// called independently to persist training outputs before simulation starts.
+/// Parquet, timing, metadata) and writes the `training/_SUCCESS` marker on
+/// completion. Also creates an empty `simulation/` directory so downstream
+/// code can unconditionally write into it.
 ///
 /// # Errors
 ///
@@ -45,6 +42,7 @@ pub fn write_training_results(
     training_output: &TrainingOutput,
     system: &System,
     config: &Config,
+    ctx: &OutputContext,
 ) -> Result<(), OutputError> {
     std::fs::create_dir_all(output_dir.join("training/dictionaries"))
         .map_err(|e| OutputError::io(output_dir.join("training/dictionaries"), e))?;
@@ -62,49 +60,20 @@ pub fn write_training_results(
     let converged_at = training_output
         .converged
         .then_some(training_output.iterations_completed);
-    let training_manifest = TrainingManifest {
-        version: "2.0.0".to_string(),
-        status: "complete".to_string(),
-        started_at: None,
-        completed_at: None,
-        iterations: ManifestIterations {
-            max_iterations: None,
-            completed: training_output.iterations_completed,
-            converged_at,
-        },
-        convergence: ManifestConvergence {
-            achieved: training_output.converged,
-            final_gap_percent: training_output.final_gap_percent,
-            termination_reason: training_output.termination_reason.clone(),
-        },
-        cuts: ManifestCuts {
-            total_generated: training_output.cut_stats.total_generated,
-            total_active: training_output.cut_stats.total_active,
-            peak_active: training_output.cut_stats.peak_active,
-        },
-        checksum: None,
-        mpi_info: ManifestMpiInfo::default(),
-    };
-    write_training_manifest(
-        &output_dir.join("training/_manifest.json"),
-        &training_manifest,
-    )?;
 
-    let training_metadata = TrainingMetadata {
-        version: "2.0.0".to_string(),
-        run_info: MetadataRunInfo {
-            run_id: "not-implemented".to_string(),
-            started_at: None,
-            completed_at: None,
-            duration_seconds: Some(training_output.total_time_ms as f64 / 1_000.0),
-            cobre_version: env!("CARGO_PKG_VERSION").to_string(),
-            solver: None,
-            solver_version: None,
-            hostname: None,
-            user: None,
-        },
-        configuration_snapshot: MetadataConfigSnapshot {
+    let max_iterations = extract_max_iterations(config);
+
+    let metadata = TrainingMetadata {
+        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        hostname: ctx.hostname.clone(),
+        solver: ctx.solver.clone(),
+        started_at: ctx.started_at.clone(),
+        completed_at: ctx.completed_at.clone(),
+        duration_seconds: training_output.total_time_ms as f64 / 1_000.0,
+        status: "complete".to_string(),
+        configuration: MetadataConfiguration {
             seed: config.training.tree_seed,
+            max_iterations,
             forward_passes: config.training.forward_passes,
             stopping_mode: config.training.stopping_mode.clone(),
             policy_mode: config.policy.mode.to_string(),
@@ -116,20 +85,26 @@ pub fn write_training_results(
             num_buses: system.n_buses() as u32,
             num_lines: system.n_lines() as u32,
         },
-        performance_summary: None,
-        data_integrity: None,
-        environment: MetadataEnvironment {
-            mpi_implementation: None,
-            mpi_version: None,
-            num_ranks: None,
-            cpus_per_rank: None,
-            memory_per_rank_gb: None,
+        iterations: MetadataIterations {
+            completed: training_output.iterations_completed,
+            converged_at,
+        },
+        convergence: MetadataConvergence {
+            achieved: training_output.converged,
+            final_gap_percent: training_output.final_gap_percent,
+            termination_reason: training_output.termination_reason.clone(),
+        },
+        cuts: MetadataCuts {
+            total_generated: training_output.cut_stats.total_generated,
+            total_active: training_output.cut_stats.total_active,
+            peak_active: training_output.cut_stats.peak_active,
+        },
+        mpi: MpiInfo {
+            world_size: ctx.mpi_world_size,
+            ranks_participated: ctx.mpi_ranks_participated,
         },
     };
-    write_metadata(
-        &output_dir.join("training/metadata.json"),
-        &training_metadata,
-    )?;
+    write_training_metadata(&output_dir.join("training/metadata.json"), &metadata)?;
 
     std::fs::write(output_dir.join("training/_SUCCESS"), b"")
         .map_err(|e| OutputError::io(output_dir.join("training/_SUCCESS"), e))?;
@@ -139,34 +114,38 @@ pub fn write_training_results(
 
 /// Write simulation artifacts to the output directory.
 ///
-/// Writes `simulation/_manifest.json` and the `simulation/_SUCCESS` marker.
+/// Writes `simulation/metadata.json` and the `simulation/_SUCCESS` marker.
 /// The `simulation/` directory must already exist (created by
 /// [`write_training_results`]).
 ///
 /// # Errors
 ///
-/// Returns [`OutputError`] if manifest serialization or file I/O fails.
+/// Returns [`OutputError`] if metadata serialization or file I/O fails.
 #[allow(clippy::cast_precision_loss)]
 pub fn write_simulation_results(
     output_dir: &Path,
     simulation_output: &SimulationOutput,
+    ctx: &OutputContext,
 ) -> Result<(), OutputError> {
-    let sim_manifest = SimulationManifest {
-        version: "2.0.0".to_string(),
+    let metadata = SimulationMetadata {
+        cobre_version: env!("CARGO_PKG_VERSION").to_string(),
+        hostname: ctx.hostname.clone(),
+        solver: ctx.solver.clone(),
+        started_at: ctx.started_at.clone(),
+        completed_at: ctx.completed_at.clone(),
+        duration_seconds: simulation_output.total_time_ms as f64 / 1_000.0,
         status: "complete".to_string(),
-        started_at: None,
-        completed_at: None,
-        duration_seconds: Some(simulation_output.total_time_ms as f64 / 1_000.0),
-        scenarios: ManifestScenarios {
+        scenarios: MetadataScenarios {
             total: simulation_output.n_scenarios,
             completed: simulation_output.completed,
             failed: simulation_output.failed,
         },
-        partitions_written: simulation_output.partitions_written.clone(),
-        checksum: None,
-        mpi_info: ManifestMpiInfo::default(),
+        mpi: MpiInfo {
+            world_size: ctx.mpi_world_size,
+            ranks_participated: ctx.mpi_ranks_participated,
+        },
     };
-    write_simulation_manifest(&output_dir.join("simulation/_manifest.json"), &sim_manifest)?;
+    write_simulation_metadata(&output_dir.join("simulation/metadata.json"), &metadata)?;
 
     std::fs::write(output_dir.join("simulation/_SUCCESS"), b"")
         .map_err(|e| OutputError::io(output_dir.join("simulation/_SUCCESS"), e))?;
@@ -178,7 +157,6 @@ pub fn write_simulation_results(
 ///
 /// Convenience wrapper that calls [`write_training_results`] followed by
 /// [`write_simulation_results`] (when simulation output is present).
-/// Retained for backward compatibility.
 ///
 /// # Errors
 ///
@@ -189,12 +167,29 @@ pub fn write_results(
     simulation_output: Option<&SimulationOutput>,
     system: &System,
     config: &Config,
+    ctx: &OutputContext,
 ) -> Result<(), OutputError> {
-    write_training_results(output_dir, training_output, system, config)?;
+    write_training_results(output_dir, training_output, system, config, ctx)?;
     if let Some(sim) = simulation_output {
-        write_simulation_results(output_dir, sim)?;
+        write_simulation_results(output_dir, sim, ctx)?;
     }
     Ok(())
+}
+
+/// Extract the iteration limit from the stopping rules configuration.
+fn extract_max_iterations(config: &Config) -> Option<u32> {
+    config
+        .training
+        .stopping_rules
+        .as_ref()?
+        .iter()
+        .find_map(|r| {
+            if let StoppingRuleConfig::IterationLimit { limit } = r {
+                Some(*limit)
+            } else {
+                None
+            }
+        })
 }
 
 #[cfg(test)]
@@ -319,13 +314,31 @@ mod tests {
         }
     }
 
+    fn make_output_context() -> OutputContext {
+        OutputContext {
+            hostname: "test-host".to_string(),
+            solver: "highs".to_string(),
+            started_at: "2026-01-17T08:00:00Z".to_string(),
+            completed_at: "2026-01-17T12:30:00Z".to_string(),
+            mpi_world_size: 1,
+            mpi_ranks_participated: 1,
+        }
+    }
+
     #[test]
     fn write_results_creates_training_directories() {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         assert!(tmp.path().join("training").is_dir(), "training/ must exist");
         assert!(
@@ -343,8 +356,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed with simulation_output = None");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed with simulation_output = None");
 
         assert!(
             tmp.path().join("simulation").is_dir(),
@@ -370,6 +390,7 @@ mod tests {
             Some(&simulation),
             &make_system(),
             &make_config(),
+            &make_output_context(),
         );
         assert!(
             result.is_ok(),
@@ -382,8 +403,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         assert!(
             tmp.path().join("training/_SUCCESS").is_file(),
@@ -392,35 +420,31 @@ mod tests {
     }
 
     #[test]
-    fn write_results_creates_training_manifest() {
-        let tmp = tempfile::tempdir().unwrap();
-        let training = make_training_output(0);
-
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
-
-        let path = tmp.path().join("training/_manifest.json");
-        assert!(path.is_file(), "training/_manifest.json must exist");
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        let _parsed: serde_json::Value =
-            serde_json::from_str(&content).expect("_manifest.json must contain valid JSON");
-    }
-
-    #[test]
     fn write_results_creates_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         let path = tmp.path().join("training/metadata.json");
         assert!(path.is_file(), "training/metadata.json must exist");
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let _parsed: serde_json::Value =
+        let value: serde_json::Value =
             serde_json::from_str(&content).expect("metadata.json must contain valid JSON");
+
+        assert_eq!(value["hostname"].as_str(), Some("test-host"));
+        assert_eq!(value["solver"].as_str(), Some("highs"));
+        assert!(value["started_at"].is_string());
+        assert!(value["completed_at"].is_string());
     }
 
     #[test]
@@ -428,8 +452,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(3);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         assert!(
             tmp.path().join("training/convergence.parquet").is_file(),
@@ -444,8 +475,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(3);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         let path = tmp.path().join("training/convergence.parquet");
         let file = std::fs::File::open(&path).unwrap();
@@ -467,8 +505,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         let path = tmp.path().join("training/convergence.parquet");
         assert!(path.is_file(), "training/convergence.parquet must exist");
@@ -512,6 +557,7 @@ mod tests {
             Some(&simulation),
             &make_system(),
             &make_config(),
+            &make_output_context(),
         )
         .expect("write_results must succeed");
 
@@ -525,8 +571,15 @@ mod tests {
         );
 
         let tmp2 = tempfile::tempdir().unwrap();
-        write_results(tmp2.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp2.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         assert!(
             !tmp2.path().join("simulation/_SUCCESS").exists(),
@@ -535,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn write_results_simulation_manifest_scenarios_total() {
+    fn write_results_simulation_metadata_scenarios_total() {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(3);
         let simulation = SimulationOutput {
@@ -552,11 +605,12 @@ mod tests {
             Some(&simulation),
             &make_system(),
             &make_config(),
+            &make_output_context(),
         )
         .expect("write_results must succeed");
 
-        let path = tmp.path().join("simulation/_manifest.json");
-        assert!(path.is_file(), "simulation/_manifest.json must exist");
+        let path = tmp.path().join("simulation/metadata.json");
+        assert!(path.is_file(), "simulation/metadata.json must exist");
 
         let content = std::fs::read_to_string(&path).unwrap();
         let value: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -572,8 +626,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         assert!(
             tmp.path()
@@ -588,8 +649,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(0);
 
-        write_results(tmp.path(), &training, None, &make_system(), &make_config())
-            .expect("write_results must succeed");
+        write_results(
+            tmp.path(),
+            &training,
+            None,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_results must succeed");
 
         let path = tmp.path().join("training/dictionaries/codes.json");
         let content = std::fs::read_to_string(&path).unwrap();
@@ -611,13 +679,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let training = make_training_output(3);
 
-        write_training_results(tmp.path(), &training, &make_system(), &make_config())
-            .expect("write_training_results must succeed");
+        write_training_results(
+            tmp.path(),
+            &training,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_training_results must succeed");
 
         assert!(tmp.path().join("training").is_dir());
         assert!(tmp.path().join("training/dictionaries").is_dir());
         assert!(tmp.path().join("training/timing").is_dir());
-        assert!(tmp.path().join("training/_manifest.json").is_file());
         assert!(tmp.path().join("training/metadata.json").is_file());
         assert!(tmp.path().join("training/_SUCCESS").is_file());
         assert!(
@@ -627,14 +700,15 @@ mod tests {
     }
 
     #[test]
-    fn write_simulation_results_produces_manifest_and_success() {
+    fn write_simulation_results_produces_metadata_and_success() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("simulation")).unwrap();
         let sim = make_simulation_output();
 
-        write_simulation_results(tmp.path(), &sim).expect("write_simulation_results must succeed");
+        write_simulation_results(tmp.path(), &sim, &make_output_context())
+            .expect("write_simulation_results must succeed");
 
-        assert!(tmp.path().join("simulation/_manifest.json").is_file());
+        assert!(tmp.path().join("simulation/metadata.json").is_file());
         assert!(tmp.path().join("simulation/_SUCCESS").is_file());
     }
 
@@ -644,6 +718,7 @@ mod tests {
         let tmp_split = tempfile::tempdir().unwrap();
         let training = make_training_output(2);
         let sim = make_simulation_output();
+        let ctx = make_output_context();
 
         write_results(
             tmp_combined.path(),
@@ -651,12 +726,19 @@ mod tests {
             Some(&sim),
             &make_system(),
             &make_config(),
+            &ctx,
         )
         .expect("write_results must succeed");
 
-        write_training_results(tmp_split.path(), &training, &make_system(), &make_config())
-            .expect("write_training_results must succeed");
-        write_simulation_results(tmp_split.path(), &sim)
+        write_training_results(
+            tmp_split.path(),
+            &training,
+            &make_system(),
+            &make_config(),
+            &ctx,
+        )
+        .expect("write_training_results must succeed");
+        write_simulation_results(tmp_split.path(), &sim, &ctx)
             .expect("write_simulation_results must succeed");
 
         let combined_training_success = tmp_combined.path().join("training/_SUCCESS").is_file();
@@ -667,18 +749,46 @@ mod tests {
         let split_sim_success = tmp_split.path().join("simulation/_SUCCESS").is_file();
         assert_eq!(combined_sim_success, split_sim_success);
 
-        let combined_manifest = tmp_combined
-            .path()
-            .join("training/_manifest.json")
-            .is_file();
-        let split_manifest = tmp_split.path().join("training/_manifest.json").is_file();
-        assert_eq!(combined_manifest, split_manifest);
+        let combined_metadata = tmp_combined.path().join("training/metadata.json").is_file();
+        let split_metadata = tmp_split.path().join("training/metadata.json").is_file();
+        assert_eq!(combined_metadata, split_metadata);
 
-        let combined_sim_manifest = tmp_combined
+        let combined_sim_metadata = tmp_combined
             .path()
-            .join("simulation/_manifest.json")
+            .join("simulation/metadata.json")
             .is_file();
-        let split_sim_manifest = tmp_split.path().join("simulation/_manifest.json").is_file();
-        assert_eq!(combined_sim_manifest, split_sim_manifest);
+        let split_sim_metadata = tmp_split.path().join("simulation/metadata.json").is_file();
+        assert_eq!(combined_sim_metadata, split_sim_metadata);
+    }
+
+    #[test]
+    fn extract_max_iterations_from_config() {
+        let config = make_config();
+        assert_eq!(extract_max_iterations(&config), Some(10));
+    }
+
+    #[test]
+    fn training_metadata_has_max_iterations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let training = make_training_output(0);
+
+        write_training_results(
+            tmp.path(),
+            &training,
+            &make_system(),
+            &make_config(),
+            &make_output_context(),
+        )
+        .expect("write_training_results must succeed");
+
+        let path = tmp.path().join("training/metadata.json");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(
+            value["configuration"]["max_iterations"].as_u64(),
+            Some(10),
+            "configuration.max_iterations must be extracted from stopping rules"
+        );
     }
 }

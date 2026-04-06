@@ -113,11 +113,7 @@ pub struct TrainingConfig {
     pub enabled: bool,
 
     /// Random seed for the opening scenario tree (reproducible training).
-    ///
-    /// The JSON key `"tree_seed"` is canonical; `"seed"` is accepted as a
-    /// deprecated alias for backward compatibility with existing `config.json`
-    /// files.
-    #[serde(default, alias = "seed")]
+    #[serde(default)]
     pub tree_seed: Option<i64>,
 
     /// Number of forward-pass scenario trajectories $M$ per iteration.
@@ -453,12 +449,13 @@ impl Default for SimulationSamplingConfig {
 /// Order selection criterion for autoregressive model fitting.
 ///
 /// Controls how the lag order is chosen when fitting a time series model.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+///
+/// The `"fixed"` JSON value is deprecated; it is accepted for backwards
+/// compatibility but mapped to `Pacf` at parse time with a warning.
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OrderSelectionMethod {
-    /// Use a fixed maximum lag order specified by `max_order`.
-    Fixed,
     /// Select the lag order using periodic partial autocorrelation significance
     /// testing via the periodic Yule-Walker matrix method.
     ///
@@ -467,6 +464,24 @@ pub enum OrderSelectionMethod {
     /// autocorrelation.
     #[default]
     Pacf,
+}
+
+impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "pacf" => Ok(Self::Pacf),
+            "fixed" => {
+                tracing::warn!(
+                    "OrderSelectionMethod::Fixed is deprecated and will be removed \
+                     in a future release. The PACF method is now used for all order \
+                     selection. Please update your config.json to use \"pacf\"."
+                );
+                Ok(Self::Pacf)
+            }
+            other => Err(serde::de::Error::unknown_variant(other, &["pacf", "fixed"])),
+        }
+    }
 }
 
 /// Time series estimation settings (`config.json → estimation`).
@@ -702,21 +717,11 @@ mod tests {
         assert!(cfg.exports.cuts);
     }
 
-    /// AC: deprecated `"seed"` alias parses into `tree_seed` for backward compatibility.
-    #[test]
-    fn test_seed_deprecated_alias() {
-        let f = write_config(
-            r#"{"training": {"seed": 99, "forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}}"#,
-        );
-        let cfg = parse_config(f.path()).unwrap();
-        assert_eq!(cfg.training.tree_seed, Some(99));
-    }
-
     /// AC-2: missing `training.forward_passes` → SchemaError with field name.
     #[test]
     fn test_missing_forward_passes() {
         let f = write_config(
-            r#"{"training": {"seed": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}}"#,
+            r#"{"training": {"tree_seed": 1, "stopping_rules": [{"type": "iteration_limit", "limit": 10}]}}"#,
         );
         let err = parse_config(f.path()).unwrap_err();
         match &err {
@@ -733,7 +738,7 @@ mod tests {
     /// AC-2 variant: missing `training.stopping_rules` → SchemaError.
     #[test]
     fn test_missing_stopping_rules() {
-        let f = write_config(r#"{"training": {"seed": 1, "forward_passes": 100}}"#);
+        let f = write_config(r#"{"training": {"tree_seed": 1, "forward_passes": 100}}"#);
         let err = parse_config(f.path()).unwrap_err();
         match &err {
             LoadError::SchemaError { field, .. } => {
@@ -771,7 +776,7 @@ mod tests {
             }
           },
           "training": {
-            "seed": 42,
+            "tree_seed": 42,
             "forward_passes": 192,
             "stopping_rules": [
               {"type": "iteration_limit", "limit": 50},
@@ -1047,9 +1052,9 @@ mod tests {
         assert_eq!(cfg.estimation.min_observations_per_season, 30);
     }
 
-    /// AC-035-2: explicit estimation section round-trips all three fields.
+    /// AC-035-2: `"order_selection": "fixed"` deserializes to `Pacf` (deprecated alias).
     #[test]
-    fn test_estimation_config_explicit() {
+    fn test_estimation_config_order_selection_fixed_deprecated() {
         let f = write_config(
             r#"{
             "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
@@ -1059,10 +1064,28 @@ mod tests {
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(cfg.estimation.max_order, 3);
         assert!(
-            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Fixed),
-            "order_selection should be Fixed"
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Pacf),
+            "deprecated 'fixed' must deserialize to Pacf"
         );
         assert_eq!(cfg.estimation.min_observations_per_season, 20);
+    }
+
+    /// AC-035-2b: `"order_selection": "pacf"` deserializes to `Pacf` with no warning.
+    #[test]
+    fn test_estimation_config_order_selection_pacf() {
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
+            "estimation": {"max_order": 4, "order_selection": "pacf", "min_observations_per_season": 15}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.estimation.max_order, 4);
+        assert!(
+            matches!(cfg.estimation.order_selection, OrderSelectionMethod::Pacf),
+            "explicit 'pacf' must deserialize to Pacf"
+        );
+        assert_eq!(cfg.estimation.min_observations_per_season, 15);
     }
 
     /// AC-035-3: unknown `order_selection` value → `LoadError::SchemaError` with

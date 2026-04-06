@@ -1,10 +1,10 @@
 {
   "$defs": {
     "RawCorrelationGroup": {
-      "description": "A named group of correlated entities with an associated correlation matrix.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and have\nall off-diagonal entries in [-1.0, 1.0]. The number of rows (and columns)\nmust equal the number of `entities`.",
+      "description": "A named group of correlated entities with an associated correlation matrix.\n\nAll entities in a group must share the same `entity_type` (same-type constraint, v0.4.0). Mixing entity types (e.g. inflow and load in the same group) produces a runtime validation error.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and have\nall off-diagonal entries in [-1.0, 1.0]. The number of rows (and columns)\nmust equal the number of `entities`.",
       "properties": {
         "entities": {
-          "description": "Ordered list of entity references. The matrix row/column order matches this list.",
+          "description": "Ordered list of entity references. The matrix row/column order matches this list. All entities must have the same `type` value; mixing entity types in one group produces a runtime validation error.",
           "items": {
             "$ref": "#/$defs/RawEntity"
           },
@@ -38,7 +38,7 @@
           "type": "integer"
         },
         "type": {
-          "description": "Entity type tag. Currently `\"inflow\"` for hydro inflow series.",
+          "description": "Entity type tag. Valid values: `\"inflow\"` (hydro inflow series), `\"load\"` (bus load), `\"ncs\"` (non-controllable source availability).",
           "type": "string"
         }
       },
@@ -77,14 +77,15 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Spatial correlation model loaded from `scenarios/correlation.json`.\n\nDefines named correlation profiles and an optional stage-to-profile schedule\nfor stochastic scenario generation. Each profile contains one or more\ncorrelation groups, each grouping a set of entity inflow series with a\nsymmetric correlation matrix (decomposed via Cholesky).\n\nProfiles are stored in deterministic order (BTreeMap) regardless of JSON\ndeclaration order. Schedule entries reference profile names that must exist\nin the `profiles` map.",
+  "description": "Spatial correlation model loaded from `scenarios/correlation.json`.\n\nDefines named correlation profiles and an optional stage-to-profile schedule\nfor stochastic scenario generation. Each profile contains one or more\ncorrelation groups, each grouping a set of entity inflow series with a\nsymmetric correlation matrix decomposed via the method specified in the\n`method` field (default: `\"spectral\"`).\n\nProfiles are stored in deterministic order (BTreeMap) regardless of JSON\ndeclaration order. Schedule entries reference profile names that must exist\nin the `profiles` map.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
       "type": ["string", "null"]
     },
     "method": {
-      "description": "Decomposition method for the correlation matrix. Must not be empty. Always `\"cholesky\"` in practice.",
+      "description": "Decomposition method for the correlation matrix. Must not be empty. Defaults to `\"spectral\"`. `\"cholesky\"` is also accepted for backward compatibility with existing case files. Unrecognized values produce a warning but are not rejected.",
+      "enum": ["spectral", "cholesky"],
       "type": "string"
     },
     "profiles": {

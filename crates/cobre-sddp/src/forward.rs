@@ -62,7 +62,11 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{SampleRequest, build_forward_sampler};
+use cobre_stochastic::context::ClassSchemes;
+use cobre_stochastic::{
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
+};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
@@ -264,10 +268,12 @@ pub fn sync_forward<C: Communicator>(
 /// Panics if the total number of non-zeros in the cut batch exceeds `i32::MAX`,
 /// which would exceed the `HiGHS` API index limit. In practice this cannot occur
 /// for any realistic problem size.
+
 /// Push one negated, scaled coefficient entry into the cut row batch.
 ///
 /// Shared by the sparse and dense paths in [`build_cut_row_batch_into`] to
 /// prevent the two branches from drifting apart during maintenance.
+#[allow(clippy::empty_line_after_doc_comments)]
 #[inline]
 fn push_scaled_coefficient(batch: &mut RowBatch, j: usize, coeff: f64, col_scale: &[f64]) {
     debug_assert!(
@@ -343,13 +349,21 @@ pub fn build_cut_row_batch_into(
         // Unified state coefficient loop: sparse iterates over the nonzero
         // mask, dense iterates over all state indices. Both yield (col_index,
         // coefficient) pairs and share the same push logic.
+        //
+        // state_to_lp_column remaps outgoing-state indices to LP columns.
+        // For storage (j < N) the mapping is identity. For lag dimensions
+        // the outgoing state after shift_lag_state stores z_inflow at lag 0
+        // and shifted incoming lags at lag 1+, so the cut must reference the
+        // corresponding LP columns (z_inflow and incoming lag l−1).
         if is_sparse {
             for &j in mask {
-                push_scaled_coefficient(batch, j, coefficients[j], col_scale);
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, coefficients[j], col_scale);
             }
         } else {
             for (j, &c) in coefficients.iter().enumerate() {
-                push_scaled_coefficient(batch, j, c, col_scale);
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, c, col_scale);
             }
         }
 
@@ -466,16 +480,20 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
         );
 
         // Build the row using the same transformation as build_cut_row_batch_into.
+        // state_to_lp_column remaps outgoing-state indices to LP columns
+        // (identity for storage; z_inflow for lag 0; shifted incoming lag for
+        // lag l ≥ 1).
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch_buf.row_starts.push(nz_offset as i32);
 
         for (j, &c) in coefficients.iter().enumerate() {
+            let lp_col = indexer.state_to_lp_column(j);
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            batch_buf.col_indices.push(j as i32);
+            batch_buf.col_indices.push(lp_col as i32);
             let d = if col_scale.is_empty() {
                 1.0
             } else {
-                col_scale[j]
+                col_scale[lp_col]
             };
             batch_buf.values.push(-c * d);
         }
@@ -811,6 +829,42 @@ fn run_forward_stage<S: SolverInterface + Send>(
     Ok(stage_cost)
 }
 
+/// Build a [`ForwardSampler`] from the sampler-related fields of a
+/// [`TrainingContext`].
+///
+/// Extracted so callers (e.g. the training loop in `training.rs`) can
+/// construct the sampler once before the iteration loop and reuse it across
+/// all iterations without repeated heap allocation.
+///
+/// # Errors
+///
+/// Propagates any error from [`build_forward_sampler`], such as a missing
+/// `OutOfSample` seed or an incompatible library shape.
+pub fn build_sampler_from_ctx<'a>(
+    ctx: &'a TrainingContext<'a>,
+) -> Result<ForwardSampler<'a>, SddpError> {
+    let stochastic = ctx.stochastic;
+    build_forward_sampler(ForwardSamplerConfig {
+        class_schemes: ClassSchemes {
+            inflow: Some(ctx.inflow_scheme),
+            load: Some(ctx.load_scheme),
+            ncs: Some(ctx.ncs_scheme),
+        },
+        ctx: stochastic,
+        stages: ctx.stages,
+        dims: ClassDimensions {
+            n_hydros: stochastic.n_hydros(),
+            n_load_buses: stochastic.n_load_buses(),
+            n_ncs: stochastic.n_stochastic_ncs(),
+        },
+        historical_library: ctx.historical_library,
+        external_inflow_library: ctx.external_inflow_library,
+        external_load_library: ctx.external_load_library,
+        external_ncs_library: ctx.external_ncs_library,
+    })
+    .map_err(SddpError::Stochastic)
+}
+
 /// Execute the forward pass for one training iteration on this rank.
 ///
 /// Simulates this rank's share of forward-pass scenarios through the full
@@ -903,11 +957,24 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
         build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
     }
-    let sampler = build_forward_sampler(
-        training_ctx.sampling_scheme,
-        stochastic,
-        training_ctx.stages,
-    )?;
+    let sampler = build_forward_sampler(ForwardSamplerConfig {
+        class_schemes: ClassSchemes {
+            inflow: Some(training_ctx.inflow_scheme),
+            load: Some(training_ctx.load_scheme),
+            ncs: Some(training_ctx.ncs_scheme),
+        },
+        ctx: stochastic,
+        stages: training_ctx.stages,
+        dims: ClassDimensions {
+            n_hydros: stochastic.n_hydros(),
+            n_load_buses: stochastic.n_load_buses(),
+            n_ncs: stochastic.n_stochastic_ncs(),
+        },
+        historical_library: training_ctx.historical_library,
+        external_inflow_library: training_ctx.external_inflow_library,
+        external_load_library: training_ctx.external_load_library,
+        external_ncs_library: training_ctx.external_ncs_library,
+    })?;
     let n_workers = workspaces.len().max(1);
 
     let mut remaining: &mut [TrajectoryRecord] = records;
@@ -966,6 +1033,21 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
                     let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
+
+                    if t == 0 {
+                        let class_req = ClassSampleRequest {
+                            iteration: i32,
+                            scenario: s32,
+                            stage: 0,
+                            stage_idx: 0,
+                            total_scenarios: total_scenarios_u32,
+                        };
+                        sampler.apply_initial_state(
+                            &class_req,
+                            &mut ws.current_state,
+                            indexer.inflow_lags.start,
+                        );
+                    }
                     let noise = sampler.sample(SampleRequest {
                         iteration: i32,
                         scenario: s32,
@@ -1040,7 +1122,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::build_stochastic_context;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
@@ -1376,7 +1458,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -1388,7 +1470,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── Unit tests: ForwardResult ────────────────────────────────────────────
@@ -1460,14 +1555,14 @@ mod tests {
 
         assert_eq!(batch.num_rows, 2);
         assert_eq!(batch.row_starts, vec![0, 3, 6]);
-        assert_eq!(batch.col_indices[0], 0);
-        assert_eq!(batch.col_indices[1], 1);
+        assert_eq!(batch.col_indices[0], 0); // storage col 0
+        assert_eq!(batch.col_indices[1], 2); // lag 0 → z_inflow col N*(1+L)=2
         assert_eq!(batch.col_indices[2], 4); // theta at N*(3+L) = 1*(3+1) = 4
         assert_eq!(batch.values[0], -1.0);
         assert_eq!(batch.values[1], -3.0);
         assert_eq!(batch.values[2], 1.0);
-        assert_eq!(batch.col_indices[3], 0);
-        assert_eq!(batch.col_indices[4], 1);
+        assert_eq!(batch.col_indices[3], 0); // storage col 0
+        assert_eq!(batch.col_indices[4], 2); // lag 0 → z_inflow col 2
         assert_eq!(batch.col_indices[5], 4); // theta at N*(3+L) = 4
         assert_eq!(batch.values[3], -2.0);
         assert_eq!(batch.values[4], -4.0);
@@ -1485,7 +1580,7 @@ mod tests {
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
         assert_eq!(batch.num_rows, 1);
-        assert_eq!(batch.col_indices, vec![0, 1, 4]); // theta at N*(3+L) = 4
+        assert_eq!(batch.col_indices, vec![0, 2, 4]); // lag 0 → z_inflow col 2; theta at 4
         assert_eq!(batch.values, vec![0.0, -7.0, 1.0]);
         assert_eq!(batch.row_lower, vec![3.0]);
     }
@@ -1617,8 +1712,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1712,8 +1813,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1813,8 +1920,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2197,8 +2310,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2305,6 +2424,7 @@ mod tests {
     /// running with 4 workspaces. This verifies the static partitioning
     /// produces deterministic results regardless of workspace count.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_forward_pass_parallel_cost_agreement() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
@@ -2351,8 +2471,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2381,8 +2507,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2474,8 +2606,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2644,7 +2782,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -2656,7 +2794,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR, with a single water-balance
@@ -2761,8 +2912,14 @@ mod tests {
                 inflow_method,
                 stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -2925,8 +3082,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -3057,7 +3220,7 @@ mod tests {
         };
         // No correlation profile: entities are treated as independent.
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: std::collections::BTreeMap::new(),
             schedule: vec![],
         };
@@ -3070,7 +3233,20 @@ mod tests {
             .correlation(correlation)
             .build()
             .unwrap();
-        build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+        build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap()
     }
 
     // ── New test: parallel infeasibility propagation ──────────────────────────
@@ -3143,8 +3319,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3192,6 +3374,7 @@ mod tests {
     /// `max(0, 300 + 30 * eta) * block_factor`.  Since no load factors file is
     /// supplied, `block_factor = 1.0`, so `load_rhs_buf[0] = max(0, 300 + 30 * eta)`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn forward_pass_load_noise_positive_realization() {
         let n_load_buses = 1usize;
         let stochastic = make_stochastic_context_1_hydro_1_load_bus(300.0, 30.0);
@@ -3256,8 +3439,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3364,8 +3553,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3449,8 +3644,14 @@ mod tests {
                 inflow_method: &InflowNonNegativityMethod::None,
                 stochastic: &stochastic,
                 initial_state: &initial_state,
-                sampling_scheme: SamplingScheme::InSample,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
                 stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,

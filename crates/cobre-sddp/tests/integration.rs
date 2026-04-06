@@ -42,10 +42,7 @@ use cobre_core::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{
-    OpeningTree, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
-};
+use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
 
 use cobre_sddp::{
     HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageContext, StageIndexer,
@@ -244,57 +241,6 @@ impl SolverInterface for MockSolver {
     }
 }
 
-/// Build an `OpeningTree` with `n_openings` at stage 0 using seed 42.
-fn make_opening_tree(n_openings: usize) -> OpeningTree {
-    let stage = Stage {
-        index: 0,
-        id: 0,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "S".to_string(),
-            duration_hours: 744.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: true,
-            inflow_lags: false,
-        },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor: n_openings,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-
-    let entity_id = EntityId(1);
-    let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "default".to_string(),
-        CorrelationProfile {
-            groups: vec![CorrelationGroup {
-                name: "g1".to_string(),
-                entities: vec![CorrelationEntity {
-                    entity_type: "inflow".to_string(),
-                    id: entity_id,
-                }],
-                matrix: vec![vec![1.0]],
-            }],
-        },
-    );
-    let corr_model = CorrelationModel {
-        method: "cholesky".to_string(),
-        profiles,
-        schedule: vec![],
-    };
-    let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
-    let entity_order = vec![entity_id];
-
-    generate_opening_tree(42, &[stage], 1, &mut decomposed, &entity_order).unwrap()
-}
-
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
@@ -407,7 +353,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         },
     );
     let correlation = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -421,7 +367,20 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         .build()
         .unwrap();
 
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
+        },
+    )
+    .unwrap()
 }
 
 /// Minimal stage template for N=1 hydro, L=0 PAR.
@@ -468,7 +427,6 @@ struct Fixture {
     base_rows: Vec<usize>,
     indexer: StageIndexer,
     initial_state: Vec<f64>,
-    opening_tree: OpeningTree,
     stochastic: StochasticContext,
     horizon: HorizonMode,
     risk_measures: Vec<RiskMeasure>,
@@ -483,7 +441,6 @@ impl Fixture {
         // base_row = n_dual_relevant + n_hydros = 1 + 1 = 2 (z_inflow rows follow state rows)
         let base_rows = vec![2usize; n_stages];
         let initial_state = vec![0.0_f64; indexer.n_state];
-        let opening_tree = make_opening_tree(1);
         let stochastic = make_stochastic_context(n_stages, 1);
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -496,7 +453,6 @@ impl Fixture {
             base_rows,
             indexer,
             initial_state,
-            opening_tree,
             stochastic,
             horizon,
             risk_measures,
@@ -504,14 +460,13 @@ impl Fixture {
     }
 }
 
-/// Run a single training pass with a given stochastic context and opening tree.
+/// Run a single training pass with a given stochastic context.
 ///
 /// Returns the `TrainingOutcome`. Used to de-duplicate the two identical
 /// train calls in `train_deterministic_with_same_seed`.
 fn run_one_deterministic_pass(
     fx: &Fixture,
     stochastic: &StochasticContext,
-    opening_tree: &OpeningTree,
     limit: u64,
 ) -> cobre_sddp::TrainingOutcome {
     let mut fcf = make_fcf(fx.n_stages);
@@ -553,10 +508,15 @@ fn run_one_deterministic_pass(
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        opening_tree,
         &fx.risk_measures,
         iteration_limit(limit),
         &StubComm,
@@ -614,10 +574,15 @@ fn train_converges_with_mock_solver() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
         &comm,
@@ -638,11 +603,10 @@ fn train_converges_with_mock_solver() {
 fn train_deterministic_with_same_seed() {
     let fx = Fixture::new(2);
 
-    let result1 = run_one_deterministic_pass(&fx, &fx.stochastic, &fx.opening_tree, 5);
+    let result1 = run_one_deterministic_pass(&fx, &fx.stochastic, 5);
 
-    let opening_tree2 = make_opening_tree(1);
     let stochastic2 = make_stochastic_context(fx.n_stages, 1);
-    let result2 = run_one_deterministic_pass(&fx, &stochastic2, &opening_tree2, 5);
+    let result2 = run_one_deterministic_pass(&fx, &stochastic2, 5);
 
     assert_eq!(
         result1.result.final_lb.to_bits(),
@@ -706,10 +670,15 @@ fn train_lb_monotonically_nondecreasing() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(6),
         &comm,
@@ -785,10 +754,15 @@ fn train_emits_correct_event_sequence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         // Limit to exactly 3 iterations.
         iteration_limit(3),
@@ -866,10 +840,15 @@ fn train_stops_at_iteration_limit() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(3),
         &comm,
@@ -937,10 +916,15 @@ fn train_stops_on_graceful_shutdown() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         rules,
         &comm,
@@ -998,10 +982,15 @@ fn train_propagates_infeasible_error() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
         &comm,
@@ -1086,10 +1075,15 @@ fn d17_level1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
         &comm,
@@ -1181,6 +1175,7 @@ fn d17_level1_cut_selection_convergence() {
 /// - At least one `CutSelectionComplete` event with `cuts_deactivated > 0`.
 /// - `active_count() < populated_count` for the stage-0 FCF pool.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn d18_lml1_cut_selection_convergence() {
     use cobre_sddp::cut_selection::CutSelectionStrategy;
 
@@ -1232,10 +1227,15 @@ fn d18_lml1_cut_selection_convergence() {
             inflow_method: &InflowNonNegativityMethod::None,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         iteration_limit(10),
         &comm,

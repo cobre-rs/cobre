@@ -49,3 +49,4 @@ __pycache__/
 # Python bindings
 .venv.claude/
 .claude/
+doc/

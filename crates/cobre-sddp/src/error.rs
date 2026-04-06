@@ -48,7 +48,7 @@ pub enum SddpError {
     /// Stochastic model construction or scenario generation failed.
     ///
     /// Wraps a [`cobre_stochastic::StochasticError`] from PAR model
-    /// validation, Cholesky decomposition, or seed derivation.
+    /// validation, spectral decomposition, or seed derivation.
     #[error("stochastic error: {0}")]
     Stochastic(#[from] StochasticError),
 

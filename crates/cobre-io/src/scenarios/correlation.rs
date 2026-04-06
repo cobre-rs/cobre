@@ -9,7 +9,7 @@
 //! ```json
 //! {
 //!   "$schema": "...",
-//!   "method": "cholesky",
+//!   "method": "spectral",
 //!   "profiles": {
 //!     "default": {
 //!       "correlation_groups": [
@@ -82,7 +82,8 @@ struct RawCorrelationFile {
     #[serde(rename = "$schema")]
     _schema: Option<String>,
 
-    /// Decomposition method. Must not be empty. Always `"cholesky"` in practice.
+    /// Decomposition method. Must not be empty. `"spectral"` is the default;
+    /// `"cholesky"` is accepted for backward compatibility.
     method: String,
 
     /// Named correlation profiles. Must not be empty.
@@ -200,6 +201,15 @@ fn validate_raw(raw: &RawCorrelationFile, path: &Path) -> Result<(), LoadError> 
             field: "method".to_string(),
             message: "method must not be empty".to_string(),
         });
+    }
+
+    // Warn on unrecognized methods for forward compatibility (do not reject).
+    if raw.method != "spectral" && raw.method != "cholesky" {
+        tracing::warn!(
+            method = %raw.method,
+            path = %path.display(),
+            "unrecognized correlation method; expected 'spectral' or 'cholesky'"
+        );
     }
 
     // Profiles must not be empty.
@@ -393,7 +403,7 @@ mod tests {
 
     /// Canonical valid JSON for error-path tests (1 profile, 1 group, 2x2 matrix).
     const VALID_JSON: &str = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -420,7 +430,7 @@ mod tests {
     #[test]
     fn test_valid_3x3_identity_matrix() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -444,7 +454,7 @@ mod tests {
         let tmp = write_json(json);
         let model = parse_correlation(tmp.path()).unwrap();
 
-        assert_eq!(model.method, "cholesky");
+        assert_eq!(model.method, "spectral");
         assert_eq!(model.profiles.len(), 1);
         assert!(model.profiles.contains_key("default"));
         assert!(model.schedule.is_empty());
@@ -470,7 +480,7 @@ mod tests {
     #[test]
     fn test_two_profiles_with_schedule() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "wet_season": {
       "correlation_groups": [
@@ -511,10 +521,10 @@ mod tests {
         let tmp = write_json(json);
         let model = parse_correlation(tmp.path()).unwrap();
 
-        // AC: result has profiles.len() == 2, schedule.len() == 2, method == "cholesky".
+        // AC: result has profiles.len() == 2, schedule.len() == 2, method == "spectral".
         assert_eq!(model.profiles.len(), 2);
         assert_eq!(model.schedule.len(), 2);
-        assert_eq!(model.method, "cholesky");
+        assert_eq!(model.method, "spectral");
 
         // BTreeMap ordering: "default" < "wet_season" alphabetically.
         let keys: Vec<&String> = model.profiles.keys().collect();
@@ -544,7 +554,7 @@ mod tests {
     #[test]
     fn test_non_symmetric_matrix_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -587,7 +597,7 @@ mod tests {
     #[test]
     fn test_diagonal_not_one_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -630,7 +640,7 @@ mod tests {
     #[test]
     fn test_element_greater_than_one_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -673,7 +683,7 @@ mod tests {
     #[test]
     fn test_element_less_than_minus_one_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -716,7 +726,7 @@ mod tests {
     #[test]
     fn test_non_square_matrix_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -756,7 +766,7 @@ mod tests {
     #[test]
     fn test_matrix_row_count_mismatch_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -796,7 +806,7 @@ mod tests {
     #[test]
     fn test_schedule_unknown_profile_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -838,7 +848,7 @@ mod tests {
     #[test]
     fn test_empty_profiles_rejected() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {}
 }"#;
         let tmp = write_json(json);
@@ -906,7 +916,7 @@ mod tests {
     #[test]
     fn test_single_entity_1x1_matrix_valid() {
         let json = r#"{
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -924,5 +934,43 @@ mod tests {
 
         assert_eq!(model.profiles["default"].groups[0].entities.len(), 1);
         assert!((model.profiles["default"].groups[0].matrix[0][0] - 1.0).abs() < f64::EPSILON);
+    }
+
+    // ── AC: backward compatibility — "cholesky" method still accepted ─────────
+
+    /// Existing case files with `"method": "cholesky"` must load without error.
+    /// This verifies backward compatibility is preserved after the default
+    /// changed to `"spectral"`.
+    #[test]
+    fn parse_accepts_cholesky_method() {
+        let json = r#"{
+  "method": "cholesky",
+  "profiles": {
+    "default": {
+      "correlation_groups": [
+        {
+          "name": "all_hydros",
+          "entities": [
+            { "type": "inflow", "id": 1 },
+            { "type": "inflow", "id": 2 }
+          ],
+          "matrix": [
+            [1.0, 0.5],
+            [0.5, 1.0]
+          ]
+        }
+      ]
+    }
+  }
+}"#;
+        let tmp = write_json(json);
+        let model = parse_correlation(tmp.path()).unwrap();
+
+        assert_eq!(
+            model.method, "cholesky",
+            "cholesky must be accepted for backward compat"
+        );
+        assert_eq!(model.profiles.len(), 1);
+        assert!(model.schedule.is_empty());
     }
 }

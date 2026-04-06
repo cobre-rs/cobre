@@ -57,10 +57,7 @@ use cobre_sddp::{
     hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
-use cobre_stochastic::{
-    OpeningTree, PrecomputedPar, StochasticContext, build_stochastic_context,
-    correlation::resolve::DecomposedCorrelation, tree::generate::generate_opening_tree,
-};
+use cobre_stochastic::{ClassSchemes, PrecomputedPar, StochasticContext, build_stochastic_context};
 
 // ===========================================================================
 // Communicator stub
@@ -253,7 +250,7 @@ fn build_system() -> cobre_core::System {
         },
     );
     let correlation = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -363,68 +360,20 @@ fn build_system() -> cobre_core::System {
 /// Build a [`StochasticContext`] for the 2-hydro, 3-stage negative-inflow fixture.
 fn build_stochastic() -> StochasticContext {
     let system = build_system();
-    build_stochastic_context(&system, 42, None, &[], &[], None).unwrap()
-}
-
-/// Build an [`OpeningTree`] with 10 openings at stage 0 for the 2-hydro fixture.
-///
-/// 10 openings with `std = 30.0` and seed 42 guarantees multiple openings
-/// produce negative inflow values.
-fn build_opening_tree() -> OpeningTree {
-    let stage = Stage {
-        index: 0,
-        id: 0,
-        start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
-        season_id: Some(0),
-        blocks: vec![Block {
-            index: 0,
-            name: "S".to_string(),
-            duration_hours: 744.0,
-        }],
-        block_mode: BlockMode::Parallel,
-        state_config: StageStateConfig {
-            storage: true,
-            inflow_lags: false,
+    build_stochastic_context(
+        &system,
+        42,
+        None,
+        &[],
+        &[],
+        None,
+        ClassSchemes {
+            inflow: Some(SamplingScheme::InSample),
+            load: Some(SamplingScheme::InSample),
+            ncs: Some(SamplingScheme::InSample),
         },
-        risk_config: StageRiskConfig::Expectation,
-        scenario_config: ScenarioSourceConfig {
-            branching_factor: 10,
-            noise_method: NoiseMethod::Saa,
-        },
-    };
-
-    let id_h1 = EntityId(1);
-    let id_h2 = EntityId(2);
-    let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "default".to_string(),
-        CorrelationProfile {
-            groups: vec![CorrelationGroup {
-                name: "g1".to_string(),
-                entities: vec![
-                    CorrelationEntity {
-                        entity_type: "inflow".to_string(),
-                        id: id_h1,
-                    },
-                    CorrelationEntity {
-                        entity_type: "inflow".to_string(),
-                        id: id_h2,
-                    },
-                ],
-                matrix: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
-            }],
-        },
-    );
-
-    let mut decomposed = DecomposedCorrelation::build(&CorrelationModel {
-        method: "cholesky".to_string(),
-        profiles,
-        schedule: vec![],
-    })
-    .unwrap();
-
-    generate_opening_tree(42, &[stage], 2, &mut decomposed, &[id_h1, id_h2]).unwrap()
+    )
+    .unwrap()
 }
 
 // ===========================================================================
@@ -435,7 +384,6 @@ fn build_opening_tree() -> OpeningTree {
 struct Fixture {
     stage_templates: cobre_sddp::lp_builder::StageTemplates,
     stochastic: StochasticContext,
-    opening_tree: OpeningTree,
     indexer: StageIndexer,
     initial_state: Vec<f64>,
     horizon: HorizonMode,
@@ -474,7 +422,6 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     )
     .expect("no FPHA plants in integration test fixture");
     let stochastic = build_stochastic();
-    let opening_tree = build_opening_tree();
 
     let n_stages = stage_templates.templates.len();
     let first_tmpl = stage_templates.templates.first().expect("at least 1 stage");
@@ -519,7 +466,6 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     Fixture {
         stage_templates,
         stochastic,
-        opening_tree,
         indexer,
         initial_state,
         horizon,
@@ -588,10 +534,15 @@ fn train_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
-        &fx.opening_tree,
         &fx.risk_measures,
         StoppingRuleSet {
             rules: vec![StoppingRule::IterationLimit { limit: iterations }],
@@ -656,7 +607,13 @@ fn simulate_fixture(
             inflow_method: &fx.inflow_method,
             stochastic: &fx.stochastic,
             initial_state: &fx.initial_state,
-            sampling_scheme: SamplingScheme::InSample,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
             stages: &[],
         },
         &SimulationConfig {

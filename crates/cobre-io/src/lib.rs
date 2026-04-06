@@ -84,29 +84,30 @@ pub use output::policy::{
     serialize_stage_states, write_policy_checkpoint,
 };
 pub use output::{
-    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, ManifestChecksum,
-    ManifestConvergence, ManifestCuts, ManifestIterations, ManifestMpiInfo, ManifestScenarios,
-    MetadataConfigSnapshot, MetadataDataIntegrity, MetadataEnvironment, MetadataPerformanceSummary,
-    MetadataProblemDimensions, MetadataRunInfo, OutputError, ParquetWriterConfig,
-    SimulationManifest, SimulationOutput, SolverStatsRow, TrainingManifest, TrainingMetadata,
-    TrainingOutput, TrainingParquetWriter, read_convergence_summary, read_simulation_manifest,
-    read_training_manifest, write_cut_selection_records, write_dictionaries,
-    write_fpha_hyperplanes, write_metadata, write_results, write_scaling_report,
-    write_simulation_manifest, write_simulation_results, write_simulation_solver_stats,
-    write_solver_stats, write_training_manifest, write_training_results,
+    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, MetadataConfiguration,
+    MetadataConvergence, MetadataCuts, MetadataIterations, MetadataProblemDimensions,
+    MetadataScenarios, MpiInfo, OutputContext, OutputError, ParquetWriterConfig,
+    SimulationMetadata, SimulationOutput, SolverStatsRow, TrainingMetadata, TrainingOutput,
+    TrainingParquetWriter, get_hostname, now_iso8601, read_convergence_summary,
+    read_simulation_metadata, read_training_metadata, write_cut_selection_records,
+    write_dictionaries, write_fpha_hyperplanes, write_provenance_report, write_results,
+    write_scaling_report, write_simulation_metadata, write_simulation_results,
+    write_simulation_solver_stats, write_solver_stats, write_training_metadata,
+    write_training_results,
 };
 pub use penalties::parse_penalties;
 pub use report::{ReportEntry, ValidationReport, generate_report};
 pub use resolution::{resolve_bounds, resolve_penalties};
 pub use scenarios::{
-    BlockFactor, ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow,
-    InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow, NoiseOpeningRow, ScenarioData,
-    assemble_inflow_models, assemble_load_models, load_correlation, load_external_scenarios,
+    BlockFactor, ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowArCoefficientRow,
+    InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
+    NoiseOpeningRow, ScenarioData, assemble_inflow_models, assemble_load_models, load_correlation,
+    load_external_inflow_scenarios, load_external_load_scenarios, load_external_ncs_scenarios,
     load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
     load_load_factors, load_load_seasonal_stats, load_noise_openings, load_scenarios,
-    parse_correlation, parse_external_scenarios, parse_inflow_ar_coefficients,
-    parse_inflow_history, parse_inflow_seasonal_stats, parse_load_factors,
-    parse_load_seasonal_stats,
+    parse_correlation, parse_external_inflow_scenarios, parse_external_load_scenarios,
+    parse_external_ncs_scenarios, parse_inflow_ar_coefficients, parse_inflow_history,
+    parse_inflow_seasonal_stats, parse_load_factors, parse_load_seasonal_stats,
 };
 pub use stages::{StagesData, build_season_stage_map, parse_stages};
 pub use system::{

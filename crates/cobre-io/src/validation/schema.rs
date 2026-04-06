@@ -38,11 +38,12 @@ use crate::{
     initial_conditions::parse_initial_conditions,
     penalties::parse_penalties,
     scenarios::{
-        ExternalScenarioRow, InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow,
-        LoadFactorEntry, LoadSeasonalStatsRow, NcsFactorEntry, load_correlation,
-        load_external_scenarios, load_inflow_ar_coefficients, load_inflow_history,
-        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats, load_ncs_stats,
-        load_non_controllable_factors,
+        ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowArCoefficientRow,
+        InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
+        NcsFactorEntry, load_correlation, load_external_inflow_scenarios,
+        load_external_load_scenarios, load_external_ncs_scenarios, load_inflow_ar_coefficients,
+        load_inflow_history, load_inflow_seasonal_stats, load_load_factors,
+        load_load_seasonal_stats, load_ncs_stats, load_non_controllable_factors,
     },
     stages::StagesData,
     system::{
@@ -64,7 +65,6 @@ use crate::{
 /// This type is `pub(crate)` — it is only used within the validation pipeline
 /// and is never exposed to downstream crates.
 pub(crate) struct ParsedData {
-    // ── Required root-level files ─────────────────────────────────────────────
     /// Parsed `config.json`.
     ///
     /// Populated for completeness and future use; not yet forwarded to `System`.
@@ -81,7 +81,6 @@ pub(crate) struct ParsedData {
     /// Parsed `initial_conditions.json`.
     pub(crate) initial_conditions: InitialConditions,
 
-    // ── Required system/ files ────────────────────────────────────────────────
     /// Parsed `system/buses.json`.
     pub(crate) buses: Vec<Bus>,
     /// Parsed `system/thermals.json`.
@@ -91,7 +90,6 @@ pub(crate) struct ParsedData {
     /// Parsed `system/lines.json`.
     pub(crate) lines: Vec<Line>,
 
-    // ── Optional system/ files ────────────────────────────────────────────────
     /// Parsed `system/non_controllable_sources.json`. Empty when absent.
     pub(crate) non_controllable_sources: Vec<NonControllableSource>,
     /// Parsed `system/pumping_stations.json`. Empty when absent.
@@ -105,15 +103,18 @@ pub(crate) struct ParsedData {
     /// Parsed `system/fpha_hyperplanes.parquet`. Empty when absent.
     pub(crate) fpha_hyperplanes: Vec<FphaHyperplaneRow>,
 
-    // ── Optional scenarios/ files ─────────────────────────────────────────────
     /// Parsed `scenarios/inflow_history.parquet`. Empty when absent.
     pub(crate) inflow_history: Vec<InflowHistoryRow>,
     /// Parsed `scenarios/inflow_seasonal_stats.parquet`. Empty when absent.
     pub(crate) inflow_seasonal_stats: Vec<InflowSeasonalStatsRow>,
     /// Parsed `scenarios/inflow_ar_coefficients.parquet`. Empty when absent.
     pub(crate) inflow_ar_coefficients: Vec<InflowArCoefficientRow>,
-    /// Parsed `scenarios/external_scenarios.parquet`. Empty when absent.
+    /// Parsed `scenarios/external_inflow_scenarios.parquet`. Empty when absent.
     pub(crate) external_scenarios: Vec<ExternalScenarioRow>,
+    /// Parsed `scenarios/external_load_scenarios.parquet`. Empty when absent.
+    pub(crate) external_load_scenarios: Vec<ExternalLoadRow>,
+    /// Parsed `scenarios/external_ncs_scenarios.parquet`. Empty when absent.
+    pub(crate) external_ncs_scenarios: Vec<ExternalNcsRow>,
     /// Parsed `scenarios/load_seasonal_stats.parquet`. Empty when absent.
     pub(crate) load_seasonal_stats: Vec<LoadSeasonalStatsRow>,
     /// Parsed `scenarios/load_factors.json`. Empty when absent.
@@ -127,7 +128,6 @@ pub(crate) struct ParsedData {
     /// Parsed `scenarios/non_controllable_stats.parquet`. Empty when absent.
     pub(crate) ncs_models: Vec<NcsModel>,
 
-    // ── Optional constraints/ files ───────────────────────────────────────────
     /// Parsed `constraints/thermal_bounds.parquet`. Empty when absent.
     pub(crate) thermal_bounds: Vec<ThermalBoundsRow>,
     /// Parsed `constraints/hydro_bounds.parquet`. Empty when absent.
@@ -245,8 +245,6 @@ pub(crate) fn validate_schema(
     // Track whether any error is added during this call.
     let error_count_before = ctx.error_count();
 
-    // ── Required root-level files ─────────────────────────────────────────────
-
     let config = parse_or_error(
         parse_config(&case_root.join("config.json")),
         "config.json",
@@ -271,7 +269,6 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
-    // ── Required system/ files ────────────────────────────────────────────────
     //
     // parse_buses, parse_hydros, parse_lines, and parse_non_controllable_sources
     // require a `&GlobalPenaltyDefaults`. We use the parsed penalties when
@@ -303,8 +300,6 @@ pub(crate) fn validate_schema(
         "system/thermals.json",
         ctx,
     );
-
-    // ── Optional system/ files ────────────────────────────────────────────────
 
     let non_controllable_sources = optional_or_error(
         manifest.system_non_controllable_sources_json,
@@ -359,8 +354,6 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
-    // ── Optional scenarios/ files ─────────────────────────────────────────────
-
     let inflow_history = optional_or_error(
         manifest.scenarios_inflow_history_parquet,
         || load_inflow_history(Some(&case_root.join("scenarios/inflow_history.parquet"))),
@@ -394,14 +387,38 @@ pub(crate) fn validate_schema(
     );
 
     let external_scenarios = optional_or_error(
-        manifest.scenarios_external_scenarios_parquet,
+        manifest.scenarios_external_inflow_scenarios_parquet,
         || {
-            load_external_scenarios(Some(
-                &case_root.join("scenarios/external_scenarios.parquet"),
+            load_external_inflow_scenarios(Some(
+                &case_root.join("scenarios/external_inflow_scenarios.parquet"),
             ))
         },
         Vec::new,
-        "scenarios/external_scenarios.parquet",
+        "scenarios/external_inflow_scenarios.parquet",
+        ctx,
+    );
+
+    let external_load_scenarios = optional_or_error(
+        manifest.scenarios_external_load_scenarios_parquet,
+        || {
+            load_external_load_scenarios(Some(
+                &case_root.join("scenarios/external_load_scenarios.parquet"),
+            ))
+        },
+        Vec::new,
+        "scenarios/external_load_scenarios.parquet",
+        ctx,
+    );
+
+    let external_ncs_scenarios = optional_or_error(
+        manifest.scenarios_external_ncs_scenarios_parquet,
+        || {
+            load_external_ncs_scenarios(Some(
+                &case_root.join("scenarios/external_ncs_scenarios.parquet"),
+            ))
+        },
+        Vec::new,
+        "scenarios/external_ncs_scenarios.parquet",
         ctx,
     );
 
@@ -462,8 +479,6 @@ pub(crate) fn validate_schema(
         "scenarios/non_controllable_stats.parquet",
         ctx,
     );
-
-    // ── Optional constraints/ files ───────────────────────────────────────────
 
     let thermal_bounds = optional_or_error(
         manifest.constraints_thermal_bounds_parquet,
@@ -593,8 +608,6 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
-    // ── Assemble result ───────────────────────────────────────────────────────
-
     // Only return Some(ParsedData) when no new errors were added during this call.
     if ctx.error_count() > error_count_before {
         return None;
@@ -644,6 +657,8 @@ pub(crate) fn validate_schema(
         inflow_seasonal_stats,
         inflow_ar_coefficients,
         external_scenarios,
+        external_load_scenarios,
+        external_ncs_scenarios,
         load_seasonal_stats,
         load_factors,
         correlation,
@@ -762,8 +777,6 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    // ── Minimal valid JSON fragments for each required file ───────────────────
-
     // config.json: `training.stopping_rules[].type` = "iteration_limit",
     // field name is "limit" (not "max_iterations").
     const VALID_CONFIG_JSON: &str = r#"{
@@ -817,7 +830,7 @@ mod tests {
             "annual_discount_rate": 0.06,
             "transitions": []
         },
-        "scenario_source": { "sampling_scheme": "in_sample", "seed": 42 },
+        "scenario_source": { "seed": 42 },
         "stages": [
             {
                 "id": 0,
@@ -871,8 +884,6 @@ mod tests {
         write_file(root, "system/thermals.json", VALID_THERMALS_JSON);
     }
 
-    // ── AC 1: fully valid case returns Some(ParsedData), no errors ────────────
-
     /// Given a case directory with all 8 required files containing valid JSON,
     /// `validate_schema` returns `Some(ParsedData)` with all required fields
     /// populated and `ctx.has_errors()` is `false`.
@@ -914,8 +925,6 @@ mod tests {
             "correlation should be None when file absent"
         );
     }
-
-    // ── AC 2: one invalid required file produces ParseError, returns None ─────
 
     /// Given a case directory where `system/hydros.json` contains invalid JSON
     /// syntax, `validate_schema` returns `None` and `ctx` contains at least one
@@ -959,8 +968,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
-
-    // ── AC 3: two invalid files produce two errors — both collected ───────────
 
     /// Given a case where `system/buses.json` has a schema violation (duplicate
     /// bus IDs) AND `penalties.json` has a parse error (invalid JSON),
@@ -1014,8 +1021,6 @@ mod tests {
         );
     }
 
-    // ── AC 4: absent optional file yields None field, no error ────────────────
-
     /// Given a manifest where `scenarios_correlation_json` is `false`,
     /// `validate_schema` returns `Some(ParsedData)` with `correlation == None`
     /// and no error is added for the missing file.
@@ -1048,8 +1053,6 @@ mod tests {
             "correlation should be None when file absent"
         );
     }
-
-    // ── AC 5: map_load_error maps each LoadError variant correctly ────────────
 
     /// `map_load_error` maps `IoError` to `ErrorKind::FileNotFound`.
     #[test]

@@ -7,6 +7,8 @@
 //! [`StochasticProvenance`] groups per-component provenance into a single value
 //! stored on [`StochasticContext`](crate::StochasticContext) and returned by its `provenance()` accessor.
 
+use cobre_core::scenario::SamplingScheme;
+
 /// Origin of a single stochastic pipeline component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentProvenance {
@@ -29,6 +31,15 @@ pub struct StochasticProvenance {
     pub correlation: ComponentProvenance,
     /// Origin of inflow PAR models (`Generated` when hydros present; `NotApplicable` otherwise).
     pub inflow_model: ComponentProvenance,
+    /// Sampling scheme configured for the inflow entity class.
+    /// `None` when per-class config is not yet applied.
+    pub inflow_scheme: Option<SamplingScheme>,
+    /// Sampling scheme configured for the load entity class.
+    /// `None` when per-class config is not yet applied.
+    pub load_scheme: Option<SamplingScheme>,
+    /// Sampling scheme configured for the NCS entity class.
+    /// `None` when per-class config is not yet applied.
+    pub ncs_scheme: Option<SamplingScheme>,
 }
 
 #[cfg(test)]
@@ -41,6 +52,7 @@ mod tests {
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
+            SamplingScheme,
         },
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -50,7 +62,7 @@ mod tests {
 
     use crate::{
         ComponentProvenance,
-        context::{OpeningTree, build_stochastic_context},
+        context::{ClassSchemes, OpeningTree, build_stochastic_context},
     };
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
@@ -171,7 +183,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -193,7 +205,20 @@ mod tests {
             .unwrap();
 
         let user_tree = OpeningTree::from_parts(vec![1.0_f64; 2 * 2], vec![2, 2], 1);
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], Some(user_tree)).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            Some(user_tree),
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -217,7 +242,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -235,7 +273,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().opening_tree,
@@ -259,7 +310,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().correlation,
@@ -276,7 +340,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().correlation,
@@ -300,7 +377,20 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().inflow_model,
@@ -317,12 +407,62 @@ mod tests {
             .build()
             .unwrap();
 
-        let ctx = build_stochastic_context(&system, 42, None, &[], &[], None).unwrap();
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
 
         assert_eq!(
             ctx.provenance().inflow_model,
             ComponentProvenance::NotApplicable,
             "system with no hydros must produce inflow_model == NotApplicable"
+        );
+    }
+
+    #[test]
+    fn test_provenance_per_class_schemes_populated() {
+        let system = SystemBuilder::new()
+            .buses(vec![make_bus(0)])
+            .stages(vec![make_stage(0, 0, 3)])
+            .build()
+            .unwrap();
+
+        let ctx = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
+
+        assert!(
+            ctx.provenance().inflow_scheme == Some(SamplingScheme::InSample),
+            "inflow_scheme must be Some(InSample) when passed as argument"
+        );
+        assert!(
+            ctx.provenance().load_scheme == Some(SamplingScheme::InSample),
+            "load_scheme must be Some(InSample) when passed as argument"
+        );
+        assert!(
+            ctx.provenance().ncs_scheme == Some(SamplingScheme::InSample),
+            "ncs_scheme must be Some(InSample) when passed as argument"
         );
     }
 }

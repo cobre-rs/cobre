@@ -27,11 +27,11 @@
 //! ```rust,no_run
 //! use cobre_sddp::setup::StudySetup;
 //! use cobre_sddp::hydro_models::PrepareHydroModelsResult;
-//! use cobre_stochastic::build_stochastic_context;
+//! use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
-//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None)?;
+//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None, ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
@@ -52,7 +52,12 @@ use cobre_core::{
     scenario::SamplingScheme,
 };
 use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::{StochasticContext, context::OpeningTree};
+use cobre_stochastic::{
+    ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext, context::OpeningTree,
+    discover_historical_windows, standardize_external_inflow, standardize_external_load,
+    standardize_external_ncs, standardize_historical_windows, validate_external_library,
+    validate_historical_library,
+};
 
 use crate::{
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
@@ -229,10 +234,8 @@ impl StudyParams {
 /// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {
-    // ── LP templates ─────────────────────────────────────────────────────────
     stage_templates: StageTemplates,
 
-    // ── Algorithm state ──────────────────────────────────────────────────────
     stochastic: StochasticContext,
     indexer: StageIndexer,
     fcf: FutureCostFunction,
@@ -241,31 +244,46 @@ pub struct StudySetup {
     risk_measures: Vec<RiskMeasure>,
     entity_counts: EntityCounts,
 
-    // ── Hydro models ──────────────────────────────────────────────────────────
     hydro_models: PrepareHydroModelsResult,
 
-    // ── NCS per-stage entity IDs (for simulation extraction) ────────────────
     ncs_entity_ids_per_stage: Vec<Vec<i32>>,
     /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
     ncs_max_gen: Vec<f64>,
 
-    // ── Derived layout values ─────────────────────────────────────────────────
     block_counts_per_stage: Vec<usize>,
     max_blocks: usize,
 
-    // ── Scaling diagnostics ──────────────────────────────────────────────────
     scaling_report: crate::scaling_report::ScalingReport,
 
-    // ── Scenario source ───────────────────────────────────────────────────────
-    /// Forward-pass noise source scheme extracted from the system's scenario source.
-    sampling_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the inflow entity class.
+    inflow_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the load entity class.
+    load_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the NCS entity class.
+    ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) owned for the lifetime of this setup.
     ///
     /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
     /// can read per-stage noise methods when constructing an `OutOfSample` sampler.
     stages: Vec<Stage>,
 
-    // ── Config-derived scalars ────────────────────────────────────────────────
+    /// Pre-standardized historical inflow windows library.
+    ///
+    /// `Some` when `inflow_scheme == SamplingScheme::Historical`, `None` otherwise.
+    historical_library: Option<HistoricalScenarioLibrary>,
+    /// Pre-standardized external inflow scenario library.
+    ///
+    /// `Some` when `inflow_scheme == SamplingScheme::External`, `None` otherwise.
+    external_inflow_library: Option<ExternalScenarioLibrary>,
+    /// Pre-standardized external load scenario library.
+    ///
+    /// `Some` when `load_scheme == SamplingScheme::External`, `None` otherwise.
+    external_load_library: Option<ExternalScenarioLibrary>,
+    /// Pre-standardized external NCS scenario library.
+    ///
+    /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
+    external_ncs_library: Option<ExternalScenarioLibrary>,
+
     seed: u64,
     forward_passes: u32,
     max_iterations: u64,
@@ -370,7 +388,6 @@ impl StudySetup {
             summarize_scale_factors,
         };
 
-        // ── Stage templates ───────────────────────────────────────────────────
         let mut stage_templates = build_stage_templates(
             system,
             &inflow_method,
@@ -380,7 +397,6 @@ impl StudySetup {
             &hydro_models.evaporation,
         )?;
 
-        // ── Discount factors ─────────────────────────────────────────────────
         // Compute per-stage one-step discount factors from the PolicyGraph
         // and store in StageTemplates. This is done here (not inside
         // build_stage_templates) to avoid threading PolicyGraph through
@@ -410,7 +426,6 @@ impl StudySetup {
                 .collect();
         }
 
-        // ── Cumulative discount factors ──────────────────────────────────────
         // D_0 = 1.0, D_t = D_{t-1} * d_{t-1} for t >= 1.
         // Used by the simulation extraction layer for reporting only.
         {
@@ -509,7 +524,6 @@ impl StudySetup {
 
         let stage_templates_ref = &stage_templates.templates;
 
-        // ── Stage indexer ─────────────────────────────────────────────────────
         let n_blks_stage0 = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
         let has_inflow_penalty =
             inflow_method.has_slack_columns() && stage_templates_ref[0].n_hydro > 0;
@@ -567,7 +581,6 @@ impl StudySetup {
             let n_ncs_stage0 = stage_templates.n_ncs_per_stage[0];
             indexer.ncs_generation = ncs_start..(ncs_start + n_ncs_stage0 * n_blks_stage0);
 
-            // Debug: verify NCS column starts are consistent across stages.
             for (s, &start) in stage_templates.ncs_col_starts.iter().enumerate() {
                 debug_assert_eq!(
                     start, ncs_start,
@@ -579,7 +592,6 @@ impl StudySetup {
         // z-inflow column and row ranges are set by StageIndexer::new at
         // fixed offset N*(1+L), no per-stage wiring needed.
 
-        // ── Nonzero state mask for sparse cut injection (P3) ────────────────
         // Build per-hydro AR orders from the precomputed PAR model. When the
         // PAR has hydros with AR order < max_par_order, the mask enables
         // sparse cut rows in `build_cut_row_batch_into`.
@@ -589,10 +601,8 @@ impl StudySetup {
             indexer.set_nonzero_mask(&ar_orders);
         }
 
-        // ── Initial state ─────────────────────────────────────────────────────
         let initial_state = build_initial_state(system, &indexer);
 
-        // ── FCF pre-allocation ────────────────────────────────────────────────
         let n_stages = stage_templates_ref.len();
         let max_iterations = max_iterations_from_rules(&stopping_rule_set);
         let fcf_capacity_iterations = max_iterations.saturating_add(1);
@@ -604,7 +614,6 @@ impl StudySetup {
             0,
         );
 
-        // ── Horizon and risk measures ─────────────────────────────────────────
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
@@ -616,10 +625,8 @@ impl StudySetup {
             .map(|s| RiskMeasure::from(s.risk_config))
             .collect();
 
-        // ── Entity counts ─────────────────────────────────────────────────────
         let entity_counts = build_entity_counts(system);
 
-        // ── NCS per-stage entity IDs ──────────────────────────────────────────
         let ncs_entity_ids_per_stage: Vec<Vec<i32>> = stage_templates
             .active_ncs_indices
             .iter()
@@ -631,7 +638,6 @@ impl StudySetup {
             })
             .collect();
 
-        // ── NCS max generation for stochastic entities ───────────────────────
         let ncs_max_gen: Vec<f64> = {
             let stoch_ncs_ids = stochastic.ncs_entity_ids();
             let mut result = Vec::with_capacity(stoch_ncs_ids.len());
@@ -651,7 +657,6 @@ impl StudySetup {
             result
         };
 
-        // ── Block layout ──────────────────────────────────────────────────────
         let block_counts_per_stage: Vec<usize> = stage_templates
             .block_hours_per_stage
             .iter()
@@ -659,14 +664,253 @@ impl StudySetup {
             .collect();
         let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
 
-        // ── Scenario source ───────────────────────────────────────────────────
-        let sampling_scheme = system.scenario_source().sampling_scheme;
+        let inflow_scheme = system.scenario_source().inflow_scheme;
+        let load_scheme = system.scenario_source().load_scheme;
+        let ncs_scheme = system.scenario_source().ncs_scheme;
         let stages: Vec<Stage> = system
             .stages()
             .iter()
             .filter(|s| s.id >= 0)
             .cloned()
             .collect();
+
+        // Build libraries only for the scheme variants that require them.
+        // InSample and OutOfSample do not need pre-built libraries.
+
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+
+        // Historical inflow library (built when inflow_scheme == Historical).
+        let historical_library: Option<HistoricalScenarioLibrary> =
+            if inflow_scheme == SamplingScheme::Historical {
+                let user_pool = system.scenario_source().historical_years.as_ref();
+                let max_order = stochastic.par().max_order();
+                let window_years = discover_historical_windows(
+                    system.inflow_history(),
+                    &hydro_ids,
+                    &stages,
+                    max_order,
+                    user_pool,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                let n_windows = window_years.len();
+                let n_hydros = hydro_ids.len();
+                let n_stages = stages.len();
+                let mut library = HistoricalScenarioLibrary::new(
+                    n_windows,
+                    n_stages,
+                    n_hydros,
+                    max_order,
+                    window_years.clone(),
+                );
+                standardize_historical_windows(
+                    &mut library,
+                    system.inflow_history(),
+                    &hydro_ids,
+                    &stages,
+                    stochastic.par(),
+                    &window_years,
+                );
+                validate_historical_library(
+                    &library,
+                    system.inflow_history(),
+                    &hydro_ids,
+                    &stages,
+                    max_order,
+                    user_pool,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                Some(library)
+            } else {
+                None
+            };
+
+        // External inflow library (built when inflow_scheme == External).
+        let external_inflow_library: Option<ExternalScenarioLibrary> =
+            if inflow_scheme == SamplingScheme::External {
+                let external_rows = system.external_scenarios();
+                let n_stages = stages.len();
+                let n_hydros = hydro_ids.len();
+                // Collect row metadata required by validate_external_library.
+                let row_entity_ids: std::collections::HashSet<EntityId> =
+                    external_rows.iter().map(|r| r.hydro_id).collect();
+                let mut rows_per_stage = vec![0usize; n_stages];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                // Determine uniform scenario count from stage 0 (or 0 if no rows).
+                let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
+                    if rows_per_stage[0] % n_hydros != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external inflow rows at stage 0 ({}) is not divisible by \
+                                     hydro count ({n_hydros}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_hydros
+                } else {
+                    0
+                };
+                let mut library =
+                    ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_hydros, "inflow");
+                validate_external_library(
+                    &library,
+                    &hydro_ids,
+                    &row_entity_ids,
+                    &rows_per_stage,
+                    n_stages,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                standardize_external_inflow(
+                    &mut library,
+                    external_rows,
+                    &hydro_ids,
+                    &stages,
+                    stochastic.par(),
+                    &system.initial_conditions().past_inflows,
+                );
+                Some(library)
+            } else {
+                None
+            };
+
+        // External load library (built when load_scheme == External).
+        let external_load_library: Option<ExternalScenarioLibrary> =
+            if load_scheme == SamplingScheme::External {
+                let external_rows = system.external_load_scenarios();
+                let n_stages = stages.len();
+                // Build canonical bus ID list from load models (same logic as
+                // build_stochastic_context: buses with std_mw > 0.0, sorted and deduped).
+                let mut bus_ids: Vec<EntityId> = system
+                    .load_models()
+                    .iter()
+                    .filter(|m| m.std_mw > 0.0)
+                    .map(|m| m.bus_id)
+                    .collect();
+                bus_ids.sort_unstable_by_key(|id| id.0);
+                bus_ids.dedup();
+                let n_buses = bus_ids.len();
+                let row_entity_ids: std::collections::HashSet<EntityId> =
+                    external_rows.iter().map(|r| r.bus_id).collect();
+                let mut rows_per_stage = vec![0usize; n_stages];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                let n_scenarios_ext = if n_buses > 0 && !rows_per_stage.is_empty() {
+                    if rows_per_stage[0] % n_buses != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external load rows at stage 0 ({}) is not divisible by \
+                                     bus count ({n_buses}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_buses
+                } else {
+                    0
+                };
+                let mut library =
+                    ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_buses, "load");
+                validate_external_library(
+                    &library,
+                    &bus_ids,
+                    &row_entity_ids,
+                    &rows_per_stage,
+                    n_stages,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                standardize_external_load(
+                    &mut library,
+                    external_rows,
+                    &bus_ids,
+                    system.load_models(),
+                    n_stages,
+                );
+                Some(library)
+            } else {
+                None
+            };
+
+        // External NCS library (built when ncs_scheme == External).
+        let external_ncs_library: Option<ExternalScenarioLibrary> = if ncs_scheme
+            == SamplingScheme::External
+        {
+            let external_rows = system.external_ncs_scenarios();
+            let n_stages = stages.len();
+            // Build canonical NCS ID list from ncs_models (same logic as
+            // build_stochastic_context: all NCS entities, sorted and deduped).
+            let mut ncs_ids: Vec<EntityId> = system.ncs_models().iter().map(|m| m.ncs_id).collect();
+            ncs_ids.sort_unstable_by_key(|id| id.0);
+            ncs_ids.dedup();
+            let n_ncs = ncs_ids.len();
+            let row_entity_ids: std::collections::HashSet<EntityId> =
+                external_rows.iter().map(|r| r.ncs_id).collect();
+            let mut rows_per_stage = vec![0usize; n_stages];
+            #[allow(clippy::cast_sign_loss)]
+            for row in external_rows {
+                let s = row.stage_id as usize;
+                if s < n_stages {
+                    rows_per_stage[s] += 1;
+                }
+            }
+            let n_scenarios_ext = if n_ncs > 0 && !rows_per_stage.is_empty() {
+                if rows_per_stage[0] % n_ncs != 0 {
+                    return Err(SddpError::Stochastic(
+                        cobre_stochastic::StochasticError::InsufficientData {
+                            context: format!(
+                                "external NCS rows at stage 0 ({}) is not divisible by \
+                                 NCS count ({n_ncs}); each stage must have exactly \
+                                 n_scenarios * n_entities rows",
+                                rows_per_stage[0],
+                            ),
+                        },
+                    ));
+                }
+                rows_per_stage[0] / n_ncs
+            } else {
+                0
+            };
+            let mut library = ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_ncs, "ncs");
+            validate_external_library(
+                &library,
+                &ncs_ids,
+                &row_entity_ids,
+                &rows_per_stage,
+                n_stages,
+                forward_passes,
+            )
+            .map_err(SddpError::Stochastic)?;
+            standardize_external_ncs(
+                &mut library,
+                external_rows,
+                &ncs_ids,
+                system.ncs_models(),
+                n_stages,
+            );
+            Some(library)
+        } else {
+            None
+        };
 
         Ok(Self {
             stage_templates,
@@ -683,8 +927,14 @@ impl StudySetup {
             block_counts_per_stage,
             max_blocks,
             scaling_report,
-            sampling_scheme,
+            inflow_scheme,
+            load_scheme,
+            ncs_scheme,
             stages,
+            historical_library,
+            external_inflow_library,
+            external_load_library,
+            external_ncs_library,
             seed,
             forward_passes,
             max_iterations,
@@ -699,8 +949,6 @@ impl StudySetup {
             export_states: false,
         })
     }
-
-    // ── Accessors: LP templates ───────────────────────────────────────────────
 
     /// Return a reference to the full [`StageTemplates`] struct.
     #[must_use]
@@ -732,8 +980,6 @@ impl StudySetup {
     pub fn noise_scale(&self) -> &[f64] {
         &self.stage_templates.noise_scale
     }
-
-    // ── Accessors: algorithm state ────────────────────────────────────────────
 
     /// Return a shared reference to the stochastic context.
     #[must_use]
@@ -811,8 +1057,6 @@ impl StudySetup {
         &self.hydro_models
     }
 
-    // ── Accessors: derived layout ─────────────────────────────────────────────
-
     /// Return the number of blocks per stage as a slice.
     #[must_use]
     pub fn block_counts_per_stage(&self) -> &[usize] {
@@ -824,8 +1068,6 @@ impl StudySetup {
     pub fn max_blocks(&self) -> usize {
         self.max_blocks
     }
-
-    // ── Accessors: config-derived scalars ─────────────────────────────────────
 
     /// Return the random seed used for noise generation.
     #[must_use]
@@ -904,8 +1146,6 @@ impl StudySetup {
         &self.stopping_rule_set
     }
 
-    // ── Context constructors ──────────────────────────────────────────────────
-
     /// Construct a [`StageContext`] borrowing from this setup.
     #[must_use]
     pub fn stage_ctx(&self) -> StageContext<'_> {
@@ -933,12 +1173,16 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
-            sampling_scheme: self.sampling_scheme,
+            inflow_scheme: self.inflow_scheme,
+            load_scheme: self.load_scheme,
+            ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
+            historical_library: self.historical_library.as_ref(),
+            external_inflow_library: self.external_inflow_library.as_ref(),
+            external_load_library: self.external_load_library.as_ref(),
+            external_ncs_library: self.external_ncs_library.as_ref(),
         }
     }
-
-    // ── Training method ───────────────────────────────────────────────────────
 
     /// Execute the training loop using the precomputed study state.
     ///
@@ -1000,8 +1244,14 @@ impl StudySetup {
             inflow_method: &self.inflow_method,
             stochastic: &self.stochastic,
             initial_state: &self.initial_state,
-            sampling_scheme: self.sampling_scheme,
+            inflow_scheme: self.inflow_scheme,
+            load_scheme: self.load_scheme,
+            ncs_scheme: self.ncs_scheme,
             stages: &self.stages,
+            historical_library: self.historical_library.as_ref(),
+            external_inflow_library: self.external_inflow_library.as_ref(),
+            external_load_library: self.external_load_library.as_ref(),
+            external_ncs_library: self.external_ncs_library.as_ref(),
         };
 
         crate::train(
@@ -1010,15 +1260,12 @@ impl StudySetup {
             &mut self.fcf,
             &stage_ctx,
             &training_ctx,
-            self.stochastic.opening_tree(),
             &self.risk_measures,
             self.stopping_rule_set.clone(),
             comm,
             solver_factory,
         )
     }
-
-    // ── Simulation method ─────────────────────────────────────────────────────
 
     /// Execute the simulation pipeline using the trained future cost function.
     ///
@@ -1084,8 +1331,6 @@ impl StudySetup {
         )
     }
 
-    // ── Training output method ────────────────────────────────────────────────
-
     /// Convert a [`TrainingResult`] and event log into the training output
     /// required by the output writers in `cobre-io`.
     ///
@@ -1101,8 +1346,6 @@ impl StudySetup {
     ) -> cobre_io::TrainingOutput {
         crate::build_training_output(result, events, &self.fcf)
     }
-
-    // ── Workspace pool helper ─────────────────────────────────────────────────
 
     /// Construct a [`WorkspacePool`] sized for this study's indexer dimensions.
     ///
@@ -1131,8 +1374,6 @@ impl StudySetup {
         )
     }
 
-    // ── SimulationConfig convenience accessor ─────────────────────────────────
-
     /// Build a [`SimulationConfig`] from the stored `n_scenarios` and
     /// `io_channel_capacity` fields.
     ///
@@ -1145,6 +1386,46 @@ impl StudySetup {
             n_scenarios: self.n_scenarios,
             io_channel_capacity: self.io_channel_capacity,
         }
+    }
+
+    /// Return a reference to the historical inflow scenario library, if built.
+    ///
+    /// Returns `Some` when `inflow_scheme == SamplingScheme::Historical` and
+    /// the library was successfully constructed during [`StudySetup::new`].
+    /// Returns `None` for all other inflow sampling schemes.
+    #[must_use]
+    pub fn historical_library(&self) -> Option<&HistoricalScenarioLibrary> {
+        self.historical_library.as_ref()
+    }
+
+    /// Return a reference to the external inflow scenario library, if built.
+    ///
+    /// Returns `Some` when `inflow_scheme == SamplingScheme::External` and
+    /// the library was successfully constructed during [`StudySetup::new`].
+    /// Returns `None` for all other inflow sampling schemes.
+    #[must_use]
+    pub fn external_inflow_library(&self) -> Option<&ExternalScenarioLibrary> {
+        self.external_inflow_library.as_ref()
+    }
+
+    /// Return a reference to the external load scenario library, if built.
+    ///
+    /// Returns `Some` when `load_scheme == SamplingScheme::External` and
+    /// the library was successfully constructed during [`StudySetup::new`].
+    /// Returns `None` for all other load sampling schemes.
+    #[must_use]
+    pub fn external_load_library(&self) -> Option<&ExternalScenarioLibrary> {
+        self.external_load_library.as_ref()
+    }
+
+    /// Return a reference to the external NCS scenario library, if built.
+    ///
+    /// Returns `Some` when `ncs_scheme == SamplingScheme::External` and
+    /// the library was successfully constructed during [`StudySetup::new`].
+    /// Returns `None` for all other NCS sampling schemes.
+    #[must_use]
+    pub fn external_ncs_library(&self) -> Option<&ExternalScenarioLibrary> {
+        self.external_ncs_library.as_ref()
     }
 }
 
@@ -1225,7 +1506,6 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
     let hydros = system.hydros();
     let ic = system.initial_conditions();
 
-    // ── Storage portion ───────────────────────────────────────────────────────
     for hs in &ic.storage {
         // Both hydros() and ic.storage are sorted by hydro_id.
         if let Ok(idx) = hydros.binary_search_by_key(&hs.hydro_id.0, |h| h.id.0) {
@@ -1233,7 +1513,6 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
         }
     }
 
-    // ── Lag portion (populated from past_inflows, lag-major layout) ─────────────
     if indexer.max_par_order > 0 {
         let n_h = indexer.hydro_count;
         for pi in &ic.past_inflows {
@@ -1267,6 +1546,8 @@ pub struct PrepareStochasticResult {
     /// Estimation report (`Some` if `inflow_history.parquet` was present and
     /// `inflow_seasonal_stats.parquet` was absent, triggering auto-estimation).
     pub estimation_report: Option<crate::EstimationReport>,
+    /// Which of the 7 estimation path rows was taken during preprocessing.
+    pub estimation_path: crate::EstimationPath,
 }
 
 /// Load, validate, and assemble a user-supplied opening tree from the case directory.
@@ -1431,7 +1712,7 @@ pub fn load_load_factors_for_stochastic(
 ///
 /// - [`SddpError::Io`] — file read, parse, or validation failure from either
 ///   `estimate_from_history` or opening tree loading.
-/// - [`SddpError::Stochastic`] — PAR parameter validation or Cholesky
+/// - [`SddpError::Stochastic`] — PAR parameter validation or spectral
 ///   decomposition failure from `build_stochastic_context` or estimation.
 pub fn prepare_stochastic(
     system: System,
@@ -1439,7 +1720,7 @@ pub fn prepare_stochastic(
     config: &cobre_io::Config,
     seed: u64,
 ) -> Result<PrepareStochasticResult, SddpError> {
-    let (system, estimation_report) =
+    let (system, estimation_report, estimation_path) =
         crate::estimation::estimate_from_history(system, case_dir, config)?;
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
@@ -1488,12 +1769,18 @@ pub fn prepare_stochastic(
         &entity_factor_entries,
         &ncs_entity_factor_entries,
         user_opening_tree,
+        cobre_stochastic::ClassSchemes {
+            inflow: Some(system.scenario_source().inflow_scheme),
+            load: Some(system.scenario_source().load_scheme),
+            ncs: Some(system.scenario_source().ncs_scheme),
+        },
     )?;
 
     Ok(PrepareStochasticResult {
         system,
         stochastic,
         estimation_report,
+        estimation_path,
     })
 }
 
@@ -1520,7 +1807,7 @@ mod tests {
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
             thermal::{Thermal, ThermalCostSegment},
         },
-        scenario::{InflowModel, LoadModel},
+        scenario::{InflowModel, LoadModel, SamplingScheme},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
@@ -1531,9 +1818,7 @@ mod tests {
         ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
         TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
-    use cobre_stochastic::build_stochastic_context;
-
-    // ── Fixture helpers ───────────────────────────────────────────────────────
+    use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 
     /// Build a minimal system with 1 bus, 1 thermal, 1 hydro, and `n_stages`
     /// study stages (each with 1 block). All bounds and penalties are set to
@@ -1803,8 +2088,6 @@ mod tests {
         }
     }
 
-    // ── Tests ─────────────────────────────────────────────────────────────────
-
     /// Given a minimal valid system (1 hydro, 1 thermal, 1 bus, 2 stages),
     /// when `StudySetup::new()` is called, then it returns `Ok` and
     /// `stage_templates()` returns a non-empty slice.
@@ -1812,8 +2095,20 @@ mod tests {
     fn new_minimal_valid_system_returns_ok() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1832,8 +2127,20 @@ mod tests {
     fn new_zero_stages_returns_validation_error() {
         let system = minimal_system(0);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let result = StudySetup::new(
             &system,
@@ -1856,8 +2163,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 50);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1901,8 +2220,20 @@ mod tests {
     fn fcf_mut_allows_cut_insertion() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -1925,8 +2256,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1948,8 +2291,20 @@ mod tests {
     fn cut_selection_none_when_disabled() {
         let system = minimal_system(2);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -1970,8 +2325,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2014,8 +2381,20 @@ mod tests {
         let n_stages = 3;
         let system = minimal_system(n_stages);
         let config = minimal_config(2, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2053,8 +2432,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2091,8 +2482,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2114,8 +2517,6 @@ mod tests {
         );
     }
 
-    // ── simulation_config() ───────────────────────────────────────────────────
-
     /// `simulation_config()` returns a `SimulationConfig` whose fields match
     /// the values extracted from the `Config` at construction time.
     #[test]
@@ -2132,8 +2533,20 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2148,8 +2561,6 @@ mod tests {
         assert_eq!(sim_cfg.io_channel_capacity, setup.io_channel_capacity());
     }
 
-    // ── create_workspace_pool() ───────────────────────────────────────────────
-
     /// `create_workspace_pool()` with `n_threads = 2` returns a pool whose
     /// `workspaces.len()` equals 2.
     #[test]
@@ -2158,8 +2569,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 3);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -2176,8 +2599,6 @@ mod tests {
         assert_eq!(pool.workspaces.len(), 2);
     }
 
-    // ── build_training_output() ───────────────────────────────────────────────
-
     /// `build_training_output()` with a non-empty `TrainingResult` and empty
     /// events produces a `TrainingOutput` whose `convergence_records` is
     /// non-empty (one record per `result.iterations`).
@@ -2188,8 +2609,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2223,8 +2656,6 @@ mod tests {
         );
     }
 
-    // ── simulate() integration test ───────────────────────────────────────────
-
     /// Given a trained `StudySetup` with `n_scenarios > 0`, calling `simulate()`
     /// returns `Ok(costs)` with `costs.len() > 0`.
     #[test]
@@ -2242,8 +2673,20 @@ mod tests {
         };
 
         let system = minimal_system(2);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let mut setup = StudySetup::new(
             &system,
@@ -2446,8 +2889,6 @@ mod tests {
         assert_eq!(params.policy_path, "./my_policy", "policy_path mismatch");
     }
 
-    // ── prepare_stochastic tests ──────────────────────────────────────────────
-
     /// Build a minimal case directory with required structural files present so
     /// that `validate_structure` does not fail. The optional estimation and
     /// opening tree files are NOT created here; tests add them as needed.
@@ -2594,8 +3035,6 @@ mod tests {
         );
     }
 
-    // ── prepare_hydro_models / hydro_models accessor tests ────────────────────
-
     /// Given a system with no FPHA and no evaporation data, `default_from_system`
     /// returns a result where all hydros use constant productivity and no evaporation.
     #[test]
@@ -2652,8 +3091,20 @@ mod tests {
 
         let system = minimal_system(2);
         let config = minimal_config(1, 5);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
         let hydro_result = PrepareHydroModelsResult::default_from_system(&system);
 
         let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
@@ -2672,8 +3123,6 @@ mod tests {
             );
         }
     }
-
-    // ── build_initial_state lag population tests ──────────────────────────────
 
     /// Build a `StageIndexer` for lag tests: N hydros, L lags, no equipment columns.
     fn indexer_for_lag_test(hydro_count: usize, max_par_order: usize) -> StageIndexer {
@@ -3027,8 +3476,20 @@ mod tests {
         let system =
             minimal_system_2_hydros_with_past_inflows(3, vec![600.0, 500.0], vec![200.0, 100.0]);
         let config = minimal_config(1, 10);
-        let stochastic = build_stochastic_context(&system, 42, None, &[], &[], None)
-            .expect("stochastic context");
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
 
         let setup = StudySetup::new(
             &system,
@@ -3086,5 +3547,1489 @@ mod tests {
         let state = build_initial_state(&system, &indexer);
 
         assert_eq!(state.len(), 1, "state length must equal n_state=1");
+    }
+
+    /// Given a `System` with `inflow_scheme = InSample`, when `StudySetup::new()`
+    /// is called, then `historical_library()` returns `None`.
+    #[test]
+    fn historical_library_none_for_insample() {
+        let system = minimal_system(2);
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        assert!(
+            setup.historical_library().is_none(),
+            "historical_library must be None for InSample scheme"
+        );
+        assert!(
+            setup.external_inflow_library().is_none(),
+            "external_inflow_library must be None for InSample scheme"
+        );
+        assert!(
+            setup.external_load_library().is_none(),
+            "external_load_library must be None for InSample load scheme"
+        );
+        assert!(
+            setup.external_ncs_library().is_none(),
+            "external_ncs_library must be None for InSample ncs scheme"
+        );
+    }
+
+    /// Build a system that has `inflow_scheme = Historical` and the inflow
+    /// history needed to discover at least one window.
+    ///
+    /// The system has 1 hydro, 1 bus, 1 thermal, 2 monthly stages (`season_id`
+    /// `Some(0)` and `Some(1)`), and historical data covering years 1990-1991.
+    /// With `max_par_order = 0` (no AR coefficients), a window is valid if
+    /// we have observations for both study months. Year 1990 covers months 0-1
+    /// so season 0 and 1 are available under year 1990.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
+    fn system_with_historical_inflow(n_stages: usize) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::{
+            scenario::{InflowHistoryRow, ScenarioSource},
+            system::SystemBuilder,
+        };
+
+        fn default_hydro_bounds() -> HydroStageBounds {
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            }
+        }
+
+        fn default_hydro_penalties() -> HydroStagePenalties {
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 500.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            }
+        }
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        // Monthly stages: season_id = month index (0-based).
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 28).unwrap(),
+                season_id: Some(i % 12),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        // Historical inflow data: 1990 and 1991 cover 12 months each.
+        // With n_stages <= 2 and max_par_order = 0, year 1990 and 1991 are
+        // both valid windows (study months are in Jan-Feb = seasons 0-1).
+        let inflow_history: Vec<InflowHistoryRow> = (1990_i32..=1991)
+            .flat_map(|year| {
+                (1u32..=12).map(move |month| InflowHistoryRow {
+                    hydro_id: EntityId(3),
+                    date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+                    value_m3s: 80.0 + (year - 1990) as f64 * 5.0,
+                })
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: n_st,
+            },
+            &BoundsDefaults {
+                hydro: default_hydro_bounds(),
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: n_st,
+            },
+            &PenaltiesDefaults {
+                hydro: default_hydro_penalties(),
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .inflow_history(inflow_history)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system_with_historical_inflow: valid")
+    }
+
+    /// Given a `System` with `inflow_scheme = Historical` and valid inflow history,
+    /// when `StudySetup::new()` is called, then `historical_library()` returns
+    /// `Some` and `n_windows() > 0`.
+    #[test]
+    fn historical_library_built_when_scheme_is_historical() {
+        let system = system_with_historical_inflow(2);
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::Historical),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let lib = setup
+            .historical_library()
+            .expect("expected Some(HistoricalScenarioLibrary) for Historical scheme");
+        assert!(
+            lib.n_windows() > 0,
+            "expected at least one historical window, got 0"
+        );
+        assert_eq!(
+            lib.n_stages(),
+            2,
+            "expected n_stages == 2 matching the system's study stages"
+        );
+        assert_eq!(lib.n_hydros(), 1, "expected n_hydros == 1");
+    }
+
+    /// Given a `System` with `inflow_scheme = External` and valid external
+    /// inflow rows, when `StudySetup::new()` is called, then
+    /// `external_inflow_library()` returns `Some` and `n_entities() > 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
+    fn external_inflow_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::{ExternalScenarioRow, ScenarioSource};
+        use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
+
+        // Build external inflow rows: 3 scenarios × 1 hydro × 2 stages.
+        // Hydro ID = 3 (from minimal_system). Stage IDs 0, 1. Scenario IDs 0, 1, 2.
+        let hydro_id = EntityId(3);
+        let mut external_rows: Vec<ExternalScenarioRow> = Vec::new();
+        for stage_id in 0i32..2 {
+            for scenario_id in 0i32..3 {
+                external_rows.push(ExternalScenarioRow {
+                    stage_id,
+                    scenario_id,
+                    hydro_id,
+                    value_m3s: 80.0 + scenario_id as f64 * 5.0,
+                });
+            }
+        }
+
+        // We need to rebuild the system with external scenario source and rows.
+        // Use SystemBuilder to produce a system that carries external rows.
+        // minimal_system builds with its own SystemBuilder call, so we rebuild.
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+        let stages: Vec<Stage> = (0..2usize)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<CoreInflowModel> = (0..2usize)
+            .map(|i| CoreInflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..2usize)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: 2,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::External,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .external_scenarios(external_rows)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system with external inflow: valid");
+
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::External),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let lib = setup
+            .external_inflow_library()
+            .expect("expected Some(ExternalScenarioLibrary) for External inflow scheme");
+        assert!(
+            lib.n_entities() > 0,
+            "expected n_entities > 0 in external inflow library"
+        );
+        assert_eq!(lib.n_stages(), 2);
+        assert_eq!(lib.n_scenarios(), 3);
+        assert_eq!(lib.entity_class(), "inflow");
+    }
+
+    /// Given a `System` with `load_scheme = External` and valid external load
+    /// rows, when `StudySetup::new()` is called, then
+    /// `external_load_library()` returns `Some` and `n_entities() > 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
+    fn external_load_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::{ExternalLoadRow, ScenarioSource};
+        use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        let stages: Vec<Stage> = (0..2usize)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<CoreInflowModel> = (0..2usize)
+            .map(|i| CoreInflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..2usize)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 10.0,
+            })
+            .collect();
+
+        // External load rows: 3 scenarios × 1 bus × 2 stages.
+        let mut external_load_rows: Vec<ExternalLoadRow> = Vec::new();
+        for stage_id in 0i32..2 {
+            for scenario_id in 0i32..3 {
+                external_load_rows.push(ExternalLoadRow {
+                    stage_id,
+                    scenario_id,
+                    bus_id: EntityId(1),
+                    value_mw: 90.0 + scenario_id as f64 * 10.0,
+                });
+            }
+        }
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: 2,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::External,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .external_load_scenarios(external_load_rows)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system with external load: valid");
+
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::External),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let lib = setup
+            .external_load_library()
+            .expect("expected Some(ExternalScenarioLibrary) for External load scheme");
+        assert!(
+            lib.n_entities() > 0,
+            "expected n_entities > 0 in external load library"
+        );
+        assert_eq!(lib.n_stages(), 2);
+        assert_eq!(lib.n_scenarios(), 3);
+        assert_eq!(lib.entity_class(), "load");
+    }
+
+    /// Given a `System` with `ncs_scheme = External` and valid external NCS
+    /// rows, when `StudySetup::new()` is called, then
+    /// `external_ncs_library()` returns `Some` and `n_entities() > 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
+    fn external_ncs_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::InflowModel as CoreInflowModel;
+        use cobre_core::{
+            NonControllableSource,
+            scenario::{ExternalNcsRow, NcsModel, ScenarioSource},
+            system::SystemBuilder,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        // NCS entity: wind plant with EntityId(4).
+        let ncs_id = EntityId(4);
+        let ncs_source = NonControllableSource {
+            id: ncs_id,
+            name: "Wind1".to_string(),
+            bus_id: EntityId(1),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            max_generation_mw: 100.0,
+            curtailment_cost: 0.01,
+        };
+
+        let stages: Vec<Stage> = (0..2usize)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: None,
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 744.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<CoreInflowModel> = (0..2usize)
+            .map(|i| CoreInflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..2usize)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        // NCS models: mean=0.8, std=0.1 for both stages.
+        let ncs_models: Vec<NcsModel> = (0..2usize)
+            .map(|i| NcsModel {
+                ncs_id,
+                stage_id: i as i32,
+                mean: 0.8,
+                std: 0.1,
+            })
+            .collect();
+
+        // External NCS rows: 3 scenarios × 1 NCS × 2 stages.
+        let mut external_ncs_rows: Vec<ExternalNcsRow> = Vec::new();
+        for stage_id in 0i32..2 {
+            for scenario_id in 0i32..3 {
+                external_ncs_rows.push(ExternalNcsRow {
+                    stage_id,
+                    scenario_id,
+                    ncs_id,
+                    value: 0.7 + scenario_id as f64 * 0.1,
+                });
+            }
+        }
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 1,
+                n_stages: 2,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::External,
+            seed: None,
+            historical_years: None,
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .non_controllable_sources(vec![ncs_source])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .ncs_models(ncs_models)
+            .external_ncs_scenarios(external_ncs_rows)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system with external NCS: valid");
+
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::External),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let lib = setup
+            .external_ncs_library()
+            .expect("expected Some(ExternalScenarioLibrary) for External NCS scheme");
+        assert!(
+            lib.n_entities() > 0,
+            "expected n_entities > 0 in external NCS library"
+        );
+        assert_eq!(lib.n_stages(), 2);
+        assert_eq!(lib.n_scenarios(), 3);
+        assert_eq!(lib.entity_class(), "ncs");
+    }
+
+    /// Given a `System` with `inflow_scheme = Historical` but a user pool
+    /// that references a year with no data, when `StudySetup::new()` is
+    /// called, then it returns `Err` with a message about windows.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
+    fn historical_library_fails_when_no_valid_windows() {
+        // system_with_historical_inflow has data for years 1990-1991.
+        // We use HistoricalYears::List with year 2050 (no data) to force
+        // zero valid windows after filtering.
+        use cobre_core::scenario::ScenarioSource;
+        use cobre_core::system::SystemBuilder;
+
+        // Instead, let's build a system with Historical scheme and empty
+        // inflow_history (no rows at all). This guarantees zero candidate
+        // years in discovery.
+        use chrono::NaiveDate;
+        use cobre_core::scenario::InflowModel;
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        let stages: Vec<Stage> = (0..2usize)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 28).unwrap(),
+                season_id: Some(i % 12),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..2usize)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..2usize)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 2,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: 2,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        // Historical scheme but NO inflow_history data — discovery must fail.
+        let scenario_source = ScenarioSource {
+            inflow_scheme: SamplingScheme::Historical,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .scenario_source(scenario_source)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("system: valid");
+
+        let config = minimal_config(1, 5);
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::Historical),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let result = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        );
+
+        assert!(result.is_err(), "expected Err when no historical data");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("window") || err_msg.contains("historical"),
+            "error should mention windows or historical, got: {err_msg}"
+        );
     }
 }

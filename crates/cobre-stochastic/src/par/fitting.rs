@@ -34,7 +34,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
-    scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+    scenario::{
+        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        CorrelationScheduleEntry,
+    },
     temporal::{SeasonMap, Stage},
 };
 
@@ -624,6 +627,11 @@ pub fn estimate_correlation(
     )
 }
 
+/// Minimum number of paired observations required per season for a per-season
+/// correlation matrix. Seasons below this threshold fall back to the pooled
+/// (all-season) matrix via the "default" profile.
+const MIN_CORRELATION_PAIRS: usize = 30;
+
 /// Estimate correlation with an optional [`SeasonMap`] fallback.
 ///
 /// # Errors
@@ -667,28 +675,37 @@ pub fn estimate_correlation_with_season_map(
         .map(|e| ((e.hydro_id, e.season_id), e))
         .collect();
 
-    let residuals = compute_hydro_residuals(&lookups, &ar_lookup, hydro_ids, season_map);
-    let matrix = compute_pearson_correlation_matrix(&residuals);
+    let per_season_residuals = compute_hydro_residuals(&lookups, &ar_lookup, hydro_ids, season_map);
+    let pooled_residuals = flatten_residuals(&per_season_residuals);
+    let pooled_matrix = compute_pearson_correlation_matrix(&pooled_residuals);
+    let seasonal_matrices = compute_seasonal_matrices(&per_season_residuals, lookups.n_seasons);
 
-    Ok(assemble_correlation_model(hydro_ids, matrix))
+    Ok(assemble_seasonal_correlation_model(
+        hydro_ids,
+        pooled_matrix,
+        &seasonal_matrices,
+        stages,
+        lookups.n_seasons,
+    ))
 }
 
-/// Compute standardized AR innovation residuals for each hydro.
+/// Compute standardized AR innovation residuals for each hydro, partitioned by season.
 ///
 /// For each hydro and each observation date where the AR model has sufficient
 /// lag history, computes:
 ///   `epsilon_t = z_t - sum(psi_{m,l} * z_{t-l})` for l in 1..=p
 ///
-/// Returns one `HashMap<NaiveDate, f64>` per hydro (indexed by position in
-/// `hydro_ids`).
+/// Returns one `HashMap<season_id, HashMap<NaiveDate, f64>>` per hydro (indexed
+/// by position in `hydro_ids`). Each residual is placed under its `season_id`
+/// key instead of being pooled into a flat date-keyed map.
 fn compute_hydro_residuals(
     lookups: &SeasonLookups<'_>,
     ar_lookup: &HashMap<(EntityId, usize), &ArCoefficientEstimate>,
     hydro_ids: &[EntityId],
     season_map: Option<&SeasonMap>,
-) -> Vec<HashMap<NaiveDate, f64>> {
+) -> Vec<HashMap<usize, HashMap<NaiveDate, f64>>> {
     let n_hydros = hydro_ids.len();
-    let mut hydro_residuals: Vec<HashMap<NaiveDate, f64>> =
+    let mut hydro_residuals: Vec<HashMap<usize, HashMap<NaiveDate, f64>>> =
         (0..n_hydros).map(|_| HashMap::new()).collect();
 
     for (hidx, &hydro_id) in hydro_ids.iter().enumerate() {
@@ -716,16 +733,9 @@ fn compute_hydro_residuals(
                 (value - stats_m.mean) / stats_m.std
             };
 
-            let ar_order;
-            let ar_coeffs: &[f64];
-            let empty_coeffs: Vec<f64> = Vec::new();
-            if let Some(ar_est) = ar_lookup.get(&(hydro_id, season_id)) {
-                ar_order = ar_est.coefficients.len();
-                ar_coeffs = &ar_est.coefficients;
-            } else {
-                ar_order = 0;
-                ar_coeffs = &empty_coeffs;
-            }
+            let ar_est = ar_lookup.get(&(hydro_id, season_id));
+            let ar_order = ar_est.map_or(0, |e| e.coefficients.len());
+            let ar_coeffs = ar_est.map_or(&[] as &[f64], |e| &e.coefficients);
 
             let Some(&pos) = date_index.get(&date) else {
                 continue;
@@ -738,11 +748,7 @@ fn compute_hydro_residuals(
             let mut lag_ok = true;
 
             for lag in 1..=ar_order {
-                let n_s = if lookups.n_seasons == 0 {
-                    1
-                } else {
-                    lookups.n_seasons
-                };
+                let n_s = lookups.n_seasons.max(1);
                 let lag_season = season_id.wrapping_add(n_s).wrapping_sub(lag % n_s) % n_s;
 
                 let Some(stats_lag) = lookups.stats_lookup.get(&(hydro_id, lag_season)) else {
@@ -764,11 +770,85 @@ fn compute_hydro_residuals(
             }
 
             let epsilon = z_t - ar_sum;
-            hydro_residuals[hidx].insert(date, epsilon);
+            hydro_residuals[hidx]
+                .entry(season_id)
+                .or_default()
+                .insert(date, epsilon);
         }
     }
 
     hydro_residuals
+}
+
+/// Flatten per-season residuals into a single date-keyed map per hydro.
+///
+/// Dates are unique per hydro per season (each observation maps to exactly one
+/// season), so no collisions occur when merging season maps.
+fn flatten_residuals(
+    per_season: &[HashMap<usize, HashMap<NaiveDate, f64>>],
+) -> Vec<HashMap<NaiveDate, f64>> {
+    per_season
+        .iter()
+        .map(|seasons| {
+            let mut flat = HashMap::new();
+            for date_map in seasons.values() {
+                flat.extend(date_map.iter().map(|(&d, &v)| (d, v)));
+            }
+            flat
+        })
+        .collect()
+}
+
+/// Compute per-season Pearson correlation matrices.
+///
+/// For each season, extracts the residuals belonging to that season from each
+/// hydro and computes the Pearson correlation matrix. Seasons where the minimum
+/// number of paired observations across all hydro pairs is below
+/// [`MIN_CORRELATION_PAIRS`] are excluded from the result.
+///
+/// When there is only a single hydro (no pairs to check), the total residual
+/// count for that hydro is used as the sample size.
+fn compute_seasonal_matrices(
+    per_season_residuals: &[HashMap<usize, HashMap<NaiveDate, f64>>],
+    n_seasons: usize,
+) -> HashMap<usize, Vec<Vec<f64>>> {
+    let mut result = HashMap::new();
+    let n_hydros = per_season_residuals.len();
+
+    for season_id in 0..n_seasons {
+        // Extract per-hydro residuals for this season.
+        let season_residuals: Vec<HashMap<NaiveDate, f64>> = per_season_residuals
+            .iter()
+            .map(|hydro_seasons| hydro_seasons.get(&season_id).cloned().unwrap_or_default())
+            .collect();
+
+        // Determine minimum paired observation count.
+        let min_pairs = if n_hydros <= 1 {
+            // No pairs exist; use the single hydro's residual count.
+            season_residuals.first().map_or(0, HashMap::len)
+        } else {
+            let mut min = usize::MAX;
+            for i in 0..n_hydros {
+                for j in (i + 1)..n_hydros {
+                    let count = season_residuals[i]
+                        .keys()
+                        .filter(|d| season_residuals[j].contains_key(*d))
+                        .count();
+                    min = min.min(count);
+                }
+            }
+            min
+        };
+
+        if min_pairs >= MIN_CORRELATION_PAIRS {
+            result.insert(
+                season_id,
+                compute_pearson_correlation_matrix(&season_residuals),
+            );
+        }
+    }
+
+    result
 }
 
 /// Compute the `n_hydros` x `n_hydros` Pearson correlation matrix from residuals.
@@ -838,8 +918,22 @@ fn compute_pearson_correlation_matrix(
     matrix
 }
 
-/// Assemble a [`CorrelationModel`] from hydro IDs and a correlation matrix.
-fn assemble_correlation_model(hydro_ids: &[EntityId], matrix: Vec<Vec<f64>>) -> CorrelationModel {
+/// Assemble a multi-profile [`CorrelationModel`] from hydro IDs, a pooled
+/// matrix, per-season matrices, the stage list, and the total season count.
+///
+/// The pooled matrix is always inserted as the `"default"` profile.
+/// When `n_seasons <= 1`, only the default profile is produced (backward
+/// compatibility with the single-season path).
+/// For the multi-season case, each season that passed the minimum-sample check
+/// gets a `"season_XX"` profile (zero-padded to the width of the largest season
+/// index), and the schedule maps each stage to its season's profile name.
+fn assemble_seasonal_correlation_model(
+    hydro_ids: &[EntityId],
+    pooled_matrix: Vec<Vec<f64>>,
+    seasonal_matrices: &HashMap<usize, Vec<Vec<f64>>>,
+    stages: &[Stage],
+    n_seasons: usize,
+) -> CorrelationModel {
     let entities: Vec<CorrelationEntity> = hydro_ids
         .iter()
         .map(|&id| CorrelationEntity {
@@ -848,23 +942,67 @@ fn assemble_correlation_model(hydro_ids: &[EntityId], matrix: Vec<Vec<f64>>) -> 
         })
         .collect();
 
-    let group = CorrelationGroup {
-        name: "default".to_string(),
-        entities,
-        matrix,
-    };
-
-    let profile = CorrelationProfile {
-        groups: vec![group],
-    };
-
     let mut profiles = BTreeMap::new();
-    profiles.insert("default".to_string(), profile);
+
+    // Always include the pooled matrix as "default".
+    profiles.insert(
+        "default".to_string(),
+        CorrelationProfile {
+            groups: vec![CorrelationGroup {
+                name: "default".to_string(),
+                entities: entities.clone(),
+                matrix: pooled_matrix,
+            }],
+        },
+    );
+
+    // Single-season: return early with no per-season profiles and empty schedule.
+    if n_seasons <= 1 {
+        return CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: Vec::new(),
+        };
+    }
+
+    // Multi-season: add per-season profiles.
+    let width = format!("{}", n_seasons.saturating_sub(1)).len();
+    for (&season_id, matrix) in seasonal_matrices {
+        let name = format!("season_{season_id:0>width$}");
+        profiles.insert(
+            name,
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "default".to_string(),
+                    entities: entities.clone(),
+                    matrix: matrix.clone(),
+                }],
+            },
+        );
+    }
+
+    // Build schedule: map each stage to its season profile name, omitting
+    // stages whose season has no per-season profile (they fall back to "default").
+    let mut schedule: Vec<CorrelationScheduleEntry> = stages
+        .iter()
+        .filter_map(|stage| {
+            let season_id = stage.season_id?;
+            if seasonal_matrices.contains_key(&season_id) {
+                Some(CorrelationScheduleEntry {
+                    stage_id: stage.id,
+                    profile_name: format!("season_{season_id:0>width$}"),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    schedule.sort_by_key(|e| e.stage_id);
 
     CorrelationModel {
         method: "cholesky".to_string(),
         profiles,
-        schedule: Vec::new(),
+        schedule,
     }
 }
 

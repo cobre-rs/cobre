@@ -199,21 +199,16 @@ impl DecomposedCorrelation {
 
             let mut group_factors: Vec<GroupFactor> = Vec::with_capacity(profile.groups.len());
             for group in &profile.groups {
-                let factor = CholeskyFactor::decompose(&group.matrix).map_err(|e| match e {
-                    StochasticError::CholeskyDecompositionFailed { reason, .. } => {
-                        StochasticError::CholeskyDecompositionFailed {
-                            profile_name: profile_name.clone(),
-                            reason,
+                let factor =
+                    CholeskyFactor::decompose_or_nearest(&group.matrix).map_err(|e| match e {
+                        StochasticError::InvalidCorrelation { reason, .. } => {
+                            StochasticError::InvalidCorrelation {
+                                profile_name: profile_name.clone(),
+                                reason,
+                            }
                         }
-                    }
-                    StochasticError::InvalidCorrelation { reason, .. } => {
-                        StochasticError::InvalidCorrelation {
-                            profile_name: profile_name.clone(),
-                            reason,
-                        }
-                    }
-                    other => other,
-                })?;
+                        other => other,
+                    })?;
 
                 let entity_ids: Vec<EntityId> = group.entities.iter().map(|e| e.id).collect();
                 let entity_type = group

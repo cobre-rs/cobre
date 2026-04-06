@@ -149,6 +149,73 @@ impl CholeskyFactor {
         Ok(factor)
     }
 
+    /// Modified Cholesky decomposition that handles near-singular matrices.
+    ///
+    /// First attempts a standard Cholesky decomposition. If a diagonal element
+    /// becomes non-positive (matrix is not positive-definite), restarts with
+    /// the modified Cholesky approach: any diagonal element that would be
+    /// non-positive is clamped to `floor` and the decomposition continues.
+    ///
+    /// This produces the Cholesky factor of a nearby positive-definite matrix,
+    /// which is the standard numerical treatment for estimated correlation
+    /// matrices with degenerate series (near-zero variance hydros, insufficient
+    /// seasonal samples, etc.).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StochasticError::InvalidCorrelation`] if the matrix is not
+    /// square or not symmetric. Never fails on positive-definiteness — the
+    /// modified path always succeeds.
+    pub fn decompose_or_nearest(matrix: &[Vec<f64>]) -> Result<Self, StochasticError> {
+        // Try strict decomposition first (fast path).
+        match Self::decompose(matrix) {
+            Ok(factor) => return Ok(factor),
+            Err(StochasticError::CholeskyDecompositionFailed { .. }) => {}
+            Err(e) => return Err(e), // squareness/symmetry errors are fatal
+        }
+
+        // Modified Cholesky: clamp non-positive diagonals to a small floor.
+        let n = matrix.len();
+        let floor = 1e-6;
+        let packed_len = n * (n + 1) / 2;
+        let data = vec![0.0_f64; packed_len].into_boxed_slice();
+        let mut factor = Self { data, dim: n };
+        let mut clamped_count = 0_usize;
+
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..n {
+            for j in 0..=i {
+                let mut sum = matrix[i][j];
+                for k in 0..j {
+                    sum -= factor.get(i, k) * factor.get(j, k);
+                }
+
+                if i == j {
+                    if sum <= 0.0 {
+                        sum = floor;
+                        clamped_count += 1;
+                    }
+                    factor.set(i, i, sum.sqrt());
+                } else {
+                    factor.set(i, j, sum / factor.get(j, j));
+                }
+            }
+        }
+
+        if clamped_count > 0 {
+            tracing::warn!(
+                clamped_diagonals = clamped_count,
+                dim = n,
+                floor,
+                "modified Cholesky clamped non-positive diagonals; \
+                 correlation matrix was not positive-definite \
+                 (likely from degenerate series with near-zero variance)"
+            );
+        }
+
+        Ok(factor)
+    }
+
     /// Applies the Cholesky factor to transform independent noise into correlated noise.
     ///
     /// Computes `correlated = L * independent` where `L` is the lower-triangular
@@ -373,5 +440,45 @@ mod tests {
                 "should reject difference {bad_diff:.2e} > 1e-10"
             );
         }
+    }
+
+    #[test]
+    fn decompose_or_nearest_succeeds_on_pd_matrix() {
+        let matrix = vec![vec![1.0, 0.5], vec![0.5, 1.0]];
+        let factor = CholeskyFactor::decompose_or_nearest(&matrix).unwrap();
+        assert!((factor.get(0, 0) - 1.0).abs() < 1e-12);
+        assert!((factor.get(1, 0) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn decompose_or_nearest_handles_non_pd_matrix() {
+        // Not PD: det = 1 - 4 = -3.
+        let matrix = vec![vec![1.0, 2.0], vec![2.0, 1.0]];
+        assert!(CholeskyFactor::decompose(&matrix).is_err());
+        let factor = CholeskyFactor::decompose_or_nearest(&matrix).unwrap();
+        assert_eq!(factor.dim(), 2);
+    }
+
+    #[test]
+    fn decompose_or_nearest_handles_correlation_style_non_pd() {
+        // Correlation-style non-PD: A↔B=0.9, B↔C=0.9, A↔C=-0.5.
+        let matrix = vec![
+            vec![1.0, 0.9, -0.5],
+            vec![0.9, 1.0, 0.9],
+            vec![-0.5, 0.9, 1.0],
+        ];
+        assert!(CholeskyFactor::decompose(&matrix).is_err());
+        let factor = CholeskyFactor::decompose_or_nearest(&matrix).unwrap();
+        assert_eq!(factor.dim(), 3);
+    }
+
+    #[test]
+    fn decompose_or_nearest_rejects_non_symmetric() {
+        let matrix = vec![vec![1.0, 0.3], vec![0.3 + 1e-9_f64, 1.0]];
+        let result = CholeskyFactor::decompose_or_nearest(&matrix);
+        assert!(matches!(
+            result,
+            Err(StochasticError::InvalidCorrelation { .. })
+        ));
     }
 }

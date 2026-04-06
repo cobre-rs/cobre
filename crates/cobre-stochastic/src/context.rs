@@ -949,12 +949,11 @@ mod tests {
             },
         );
 
+        // With decompose_or_nearest, the modified Cholesky clamps non-positive
+        // diagonals instead of failing. The build should succeed.
         assert!(
-            matches!(
-                result,
-                Err(StochasticError::CholeskyDecompositionFailed { .. })
-            ),
-            "expected CholeskyDecompositionFailed, got: {result:?}"
+            result.is_ok(),
+            "modified Cholesky should handle non-PD matrix, got: {result:?}"
         );
     }
 

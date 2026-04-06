@@ -127,8 +127,14 @@ fn load_case_and_config(
     let config = cobre_io::parse_config(&config_path)?;
     let bcast = BroadcastConfig::from_config(&config)?;
     let seed = bcast.seed;
-    let prepared =
-        prepare_stochastic(system, &args.case_dir, &config, seed).map_err(CliError::from)?;
+    let prepared = prepare_stochastic(
+        system,
+        &args.case_dir,
+        &config,
+        seed,
+        &bcast.training_source,
+    )
+    .map_err(CliError::from)?;
     let hydro_models =
         prepare_hydro_models(&prepared.system, &args.case_dir).map_err(CliError::from)?;
     Ok((prepared, hydro_models, bcast, config))
@@ -619,7 +625,8 @@ fn broadcast_and_build_setup(
     } else {
         let user_tree: Option<OpeningTree> =
             tree_result?.map(|bt| OpeningTree::from_parts(bt.data, bt.openings_per_stage, bt.dim));
-        let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
+        let training_src = &bcast_config.training_source;
+        let forward_seed = training_src.seed.map(i64::unsigned_abs);
 
         let load_factor_entries =
             load_load_factors_for_stochastic(&args.case_dir).map_err(|e| CliError::Internal {
@@ -657,9 +664,9 @@ fn broadcast_and_build_setup(
             &ncs_entity_factors,
             user_tree,
             cobre_stochastic::ClassSchemes {
-                inflow: Some(system.scenario_source().inflow_scheme),
-                load: Some(system.scenario_source().load_scheme),
-                ncs: Some(system.scenario_source().ncs_scheme),
+                inflow: Some(training_src.inflow_scheme),
+                load: Some(training_src.load_scheme),
+                ncs: Some(training_src.ncs_scheme),
             },
         )
         .map_err(|e| CliError::Internal {
@@ -720,6 +727,8 @@ fn build_study_setup(
         cut_selection,
         bcast_config.cut_activity_tolerance,
         hydro_models,
+        &bcast_config.training_source,
+        &bcast_config.simulation_source,
     )
     .map_err(CliError::from)?;
     setup.set_export_states(bcast_config.export_states);

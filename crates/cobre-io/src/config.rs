@@ -509,12 +509,7 @@ impl Default for SimulationConfig {
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum OrderSelectionMethod {
-    /// Select the lag order using periodic partial autocorrelation significance
-    /// testing via the periodic Yule-Walker matrix method.
-    ///
-    /// Tests each lag against a 95% confidence interval (`1.96 / sqrt(N)`)
-    /// and selects the maximum lag with a statistically significant partial
-    /// autocorrelation.
+    /// Periodic Yule-Walker partial autocorrelation method (PACF).
     #[default]
     Pacf,
 }
@@ -753,9 +748,11 @@ fn convert_class_scheme_cfg(
     class_name: &str,
     path: &Path,
 ) -> Result<SamplingScheme, LoadError> {
-    let scheme_str = class.map_or("in_sample", |c| c.scheme.as_str());
-    let field = format!("{section}.scenario_source.{class_name}.scheme");
-    convert_sampling_scheme_cfg(scheme_str, &field, path)
+    convert_sampling_scheme_cfg(
+        class.map_or("in_sample", |c| c.scheme.as_str()),
+        &format!("{section}.scenario_source.{class_name}.scheme"),
+        path,
+    )
 }
 
 /// Convert `Option<RawScenarioSourceConfig>` into a [`ScenarioSource`].
@@ -823,13 +820,12 @@ fn validate_scenario_source_cfg(
         });
     }
 
+    // Historical scheme is only valid for inflow class
     if source.load_scheme == SamplingScheme::Historical {
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: format!("{section}.scenario_source.load.scheme"),
-            message:
-                "historical scheme is only valid for the inflow class; load class must use in_sample, out_of_sample, or external"
-                    .to_string(),
+            message: "historical scheme is only valid for the inflow class".to_string(),
         });
     }
 
@@ -837,12 +833,11 @@ fn validate_scenario_source_cfg(
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: format!("{section}.scenario_source.ncs.scheme"),
-            message:
-                "historical scheme is only valid for the inflow class; ncs class must use in_sample, out_of_sample, or external"
-                    .to_string(),
+            message: "historical scheme is only valid for the inflow class".to_string(),
         });
     }
 
+    // Seed is required unless all classes are InSample
     let all_in_sample = source.inflow_scheme == SamplingScheme::InSample
         && source.load_scheme == SamplingScheme::InSample
         && source.ncs_scheme == SamplingScheme::InSample;

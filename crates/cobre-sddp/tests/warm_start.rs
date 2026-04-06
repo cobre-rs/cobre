@@ -16,6 +16,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+use cobre_core::scenario::ScenarioSource;
 use cobre_io::output::policy::{read_policy_checkpoint, write_policy_checkpoint};
 use cobre_sddp::{
     FutureCostFunction, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
@@ -115,7 +116,8 @@ fn write_test_checkpoint(
 /// Build a `StudySetup` for the given case directory and config, using seed 42.
 fn build_setup(case_dir: &Path, config: &cobre_io::Config) -> StudySetup {
     let system = cobre_io::load_case(case_dir).expect("load_case");
-    let prep = prepare_stochastic(system, case_dir, config, 42).expect("prepare_stochastic");
+    let prep = prepare_stochastic(system, case_dir, config, 42, &ScenarioSource::default())
+        .expect("prepare_stochastic");
     let hydro_models = prepare_hydro_models(&prep.system, case_dir).expect("prepare_hydro_models");
     StudySetup::new(&prep.system, config, prep.stochastic, hydro_models).expect("StudySetup::new")
 }

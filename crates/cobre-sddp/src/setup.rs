@@ -48,8 +48,9 @@ use std::sync::mpsc::SyncSender;
 
 use cobre_comm::Communicator;
 use cobre_core::{
-    EntityId, Stage, System, TrainingEvent, entities::hydro::HydroGenerationModel,
-    scenario::SamplingScheme,
+    EntityId, Stage, System, TrainingEvent,
+    entities::hydro::HydroGenerationModel,
+    scenario::{SamplingScheme, ScenarioSource},
 };
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{
@@ -255,34 +256,62 @@ pub struct StudySetup {
 
     scaling_report: crate::scaling_report::ScalingReport,
 
-    /// Forward-pass noise source scheme for the inflow entity class.
+    /// Forward-pass noise source scheme for the training inflow entity class.
     inflow_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the load entity class.
+    /// Forward-pass noise source scheme for the training load entity class.
     load_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the NCS entity class.
+    /// Forward-pass noise source scheme for the training NCS entity class.
     ncs_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the simulation inflow entity class.
+    sim_inflow_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the simulation load entity class.
+    sim_load_scheme: SamplingScheme,
+    /// Forward-pass noise source scheme for the simulation NCS entity class.
+    sim_ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) owned for the lifetime of this setup.
     ///
     /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
     /// can read per-stage noise methods when constructing an `OutOfSample` sampler.
     stages: Vec<Stage>,
 
-    /// Pre-standardized historical inflow windows library.
+    /// Pre-standardized historical inflow windows library (training).
     ///
     /// `Some` when `inflow_scheme == SamplingScheme::Historical`, `None` otherwise.
     historical_library: Option<HistoricalScenarioLibrary>,
-    /// Pre-standardized external inflow scenario library.
+    /// Pre-standardized external inflow scenario library (training).
     ///
     /// `Some` when `inflow_scheme == SamplingScheme::External`, `None` otherwise.
     external_inflow_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external load scenario library.
+    /// Pre-standardized external load scenario library (training).
     ///
     /// `Some` when `load_scheme == SamplingScheme::External`, `None` otherwise.
     external_load_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external NCS scenario library.
+    /// Pre-standardized external NCS scenario library (training).
     ///
     /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
     external_ncs_library: Option<ExternalScenarioLibrary>,
+    /// Pre-standardized historical inflow windows library (simulation).
+    ///
+    /// `Some` when `sim_inflow_scheme == SamplingScheme::Historical` and the
+    /// simulation scheme differs from the training scheme. When the schemes are
+    /// identical this field is `None` and the training `historical_library` is
+    /// used instead.
+    sim_historical_library: Option<HistoricalScenarioLibrary>,
+    /// Pre-standardized external inflow scenario library (simulation).
+    ///
+    /// `Some` when `sim_inflow_scheme == SamplingScheme::External` and differs
+    /// from the training inflow scheme. Shares the training library otherwise.
+    sim_external_inflow_library: Option<ExternalScenarioLibrary>,
+    /// Pre-standardized external load scenario library (simulation).
+    ///
+    /// `Some` when `sim_load_scheme == SamplingScheme::External` and differs
+    /// from the training load scheme. Shares the training library otherwise.
+    sim_external_load_library: Option<ExternalScenarioLibrary>,
+    /// Pre-standardized external NCS scenario library (simulation).
+    ///
+    /// `Some` when `sim_ncs_scheme == SamplingScheme::External` and differs
+    /// from the training NCS scheme. Shares the training library otherwise.
+    sim_external_ncs_library: Option<ExternalScenarioLibrary>,
 
     seed: u64,
     forward_passes: u32,
@@ -326,6 +355,16 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         let params = StudyParams::from_config(config)?;
+        // Use a sentinel path; training_scenario_source / simulation_scenario_source
+        // only use the path for error messages and the historical-years look-up,
+        // which is not exercised when the caller provides a validated Config.
+        let sentinel_path = Path::new("config.json");
+        let training_source = config
+            .training_scenario_source(sentinel_path)
+            .map_err(|e| SddpError::Validation(e.to_string()))?;
+        let simulation_source = config
+            .simulation_scenario_source(sentinel_path)
+            .map_err(|e| SddpError::Validation(e.to_string()))?;
         Self::from_broadcast_params(
             system,
             stochastic,
@@ -339,6 +378,8 @@ impl StudySetup {
             params.cut_selection,
             params.cut_activity_tolerance,
             hydro_models,
+            &training_source,
+            &simulation_source,
         )
     }
 
@@ -382,6 +423,8 @@ impl StudySetup {
         cut_selection: Option<CutSelectionStrategy>,
         cut_activity_tolerance: f64,
         hydro_models: PrepareHydroModelsResult,
+        training_source: &ScenarioSource,
+        simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
             LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
@@ -664,9 +707,12 @@ impl StudySetup {
             .collect();
         let max_blocks = block_counts_per_stage.iter().copied().max().unwrap_or(0);
 
-        let inflow_scheme = system.scenario_source().inflow_scheme;
-        let load_scheme = system.scenario_source().load_scheme;
-        let ncs_scheme = system.scenario_source().ncs_scheme;
+        let inflow_scheme = training_source.inflow_scheme;
+        let load_scheme = training_source.load_scheme;
+        let ncs_scheme = training_source.ncs_scheme;
+        let sim_inflow_scheme = simulation_source.inflow_scheme;
+        let sim_load_scheme = simulation_source.load_scheme;
+        let sim_ncs_scheme = simulation_source.ncs_scheme;
         let stages: Vec<Stage> = system
             .stages()
             .iter()
@@ -682,7 +728,7 @@ impl StudySetup {
         // Historical inflow library (built when inflow_scheme == Historical).
         let historical_library: Option<HistoricalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::Historical {
-                let user_pool = system.scenario_source().historical_years.as_ref();
+                let user_pool = training_source.historical_years.as_ref();
                 let max_order = stochastic.par().max_order();
                 let window_years = discover_historical_windows(
                     system.inflow_history(),
@@ -912,6 +958,243 @@ impl StudySetup {
             None
         };
 
+        // Build simulation-specific libraries when simulation schemes differ from
+        // training schemes. When they are identical, simulation borrows from the
+        // training libraries (represented as `None` in the sim_* fields, with
+        // `simulation_ctx()` falling back to the training library references).
+
+        // Simulation historical inflow library.
+        let sim_historical_library: Option<HistoricalScenarioLibrary> = if sim_inflow_scheme
+            == SamplingScheme::Historical
+            && sim_inflow_scheme != inflow_scheme
+        {
+            let user_pool = simulation_source.historical_years.as_ref();
+            let max_order = stochastic.par().max_order();
+            let window_years = discover_historical_windows(
+                system.inflow_history(),
+                &hydro_ids,
+                &stages,
+                max_order,
+                user_pool,
+                forward_passes,
+            )
+            .map_err(SddpError::Stochastic)?;
+            let n_windows = window_years.len();
+            let n_hydros_sim = hydro_ids.len();
+            let n_stages_sim = stages.len();
+            let mut library = HistoricalScenarioLibrary::new(
+                n_windows,
+                n_stages_sim,
+                n_hydros_sim,
+                max_order,
+                window_years.clone(),
+            );
+            standardize_historical_windows(
+                &mut library,
+                system.inflow_history(),
+                &hydro_ids,
+                &stages,
+                stochastic.par(),
+                &window_years,
+            );
+            validate_historical_library(
+                &library,
+                system.inflow_history(),
+                &hydro_ids,
+                &stages,
+                max_order,
+                user_pool,
+                forward_passes,
+            )
+            .map_err(SddpError::Stochastic)?;
+            Some(library)
+        } else {
+            None
+        };
+
+        // Simulation external inflow library.
+        let sim_external_inflow_library: Option<ExternalScenarioLibrary> = if sim_inflow_scheme
+            == SamplingScheme::External
+            && sim_inflow_scheme != inflow_scheme
+        {
+            let external_rows = system.external_scenarios();
+            let n_stages_sim = stages.len();
+            let n_hydros_sim = hydro_ids.len();
+            let row_entity_ids: std::collections::HashSet<EntityId> =
+                external_rows.iter().map(|r| r.hydro_id).collect();
+            let mut rows_per_stage = vec![0usize; n_stages_sim];
+            #[allow(clippy::cast_sign_loss)]
+            for row in external_rows {
+                let s = row.stage_id as usize;
+                if s < n_stages_sim {
+                    rows_per_stage[s] += 1;
+                }
+            }
+            let n_scenarios_ext = if n_hydros_sim > 0 && !rows_per_stage.is_empty() {
+                if rows_per_stage[0] % n_hydros_sim != 0 {
+                    return Err(SddpError::Stochastic(
+                        cobre_stochastic::StochasticError::InsufficientData {
+                            context: format!(
+                                "external inflow rows at stage 0 ({}) is not divisible by \
+                                     hydro count ({n_hydros_sim}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                rows_per_stage[0],
+                            ),
+                        },
+                    ));
+                }
+                rows_per_stage[0] / n_hydros_sim
+            } else {
+                0
+            };
+            let mut library =
+                ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_hydros_sim, "inflow");
+            validate_external_library(
+                &library,
+                &hydro_ids,
+                &row_entity_ids,
+                &rows_per_stage,
+                n_stages_sim,
+                forward_passes,
+            )
+            .map_err(SddpError::Stochastic)?;
+            standardize_external_inflow(
+                &mut library,
+                external_rows,
+                &hydro_ids,
+                &stages,
+                stochastic.par(),
+                &system.initial_conditions().past_inflows,
+            );
+            Some(library)
+        } else {
+            None
+        };
+
+        // Simulation external load library.
+        let sim_external_load_library: Option<ExternalScenarioLibrary> =
+            if sim_load_scheme == SamplingScheme::External && sim_load_scheme != load_scheme {
+                let external_rows = system.external_load_scenarios();
+                let n_stages_sim = stages.len();
+                let mut bus_ids: Vec<EntityId> = system
+                    .load_models()
+                    .iter()
+                    .filter(|m| m.std_mw > 0.0)
+                    .map(|m| m.bus_id)
+                    .collect();
+                bus_ids.sort_unstable_by_key(|id| id.0);
+                bus_ids.dedup();
+                let n_buses = bus_ids.len();
+                let row_entity_ids: std::collections::HashSet<EntityId> =
+                    external_rows.iter().map(|r| r.bus_id).collect();
+                let mut rows_per_stage = vec![0usize; n_stages_sim];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages_sim {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                let n_scenarios_ext = if n_buses > 0 && !rows_per_stage.is_empty() {
+                    if rows_per_stage[0] % n_buses != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external load rows at stage 0 ({}) is not divisible by \
+                                     bus count ({n_buses}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_buses
+                } else {
+                    0
+                };
+                let mut library =
+                    ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_buses, "load");
+                validate_external_library(
+                    &library,
+                    &bus_ids,
+                    &row_entity_ids,
+                    &rows_per_stage,
+                    n_stages_sim,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                standardize_external_load(
+                    &mut library,
+                    external_rows,
+                    &bus_ids,
+                    system.load_models(),
+                    n_stages_sim,
+                );
+                Some(library)
+            } else {
+                None
+            };
+
+        // Simulation external NCS library.
+        let sim_external_ncs_library: Option<ExternalScenarioLibrary> =
+            if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
+                let external_rows = system.external_ncs_scenarios();
+                let n_stages_sim = stages.len();
+                let mut ncs_ids: Vec<EntityId> =
+                    system.ncs_models().iter().map(|m| m.ncs_id).collect();
+                ncs_ids.sort_unstable_by_key(|id| id.0);
+                ncs_ids.dedup();
+                let n_ncs = ncs_ids.len();
+                let row_entity_ids: std::collections::HashSet<EntityId> =
+                    external_rows.iter().map(|r| r.ncs_id).collect();
+                let mut rows_per_stage = vec![0usize; n_stages_sim];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages_sim {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                let n_scenarios_ext = if n_ncs > 0 && !rows_per_stage.is_empty() {
+                    if rows_per_stage[0] % n_ncs != 0 {
+                        return Err(SddpError::Stochastic(
+                            cobre_stochastic::StochasticError::InsufficientData {
+                                context: format!(
+                                    "external NCS rows at stage 0 ({}) is not divisible by \
+                                     NCS count ({n_ncs}); each stage must have exactly \
+                                     n_scenarios * n_entities rows",
+                                    rows_per_stage[0],
+                                ),
+                            },
+                        ));
+                    }
+                    rows_per_stage[0] / n_ncs
+                } else {
+                    0
+                };
+                let mut library =
+                    ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_ncs, "ncs");
+                validate_external_library(
+                    &library,
+                    &ncs_ids,
+                    &row_entity_ids,
+                    &rows_per_stage,
+                    n_stages_sim,
+                    forward_passes,
+                )
+                .map_err(SddpError::Stochastic)?;
+                standardize_external_ncs(
+                    &mut library,
+                    external_rows,
+                    &ncs_ids,
+                    system.ncs_models(),
+                    n_stages_sim,
+                );
+                Some(library)
+            } else {
+                None
+            };
+
         Ok(Self {
             stage_templates,
             stochastic,
@@ -930,11 +1213,18 @@ impl StudySetup {
             inflow_scheme,
             load_scheme,
             ncs_scheme,
+            sim_inflow_scheme,
+            sim_load_scheme,
+            sim_ncs_scheme,
             stages,
             historical_library,
             external_inflow_library,
             external_load_library,
             external_ncs_library,
+            sim_historical_library,
+            sim_external_inflow_library,
+            sim_external_load_library,
+            sim_external_ncs_library,
             seed,
             forward_passes,
             max_iterations,
@@ -1184,6 +1474,62 @@ impl StudySetup {
         }
     }
 
+    /// Construct a simulation [`TrainingContext`] borrowing from this setup.
+    ///
+    /// Uses the simulation-specific schemes and libraries. When the simulation
+    /// scheme for a class matches the training scheme, the training library is
+    /// reused (no duplication). Historical and external libraries are selected
+    /// per class using this priority: simulation-specific > training (shared).
+    #[must_use]
+    pub fn simulation_ctx(&self) -> TrainingContext<'_> {
+        // For each class, prefer the simulation-specific library when present;
+        // fall back to the training library when schemes are identical.
+        let historical_library = self.sim_historical_library.as_ref().or(
+            if self.sim_inflow_scheme == SamplingScheme::Historical {
+                self.historical_library.as_ref()
+            } else {
+                None
+            },
+        );
+        let external_inflow_library = self.sim_external_inflow_library.as_ref().or(
+            if self.sim_inflow_scheme == SamplingScheme::External {
+                self.external_inflow_library.as_ref()
+            } else {
+                None
+            },
+        );
+        let external_load_library = self.sim_external_load_library.as_ref().or(
+            if self.sim_load_scheme == SamplingScheme::External {
+                self.external_load_library.as_ref()
+            } else {
+                None
+            },
+        );
+        let external_ncs_library = self.sim_external_ncs_library.as_ref().or(
+            if self.sim_ncs_scheme == SamplingScheme::External {
+                self.external_ncs_library.as_ref()
+            } else {
+                None
+            },
+        );
+
+        TrainingContext {
+            horizon: &self.horizon,
+            indexer: &self.indexer,
+            inflow_method: &self.inflow_method,
+            stochastic: &self.stochastic,
+            initial_state: &self.initial_state,
+            inflow_scheme: self.sim_inflow_scheme,
+            load_scheme: self.sim_load_scheme,
+            ncs_scheme: self.sim_ncs_scheme,
+            stages: &self.stages,
+            historical_library,
+            external_inflow_library,
+            external_load_library,
+            external_ncs_library,
+        }
+    }
+
     /// Execute the training loop using the precomputed study state.
     ///
     /// Constructs [`TrainingConfig`] and [`TrainingContext`] from the struct's
@@ -1301,7 +1647,7 @@ impl StudySetup {
         stage_bases: &[Option<cobre_solver::Basis>],
     ) -> Result<crate::SimulationRunResult, SimulationError> {
         let stage_ctx = self.stage_ctx();
-        let training_ctx = self.training_ctx();
+        let training_ctx = self.simulation_ctx();
 
         let sim_config = self.simulation_config();
 
@@ -1719,6 +2065,7 @@ pub fn prepare_stochastic(
     case_dir: &Path,
     config: &cobre_io::Config,
     seed: u64,
+    training_source: &ScenarioSource,
 ) -> Result<PrepareStochasticResult, SddpError> {
     let (system, estimation_report, estimation_path) =
         crate::estimation::estimate_from_history(system, case_dir, config)?;
@@ -1761,7 +2108,7 @@ pub fn prepare_stochastic(
         .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
         .collect();
 
-    let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
+    let forward_seed = training_source.seed.map(i64::unsigned_abs);
     let stochastic = cobre_stochastic::build_stochastic_context(
         &system,
         seed,
@@ -1770,9 +2117,9 @@ pub fn prepare_stochastic(
         &ncs_entity_factor_entries,
         user_opening_tree,
         cobre_stochastic::ClassSchemes {
-            inflow: Some(system.scenario_source().inflow_scheme),
-            load: Some(system.scenario_source().load_scheme),
-            ncs: Some(system.scenario_source().ncs_scheme),
+            inflow: Some(training_source.inflow_scheme),
+            load: Some(training_source.load_scheme),
+            ncs: Some(training_source.ncs_scheme),
         },
     )?;
 
@@ -1815,8 +2162,9 @@ mod tests {
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        ModelingConfig, PolicyConfig, RawClassConfigEntry, RawScenarioSourceConfig,
+        SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig,
+        TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
     use cobre_stochastic::{ClassSchemes, build_stochastic_context};
 
@@ -2079,6 +2427,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig::default(),
@@ -2086,6 +2435,40 @@ mod tests {
             exports: ExportsConfig::default(),
             estimation: EstimationConfig::default(),
         }
+    }
+
+    /// Build a minimal valid [`Config`] with the given per-class scheme overrides.
+    ///
+    /// `inflow_scheme`, `load_scheme`, and `ncs_scheme` are optional strings
+    /// matching the JSON schema values (`"in_sample"`, `"historical"`, `"external"`,
+    /// `"out_of_sample"`). `None` leaves the class defaulting to `in_sample`.
+    fn minimal_config_with_schemes(
+        forward_passes: u32,
+        max_iterations: u32,
+        inflow_scheme: Option<&str>,
+        load_scheme: Option<&str>,
+        ncs_scheme: Option<&str>,
+    ) -> Config {
+        // A seed is required when any class uses a non-in-sample scheme.
+        let needs_seed = inflow_scheme.is_some_and(|s| s != "in_sample")
+            || load_scheme.is_some_and(|s| s != "in_sample")
+            || ncs_scheme.is_some_and(|s| s != "in_sample");
+        let scenario_source = RawScenarioSourceConfig {
+            seed: if needs_seed { Some(42) } else { None },
+            historical_years: None,
+            inflow: inflow_scheme.map(|s| RawClassConfigEntry {
+                scheme: s.to_string(),
+            }),
+            load: load_scheme.map(|s| RawClassConfigEntry {
+                scheme: s.to_string(),
+            }),
+            ncs: ncs_scheme.map(|s| RawClassConfigEntry {
+                scheme: s.to_string(),
+            }),
+        };
+        let mut config = minimal_config(forward_passes, max_iterations);
+        config.training.scenario_source = Some(scenario_source);
+        config
     }
 
     /// Given a minimal valid system (1 hydro, 1 thermal, 1 bus, 2 stages),
@@ -2762,6 +3145,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig::default(),
@@ -2841,6 +3225,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig {
@@ -2932,6 +3317,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig::default(),
@@ -2947,6 +3333,7 @@ mod tests {
     #[test]
     fn prepare_stochastic_no_history_no_tree_returns_none_report_and_generated_provenance() {
         use super::prepare_stochastic;
+        use cobre_core::scenario::ScenarioSource;
         use cobre_stochastic::provenance::ComponentProvenance;
         use tempfile::TempDir;
 
@@ -2958,7 +3345,14 @@ mod tests {
         let config = minimal_prepare_config();
         let seed = 42_u64;
 
-        let result = prepare_stochastic(system, root, &config, seed)
+        let source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let result = prepare_stochastic(system, root, &config, seed, &source)
             .expect("prepare_stochastic should succeed with no optional files");
 
         assert!(
@@ -2978,6 +3372,7 @@ mod tests {
     #[test]
     fn prepare_stochastic_with_stats_file_present_skips_estimation() {
         use super::prepare_stochastic;
+        use cobre_core::scenario::ScenarioSource;
         use std::fs;
         use tempfile::TempDir;
 
@@ -2998,7 +3393,14 @@ mod tests {
         let config = minimal_prepare_config();
         let seed = 42_u64;
 
-        let result = prepare_stochastic(system, root, &config, seed)
+        let source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let result = prepare_stochastic(system, root, &config, seed, &source)
             .expect("prepare_stochastic should succeed when stats file is present");
 
         assert!(
@@ -3015,6 +3417,7 @@ mod tests {
     #[test]
     fn prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance() {
         use super::prepare_stochastic;
+        use cobre_core::scenario::ScenarioSource;
         use cobre_stochastic::provenance::ComponentProvenance;
         use tempfile::TempDir;
 
@@ -3025,7 +3428,14 @@ mod tests {
         let system = minimal_system(2);
         let config = minimal_prepare_config();
 
-        let result = prepare_stochastic(system, root, &config, 0)
+        let source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let result = prepare_stochastic(system, root, &config, 0, &source)
             .expect("prepare_stochastic must succeed with no opening tree file");
 
         assert_ne!(
@@ -3834,14 +4244,6 @@ mod tests {
             },
         );
 
-        let scenario_source = ScenarioSource {
-            inflow_scheme: SamplingScheme::Historical,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: None,
-            historical_years: None,
-        };
-
         SystemBuilder::new()
             .buses(vec![bus])
             .thermals(vec![thermal])
@@ -3850,7 +4252,6 @@ mod tests {
             .inflow_models(inflow_models)
             .load_models(load_models)
             .inflow_history(inflow_history)
-            .scenario_source(scenario_source)
             .bounds(bounds)
             .penalties(penalties)
             .build()
@@ -3863,7 +4264,7 @@ mod tests {
     #[test]
     fn historical_library_built_when_scheme_is_historical() {
         let system = system_with_historical_inflow(2);
-        let config = minimal_config(1, 5);
+        let config = minimal_config_with_schemes(1, 5, Some("historical"), None, None);
         let stochastic = build_stochastic_context(
             &system,
             42,
@@ -3915,7 +4316,7 @@ mod tests {
     )]
     fn external_inflow_library_built_when_scheme_is_external() {
         use chrono::NaiveDate;
-        use cobre_core::scenario::{ExternalScenarioRow, ScenarioSource};
+        use cobre_core::scenario::ExternalScenarioRow;
         use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
 
         // Build external inflow rows: 3 scenarios × 1 hydro × 2 stages.
@@ -4126,14 +4527,6 @@ mod tests {
             },
         );
 
-        let scenario_source = ScenarioSource {
-            inflow_scheme: SamplingScheme::External,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: None,
-            historical_years: None,
-        };
-
         let system = SystemBuilder::new()
             .buses(vec![bus])
             .thermals(vec![thermal])
@@ -4142,13 +4535,12 @@ mod tests {
             .inflow_models(inflow_models)
             .load_models(load_models)
             .external_scenarios(external_rows)
-            .scenario_source(scenario_source)
             .bounds(bounds)
             .penalties(penalties)
             .build()
             .expect("system with external inflow: valid");
 
-        let config = minimal_config(1, 5);
+        let config = minimal_config_with_schemes(1, 5, Some("external"), None, None);
         let stochastic = build_stochastic_context(
             &system,
             42,
@@ -4197,7 +4589,7 @@ mod tests {
     )]
     fn external_load_library_built_when_scheme_is_external() {
         use chrono::NaiveDate;
-        use cobre_core::scenario::{ExternalLoadRow, ScenarioSource};
+        use cobre_core::scenario::ExternalLoadRow;
         use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
 
         let bus = Bus {
@@ -4403,14 +4795,6 @@ mod tests {
             },
         );
 
-        let scenario_source = ScenarioSource {
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::External,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: None,
-            historical_years: None,
-        };
-
         let system = SystemBuilder::new()
             .buses(vec![bus])
             .thermals(vec![thermal])
@@ -4419,13 +4803,12 @@ mod tests {
             .inflow_models(inflow_models)
             .load_models(load_models)
             .external_load_scenarios(external_load_rows)
-            .scenario_source(scenario_source)
             .bounds(bounds)
             .penalties(penalties)
             .build()
             .expect("system with external load: valid");
 
-        let config = minimal_config(1, 5);
+        let config = minimal_config_with_schemes(1, 5, None, Some("external"), None);
         let stochastic = build_stochastic_context(
             &system,
             42,
@@ -4477,7 +4860,7 @@ mod tests {
         use cobre_core::scenario::InflowModel as CoreInflowModel;
         use cobre_core::{
             NonControllableSource,
-            scenario::{ExternalNcsRow, NcsModel, ScenarioSource},
+            scenario::{ExternalNcsRow, NcsModel},
             system::SystemBuilder,
         };
 
@@ -4706,14 +5089,6 @@ mod tests {
             },
         );
 
-        let scenario_source = ScenarioSource {
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::External,
-            seed: None,
-            historical_years: None,
-        };
-
         let system = SystemBuilder::new()
             .buses(vec![bus])
             .thermals(vec![thermal])
@@ -4724,13 +5099,12 @@ mod tests {
             .load_models(load_models)
             .ncs_models(ncs_models)
             .external_ncs_scenarios(external_ncs_rows)
-            .scenario_source(scenario_source)
             .bounds(bounds)
             .penalties(penalties)
             .build()
             .expect("system with external NCS: valid");
 
-        let config = minimal_config(1, 5);
+        let config = minimal_config_with_schemes(1, 5, None, None, Some("external"));
         let stochastic = build_stochastic_context(
             &system,
             42,
@@ -4781,7 +5155,6 @@ mod tests {
         // system_with_historical_inflow has data for years 1990-1991.
         // We use HistoricalYears::List with year 2050 (no data) to force
         // zero valid windows after filtering.
-        use cobre_core::scenario::ScenarioSource;
         use cobre_core::system::SystemBuilder;
 
         // Instead, let's build a system with Historical scheme and empty
@@ -4981,14 +5354,6 @@ mod tests {
         );
 
         // Historical scheme but NO inflow_history data — discovery must fail.
-        let scenario_source = ScenarioSource {
-            inflow_scheme: SamplingScheme::Historical,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: None,
-            historical_years: None,
-        };
-
         let system = SystemBuilder::new()
             .buses(vec![bus])
             .thermals(vec![thermal])
@@ -4996,13 +5361,12 @@ mod tests {
             .stages(stages)
             .inflow_models(inflow_models)
             .load_models(load_models)
-            .scenario_source(scenario_source)
             .bounds(bounds)
             .penalties(penalties)
             .build()
             .expect("system: valid");
 
-        let config = minimal_config(1, 5);
+        let config = minimal_config_with_schemes(1, 5, Some("historical"), None, None);
         let stochastic = build_stochastic_context(
             &system,
             42,
@@ -5030,6 +5394,118 @@ mod tests {
         assert!(
             err_msg.contains("window") || err_msg.contains("historical"),
             "error should mention windows or historical, got: {err_msg}"
+        );
+    }
+
+    /// Given a `Config` with training inflow scheme `InSample` and simulation
+    /// inflow scheme `OutOfSample`, when `StudySetup::new()` is called, then
+    /// `training_ctx().inflow_scheme` is `InSample` and
+    /// `simulation_ctx().inflow_scheme` is `OutOfSample`.
+    #[test]
+    fn test_simulate_uses_simulation_scheme() {
+        let system = minimal_system(2);
+
+        // Training: InSample (default). Simulation: OutOfSample.
+        let mut config = minimal_config(1, 5);
+        config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+            seed: Some(99),
+            historical_years: None,
+            inflow: Some(RawClassConfigEntry {
+                scheme: "out_of_sample".to_string(),
+            }),
+            load: None,
+            ncs: None,
+        });
+
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        let train_ctx = setup.training_ctx();
+        assert_eq!(
+            train_ctx.inflow_scheme,
+            SamplingScheme::InSample,
+            "training context must use InSample inflow scheme"
+        );
+
+        let sim_ctx = setup.simulation_ctx();
+        assert_eq!(
+            sim_ctx.inflow_scheme,
+            SamplingScheme::OutOfSample,
+            "simulation context must use OutOfSample inflow scheme"
+        );
+    }
+
+    /// Given a `Config` with training inflow scheme `InSample` and simulation
+    /// inflow scheme `Historical`, when `StudySetup::new()` is called on a
+    /// system that has inflow history, then `training_ctx().historical_library`
+    /// is `None` and `simulation_ctx().historical_library` is `Some`.
+    #[test]
+    fn test_sim_historical_library_built_when_sim_scheme_is_historical() {
+        let system = system_with_historical_inflow(2);
+
+        // Training: InSample. Simulation: Historical.
+        let mut config = minimal_config(1, 5);
+        config.simulation.scenario_source = Some(RawScenarioSourceConfig {
+            seed: Some(42),
+            historical_years: None,
+            inflow: Some(RawClassConfigEntry {
+                scheme: "historical".to_string(),
+            }),
+            load: None,
+            ncs: None,
+        });
+
+        // The stochastic context is built for the training scheme (InSample).
+        let stochastic = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            None,
+            ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .expect("stochastic context");
+
+        let setup = StudySetup::new(
+            &system,
+            &config,
+            stochastic,
+            PrepareHydroModelsResult::default_from_system(&system),
+        )
+        .expect("setup");
+
+        assert!(
+            setup.training_ctx().historical_library.is_none(),
+            "training context must NOT have a historical library when scheme is InSample"
+        );
+        assert!(
+            setup.simulation_ctx().historical_library.is_some(),
+            "simulation context must have a historical library when sim scheme is Historical"
         );
     }
 }

@@ -116,8 +116,11 @@ fn run_case_from_dir(case_dir: &Path) -> cobre_sddp::TrainingResult {
 
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
 
-    let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+    let training_source = config
+        .training_scenario_source(&config_path)
+        .expect("training_scenario_source must resolve");
+    let prepare_result = prepare_stochastic(system, case_dir, &config, 42, &training_source)
+        .expect("prepare_stochastic must succeed");
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;
 
@@ -339,7 +342,7 @@ fn build_single_hydro_system(
     branching_factor: usize,
     sampling_scheme: SamplingScheme,
     forward_seed: Option<i64>,
-) -> cobre_core::System {
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -372,7 +375,15 @@ fn build_single_hydro_system(
     let bounds = build_resolved_bounds(1, n_stages);
     let penalties = build_resolved_penalties(1, 1, n_stages);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: sampling_scheme,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .stages(stages)
@@ -380,15 +391,10 @@ fn build_single_hydro_system(
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: sampling_scheme,
-            load_scheme: sampling_scheme,
-            ncs_scheme: sampling_scheme,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder must produce a valid system")
+        .expect("SystemBuilder must produce a valid system");
+
+    (system, source)
 }
 
 fn build_two_hydro_system(
@@ -397,7 +403,7 @@ fn build_two_hydro_system(
     branching_factor: usize,
     sampling_scheme: SamplingScheme,
     forward_seed: Option<i64>,
-) -> cobre_core::System {
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -438,7 +444,15 @@ fn build_two_hydro_system(
     let bounds = build_resolved_bounds(2, n_stages);
     let penalties = build_resolved_penalties(2, 1, n_stages);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: sampling_scheme,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(hydros)
         .stages(stages)
@@ -446,24 +460,19 @@ fn build_two_hydro_system(
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: sampling_scheme,
-            load_scheme: sampling_scheme,
-            ncs_scheme: sampling_scheme,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder must produce a valid system")
+        .expect("SystemBuilder must produce a valid system");
+
+    (system, source)
 }
 
 fn run_programmatic(
     system: &cobre_core::System,
+    source: &ScenarioSource,
     forward_passes: u32,
     max_iterations: u64,
 ) -> cobre_sddp::TrainingResult {
-    // Extract forward_seed from scenario_source — mirrors what prepare_stochastic does.
-    let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
+    let forward_seed = source.seed.map(i64::unsigned_abs);
 
     let stochastic = build_stochastic_context(
         system,
@@ -502,6 +511,8 @@ fn run_programmatic(
         None, // cut_selection
         0.0,  // cut_activity_tolerance
         hydro_models,
+        source,
+        source,
     )
     .expect("StudySetup::from_broadcast_params must succeed");
 
@@ -571,7 +582,7 @@ fn out_of_sample_convergence() {
     const MAX_ITERATIONS: u64 = 50;
     const RELATIVE_TOLERANCE: f64 = 0.05; // 5%
 
-    let system_insample = build_single_hydro_system(
+    let (system_insample, source_insample) = build_single_hydro_system(
         1, // hydro_id
         3, // n_stages
         5, // branching_factor
@@ -579,7 +590,7 @@ fn out_of_sample_convergence() {
         None, // forward_seed (not used for InSample)
     );
 
-    let system_oos = build_single_hydro_system(
+    let (system_oos, source_oos) = build_single_hydro_system(
         1,
         3,
         5,
@@ -587,8 +598,15 @@ fn out_of_sample_convergence() {
         Some(42), // forward_seed required for OutOfSample
     );
 
-    let lb_insample = run_programmatic(&system_insample, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
-    let lb_oos = run_programmatic(&system_oos, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
+    let lb_insample = run_programmatic(
+        &system_insample,
+        &source_insample,
+        FORWARD_PASSES,
+        MAX_ITERATIONS,
+    )
+    .final_lb;
+    let lb_oos =
+        run_programmatic(&system_oos, &source_oos, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
 
     let relative_error = (lb_oos - lb_insample).abs() / lb_insample.abs().max(1e-10);
     assert!(
@@ -618,13 +636,15 @@ fn out_of_sample_declaration_order_invariance() {
     const MAX_ITERATIONS: u64 = 20;
 
     // System A: declare hydros in order [H1, H2]
-    let system_a = build_two_hydro_system(&[1, 2], 3, 3, SamplingScheme::OutOfSample, Some(99));
+    let (system_a, source_a) =
+        build_two_hydro_system(&[1, 2], 3, 3, SamplingScheme::OutOfSample, Some(99));
 
     // System B: declare hydros in order [H2, H1] (reversed declaration order)
-    let system_b = build_two_hydro_system(&[2, 1], 3, 3, SamplingScheme::OutOfSample, Some(99));
+    let (system_b, source_b) =
+        build_two_hydro_system(&[2, 1], 3, 3, SamplingScheme::OutOfSample, Some(99));
 
-    let lb_a = run_programmatic(&system_a, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
-    let lb_b = run_programmatic(&system_b, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
+    let lb_a = run_programmatic(&system_a, &source_a, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
+    let lb_b = run_programmatic(&system_b, &source_b, FORWARD_PASSES, MAX_ITERATIONS).final_lb;
 
     assert_eq!(
         lb_a, lb_b,
@@ -689,7 +709,7 @@ fn build_historical_system(
     branching_factor: usize,
     n_history_years: usize,
     forward_seed: Option<i64>,
-) -> cobre_core::System {
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -719,7 +739,15 @@ fn build_historical_system(
     let bounds = build_resolved_bounds(1, 4);
     let penalties = build_resolved_penalties(1, 1, 4);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: SamplingScheme::Historical,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .stages(stages)
@@ -728,30 +756,25 @@ fn build_historical_system(
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: SamplingScheme::Historical,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder for historical must succeed")
+        .expect("SystemBuilder for historical must succeed");
+
+    (system, source)
 }
 
-/// Run training pipeline with per-class schemes derived from the system.
+/// Run training pipeline with per-class schemes derived from the supplied source.
 /// Returns the `StudySetup` so callers can assert library presence before training.
 fn run_with_setup(
     system: &cobre_core::System,
+    source: &ScenarioSource,
     forward_passes: u32,
     max_iterations: u64,
 ) -> (StudySetup, cobre_sddp::TrainingResult) {
-    let forward_seed = system.scenario_source().seed.map(i64::unsigned_abs);
-    let src = system.scenario_source();
+    let forward_seed = source.seed.map(i64::unsigned_abs);
     let schemes = ClassSchemes {
-        inflow: Some(src.inflow_scheme),
-        load: Some(src.load_scheme),
-        ncs: Some(src.ncs_scheme),
+        inflow: Some(source.inflow_scheme),
+        load: Some(source.load_scheme),
+        ncs: Some(source.ncs_scheme),
     };
 
     let stochastic = build_stochastic_context(system, 42, forward_seed, &[], &[], None, schemes)
@@ -778,6 +801,8 @@ fn run_with_setup(
         None,
         0.0,
         hydro_models,
+        source,
+        source,
     )
     .expect("StudySetup::from_broadcast_params must succeed");
 
@@ -817,7 +842,7 @@ fn build_external_system(
     branching_factor: usize,
     n_scenarios: usize,
     forward_seed: Option<i64>,
-) -> cobre_core::System {
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -847,7 +872,15 @@ fn build_external_system(
     let bounds = build_resolved_bounds(1, 3);
     let penalties = build_resolved_penalties(1, 1, 3);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: SamplingScheme::External,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .stages(stages)
@@ -856,15 +889,10 @@ fn build_external_system(
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: SamplingScheme::External,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder for external must succeed")
+        .expect("SystemBuilder for external must succeed");
+
+    (system, source)
 }
 
 fn build_resolved_penalties_with_ncs(
@@ -906,7 +934,7 @@ fn build_mixed_system(
     inflow_scheme: SamplingScheme,
     load_scheme: SamplingScheme,
     ncs_scheme: SamplingScheme,
-) -> cobre_core::System {
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -957,7 +985,15 @@ fn build_mixed_system(
     let bounds = build_resolved_bounds(1, 3);
     let penalties = build_resolved_penalties_with_ncs(1, 1, 1, 3);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme,
+        load_scheme,
+        ncs_scheme,
+        seed: Some(42),
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .non_controllable_sources(vec![ncs])
@@ -968,15 +1004,10 @@ fn build_mixed_system(
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme,
-            load_scheme,
-            ncs_scheme,
-            seed: Some(42),
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder for mixed must succeed")
+        .expect("SystemBuilder for mixed must succeed");
+
+    (system, source)
 }
 
 // --- ticket-032: Historical integration test ---
@@ -986,8 +1017,8 @@ fn historical_convergence() {
     const FORWARD_PASSES: u32 = 10;
     const MAX_ITERATIONS: u64 = 50;
 
-    let system = build_historical_system(1, 5, 10, Some(42));
-    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+    let (system, source) = build_historical_system(1, 5, 10, Some(42));
+    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
 
     assert!(
         setup.historical_library().is_some(),
@@ -1009,8 +1040,8 @@ fn external_inflow_convergence() {
     const MAX_ITERATIONS: u64 = 50;
     const N_SCENARIOS: usize = 20;
 
-    let system = build_external_system(1, 5, N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+    let (system, source) = build_external_system(1, 5, N_SCENARIOS, Some(42));
+    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
 
     assert!(
         setup.external_inflow_library().is_some(),
@@ -1024,8 +1055,8 @@ fn external_inflow_convergence() {
     );
 
     // Reproducibility: same seed must produce identical LB.
-    let system2 = build_external_system(1, 5, N_SCENARIOS, Some(42));
-    let (_setup2, result2) = run_with_setup(&system2, FORWARD_PASSES, MAX_ITERATIONS);
+    let (system2, source2) = build_external_system(1, 5, N_SCENARIOS, Some(42));
+    let (_setup2, result2) = run_with_setup(&system2, &source2, FORWARD_PASSES, MAX_ITERATIONS);
     assert_eq!(
         result.final_lb, result2.final_lb,
         "reproducibility violated: run1={}, run2={}",
@@ -1041,12 +1072,12 @@ fn mixed_scheme_convergence() {
     const MAX_ITERATIONS: u64 = 50;
 
     // Combination 1: inflow InSample, load OutOfSample, ncs InSample
-    let system_a = build_mixed_system(
+    let (system_a, source_a) = build_mixed_system(
         SamplingScheme::InSample,
         SamplingScheme::OutOfSample,
         SamplingScheme::InSample,
     );
-    let (setup_a, result_a) = run_with_setup(&system_a, FORWARD_PASSES, MAX_ITERATIONS);
+    let (setup_a, result_a) = run_with_setup(&system_a, &source_a, FORWARD_PASSES, MAX_ITERATIONS);
     assert_no_external_libraries(&setup_a);
     assert!(
         result_a.final_lb.is_finite(),
@@ -1054,12 +1085,12 @@ fn mixed_scheme_convergence() {
     );
 
     // Combination 2: inflow OutOfSample, load InSample, ncs InSample
-    let system_b = build_mixed_system(
+    let (system_b, source_b) = build_mixed_system(
         SamplingScheme::OutOfSample,
         SamplingScheme::InSample,
         SamplingScheme::InSample,
     );
-    let (setup_b, result_b) = run_with_setup(&system_b, FORWARD_PASSES, MAX_ITERATIONS);
+    let (setup_b, result_b) = run_with_setup(&system_b, &source_b, FORWARD_PASSES, MAX_ITERATIONS);
     assert_no_external_libraries(&setup_b);
     assert!(
         result_b.final_lb.is_finite(),
@@ -1115,7 +1146,10 @@ fn build_external_ncs_rows(
 /// `ExternalLoadRow` data on the `System`.
 ///
 /// Has 1 bus, 1 hydro, 1 load model, and 3 monthly stages.
-fn build_external_load_system(n_scenarios: usize, forward_seed: Option<i64>) -> cobre_core::System {
+fn build_external_load_system(
+    n_scenarios: usize,
+    forward_seed: Option<i64>,
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -1150,7 +1184,15 @@ fn build_external_load_system(n_scenarios: usize, forward_seed: Option<i64>) -> 
     let bounds = build_resolved_bounds(1, 3);
     let penalties = build_resolved_penalties(1, 1, 3);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::External,
+        ncs_scheme: SamplingScheme::InSample,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .stages(stages)
@@ -1160,22 +1202,20 @@ fn build_external_load_system(n_scenarios: usize, forward_seed: Option<i64>) -> 
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::External,
-            ncs_scheme: SamplingScheme::InSample,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder for external load must succeed")
+        .expect("SystemBuilder for external load must succeed");
+
+    (system, source)
 }
 
 /// Build a system whose NCS scheme is `External`, backed by pre-computed
 /// `ExternalNcsRow` data on the `System`.
 ///
 /// Has 1 bus, 1 hydro, 1 NCS source, and 3 monthly stages.
-fn build_external_ncs_system(n_scenarios: usize, forward_seed: Option<i64>) -> cobre_core::System {
+fn build_external_ncs_system(
+    n_scenarios: usize,
+    forward_seed: Option<i64>,
+) -> (cobre_core::System, ScenarioSource) {
     let bus = Bus {
         id: EntityId(0),
         name: "B0".to_string(),
@@ -1219,7 +1259,15 @@ fn build_external_ncs_system(n_scenarios: usize, forward_seed: Option<i64>) -> c
     let bounds = build_resolved_bounds(1, 3);
     let penalties = build_resolved_penalties_with_ncs(1, 1, 1, 3);
 
-    SystemBuilder::new()
+    let source = ScenarioSource {
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::External,
+        seed: forward_seed,
+        historical_years: None,
+    };
+
+    let system = SystemBuilder::new()
         .buses(vec![bus])
         .hydros(vec![hydro])
         .non_controllable_sources(vec![ncs])
@@ -1230,15 +1278,10 @@ fn build_external_ncs_system(n_scenarios: usize, forward_seed: Option<i64>) -> c
         .correlation(correlation)
         .bounds(bounds)
         .penalties(penalties)
-        .scenario_source(ScenarioSource {
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::External,
-            seed: forward_seed,
-            historical_years: None,
-        })
         .build()
-        .expect("SystemBuilder for external NCS must succeed")
+        .expect("SystemBuilder for external NCS must succeed");
+
+    (system, source)
 }
 
 /// Verify that `ClassSampler::External` for load populates
@@ -1253,8 +1296,8 @@ fn external_load_library_populated() {
     const MAX_ITERATIONS: u64 = 20;
     const N_SCENARIOS: usize = 20;
 
-    let system = build_external_load_system(N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+    let (system, source) = build_external_load_system(N_SCENARIOS, Some(42));
+    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
 
     assert!(
         setup.external_load_library().is_some(),
@@ -1287,8 +1330,8 @@ fn external_ncs_library_populated() {
     const MAX_ITERATIONS: u64 = 20;
     const N_SCENARIOS: usize = 20;
 
-    let system = build_external_ncs_system(N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, FORWARD_PASSES, MAX_ITERATIONS);
+    let (system, source) = build_external_ncs_system(N_SCENARIOS, Some(42));
+    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
 
     assert!(
         setup.external_ncs_library().is_some(),

@@ -30,6 +30,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+use cobre_core::scenario::ScenarioSource;
 use cobre_io::{
     PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
 };
@@ -93,7 +94,8 @@ fn run_deterministic_with_solver(case_dir: &Path) -> (cobre_sddp::TrainingResult
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
 
     let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;
 
@@ -122,7 +124,8 @@ fn run_deterministic(case_dir: &Path) -> cobre_sddp::TrainingResult {
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
 
     let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;
 
@@ -158,8 +161,8 @@ fn run_with_simulation(
 
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
 
-    let pr =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+    let pr = prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+        .expect("prepare_stochastic must succeed");
     let system = pr.system;
     let stochastic = pr.stochastic;
 
@@ -917,8 +920,8 @@ fn d12_checkpoint_round_trip() {
 
     // ── Step 2: prepare stochastic and hydro models ───────────────────────────
 
-    let pr =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+    let pr = prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+        .expect("prepare_stochastic must succeed");
     let system = pr.system;
     let stochastic = pr.stochastic;
 
@@ -2626,7 +2629,8 @@ fn d26_estimated_par2_order_selection() {
     let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
 
     let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
 
     let report = prepare_result
         .estimation_report

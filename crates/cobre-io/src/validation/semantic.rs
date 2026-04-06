@@ -1104,40 +1104,41 @@ fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut ValidationContex
         &[("training", &training_source)]
     };
 
+    let mut check_external =
+        |section: &str, scheme: SamplingScheme, class_name: &str, is_empty: bool| {
+            if scheme == SamplingScheme::External && is_empty {
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "config.json",
+                    Some(format!("{section}.scenario_source.{class_name}")),
+                    format!(
+                        "{class_name} class uses 'external' scheme but no \
+                     external_{class_name}_scenarios.parquet data was found; \
+                     external scheme requires corresponding scenario file"
+                    ),
+                );
+            }
+        };
+
     for (section, source) in sources {
-        if source.inflow_scheme == SamplingScheme::External && data.external_scenarios.is_empty() {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
-                "config.json",
-                Some(format!("{section}.scenario_source.inflow")),
-                "inflow class uses 'external' scheme but no \
-                 external_inflow_scenarios.parquet data was found; \
-                 external scheme requires corresponding scenario file",
-            );
-        }
-
-        if source.load_scheme == SamplingScheme::External && data.external_load_scenarios.is_empty()
-        {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
-                "config.json",
-                Some(format!("{section}.scenario_source.load")),
-                "load class uses 'external' scheme but no \
-                 external_load_scenarios.parquet data was found; \
-                 external scheme requires corresponding scenario file",
-            );
-        }
-
-        if source.ncs_scheme == SamplingScheme::External && data.external_ncs_scenarios.is_empty() {
-            ctx.add_error(
-                ErrorKind::BusinessRuleViolation,
-                "config.json",
-                Some(format!("{section}.scenario_source.ncs")),
-                "ncs class uses 'external' scheme but no \
-                 external_ncs_scenarios.parquet data was found; \
-                 external scheme requires corresponding scenario file",
-            );
-        }
+        check_external(
+            section,
+            source.inflow_scheme,
+            "inflow",
+            data.external_scenarios.is_empty(),
+        );
+        check_external(
+            section,
+            source.load_scheme,
+            "load",
+            data.external_load_scenarios.is_empty(),
+        );
+        check_external(
+            section,
+            source.ncs_scheme,
+            "ncs",
+            data.external_ncs_scenarios.is_empty(),
+        );
     }
 }
 

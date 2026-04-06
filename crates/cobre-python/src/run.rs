@@ -30,10 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
+    ArOrderSummary, DEFAULT_SEED, EstimationReport, FutureCostFunction, HydroModelSummary,
+    ModelProvenanceReport, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
-    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
-    StochasticSummary, StudySetup, DEFAULT_SEED,
+    prepare_hydro_models, prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
 
@@ -75,7 +75,7 @@ fn write_policy_checkpoint(
     export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
+        PolicyCheckpointMetadata, write_policy_checkpoint as io_write_policy_checkpoint,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -447,7 +447,11 @@ fn run_inner(
     let should_simulate =
         !skip_simulation && config.simulation.enabled && config.simulation.num_scenarios > 0;
 
-    let result = prepare_stochastic(system, case_dir, &config, seed)
+    let training_source = config
+        .training_scenario_source(&case_dir.join("config.json"))
+        .map_err(|e| format!("scenario source error: {e}"))?;
+
+    let result = prepare_stochastic(system, case_dir, &config, seed, &training_source)
         .map_err(|e| format!("stochastic preprocessing error: {e}"))?;
     let system = result.system;
     let estimation_report = result.estimation_report;
@@ -911,7 +915,11 @@ mod tests {
 
         let seed = config.training.tree_seed.map_or(42_u64, i64::unsigned_abs);
 
-        let result = prepare_stochastic(system, &case_dir, &config, seed);
+        let training_source = config
+            .training_scenario_source(&case_dir.join("config.json"))
+            .expect("training_scenario_source must succeed for D01");
+
+        let result = prepare_stochastic(system, &case_dir, &config, seed, &training_source);
         assert!(
             result.is_ok(),
             "prepare_stochastic failed for D01 via Python path: {:?}",

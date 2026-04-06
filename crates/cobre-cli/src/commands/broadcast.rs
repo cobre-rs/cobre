@@ -4,6 +4,7 @@
 //! and opening tree data into postcard-compatible structs that can be
 //! broadcast from rank 0 to all ranks via `broadcast_value`.
 
+use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
     CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
     StoppingRule, StoppingRuleSet, StudyParams,
@@ -120,11 +121,25 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: cobre_io::PolicyMode,
     /// Whether the visited-states archive should be allocated for export.
     pub(crate) export_states: bool,
+    /// Scenario source for the training forward pass, broadcast so non-root
+    /// ranks can build the stochastic context with matching sampling schemes.
+    pub(crate) training_source: ScenarioSource,
+    /// Scenario source for the post-training simulation forward pass.
+    pub(crate) simulation_source: ScenarioSource,
 }
 
 impl BroadcastConfig {
     pub(crate) fn from_config(config: &cobre_io::Config) -> Result<Self, CliError> {
         let params = StudyParams::from_config(config).map_err(CliError::from)?;
+        // Use a sentinel path; the scenario source helpers only use the path for
+        // historical-years look-up and error messages, which are not exercised here.
+        let sentinel_path = std::path::Path::new("config.json");
+        let training_source = config
+            .training_scenario_source(sentinel_path)
+            .map_err(CliError::from)?;
+        let simulation_source = config
+            .simulation_scenario_source(sentinel_path)
+            .map_err(CliError::from)?;
 
         let stopping_rules = params
             .stopping_rule_set
@@ -180,6 +195,8 @@ impl BroadcastConfig {
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
+            training_source,
+            simulation_source,
         })
     }
 }

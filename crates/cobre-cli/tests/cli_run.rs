@@ -35,7 +35,8 @@ const CONFIG_JSON: &str = r#"{
         "forward_passes": 1,
         "stopping_rules": [
             { "type": "iteration_limit", "limit": 2 }
-        ]
+        ],
+        "scenario_source": { "inflow": { "scheme": "in_sample" }, "seed": 42 }
     }
 }"#;
 
@@ -70,7 +71,6 @@ const STAGES_JSON: &str = r#"{
         "annual_discount_rate": 0.06,
         "transitions": []
     },
-    "scenario_source": { "inflow": { "scheme": "in_sample" }, "seed": 42 },
     "stages": [
         {
             "id": 0,

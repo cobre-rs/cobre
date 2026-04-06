@@ -2186,10 +2186,12 @@ mod tests {
         assert_eq!(system.bounds().n_stages(), 0);
         // Generic constraint bounds default to empty.
         assert!(!system.resolved_generic_bounds().is_active(0, 0));
-        assert!(system
-            .resolved_generic_bounds()
-            .bounds_for_stage(0, 0)
-            .is_empty());
+        assert!(
+            system
+                .resolved_generic_bounds()
+                .bounds_for_stage(0, 0)
+                .is_empty()
+        );
     }
 
     /// Verify `System::resolved_generic_bounds()` accessor with a non-empty table.

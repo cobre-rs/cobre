@@ -1,0 +1,85 @@
+<svg width="680" height="530" viewBox="0 0 680 530" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, 'Segoe UI', sans-serif;">
+  <style>
+    text { fill: #c8c6c2; }
+    .title { font-size: 14px; font-weight: 500; }
+    .sub { font-size: 12px; fill: #8b9298; }
+    .box-teal { fill: #04342c; stroke: #0f6e56; stroke-width: 0.5; }
+    .box-blue { fill: #042c53; stroke: #185fa5; stroke-width: 0.5; }
+    .box-coral { fill: #4a1b0c; stroke: #993c1d; stroke-width: 0.5; }
+    .box-purple { fill: #26215c; stroke: #534ab7; stroke-width: 0.5; }
+    .box-amber { fill: #412402; stroke: #854f0b; stroke-width: 0.5; }
+    .box-gray { fill: #1a2028; stroke: #2d3440; stroke-width: 0.5; }
+    .t-teal { fill: #5dcaa5; }
+    .t-blue { fill: #85b7eb; }
+    .t-coral { fill: #f0997b; }
+    .t-purple { fill: #afa9ec; }
+    .t-amber { fill: #f5a623; }
+    .arr { stroke: #8b9298; stroke-width: 1; fill: none; }
+    marker path { fill: none; stroke: #8b9298; stroke-width: 1.5; }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <rect width="680" height="530" fill="#0f1419" rx="8"/>
+
+  <text class="title" x="340" y="28" text-anchor="middle" fill="#e8e6e3">Per-class ForwardSampler</text>
+  <text class="sub" x="340" y="46" text-anchor="middle">Training and simulation each build their own instance</text>
+
+  <!-- Container -->
+  <rect x="40" y="58" width="600" height="200" rx="16" fill="none" stroke="#2d3440" stroke-width="0.5" stroke-dasharray="6 3"/>
+  <text class="sub" x="56" y="76">ForwardSampler</text>
+
+  <!-- Three ClassSampler boxes -->
+  <rect class="box-teal" x="60" y="88" width="170" height="76" rx="8"/>
+  <text class="title t-teal" x="145" y="112" text-anchor="middle">Inflow sampler</text>
+  <text class="sub" x="145" y="130" text-anchor="middle">scheme: historical</text>
+  <text class="sub" x="145" y="148" text-anchor="middle">correlation: skip</text>
+
+  <rect class="box-blue" x="255" y="88" width="170" height="76" rx="8"/>
+  <text class="title t-blue" x="340" y="112" text-anchor="middle">Load sampler</text>
+  <text class="sub" x="340" y="130" text-anchor="middle">scheme: out_of_sample</text>
+  <text class="sub" x="340" y="148" text-anchor="middle">correlation: D_load</text>
+
+  <rect class="box-coral" x="450" y="88" width="170" height="76" rx="8"/>
+  <text class="title t-coral" x="535" y="112" text-anchor="middle">NCS sampler</text>
+  <text class="sub" x="535" y="130" text-anchor="middle">scheme: out_of_sample</text>
+  <text class="sub" x="535" y="148" text-anchor="middle">correlation: D_ncs</text>
+
+  <!-- Correlation annotations -->
+  <text class="sub" x="145" y="186" text-anchor="middle" fill="#5dcaa5">Pre-correlated</text>
+  <text class="sub" x="145" y="202" text-anchor="middle" fill="#5dcaa5">(skip spectral)</text>
+  <text class="sub" x="340" y="194" text-anchor="middle" fill="#85b7eb">Apply spectral D × z</text>
+  <text class="sub" x="535" y="194" text-anchor="middle" fill="#f0997b">Apply spectral D × z</text>
+
+  <!-- Arrows to output -->
+  <line x1="145" y1="220" x2="145" y2="288" class="arr" marker-end="url(#a)"/>
+  <line x1="340" y1="208" x2="340" y2="288" class="arr" marker-end="url(#a)"/>
+  <line x1="535" y1="208" x2="535" y2="288" class="arr" marker-end="url(#a)"/>
+
+  <!-- Output vector segments -->
+  <rect x="50" y="292" width="186" height="28" rx="4" fill="#0f6e56" fill-opacity="0.3" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="sub" x="143" y="310" text-anchor="middle" fill="#5dcaa5">inflow segment</text>
+  <rect x="246" y="292" width="186" height="28" rx="4" fill="#185fa5" fill-opacity="0.3" stroke="#185fa5" stroke-width="0.5"/>
+  <text class="sub" x="339" y="310" text-anchor="middle" fill="#85b7eb">load segment</text>
+  <rect x="442" y="292" width="188" height="28" rx="4" fill="#993c1d" fill-opacity="0.3" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="sub" x="536" y="310" text-anchor="middle" fill="#f0997b">NCS segment</text>
+
+  <!-- Arrow to consumer -->
+  <line x1="340" y1="320" x2="340" y2="358" class="arr" marker-end="url(#a)"/>
+
+  <!-- Consumer contract -->
+  <text class="title" x="340" y="374" text-anchor="middle" fill="#e8e6e3">Consumer contract (never changes)</text>
+
+  <rect class="box-purple" x="60" y="388" width="260" height="50" rx="8"/>
+  <text class="title t-purple" x="190" y="406" text-anchor="middle">apply_initial_state()</text>
+  <text class="sub" x="190" y="424" text-anchor="middle">Once per scenario, before t=0</text>
+
+  <rect class="box-purple" x="360" y="388" width="260" height="50" rx="8"/>
+  <text class="title t-purple" x="490" y="406" text-anchor="middle">sample()</text>
+  <text class="sub" x="490" y="424" text-anchor="middle">Once per stage, inside the loop</text>
+
+  <line x1="320" y1="413" x2="358" y2="413" class="arr" marker-end="url(#a)"/>
+
+  <!-- C1 constraint -->
+  <rect class="box-amber" x="100" y="462" width="480" height="30" rx="6"/>
+  <text class="sub t-amber" x="340" y="481" text-anchor="middle">C1: same entity type per group → block-diagonal D → per-class independence</text>
+</svg>

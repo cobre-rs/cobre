@@ -214,6 +214,8 @@ one historical observation of inflow at a given hydro plant and stage.
 When `inflow_history.parquet` is present, Cobre performs the following
 estimation steps automatically before building the scenario model:
 
+![PAR(p) estimation pipeline — from observations to InflowModel](../images/diagrams/par-estimation-pipeline.svg)
+
 1. **Seasonal statistics** — mean and standard deviation are computed from
    the historical observations for each (hydro plant, stage) pair. These
    replace the values you would otherwise provide in
@@ -237,6 +239,8 @@ estimation steps automatically before building the scenario model:
    `correlation.json`.
 
 ### History vs. pre-computed stats: choose one
+
+![Two roles of seasonal stats](../images/diagrams/par-two-roles.svg)
 
 `inflow_history.parquet` and `inflow_seasonal_stats.parquet` serve different
 roles in the inflow model. When only `inflow_history.parquet` is present
@@ -472,12 +476,19 @@ forward-pass noise is non-reproducible even if `tree_seed` is fixed.
 
 ## Noise Methods
 
+![Where sampling methods enter the SDDP algorithm](../images/diagrams/noise-pipeline.svg)
+
 The `sampling_method` field in each stage entry of `stages.json` controls
 how noise vectors are generated within that stage when building the opening
 scenario tree. This is orthogonal to the sampling scheme (see
 [Sampling Schemes](#sampling-schemes) below), which controls where the
 forward-pass noise comes from. The noise method controls the algorithm;
 the sampling scheme controls the source.
+
+All methods produce standardized η ~ N(0,1) vectors. Everything downstream
+— the spectral correlation transform, the PAR model, and the LP constraint
+patching — is identical regardless of which method produced the noise.
+Switching from SAA to Sobol is a one-field configuration change.
 
 The default method is `"saa"` when `sampling_method` is omitted.
 
@@ -574,6 +585,14 @@ SAA and emits a diagnostic warning.
 
 ### Comparison
 
+The following diagrams illustrate how each method distributes samples. SAA
+shows random clumps and gaps; LHS guarantees one sample per stratum; Sobol
+and Halton fill the space with low-discrepancy sequences.
+
+![Sampling methods — 1D comparison](../images/diagrams/sampling-1d-comparison.svg)
+
+![Sampling methods — 2D comparison](../images/diagrams/sampling-2d-comparison.svg)
+
 | Method     | Convergence rate  | Dimension limit | Scenario count        | Best for                                  |
 | ---------- | ----------------- | --------------- | --------------------- | ----------------------------------------- |
 | SAA        | O(N^{-1/2})       | None            | Any                   | General use, small branching factors      |
@@ -655,6 +674,8 @@ All three class keys (`"inflow"`, `"load"`, `"ncs"`) default to
 `"in_sample"` when absent. The `"seed"` field is shared across all classes
 and is required when any class uses `"out_of_sample"`, `"historical"`, or
 `"external"`.
+
+![Per-class ForwardSampler — each entity class chooses its noise source](../images/diagrams/forward-sampler.svg)
 
 > **Independent simulation sampling:** `simulation.scenario_source` in
 > `config.json` can be set independently of `training.scenario_source`. When
@@ -809,6 +830,16 @@ a flat buffer indexed by `(window, stage, hydro)`. During the forward pass, the
 `ClassSampler::Historical` variant selects a window deterministically from the
 seed and iteration/scenario indices, then retrieves the pre-computed eta slice
 for each stage without any per-step recomputation.
+
+#### Scenario selection: random without replacement
+
+Historical, External, and LHS all use the same underlying mechanism to
+select items from a pool without repetition: a seed-derived Fisher-Yates
+permutation. Each forward-pass scenario gets a unique window (or external
+trajectory, or LHS stratum) within each round, with no inter-worker
+communication required.
+
+![One primitive, three applications — random without replacement via seed-derived permutation](../images/diagrams/permutation-primitive.svg)
 
 ### External
 

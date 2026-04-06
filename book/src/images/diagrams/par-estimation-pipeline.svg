@@ -1,0 +1,65 @@
+<svg width="680" height="520" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, 'Segoe UI', sans-serif;">
+  <style>
+    text { fill: #c8c6c2; }
+    .title { font-size: 14px; font-weight: 500; }
+    .sub { font-size: 12px; fill: #8b9298; }
+    .arr { stroke: #8b9298; stroke-width: 1; fill: none; }
+    .leader { stroke: #5f5e5a; stroke-width: 0.5; stroke-dasharray: 3 2; fill: none; }
+    marker path { fill: none; stroke: #8b9298; stroke-width: 1.5; }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <rect width="680" height="520" fill="#0f1419" rx="8"/>
+
+  <text class="title" x="340" y="30" text-anchor="middle" fill="#e8e6e3">PAR(p) estimation pipeline</text>
+
+  <!-- Raw observations -->
+  <rect x="220" y="48" width="240" height="40" rx="8" fill="#1a2028" stroke="#2d3440" stroke-width="0.5"/>
+  <text class="title" x="340" y="72" text-anchor="middle" fill="#e8e6e3">Raw observations aₜ</text>
+  <line x1="340" y1="88" x2="340" y2="118" class="arr" marker-end="url(#a)"/>
+
+  <!-- Seasonal standardization -->
+  <rect x="180" y="118" width="320" height="52" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="340" y="138" text-anchor="middle" fill="#5dcaa5">Seasonal standardization</text>
+  <text class="sub" x="340" y="158" text-anchor="middle" fill="#0f6e56">zₜ = (aₜ − μₘ) / sₘ</text>
+  <line x1="340" y1="170" x2="340" y2="200" class="arr" marker-end="url(#a)"/>
+
+  <!-- Periodic autocorrelation -->
+  <rect x="150" y="200" width="380" height="52" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="340" y="220" text-anchor="middle" fill="#5dcaa5">Periodic autocorrelation</text>
+  <text class="sub" x="340" y="240" text-anchor="middle" fill="#0f6e56">ρ(m, ℓ) = γ(m, ℓ) / (sₘ · sₘ₋ₗ)</text>
+  <line x1="340" y1="252" x2="340" y2="282" class="arr" marker-end="url(#a)"/>
+
+  <!-- PACF order selection -->
+  <rect x="160" y="282" width="360" height="52" rx="8" fill="#26215c" stroke="#534ab7" stroke-width="0.5"/>
+  <text class="title" x="340" y="302" text-anchor="middle" fill="#afa9ec">PACF order selection</text>
+  <text class="sub" x="340" y="322" text-anchor="middle" fill="#534ab7">|PACF(k)| > 1.96/√N → select order p</text>
+  <line x1="340" y1="334" x2="340" y2="364" class="arr" marker-end="url(#a)"/>
+
+  <!-- Periodic YW solve -->
+  <rect x="140" y="364" width="400" height="52" rx="8" fill="#26215c" stroke="#534ab7" stroke-width="0.5"/>
+  <text class="title" x="340" y="384" text-anchor="middle" fill="#afa9ec">Periodic Yule-Walker solve</text>
+  <text class="sub" x="340" y="404" text-anchor="middle" fill="#534ab7">R · ψ* = r → coefficients + σ²</text>
+  <line x1="340" y1="416" x2="340" y2="446" class="arr" marker-end="url(#a)"/>
+
+  <!-- InflowModel output -->
+  <rect x="140" y="446" width="400" height="52" rx="8" fill="#4a1b0c" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="title" x="340" y="466" text-anchor="middle" fill="#f0997b">InflowModel output</text>
+  <text class="sub" x="340" y="486" text-anchor="middle" fill="#993c1d">ψ* (dimensionless) + residual_std_ratio</text>
+
+  <!-- Side annotations -->
+  <text class="sub" x="60" y="140" fill="#8b9298">μₘ, sₘ from</text>
+  <text class="sub" x="60" y="156" fill="#8b9298">history (Role 1)</text>
+  <line class="leader" x1="130" y1="148" x2="178" y2="138"/>
+  <circle cx="130" cy="148" r="2" fill="#8b9298"/>
+
+  <text class="sub" x="570" y="305" fill="#8b9298">Per (hydro,</text>
+  <text class="sub" x="570" y="321" fill="#8b9298">season)</text>
+  <line class="leader" x1="560" y1="310" x2="522" y2="302"/>
+  <circle cx="560" cy="310" r="2" fill="#8b9298"/>
+
+  <text class="sub" x="570" y="390" fill="#8b9298">Scale-invariant:</text>
+  <text class="sub" x="570" y="406" fill="#8b9298">depends only on ρ</text>
+  <line class="leader" x1="560" y1="396" x2="542" y2="390"/>
+  <circle cx="560" cy="396" r="2" fill="#8b9298"/>
+</svg>

@@ -16,7 +16,7 @@ use crate::{
     InitialConditions, Line, LoadModel, NcsModel, NetworkTopology, NonControllableSource,
     PolicyGraph, PumpingStation, ResolvedBounds, ResolvedExchangeFactors,
     ResolvedGenericConstraintBounds, ResolvedLoadFactors, ResolvedNcsBounds, ResolvedNcsFactors,
-    ResolvedPenalties, ScenarioSource, Stage, Thermal, ValidationError,
+    ResolvedPenalties, Stage, Thermal, ValidationError,
 };
 
 /// Top-level system representation.
@@ -127,8 +127,6 @@ pub struct System {
     initial_conditions: InitialConditions,
     /// User-defined generic linear constraints, sorted by `id`.
     generic_constraints: Vec<GenericConstraint>,
-    /// Top-level scenario source configuration (sampling scheme, seed).
-    scenario_source: ScenarioSource,
 
     // Raw scenario library data (H6 — historical and external sampling)
     /// Raw historical inflow observations per (hydro, date) pair.
@@ -406,12 +404,6 @@ impl System {
         &self.generic_constraints
     }
 
-    /// Returns a reference to the scenario source configuration.
-    #[must_use]
-    pub fn scenario_source(&self) -> &ScenarioSource {
-        &self.scenario_source
-    }
-
     /// Returns the raw historical inflow observations, sorted by `(hydro_id, date)`.
     ///
     /// Returns an empty slice when `scenarios/inflow_history.parquet` was absent
@@ -573,7 +565,6 @@ pub struct SystemBuilder {
     correlation: CorrelationModel,
     initial_conditions: InitialConditions,
     generic_constraints: Vec<GenericConstraint>,
-    scenario_source: ScenarioSource,
     inflow_history: Vec<InflowHistoryRow>,
     external_scenarios: Vec<ExternalScenarioRow>,
     external_load_scenarios: Vec<ExternalLoadRow>,
@@ -616,7 +607,6 @@ impl SystemBuilder {
             correlation: CorrelationModel::default(),
             initial_conditions: InitialConditions::default(),
             generic_constraints: Vec::new(),
-            scenario_source: ScenarioSource::default(),
             inflow_history: Vec::new(),
             external_scenarios: Vec::new(),
             external_load_scenarios: Vec::new(),
@@ -800,13 +790,6 @@ impl SystemBuilder {
     #[must_use]
     pub fn generic_constraints(mut self, generic_constraints: Vec<GenericConstraint>) -> Self {
         self.generic_constraints = generic_constraints;
-        self
-    }
-
-    /// Set the scenario source configuration.
-    #[must_use]
-    pub fn scenario_source(mut self, scenario_source: ScenarioSource) -> Self {
-        self.scenario_source = scenario_source;
         self
     }
 
@@ -998,7 +981,6 @@ impl SystemBuilder {
             correlation: self.correlation,
             initial_conditions: self.initial_conditions,
             generic_constraints: self.generic_constraints,
-            scenario_source: self.scenario_source,
             inflow_history: self.inflow_history,
             external_scenarios: self.external_scenarios,
             external_load_scenarios: self.external_load_scenarios,
@@ -2204,12 +2186,10 @@ mod tests {
         assert_eq!(system.bounds().n_stages(), 0);
         // Generic constraint bounds default to empty.
         assert!(!system.resolved_generic_bounds().is_active(0, 0));
-        assert!(
-            system
-                .resolved_generic_bounds()
-                .bounds_for_stage(0, 0)
-                .is_empty()
-        );
+        assert!(system
+            .resolved_generic_bounds()
+            .bounds_for_stage(0, 0)
+            .is_empty());
     }
 
     /// Verify `System::resolved_generic_bounds()` accessor with a non-empty table.

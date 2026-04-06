@@ -497,7 +497,7 @@ mod tests {
         };
         use cobre_core::{
             entities::DeficitSegment, initial_conditions::InitialConditions,
-            penalty::GlobalPenaltyDefaults, scenario::ScenarioSource,
+            penalty::GlobalPenaltyDefaults,
         };
 
         let config = Config {
@@ -513,6 +513,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig::default(),
@@ -553,7 +554,6 @@ mod tests {
             stages: StagesData {
                 stages: vec![make_stage(0), make_stage(1)],
                 policy_graph: PolicyGraph::default(),
-                scenario_source: ScenarioSource::default(),
             },
             initial_conditions: InitialConditions {
                 storage: vec![],
@@ -951,14 +951,11 @@ mod tests {
     #[test]
     fn test_pre_study_stages_not_checked() {
         use crate::stages::StagesData;
-        use cobre_core::scenario::ScenarioSource;
-
         let mut data = base_parsed_data();
         // Include one pre-study stage (id = -1) alongside the study stages.
         data.stages = StagesData {
             stages: vec![make_pre_study_stage(-1), make_stage(0), make_stage(1)],
             policy_graph: PolicyGraph::default(),
-            scenario_source: ScenarioSource::default(),
         };
 
         data.hydros = vec![make_hydro(

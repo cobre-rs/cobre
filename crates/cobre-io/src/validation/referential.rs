@@ -1050,7 +1050,6 @@ mod tests {
             "annual_discount_rate": 0.06,
             "transitions": []
         },
-        "scenario_source": { "seed": 42 },
         "stages": [
             {
                 "id": 0,

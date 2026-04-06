@@ -1,8 +1,12 @@
-//! Parsing for `stages.json` — temporal structure, policy graph, and scenario source.
+//! Parsing for `stages.json` — temporal structure and policy graph.
 //!
 //! [`parse_stages`] reads `stages.json` from the case directory root and returns a
-//! [`StagesData`] struct containing the sorted `Vec<Stage>`, the [`PolicyGraph`], and
-//! the top-level [`ScenarioSource`].
+//! [`StagesData`] struct containing the sorted `Vec<Stage>` and the [`PolicyGraph`].
+//!
+//! Scenario source configuration has moved to `config.json`
+//! (`training.scenario_source` / `simulation.scenario_source`). If a `stages.json`
+//! still contains a `scenario_source` key, `parse_stages` returns a
+//! [`LoadError::SchemaError`] directing the user to move the field.
 //!
 //! ## JSON structure
 //!
@@ -17,13 +21,6 @@
 //!     "type": "finite_horizon",
 //!     "annual_discount_rate": 0.06,
 //!     "transitions": [{ "source_id": 0, "target_id": 1, "probability": 1.0 }]
-//!   },
-//!   "scenario_source": {
-//!     "seed": 42,
-//!     "historical_years": [1940, 1953, 1971],
-//!     "inflow": { "scheme": "historical" },
-//!     "load": { "scheme": "out_of_sample" },
-//!     "ncs": { "scheme": "in_sample" }
 //!   },
 //!   "pre_study_stages": [
 //!     { "id": -1, "start_date": "2023-12-01", "end_date": "2024-01-01" }
@@ -61,13 +58,10 @@
 //! block hours sum equals stage duration) is deferred to Epic 06 Layer 5.
 
 use chrono::NaiveDate;
-use cobre_core::{
-    scenario::{HistoricalYears, SamplingScheme, ScenarioSource},
-    temporal::{
-        Block, BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig,
-        SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig,
-        Transition,
-    },
+use cobre_core::temporal::{
+    Block, BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig,
+    SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageRiskConfig, StageStateConfig,
+    Transition,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -94,9 +88,11 @@ pub(crate) struct RawStagesFile {
     /// Policy graph: horizon type, discount rate, and transitions.
     policy_graph: RawPolicyGraph,
 
-    /// Top-level scenario source. Absent or null means `ScenarioSource::default()`.
+    /// Detection field: present when a `stages.json` still contains the old
+    /// `scenario_source` key. `parse_stages` rejects it with a clear migration
+    /// error directing the user to move the field to `config.json`.
     #[serde(default)]
-    scenario_source: Option<RawScenarioSource>,
+    scenario_source: Option<serde_json::Value>,
 
     /// Pre-study stages (negative IDs). Absent or null means empty.
     #[serde(default)]
@@ -164,77 +160,6 @@ pub(crate) struct RawTransition {
     /// Optional per-transition discount rate override.
     #[serde(default)]
     annual_discount_rate_override: Option<f64>,
-}
-
-/// Intermediate type for the `scenario_source` sub-object.
-///
-/// Accepts the per-class format introduced in v0.4.0:
-/// ```json
-/// {
-///   "seed": 42,
-///   "historical_years": [1940, 1953, 1971],
-///   "inflow": { "scheme": "historical" },
-///   "load":   { "scheme": "out_of_sample" },
-///   "ncs":    { "scheme": "in_sample" }
-/// }
-/// ```
-///
-/// All class keys are optional and default to `in_sample` when absent.
-/// The `sampling_scheme` field is reserved to detect the old (pre-v0.4.0)
-/// flat format and return a clear backward-incompatibility error.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct RawScenarioSource {
-    /// Optional random seed.
-    #[serde(default)]
-    seed: Option<i64>,
-    /// Historical year pool. Absent means `None` (auto-discover at validation time).
-    #[serde(default)]
-    historical_years: Option<RawHistoricalYears>,
-    /// Inflow class config. Absent defaults to `in_sample`.
-    #[serde(default)]
-    inflow: Option<RawClassConfig>,
-    /// Load class config. Absent defaults to `in_sample`.
-    #[serde(default)]
-    load: Option<RawClassConfig>,
-    /// NCS class config. Absent defaults to `in_sample`.
-    #[serde(default)]
-    ncs: Option<RawClassConfig>,
-    /// Detects the old pre-v0.4.0 flat format. Present → backward-incompatibility error.
-    #[serde(default)]
-    sampling_scheme: Option<serde_json::Value>,
-}
-
-/// Intermediate type for a per-class scenario configuration.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct RawClassConfig {
-    /// Scheme string: `"in_sample"`, `"out_of_sample"`, `"external"`, or `"historical"`.
-    scheme: String,
-}
-
-/// Intermediate type for `historical_years`.
-///
-/// Handles two JSON representations via `#[serde(untagged)]`:
-/// - Array: `[1940, 1953, 1971]`  → [`RawHistoricalYears::List`]
-/// - Object: `{"from": 1940, "to": 2010}` → [`RawHistoricalYears::Range`]
-///
-/// The `List` variant must be declared first so serde tries it before `Range`
-/// (an integer array is tried before an object).
-#[derive(Deserialize)]
-#[serde(untagged)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-enum RawHistoricalYears {
-    /// Explicit list of year integers.
-    List(Vec<i32>),
-    /// Inclusive range shorthand.
-    Range {
-        /// First year (inclusive).
-        from: i32,
-        /// Last year (inclusive).
-        to: i32,
-    },
 }
 
 /// Intermediate type for a study stage entry.
@@ -368,8 +293,9 @@ fn default_true() -> bool {
 
 /// Parsed output from `stages.json`.
 ///
-/// Contains all stages (study + pre-study) sorted by `id` ascending, the
-/// policy graph, and the top-level scenario source configuration.
+/// Contains all stages (study + pre-study) sorted by `id` ascending and the
+/// policy graph. Scenario source configuration is no longer stored here; it
+/// lives in `config.json` and is parsed by `parse_config`.
 ///
 /// # Examples
 ///
@@ -387,8 +313,6 @@ pub struct StagesData {
     pub stages: Vec<Stage>,
     /// Policy graph with transitions, horizon type, discount rate, and season map.
     pub policy_graph: PolicyGraph,
-    /// Top-level scenario source configuration.
-    pub scenario_source: ScenarioSource,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -431,6 +355,20 @@ pub fn parse_stages(path: &Path) -> Result<StagesData, LoadError> {
 
     let raw: RawStagesFile =
         serde_json::from_str(&raw_text).map_err(|e| LoadError::parse(path, e.to_string()))?;
+
+    // Reject stages.json files that still contain the old `scenario_source` key.
+    // The field has moved to config.json (training.scenario_source /
+    // simulation.scenario_source).
+    if raw.scenario_source.is_some() {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: "scenario_source".to_string(),
+            message: "the 'scenario_source' field has moved from stages.json to config.json \
+                      (training.scenario_source / simulation.scenario_source). \
+                      Remove it from stages.json."
+                .to_string(),
+        });
+    }
 
     validate_raw_stages(&raw, path)?;
 
@@ -643,10 +581,9 @@ fn validate_risk_measure(
 /// Convert validated raw stages data into [`StagesData`].
 ///
 /// Parses dates, constructs [`Stage`] and [`Block`] instances, builds the
-/// [`PolicyGraph`] and [`ScenarioSource`], then sorts all stages by `id`
-/// ascending and assigns `index` after sort.
+/// [`PolicyGraph`], then sorts all stages by `id` ascending and assigns
+/// `index` after sort.
 fn convert_stages(raw: RawStagesFile, path: &Path) -> Result<StagesData, LoadError> {
-    let scenario_source = convert_scenario_source(raw.scenario_source, path)?;
     let season_map = convert_season_definitions(raw.season_definitions, path)?;
     let mut policy_graph = convert_policy_graph(raw.policy_graph, path)?;
     policy_graph.season_map = season_map;
@@ -755,7 +692,6 @@ fn convert_stages(raw: RawStagesFile, path: &Path) -> Result<StagesData, LoadErr
     Ok(StagesData {
         stages: all_stages,
         policy_graph,
-        scenario_source,
     })
 }
 
@@ -781,140 +717,6 @@ fn convert_policy_graph(raw: RawPolicyGraph, path: &Path) -> Result<PolicyGraph,
         // season_map is set by the caller after convert_season_definitions runs.
         season_map: None,
     })
-}
-
-/// Convert the raw `scenario_source` into a [`ScenarioSource`].
-///
-/// Returns a [`LoadError::SchemaError`] if the old flat format
-/// (`"sampling_scheme"` key) is detected, or if any class scheme string is
-/// not one of the recognised values.
-fn convert_scenario_source(
-    raw: Option<RawScenarioSource>,
-    path: &Path,
-) -> Result<ScenarioSource, LoadError> {
-    let Some(r) = raw else {
-        return Ok(ScenarioSource::default());
-    };
-
-    // Detect the old pre-v0.4.0 flat format and return a clear error.
-    if r.sampling_scheme.is_some() {
-        return Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: "scenario_source".to_string(),
-            message: concat!(
-                "the flat 'sampling_scheme' field is no longer supported (v0.4.0 break). ",
-                "Use the per-class format instead: ",
-                r#"{"inflow": {"scheme": "in_sample"}, "load": {"scheme": "in_sample"}, "ncs": {"scheme": "in_sample"}}"#
-            )
-            .to_string(),
-        });
-    }
-
-    let inflow_scheme = convert_class_scheme(r.inflow.as_ref(), "inflow", path)?;
-    let load_scheme = convert_class_scheme(r.load.as_ref(), "load", path)?;
-    let ncs_scheme = convert_class_scheme(r.ncs.as_ref(), "ncs", path)?;
-
-    let source = ScenarioSource {
-        inflow_scheme,
-        load_scheme,
-        ncs_scheme,
-        seed: r.seed,
-        historical_years: r.historical_years.map(|hy| match hy {
-            RawHistoricalYears::List(years) => HistoricalYears::List(years),
-            RawHistoricalYears::Range { from, to } => HistoricalYears::Range { from, to },
-        }),
-    };
-
-    validate_scenario_source(&source, path)?;
-
-    Ok(source)
-}
-
-/// Convert a class config to its sampling scheme, defaulting to `in_sample` if absent.
-fn convert_class_scheme(
-    class: Option<&RawClassConfig>,
-    class_name: &str,
-    path: &Path,
-) -> Result<SamplingScheme, LoadError> {
-    let scheme_str = class.map_or("in_sample", |c| c.scheme.as_str());
-    let field = format!("scenario_source.{class_name}.scheme");
-    convert_sampling_scheme(scheme_str, &field, path)
-}
-
-/// Tier 1 structural validation of a parsed [`ScenarioSource`].
-///
-/// Checks that can be performed purely from the `scenario_source` sub-object in
-/// `stages.json`, without cross-referencing other files or entity counts.
-///
-/// ## Checks performed
-///
-/// - **V1.2**: `historical_years` must not be specified if no class uses `Historical`.
-/// - **V1.3**: `seed` is required when any class uses `OutOfSample`, `Historical`,
-///   or `External`.
-/// - **V1.4**: If `historical_years` is a `Range`, `from` must be `<= to`.
-///
-/// V1.1 (valid scheme values) is enforced implicitly by [`convert_sampling_scheme`]
-/// during parsing and requires no additional code here.
-fn validate_scenario_source(source: &ScenarioSource, path: &Path) -> Result<(), LoadError> {
-    let uses_historical = any_scheme_is(source, SamplingScheme::Historical);
-
-    if source.historical_years.is_some() && !uses_historical {
-        return Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: "scenario_source.historical_years".to_string(),
-            message: "historical_years is specified but no class uses the 'historical' scheme"
-                .to_string(),
-        });
-    }
-
-    // V1.x: Historical scheme is only valid for the inflow class.
-    if source.load_scheme == SamplingScheme::Historical {
-        return Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: "scenario_source.load.scheme".to_string(),
-            message: "'historical' scheme is only valid for the inflow class; load class must use in_sample, out_of_sample, or external".to_string(),
-        });
-    }
-    if source.ncs_scheme == SamplingScheme::Historical {
-        return Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: "scenario_source.ncs.scheme".to_string(),
-            message: "'historical' scheme is only valid for the inflow class; ncs class must use in_sample, out_of_sample, or external".to_string(),
-        });
-    }
-
-    let needs_seed = !all_schemes_are(source, SamplingScheme::InSample);
-    if needs_seed && source.seed.is_none() {
-        return Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: "scenario_source.seed".to_string(),
-            message:
-                "seed is required when any class uses out_of_sample, historical, or external scheme"
-                    .to_string(),
-        });
-    }
-
-    if let Some(HistoricalYears::Range { from, to }) = source.historical_years {
-        if from > to {
-            return Err(LoadError::SchemaError {
-                path: path.to_path_buf(),
-                field: "scenario_source.historical_years".to_string(),
-                message: format!("range 'from' ({from}) must be <= 'to' ({to})"),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-/// Check if any class scheme matches the given value.
-fn any_scheme_is(source: &ScenarioSource, scheme: SamplingScheme) -> bool {
-    source.inflow_scheme == scheme || source.load_scheme == scheme || source.ncs_scheme == scheme
-}
-
-/// Check if all class schemes are the given value.
-fn all_schemes_are(source: &ScenarioSource, scheme: SamplingScheme) -> bool {
-    source.inflow_scheme == scheme && source.load_scheme == scheme && source.ncs_scheme == scheme
 }
 
 /// Convert raw blocks into sorted `Vec<Block>` (sorted by index ascending).
@@ -986,27 +788,6 @@ fn convert_noise_method(s: &str, field: &str, path: &Path) -> Result<NoiseMethod
             field: field.to_string(),
             message: format!(
                 "unknown sampling_method '{other}', expected one of: saa, lhs, qmc_sobol, qmc_halton, selective"
-            ),
-        }),
-    }
-}
-
-/// Convert a `scheme` string to [`SamplingScheme`].
-///
-/// `field` is the dot-separated JSON path to the scheme key (e.g.
-/// `"scenario_source.inflow.scheme"`), used in the error message so the caller
-/// can identify which class has the invalid value.
-fn convert_sampling_scheme(s: &str, field: &str, path: &Path) -> Result<SamplingScheme, LoadError> {
-    match s {
-        "in_sample" => Ok(SamplingScheme::InSample),
-        "out_of_sample" => Ok(SamplingScheme::OutOfSample),
-        "external" => Ok(SamplingScheme::External),
-        "historical" => Ok(SamplingScheme::Historical),
-        other => Err(LoadError::SchemaError {
-            path: path.to_path_buf(),
-            field: field.to_string(),
-            message: format!(
-                "unknown scheme '{other}', expected one of: in_sample, out_of_sample, external, historical"
             ),
         }),
     }
@@ -1116,7 +897,6 @@ mod tests {
           { "source_id": 1, "target_id": 2, "probability": 1.0 }
         ]
       },
-      "scenario_source": { "seed": 42 },
       "stages": [
         {
           "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
@@ -1247,20 +1027,14 @@ mod tests {
         }
     }
 
-    // ── AC: per-class scenario_source ────────────────────────────────────────
+    // ── AC: scenario_source in stages.json rejected ──────────────────────────
 
-    /// Given a full per-class `scenario_source` with all three classes specified,
-    /// `parse_stages` returns `Ok` with each per-class scheme set correctly.
+    /// Given a `stages.json` without `scenario_source`, `parse_stages` succeeds
+    /// and returns a `StagesData` with no `scenario_source` field.
     #[test]
-    fn test_parse_per_class_scenario_source() {
+    fn test_stages_without_scenario_source_succeeds() {
         let json = r#"{
           "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 7,
-            "inflow": { "scheme": "historical" },
-            "load":   { "scheme": "out_of_sample" },
-            "ncs":    { "scheme": "external" }
-          },
           "stages": [{
             "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
             "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
@@ -1268,176 +1042,18 @@ mod tests {
           }]
         }"#;
         let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        assert_eq!(
-            data.scenario_source.inflow_scheme,
-            SamplingScheme::Historical
-        );
-        assert_eq!(
-            data.scenario_source.load_scheme,
-            SamplingScheme::OutOfSample
-        );
-        assert_eq!(data.scenario_source.ncs_scheme, SamplingScheme::External);
-        assert_eq!(data.scenario_source.seed, Some(7));
+        parse_stages(f.path()).unwrap();
     }
 
-    // ── AC: absent class keys default to InSample ─────────────────────────────
-
-    /// Given `scenario_source: {"seed": 7}` with no class sub-objects,
-    /// all per-class schemes default to `InSample`.
+    /// Given a `stages.json` with `"scenario_source": {"seed": 42}`,
+    /// `parse_stages` returns `Err(LoadError::SchemaError)` with field
+    /// `"scenario_source"` and a message containing "moved from stages.json to
+    /// config.json".
     #[test]
-    fn test_parse_scenario_source_defaults() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": { "seed": 7 },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        assert_eq!(data.scenario_source.inflow_scheme, SamplingScheme::InSample);
-        assert_eq!(data.scenario_source.load_scheme, SamplingScheme::InSample);
-        assert_eq!(data.scenario_source.ncs_scheme, SamplingScheme::InSample);
-        assert_eq!(data.scenario_source.seed, Some(7));
-    }
-
-    // ── AC: partial per-class — only inflow and load, ncs defaults ────────────
-
-    /// Given `scenario_source` with only `inflow` and `load` specified,
-    /// `ncs_scheme` defaults to `InSample`.
-    #[test]
-    fn test_parse_scenario_source_partial_classes() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 42,
-            "inflow": { "scheme": "historical" },
-            "load":   { "scheme": "out_of_sample" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        assert_eq!(
-            data.scenario_source.inflow_scheme,
-            SamplingScheme::Historical
-        );
-        assert_eq!(
-            data.scenario_source.load_scheme,
-            SamplingScheme::OutOfSample
-        );
-        assert_eq!(data.scenario_source.ncs_scheme, SamplingScheme::InSample);
-        assert_eq!(data.scenario_source.seed, Some(42));
-    }
-
-    // ── AC: historical_years as list ──────────────────────────────────────────
-
-    /// Given `"historical_years": [1940, 1953]`, the parsed value is
-    /// `Some(HistoricalYears::List(vec![1940, 1953]))`.
-    #[test]
-    fn test_parse_historical_years_list() {
-        use cobre_core::scenario::HistoricalYears;
-
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 1,
-            "historical_years": [1940, 1953],
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        match data.scenario_source.historical_years {
-            Some(HistoricalYears::List(years)) => {
-                assert_eq!(years, vec![1940, 1953]);
-            }
-            other => panic!("expected HistoricalYears::List, got {other:?}"),
-        }
-    }
-
-    // ── AC: historical_years as range ─────────────────────────────────────────
-
-    /// Given `"historical_years": {"from": 1940, "to": 2010}`, the parsed value is
-    /// `Some(HistoricalYears::Range { from: 1940, to: 2010 })`.
-    #[test]
-    fn test_parse_historical_years_range() {
-        use cobre_core::scenario::HistoricalYears;
-
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 1,
-            "historical_years": { "from": 1940, "to": 2010 },
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        match data.scenario_source.historical_years {
-            Some(HistoricalYears::Range { from, to }) => {
-                assert_eq!(from, 1940);
-                assert_eq!(to, 2010);
-            }
-            other => panic!("expected HistoricalYears::Range, got {other:?}"),
-        }
-    }
-
-    // ── AC: absent historical_years -> None ───────────────────────────────────
-
-    /// Given `scenario_source` without `historical_years`, the field is `None`.
-    #[test]
-    fn test_parse_scenario_source_absent_historical_years() {
+    fn test_stages_with_scenario_source_rejected() {
         let json = r#"{
           "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
           "scenario_source": { "seed": 42 },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-
-        assert!(
-            data.scenario_source.historical_years.is_none(),
-            "absent historical_years should be None"
-        );
-    }
-
-    // ── AC: old flat format rejected ──────────────────────────────────────────
-
-    /// Given the old flat format `"scenario_source": {"sampling_scheme": "in_sample"}`,
-    /// `parse_stages` returns `Err(SchemaError)` with field `"scenario_source"` and
-    /// a message containing "no longer supported".
-    #[test]
-    fn test_parse_old_flat_format_rejected() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": { "sampling_scheme": "in_sample" },
           "stages": [{
             "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
             "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
@@ -1454,304 +1070,13 @@ mod tests {
                     "field should be 'scenario_source', got: {field}"
                 );
                 assert!(
-                    message.contains("no longer supported"),
-                    "message should contain 'no longer supported', got: {message}"
+                    message.contains("moved from stages.json to config.json"),
+                    "message should contain 'moved from stages.json to config.json', got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),
         }
     }
-
-    // ── AC: invalid class scheme string ───────────────────────────────────────
-
-    /// Given `"inflow": {"scheme": "bogus"}`, `parse_stages` returns
-    /// `Err(SchemaError)` with a field containing `"inflow.scheme"`.
-    #[test]
-    fn test_parse_invalid_class_scheme() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": { "inflow": { "scheme": "bogus" } },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert!(
-                    field.contains("inflow.scheme"),
-                    "field should contain 'inflow.scheme', got: {field}"
-                );
-                assert!(
-                    message.contains("bogus"),
-                    "message should contain 'bogus', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    // ── Tier 1 validation (V1.2 – V1.4) ─────────────────────────────────────
-
-    /// V1.2: `historical_years` specified but no class uses `historical` scheme →
-    /// `SchemaError` with field `"scenario_source.historical_years"`.
-    #[test]
-    fn test_v1_2_historical_years_without_historical_scheme() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "historical_years": [1940],
-            "inflow": { "scheme": "in_sample" },
-            "load":   { "scheme": "in_sample" },
-            "ncs":    { "scheme": "in_sample" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert_eq!(
-                    field, "scenario_source.historical_years",
-                    "field should be 'scenario_source.historical_years', got: {field}"
-                );
-                assert!(
-                    message.contains("no class uses the 'historical' scheme"),
-                    "message should mention 'no class uses the \\'historical\\' scheme', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// V1.2 passing case: `historical_years` specified and `inflow_scheme` is
-    /// `historical` → `Ok`.
-    #[test]
-    fn test_v1_2_historical_years_with_historical_scheme_passes() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 1,
-            "historical_years": [1940],
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        parse_stages(f.path()).unwrap();
-    }
-
-    /// V1.3: `load_scheme` is `out_of_sample` and `seed` is absent →
-    /// `SchemaError` with field `"scenario_source.seed"`.
-    #[test]
-    fn test_v1_3_seed_required_for_out_of_sample() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "load": { "scheme": "out_of_sample" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert_eq!(
-                    field, "scenario_source.seed",
-                    "field should be 'scenario_source.seed', got: {field}"
-                );
-                assert!(
-                    message.contains("seed is required"),
-                    "message should contain 'seed is required', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// V1.3: `inflow_scheme` is `historical` and `seed` is absent →
-    /// `SchemaError` with field `"scenario_source.seed"`.
-    #[test]
-    fn test_v1_3_seed_required_for_historical() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert_eq!(
-                    field, "scenario_source.seed",
-                    "field should be 'scenario_source.seed', got: {field}"
-                );
-                assert!(
-                    message.contains("seed is required"),
-                    "message should contain 'seed is required', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// V1.3: `ncs_scheme` is `external` and `seed` is absent →
-    /// `SchemaError` with field `"scenario_source.seed"`.
-    #[test]
-    fn test_v1_3_seed_required_for_external() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "ncs": { "scheme": "external" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert_eq!(
-                    field, "scenario_source.seed",
-                    "field should be 'scenario_source.seed', got: {field}"
-                );
-                assert!(
-                    message.contains("seed is required"),
-                    "message should contain 'seed is required', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// V1.3 passing case: all schemes are `in_sample` and `seed` is absent → `Ok`.
-    #[test]
-    fn test_v1_3_seed_not_required_for_all_in_sample() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "inflow": { "scheme": "in_sample" },
-            "load":   { "scheme": "in_sample" },
-            "ncs":    { "scheme": "in_sample" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        parse_stages(f.path()).unwrap();
-    }
-
-    /// V1.4: `historical_years` range with `from > to` →
-    /// `SchemaError` with field `"scenario_source.historical_years"` and message
-    /// containing both year values.
-    #[test]
-    fn test_v1_4_range_from_greater_than_to() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 1,
-            "historical_years": { "from": 2010, "to": 1940 },
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        let err = parse_stages(f.path()).unwrap_err();
-
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert_eq!(
-                    field, "scenario_source.historical_years",
-                    "field should be 'scenario_source.historical_years', got: {field}"
-                );
-                assert!(
-                    message.contains("'from' (2010) must be <= 'to' (1940)"),
-                    "message should contain year values, got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// V1.4 passing case: `historical_years` range with `from == to` → `Ok`.
-    #[test]
-    fn test_v1_4_range_from_equals_to_passes() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 1,
-            "historical_years": { "from": 2000, "to": 2000 },
-            "inflow": { "scheme": "historical" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        parse_stages(f.path()).unwrap();
-    }
-
-    /// All validation checks pass with a valid diverse per-class config → `Ok`.
-    #[test]
-    fn test_all_valid_config_passes() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "scenario_source": {
-            "seed": 99,
-            "historical_years": [1940, 1950, 1960],
-            "inflow": { "scheme": "historical" },
-            "load":   { "scheme": "out_of_sample" },
-            "ncs":    { "scheme": "external" }
-          },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "LEVE", "hours": 744.0 }],
-            "num_scenarios": 50
-          }]
-        }"#;
-        let f = write_json(json);
-        parse_stages(f.path()).unwrap();
-    }
-
-    // ── AC: absent scenario_source key -> ScenarioSource::default() ───────────
 
     // ── AC: season_definitions with 12 monthly seasons ────────────────────────
 
@@ -2195,22 +1520,6 @@ mod tests {
     }
 
     // ── Additional valid cases ────────────────────────────────────────────────
-
-    /// No `scenario_source` in JSON -> `ScenarioSource::default()`.
-    #[test]
-    fn test_absent_scenario_source_uses_default() {
-        let json = r#"{
-          "policy_graph": { "type": "finite_horizon", "annual_discount_rate": 0.0, "transitions": [] },
-          "stages": [{
-            "id": 0, "start_date": "2024-01-01", "end_date": "2024-02-01",
-            "blocks": [{ "id": 0, "name": "A", "hours": 744.0 }], "num_scenarios": 10
-          }]
-        }"#;
-        let f = write_json(json);
-        let data = parse_stages(f.path()).unwrap();
-        assert_eq!(data.scenario_source.inflow_scheme, SamplingScheme::InSample);
-        assert!(data.scenario_source.seed.is_none());
-    }
 
     /// Stages in reverse ID order in JSON are returned sorted ascending.
     #[test]

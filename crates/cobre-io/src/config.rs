@@ -23,6 +23,8 @@
 //! println!("forward_passes = {:?}", cfg.training.forward_passes);
 //! ```
 
+use cobre_core::scenario::{HistoricalYears, SamplingScheme, ScenarioSource};
+
 use crate::LoadError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -145,6 +147,11 @@ pub struct TrainingConfig {
     /// LP solver retry settings.
     #[serde(default)]
     pub solver: TrainingSolverConfig,
+
+    /// Scenario source configuration for the training forward pass.
+    /// When absent, all classes default to `in_sample`.
+    #[serde(default)]
+    pub scenario_source: Option<RawScenarioSourceConfig>,
 }
 
 impl TrainingConfig {
@@ -213,6 +220,68 @@ impl Default for TrainingSolverConfig {
             retry_time_budget_seconds: 30.0,
         }
     }
+}
+
+/// Intermediate serde type for per-class scenario source configuration in `config.json`.
+///
+/// Structurally identical to `RawScenarioSource` in `stages.rs` but scoped to
+/// `config.json` fields (`training.scenario_source` / `simulation.scenario_source`).
+/// The two types are kept separate during the transition to per-phase sampling config
+/// (Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RawScenarioSourceConfig {
+    /// Optional random seed for reproducible scenario generation.
+    #[serde(default)]
+    pub seed: Option<i64>,
+
+    /// Historical year pool. Absent means `None` (auto-discover at validation time).
+    #[serde(default)]
+    pub historical_years: Option<RawHistoricalYearsConfig>,
+
+    /// Inflow class scenario config. Absent defaults to `in_sample`.
+    #[serde(default)]
+    pub inflow: Option<RawClassConfigEntry>,
+
+    /// Load class scenario config. Absent defaults to `in_sample`.
+    #[serde(default)]
+    pub load: Option<RawClassConfigEntry>,
+
+    /// NCS class scenario config. Absent defaults to `in_sample`.
+    #[serde(default)]
+    pub ncs: Option<RawClassConfigEntry>,
+}
+
+/// Intermediate serde type for a single per-class scenario scheme in `config.json`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RawClassConfigEntry {
+    /// Scheme string: `"in_sample"`, `"out_of_sample"`, `"external"`, or `"historical"`.
+    pub scheme: String,
+}
+
+/// Intermediate serde type for `historical_years` in `config.json`.
+///
+/// Handles two JSON representations via `#[serde(untagged)]`:
+/// - Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]
+/// - Object: `{"from": 1940, "to": 2010}` → [`RawHistoricalYearsConfig::Range`]
+///
+/// The `List` variant must be declared first so serde tries it before `Range`
+/// (an integer array is tried before an object).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum RawHistoricalYearsConfig {
+    /// Explicit list of year integers.
+    List(Vec<i32>),
+    /// Inclusive range shorthand.
+    Range {
+        /// First year (inclusive).
+        from: i32,
+        /// Last year (inclusive).
+        to: i32,
+    },
 }
 
 /// Deserialized configuration for one entry in `training.stopping_rules[]`.
@@ -410,8 +479,10 @@ pub struct SimulationConfig {
     /// Bounded channel capacity between simulation threads and the I/O writer thread.
     pub io_channel_capacity: u32,
 
-    /// Sampling scheme for simulation scenarios.
-    pub sampling_scheme: SimulationSamplingConfig,
+    /// Scenario source configuration for the post-training simulation forward pass.
+    /// When absent, falls back to the training scenario source.
+    #[serde(default)]
+    pub scenario_source: Option<RawScenarioSourceConfig>,
 }
 
 impl Default for SimulationConfig {
@@ -423,25 +494,7 @@ impl Default for SimulationConfig {
             output_path: None,
             output_mode: None,
             io_channel_capacity: 64,
-            sampling_scheme: SimulationSamplingConfig::default(),
-        }
-    }
-}
-
-/// Sampling scheme for the post-training simulation.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct SimulationSamplingConfig {
-    /// Scheme type: `"in_sample"`, `"out_of_sample"`, or `"external"`.
-    #[serde(rename = "type")]
-    pub scheme_type: String,
-}
-
-impl Default for SimulationSamplingConfig {
-    fn default() -> Self {
-        Self {
-            scheme_type: "in_sample".to_string(),
+            scenario_source: None,
         }
     }
 }
@@ -665,6 +718,214 @@ fn validate_config(config: &Config, path: &Path) -> Result<(), LoadError> {
     Ok(())
 }
 
+// ── ScenarioSource helpers ───────────────────────────────────────────────────
+
+/// Convert a `scheme` string from `config.json` to [`SamplingScheme`].
+///
+/// `field` is the dot-separated JSON path to the scheme key (e.g.
+/// `"training.scenario_source.inflow.scheme"`), used verbatim in the error
+/// message so the caller can identify which field has the invalid value.
+fn convert_sampling_scheme_cfg(
+    s: &str,
+    field: &str,
+    path: &Path,
+) -> Result<SamplingScheme, LoadError> {
+    match s {
+        "in_sample" => Ok(SamplingScheme::InSample),
+        "out_of_sample" => Ok(SamplingScheme::OutOfSample),
+        "external" => Ok(SamplingScheme::External),
+        "historical" => Ok(SamplingScheme::Historical),
+        other => Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: field.to_string(),
+            message: format!(
+                "unknown scheme '{other}', expected one of: in_sample, out_of_sample, external, historical"
+            ),
+        }),
+    }
+}
+
+/// Convert a per-class config entry to its [`SamplingScheme`], defaulting to
+/// `in_sample` when the entry is absent.
+fn convert_class_scheme_cfg(
+    class: Option<&RawClassConfigEntry>,
+    section: &str,
+    class_name: &str,
+    path: &Path,
+) -> Result<SamplingScheme, LoadError> {
+    let scheme_str = class.map_or("in_sample", |c| c.scheme.as_str());
+    let field = format!("{section}.scenario_source.{class_name}.scheme");
+    convert_sampling_scheme_cfg(scheme_str, &field, path)
+}
+
+/// Convert `Option<RawScenarioSourceConfig>` into a [`ScenarioSource`].
+///
+/// `section` is either `"training"` or `"simulation"`, used to build field
+/// paths in error messages that reference `config.json`.
+///
+/// Returns `ScenarioSource::default()` (all `InSample`, no seed, no years)
+/// when `raw` is `None`.
+fn convert_scenario_source_config(
+    raw: Option<&RawScenarioSourceConfig>,
+    section: &str,
+    path: &Path,
+) -> Result<ScenarioSource, LoadError> {
+    let Some(r) = raw else {
+        return Ok(ScenarioSource::default());
+    };
+
+    let inflow_scheme = convert_class_scheme_cfg(r.inflow.as_ref(), section, "inflow", path)?;
+    let load_scheme = convert_class_scheme_cfg(r.load.as_ref(), section, "load", path)?;
+    let ncs_scheme = convert_class_scheme_cfg(r.ncs.as_ref(), section, "ncs", path)?;
+
+    let source = ScenarioSource {
+        inflow_scheme,
+        load_scheme,
+        ncs_scheme,
+        seed: r.seed,
+        historical_years: r.historical_years.as_ref().map(|hy| match hy {
+            RawHistoricalYearsConfig::List(years) => HistoricalYears::List(years.clone()),
+            RawHistoricalYearsConfig::Range { from, to } => HistoricalYears::Range {
+                from: *from,
+                to: *to,
+            },
+        }),
+    };
+
+    validate_scenario_source_cfg(&source, section, path)?;
+
+    Ok(source)
+}
+
+/// Tier-1 structural validation of a parsed [`ScenarioSource`] from `config.json`.
+///
+/// ## Checks performed
+///
+/// - `historical_years` must not be specified if no class uses `Historical`.
+/// - `seed` is required when any class uses `OutOfSample`, `Historical`, or `External`.
+/// - `Historical` scheme is only valid for the `inflow` class.
+/// - If `historical_years` is a `Range`, `from` must be `<= to`.
+fn validate_scenario_source_cfg(
+    source: &ScenarioSource,
+    section: &str,
+    path: &Path,
+) -> Result<(), LoadError> {
+    let uses_historical = source.inflow_scheme == SamplingScheme::Historical
+        || source.load_scheme == SamplingScheme::Historical
+        || source.ncs_scheme == SamplingScheme::Historical;
+
+    if source.historical_years.is_some() && !uses_historical {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: format!("{section}.scenario_source.historical_years"),
+            message: "historical_years is specified but no class uses the 'historical' scheme"
+                .to_string(),
+        });
+    }
+
+    if source.load_scheme == SamplingScheme::Historical {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: format!("{section}.scenario_source.load.scheme"),
+            message:
+                "historical scheme is only valid for the inflow class; load class must use in_sample, out_of_sample, or external"
+                    .to_string(),
+        });
+    }
+
+    if source.ncs_scheme == SamplingScheme::Historical {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: format!("{section}.scenario_source.ncs.scheme"),
+            message:
+                "historical scheme is only valid for the inflow class; ncs class must use in_sample, out_of_sample, or external"
+                    .to_string(),
+        });
+    }
+
+    let all_in_sample = source.inflow_scheme == SamplingScheme::InSample
+        && source.load_scheme == SamplingScheme::InSample
+        && source.ncs_scheme == SamplingScheme::InSample;
+    if !all_in_sample && source.seed.is_none() {
+        return Err(LoadError::SchemaError {
+            path: path.to_path_buf(),
+            field: format!("{section}.scenario_source.seed"),
+            message:
+                "seed is required when any class uses out_of_sample, historical, or external scheme"
+                    .to_string(),
+        });
+    }
+
+    if let Some(HistoricalYears::Range { from, to }) = source.historical_years {
+        if from > to {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: format!("{section}.scenario_source.historical_years"),
+                message: format!("range 'from' ({from}) must be <= 'to' ({to})"),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+impl Config {
+    /// Resolve the training-phase [`ScenarioSource`].
+    ///
+    /// When `training.scenario_source` is absent, returns `ScenarioSource::default()`
+    /// (all classes `InSample`, no seed, no historical years).
+    ///
+    /// # Errors
+    ///
+    /// Returns `LoadError::SchemaError` if the raw config contains an invalid
+    /// scheme string, Historical on a non-inflow class, or seed/year validation
+    /// failures.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use cobre_io::config::parse_config;
+    /// use std::path::Path;
+    ///
+    /// let cfg = parse_config(Path::new("case/config.json")).unwrap();
+    /// let source = cfg.training_scenario_source(Path::new("case/config.json")).unwrap();
+    /// ```
+    pub fn training_scenario_source(&self, path: &Path) -> Result<ScenarioSource, LoadError> {
+        convert_scenario_source_config(self.training.scenario_source.as_ref(), "training", path)
+    }
+
+    /// Resolve the simulation-phase [`ScenarioSource`].
+    ///
+    /// Falls back to `training_scenario_source()` when
+    /// `simulation.scenario_source` is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LoadError::SchemaError` on validation failures in either the
+    /// simulation or training scenario source.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use cobre_io::config::parse_config;
+    /// use std::path::Path;
+    ///
+    /// let cfg = parse_config(Path::new("case/config.json")).unwrap();
+    /// let source = cfg.simulation_scenario_source(Path::new("case/config.json")).unwrap();
+    /// ```
+    pub fn simulation_scenario_source(&self, path: &Path) -> Result<ScenarioSource, LoadError> {
+        if self.simulation.scenario_source.is_some() {
+            convert_scenario_source_config(
+                self.simulation.scenario_source.as_ref(),
+                "simulation",
+                path,
+            )
+        } else {
+            self.training_scenario_source(path)
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -813,8 +1074,7 @@ mod tests {
             "num_scenarios": 2000,
             "policy_type": "outer",
             "output_path": "./simulation",
-            "output_mode": "streaming",
-            "sampling_scheme": {"type": "in_sample"}
+            "output_mode": "streaming"
           },
           "exports": {
             "training": true,
@@ -1145,5 +1405,215 @@ mod tests {
             !cfg.exports.stochastic,
             "exports.stochastic should default to false when absent"
         );
+    }
+
+    // ── ScenarioSource parsing tests (ticket-001) ─────────────────────────────
+
+    const MINIMAL_TRAINING: &str =
+        r#"{"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}"#;
+
+    fn write_with_training_scenario_source(scenario_source_json: &str) -> NamedTempFile {
+        write_config(&format!(
+            r#"{{"training": {{"forward_passes": 10, "stopping_rules": [{{"type": "iteration_limit", "limit": 5}}], "scenario_source": {scenario_source_json}}}}}"#
+        ))
+    }
+
+    fn write_with_both_scenario_sources(
+        training_json: &str,
+        simulation_json: &str,
+    ) -> NamedTempFile {
+        write_config(&format!(
+            r#"{{"training": {{"forward_passes": 10, "stopping_rules": [{{"type": "iteration_limit", "limit": 5}}], "scenario_source": {training_json}}}, "simulation": {{"scenario_source": {simulation_json}}}}}"#
+        ))
+    }
+
+    /// AC-1 (ticket-001): absent `training.scenario_source` → all InSample,
+    /// no seed, no historical_years.
+    #[test]
+    fn test_training_scenario_source_default() {
+        let f = write_config(&format!(r#"{{"training": {MINIMAL_TRAINING}}}"#));
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.training_scenario_source(f.path()).unwrap();
+        assert_eq!(source, ScenarioSource::default());
+        assert_eq!(source.inflow_scheme, SamplingScheme::InSample);
+        assert_eq!(source.load_scheme, SamplingScheme::InSample);
+        assert_eq!(source.ncs_scheme, SamplingScheme::InSample);
+        assert_eq!(source.seed, None);
+        assert_eq!(source.historical_years, None);
+    }
+
+    /// AC-1b (ticket-001): explicit per-class schemes are parsed correctly.
+    #[test]
+    fn test_training_scenario_source_explicit() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 42, "inflow": {"scheme": "historical"}, "historical_years": [1940, 1953]}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.training_scenario_source(f.path()).unwrap();
+        assert_eq!(source.inflow_scheme, SamplingScheme::Historical);
+        assert_eq!(source.load_scheme, SamplingScheme::InSample);
+        assert_eq!(source.ncs_scheme, SamplingScheme::InSample);
+        assert_eq!(source.seed, Some(42));
+        assert_eq!(
+            source.historical_years,
+            Some(HistoricalYears::List(vec![1940, 1953]))
+        );
+    }
+
+    /// AC-3 (ticket-001): absent `simulation.scenario_source` falls back to
+    /// `training_scenario_source()`.
+    #[test]
+    fn test_simulation_scenario_source_fallback() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 7, "inflow": {"scheme": "out_of_sample"}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let training = cfg.training_scenario_source(f.path()).unwrap();
+        let simulation = cfg.simulation_scenario_source(f.path()).unwrap();
+        assert_eq!(training, simulation);
+        assert_eq!(simulation.inflow_scheme, SamplingScheme::OutOfSample);
+        assert_eq!(simulation.seed, Some(7));
+    }
+
+    /// AC-4 (ticket-001): both sections present with different schemes → different
+    /// `ScenarioSource` values returned.
+    #[test]
+    fn test_simulation_scenario_source_independent() {
+        let f = write_with_both_scenario_sources(
+            r#"{"seed": 1, "inflow": {"scheme": "out_of_sample"}}"#,
+            r#"{"seed": 2, "load": {"scheme": "out_of_sample"}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let training = cfg.training_scenario_source(f.path()).unwrap();
+        let simulation = cfg.simulation_scenario_source(f.path()).unwrap();
+        assert_ne!(training, simulation);
+        assert_eq!(training.inflow_scheme, SamplingScheme::OutOfSample);
+        assert_eq!(training.load_scheme, SamplingScheme::InSample);
+        assert_eq!(simulation.inflow_scheme, SamplingScheme::InSample);
+        assert_eq!(simulation.load_scheme, SamplingScheme::OutOfSample);
+    }
+
+    /// Historical scheme on inflow class is accepted.
+    #[test]
+    fn test_scenario_source_historical_inflow_valid() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 99, "inflow": {"scheme": "historical"}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.training_scenario_source(f.path()).unwrap();
+        assert_eq!(source.inflow_scheme, SamplingScheme::Historical);
+    }
+
+    /// AC-5 (ticket-001): Historical on load class → SchemaError.
+    #[test]
+    fn test_scenario_source_historical_load_rejected() {
+        let f = write_config(&format!(
+            r#"{{"training": {MINIMAL_TRAINING}, "simulation": {{"scenario_source": {{"seed": 1, "load": {{"scheme": "historical"}}}}}}}}"#
+        ));
+        let cfg = parse_config(f.path()).unwrap();
+        let err = cfg.simulation_scenario_source(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, field, .. } => {
+                assert!(
+                    message.contains("historical scheme is only valid for the inflow class"),
+                    "unexpected message: {message}"
+                );
+                assert!(field.contains("load.scheme"), "unexpected field: {field}");
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Historical on ncs class → SchemaError.
+    #[test]
+    fn test_scenario_source_historical_ncs_rejected() {
+        let f =
+            write_with_training_scenario_source(r#"{"seed": 1, "ncs": {"scheme": "historical"}}"#);
+        let cfg = parse_config(f.path()).unwrap();
+        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, field, .. } => {
+                assert!(
+                    message.contains("historical scheme is only valid for the inflow class"),
+                    "unexpected message: {message}"
+                );
+                assert!(field.contains("ncs.scheme"), "unexpected field: {field}");
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// OutOfSample without seed → SchemaError.
+    #[test]
+    fn test_scenario_source_seed_required_for_oos() {
+        let f = write_with_training_scenario_source(r#"{"inflow": {"scheme": "out_of_sample"}}"#);
+        let cfg = parse_config(f.path()).unwrap();
+        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, field, .. } => {
+                assert!(
+                    message.contains("seed is required"),
+                    "unexpected message: {message}"
+                );
+                assert!(field.contains("seed"), "unexpected field: {field}");
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Range form of `historical_years` parses correctly.
+    #[test]
+    fn test_scenario_source_historical_years_range() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 5, "inflow": {"scheme": "historical"}, "historical_years": {"from": 1940, "to": 2010}}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let source = cfg.training_scenario_source(f.path()).unwrap();
+        assert_eq!(
+            source.historical_years,
+            Some(HistoricalYears::Range {
+                from: 1940,
+                to: 2010
+            })
+        );
+    }
+
+    /// `historical_years` specified without any Historical scheme → SchemaError.
+    #[test]
+    fn test_scenario_source_historical_years_without_historical_scheme() {
+        let f = write_with_training_scenario_source(
+            r#"{"seed": 1, "inflow": {"scheme": "out_of_sample"}, "historical_years": [1990, 2000]}"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let err = cfg.training_scenario_source(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { message, .. } => {
+                assert!(
+                    message.contains(
+                        "historical_years is specified but no class uses the 'historical' scheme"
+                    ),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// `simulation.sampling_scheme` (old dead field) is silently ignored since
+    /// `SimulationConfig` does not use `deny_unknown_fields`.
+    #[test]
+    fn test_dead_sampling_scheme_field_removed() {
+        // The old `sampling_scheme` key is an unknown field — serde ignores it.
+        let f = write_config(
+            r#"{
+            "training": {"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]},
+            "simulation": {"enabled": true, "sampling_scheme": {"type": "in_sample"}}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        // Parsed successfully — old field silently ignored.
+        assert!(cfg.simulation.enabled);
+        // The new scenario_source field is absent.
+        assert!(cfg.simulation.scenario_source.is_none());
     }
 }

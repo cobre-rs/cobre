@@ -67,8 +67,7 @@ use crate::{
 pub(crate) struct ParsedData {
     /// Parsed `config.json`.
     ///
-    /// Populated for completeness and future use; not yet forwarded to `System`.
-    #[allow(dead_code)]
+    /// Used by semantic validation to check scenario source configuration.
     pub(crate) config: Config,
     /// Parsed `penalties.json`.
     ///
@@ -830,7 +829,6 @@ mod tests {
             "annual_discount_rate": 0.06,
             "transitions": []
         },
-        "scenario_source": { "seed": 42 },
         "stages": [
             {
                 "id": 0,

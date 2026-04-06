@@ -176,7 +176,6 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
         .correlation(data.correlation.unwrap_or_else(CorrelationModel::default))
         .initial_conditions(data.initial_conditions)
         .generic_constraints(data.generic_constraints)
-        .scenario_source(data.stages.scenario_source)
         .inflow_history(data.inflow_history)
         .external_scenarios(data.external_scenarios)
         .external_load_scenarios(data.external_load_scenarios)

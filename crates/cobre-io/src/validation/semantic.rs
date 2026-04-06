@@ -476,7 +476,6 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
 ) {
     check_stage_structure(data, ctx);
     check_sobol_power_of_2(data, ctx);
-    check_simulation_sampling_scheme(data, ctx);
     check_penalty_ordering(data, ctx);
     check_fpha_penalty_rule(data, ctx);
     check_scenario_models(data, ctx);
@@ -660,34 +659,6 @@ fn check_sobol_power_of_2(data: &ParsedData, ctx: &mut ValidationContext) {
                 ),
             );
         }
-    }
-}
-
-// ── Rule 26: Simulation sampling scheme validation ────────────────────────────
-
-/// Known valid values for `simulation.sampling_scheme.type` in `config.json`.
-const KNOWN_SAMPLING_SCHEMES: &[&str] = &["in_sample", "out_of_sample", "external", "historical"];
-
-/// Validates that `simulation.sampling_scheme.type` is a recognised scheme name.
-///
-/// The field is stored as a raw `String` (to preserve the collect-all-errors
-/// design — serde can still parse an unknown value), so this check provides the
-/// validation that serde alone cannot. An unrecognised value would silently fall
-/// back to in-sample behaviour at dispatch time; catching it here gives the user
-/// an actionable error at load time.
-fn check_simulation_sampling_scheme(data: &ParsedData, ctx: &mut ValidationContext) {
-    let scheme = &data.config.simulation.sampling_scheme.scheme_type;
-    if !KNOWN_SAMPLING_SCHEMES.contains(&scheme.as_str()) {
-        ctx.add_error(
-            ErrorKind::InvalidValue,
-            "config.json",
-            None::<&str>,
-            format!(
-                "simulation.sampling_scheme.type '{scheme}' is not a recognised \
-                 sampling scheme; expected one of: {}",
-                KNOWN_SAMPLING_SCHEMES.join(", "),
-            ),
-        );
     }
 }
 
@@ -1104,40 +1075,69 @@ fn check_correlation_same_type(data: &ParsedData, ctx: &mut ValidationContext) {
 /// corresponding external scenario file data is non-empty.
 fn check_external_scheme_has_files(data: &ParsedData, ctx: &mut ValidationContext) {
     use cobre_core::scenario::SamplingScheme;
+    use std::path::Path;
 
-    let source = &data.stages.scenario_source;
+    // scenario_source is read from config.json (training and simulation sections).
+    // Config has already been validated by Layer 2, so these calls will not fail.
+    let Ok(training_source) = data
+        .config
+        .training_scenario_source(Path::new("config.json"))
+    else {
+        return;
+    };
+    let Ok(simulation_source) = data
+        .config
+        .simulation_scenario_source(Path::new("config.json"))
+    else {
+        return;
+    };
 
-    if source.inflow_scheme == SamplingScheme::External && data.external_scenarios.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
-            "stages.json",
-            Some("scenario_source.inflow"),
-            "inflow class uses 'external' scheme but no external_inflow_scenarios.parquet \
-             data was found; external scheme requires corresponding scenario file"
-                .to_string(),
-        );
-    }
+    // Only check simulation independently when it explicitly defines its own
+    // scenario_source; otherwise simulation falls back to training, which is
+    // already checked, and checking again would produce duplicate errors.
+    let sources: &[(&str, &_)] = if data.config.simulation.scenario_source.is_some() {
+        &[
+            ("training", &training_source),
+            ("simulation", &simulation_source),
+        ]
+    } else {
+        &[("training", &training_source)]
+    };
 
-    if source.load_scheme == SamplingScheme::External && data.external_load_scenarios.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
-            "stages.json",
-            Some("scenario_source.load"),
-            "load class uses 'external' scheme but no external_load_scenarios.parquet \
-             data was found; external scheme requires corresponding scenario file"
-                .to_string(),
-        );
-    }
+    for (section, source) in sources {
+        if source.inflow_scheme == SamplingScheme::External && data.external_scenarios.is_empty() {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "config.json",
+                Some(format!("{section}.scenario_source.inflow")),
+                "inflow class uses 'external' scheme but no \
+                 external_inflow_scenarios.parquet data was found; \
+                 external scheme requires corresponding scenario file",
+            );
+        }
 
-    if source.ncs_scheme == SamplingScheme::External && data.external_ncs_scenarios.is_empty() {
-        ctx.add_error(
-            ErrorKind::BusinessRuleViolation,
-            "stages.json",
-            Some("scenario_source.ncs"),
-            "ncs class uses 'external' scheme but no external_ncs_scenarios.parquet \
-             data was found; external scheme requires corresponding scenario file"
-                .to_string(),
-        );
+        if source.load_scheme == SamplingScheme::External && data.external_load_scenarios.is_empty()
+        {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "config.json",
+                Some(format!("{section}.scenario_source.load")),
+                "load class uses 'external' scheme but no \
+                 external_load_scenarios.parquet data was found; \
+                 external scheme requires corresponding scenario file",
+            );
+        }
+
+        if source.ncs_scheme == SamplingScheme::External && data.external_ncs_scenarios.is_empty() {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "config.json",
+                Some(format!("{section}.scenario_source.ncs")),
+                "ncs class uses 'external' scheme but no \
+                 external_ncs_scenarios.parquet data was found; \
+                 external scheme requires corresponding scenario file",
+            );
+        }
     }
 }
 
@@ -1488,7 +1488,6 @@ mod tests {
         },
         initial_conditions::InitialConditions,
         penalty::GlobalPenaltyDefaults,
-        scenario::{SamplingScheme, ScenarioSource},
         temporal::{
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
@@ -1606,13 +1605,6 @@ mod tests {
                 annual_discount_rate: 0.06,
                 transitions: vec![],
                 season_map: None,
-            },
-            scenario_source: ScenarioSource {
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                seed: Some(42),
-                historical_years: None,
             },
         }
     }
@@ -2625,13 +2617,6 @@ mod tests {
                 transitions: vec![],
                 season_map: None,
             },
-            scenario_source: ScenarioSource {
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                seed: Some(42),
-                historical_years: None,
-            },
         }
     }
 
@@ -3492,13 +3477,6 @@ mod tests {
                 transitions: vec![],
                 season_map: None,
             },
-            scenario_source: ScenarioSource {
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                seed: Some(42),
-                historical_years: None,
-            },
         }
     }
 
@@ -3713,13 +3691,6 @@ mod tests {
                 annual_discount_rate: 0.06,
                 transitions: vec![],
                 season_map,
-            },
-            scenario_source: ScenarioSource {
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                seed: Some(42),
-                historical_years: None,
             },
         }
     }
@@ -4011,13 +3982,6 @@ mod tests {
                     annual_discount_rate: 0.06,
                     transitions: vec![],
                     season_map: None,
-                },
-                scenario_source: ScenarioSource {
-                    inflow_scheme: SamplingScheme::InSample,
-                    load_scheme: SamplingScheme::InSample,
-                    ncs_scheme: SamplingScheme::InSample,
-                    seed: Some(42),
-                    historical_years: None,
                 },
             },
             initial_conditions: cobre_core::InitialConditions {
@@ -4420,141 +4384,157 @@ mod tests {
         );
     }
 
-    // ── Rule 26: Simulation sampling scheme validation ────────────────────────
+    // ── F2-002: External scheme requires external scenario files ──────────────
 
-    /// `scheme_type: "in_sample"` (the default) produces no `InvalidValue`
-    /// errors with `file == "config.json"`.
-    #[test]
-    fn test_simulation_scheme_in_sample_no_error() {
-        use crate::config::SimulationSamplingConfig;
-
-        let mut data = make_data_5b(
-            vec![make_hydro_ordered_penalties(1)],
-            make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 10.0)],
-            vec![],
-            vec![],
-            None,
-        );
-        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
-            scheme_type: "in_sample".to_string(),
-        };
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-
-        let config_invalid_value_errors: Vec<_> = ctx
-            .errors()
-            .into_iter()
-            .filter(|e| {
-                e.kind == ErrorKind::InvalidValue
-                    && e.file.to_string_lossy().contains("config.json")
-            })
-            .collect();
-        assert!(
-            config_invalid_value_errors.is_empty(),
-            "\"in_sample\" should produce no config.json InvalidValue errors, \
-             got: {config_invalid_value_errors:?}"
-        );
+    /// Build a `Config` with `training.scenario_source.inflow.scheme = "external"`.
+    fn config_with_training_external_inflow() -> Config {
+        let json = r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 100 }
+                ],
+                "scenario_source": {
+                    "seed": 42,
+                    "inflow": { "scheme": "external" }
+                }
+            }
+        }"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), json).unwrap();
+        crate::config::parse_config(tmp.path()).unwrap()
     }
 
-    /// `scheme_type: "out_of_sample"` produces no `InvalidValue` errors with
-    /// `file == "config.json"`.
-    #[test]
-    fn test_simulation_scheme_out_of_sample_no_error() {
-        use crate::config::SimulationSamplingConfig;
-
-        let mut data = make_data_5b(
-            vec![make_hydro_ordered_penalties(1)],
-            make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 10.0)],
-            vec![],
-            vec![],
-            None,
-        );
-        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
-            scheme_type: "out_of_sample".to_string(),
-        };
-        let mut ctx = ValidationContext::new();
-        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
-
-        let config_invalid_value_errors: Vec<_> = ctx
-            .errors()
-            .into_iter()
-            .filter(|e| {
-                e.kind == ErrorKind::InvalidValue
-                    && e.file.to_string_lossy().contains("config.json")
-            })
-            .collect();
-        assert!(
-            config_invalid_value_errors.is_empty(),
-            "\"out_of_sample\" should produce no config.json InvalidValue errors, \
-             got: {config_invalid_value_errors:?}"
-        );
+    /// Build a `Config` with `simulation.scenario_source.load.scheme = "external"`.
+    fn config_with_simulation_external_load() -> Config {
+        let json = r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 100 }
+                ]
+            },
+            "simulation": {
+                "scenario_source": {
+                    "seed": 7,
+                    "load": { "scheme": "external" }
+                }
+            }
+        }"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), json).unwrap();
+        crate::config::parse_config(tmp.path()).unwrap()
     }
 
-    /// `scheme_type: "bogus_value"` produces exactly 1 `InvalidValue` error
-    /// with `file == "config.json"` and `message` containing the invalid value.
+    /// AC1: `config.training.scenario_source.inflow.scheme = "external"` with no
+    /// `external_scenarios` data produces an error referencing `"config.json"` and
+    /// field `"training.scenario_source.inflow"`.
     #[test]
-    fn test_simulation_scheme_unknown_value_produces_error() {
-        use crate::config::SimulationSamplingConfig;
-
+    fn test_training_external_inflow_without_file_is_error() {
         let mut data = make_data_5b(
             vec![make_hydro_ordered_penalties(1)],
             make_stages_5b(vec![0]),
-            vec![make_bus_with_deficit(1, 10.0)],
+            vec![make_bus_with_deficit(1, 75.0)],
             vec![],
             vec![],
             None,
         );
-        data.config.simulation.sampling_scheme = SimulationSamplingConfig {
-            scheme_type: "bogus_value".to_string(),
-        };
+        data.config = config_with_training_external_inflow();
+        data.external_scenarios = vec![]; // no external inflow file
+
         let mut ctx = ValidationContext::new();
         validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
 
-        let config_invalid_value_errors: Vec<_> = ctx
-            .errors()
-            .into_iter()
+        let errors = ctx.errors();
+        let matching: Vec<_> = errors
+            .iter()
             .filter(|e| {
-                e.kind == ErrorKind::InvalidValue
-                    && e.file.to_string_lossy().contains("config.json")
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file == std::path::PathBuf::from("config.json")
+                    && e.entity
+                        .as_deref()
+                        .is_some_and(|f| f.contains("training.scenario_source.inflow"))
             })
             .collect();
         assert_eq!(
-            config_invalid_value_errors.len(),
+            matching.len(),
             1,
-            "expected exactly 1 config.json InvalidValue error for unknown scheme, \
-             got: {config_invalid_value_errors:?}"
-        );
-        assert!(
-            config_invalid_value_errors[0]
-                .message
-                .contains("bogus_value"),
-            "error message should contain the invalid value 'bogus_value', \
-             got: {}",
-            config_invalid_value_errors[0].message
+            "expected 1 error for missing external inflow file (training), got: {errors:?}"
         );
     }
 
-    /// Deserializing `{"type": "out_of_sample"}` into `SimulationSamplingConfig`
-    /// yields `scheme_type == "out_of_sample"` (serde roundtrip for the
-    /// `config.json` path).
+    /// AC2: `config.simulation.scenario_source.load.scheme = "external"` with no
+    /// `external_load_scenarios` data produces an error referencing `"config.json"`
+    /// and field `"simulation.scenario_source.load"`.
     #[test]
-    #[allow(clippy::expect_used)]
-    fn test_simulation_sampling_config_serde_roundtrip() {
-        use crate::config::SimulationSamplingConfig;
-
-        let json = r#"{"type": "out_of_sample"}"#;
-        let cfg: SimulationSamplingConfig =
-            serde_json::from_str(json).expect("should deserialise successfully");
-        assert_eq!(
-            cfg.scheme_type, "out_of_sample",
-            "scheme_type should be 'out_of_sample' after deserialisation"
+    fn test_simulation_external_load_without_file_is_error() {
+        let mut data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 75.0)],
+            vec![],
+            vec![],
+            None,
         );
-        let serialised = serde_json::to_string(&cfg).expect("should serialise successfully");
+        data.config = config_with_simulation_external_load();
+        data.external_load_scenarios = vec![]; // no external load file
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let errors = ctx.errors();
+        let matching: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file == std::path::PathBuf::from("config.json")
+                    && e.entity
+                        .as_deref()
+                        .is_some_and(|f| f.contains("simulation.scenario_source.load"))
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected 1 error for missing external load file (simulation), got: {errors:?}"
+        );
+    }
+
+    /// Training uses External inflow but the external file is present: no error.
+    #[test]
+    fn test_training_external_inflow_with_file_is_ok() {
+        use cobre_core::scenario::ExternalScenarioRow;
+        let mut data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            make_stages_5b(vec![0]),
+            vec![make_bus_with_deficit(1, 75.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        data.config = config_with_training_external_inflow();
+        // Provide at least one row so the file is considered non-empty.
+        data.external_scenarios = vec![ExternalScenarioRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            scenario_id: 1,
+            value_m3s: 10.0,
+        }];
+
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let errors = ctx.errors();
+        let external_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file == std::path::PathBuf::from("config.json")
+            })
+            .collect();
         assert!(
-            serialised.contains("out_of_sample"),
-            "serialised JSON should contain 'out_of_sample', got: {serialised}"
+            external_errors.is_empty(),
+            "no external-file errors expected when file is present, got: {external_errors:?}"
         );
     }
 }

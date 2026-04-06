@@ -16,6 +16,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+use cobre_core::scenario::ScenarioSource;
 use cobre_io::output::policy::{read_policy_checkpoint, write_policy_checkpoint};
 use cobre_sddp::{
     FutureCostFunction, StudySetup, build_basis_cache_from_checkpoint,
@@ -86,7 +87,8 @@ fn simulation_only_fcf_round_trip() {
 
     let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
     let prepare_result =
-        prepare_stochastic(system, &case_dir, &config, 42).expect("prepare_stochastic");
+        prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic");
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;
 

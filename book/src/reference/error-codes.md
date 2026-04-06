@@ -433,12 +433,12 @@ discard the checkpoint and start a new run.
 the schema but not yet implemented in the current version of Cobre. This is used
 during development to surface unimplemented feature requests from valid input.
 
-**Example message:** `hydro production model 'fpha' is not yet implemented`
+**Example message:** `hydro production model 'linearized_head' is not yet implemented`
 
 **Resolution:** Avoid using the unimplemented feature until it is available.
 Check the [CHANGELOG](https://github.com/cobre-rs/cobre/blob/main/CHANGELOG.md) for the implementation timeline.
 Alternatively, use the currently supported alternatives (e.g., `"constant_productivity"`
-instead of `"fpha"` for hydro generation models).
+or `"fpha"` for hydro generation models).
 
 ---
 

@@ -49,6 +49,11 @@ will not produce `simulation/pumping_stations/`.
       ...
       stage_NNN.bin
     metadata.json
+    states/                         # when exports.states = true
+      stage_000.bin
+      stage_001.bin
+      ...
+      stage_NNN.bin
   simulation/
     _manifest.json
     costs/
@@ -475,7 +480,7 @@ The logical record structure is:
 
 FlatBuffers binary file encoding the visited forward-pass trial points for a
 single stage. One file per stage. Present only when `exports.states` is `true`
-(the default). The `states/` directory is omitted entirely when disabled.
+(default is `false`). The `states/` directory is omitted entirely when disabled.
 
 Trial points are the state vectors observed at each forward-pass scenario
 during training. They are always collected in memory regardless of the cut

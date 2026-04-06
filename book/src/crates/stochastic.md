@@ -41,6 +41,8 @@ for deterministic noise generation.
 
 ## Architecture
 
+![Data flow: from files to ForwardSampler](../images/diagrams/data-flow-crate-layers.svg)
+
 ### PAR(p) preprocessing and flat array layout
 
 PAR(p) (Periodic Autoregressive) models describe the seasonal autocorrelation

@@ -363,9 +363,8 @@ impl Fixture {
 fn make_config() -> Config {
     use cobre_io::config::{
         CheckpointingConfig, CutSelectionConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig,
-        SimulationSamplingConfig, StoppingRuleConfig, TrainingConfig as IoTrainingConfig,
-        TrainingSolverConfig, UpperBoundEvaluationConfig,
+        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
+        TrainingConfig as IoTrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
     Config {
         schema: None,
@@ -382,6 +381,7 @@ fn make_config() -> Config {
             forward_pass: None,
             cut_selection: CutSelectionConfig::default(),
             solver: TrainingSolverConfig::default(),
+            scenario_source: None,
         },
         upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
         policy: PolicyConfig {
@@ -397,7 +397,7 @@ fn make_config() -> Config {
             output_path: None,
             output_mode: None,
             io_channel_capacity: 64,
-            sampling_scheme: SimulationSamplingConfig::default(),
+            scenario_source: None,
         },
         exports: ExportsConfig::default(),
         estimation: cobre_io::EstimationConfig::default(),

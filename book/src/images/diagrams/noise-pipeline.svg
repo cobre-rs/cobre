@@ -1,0 +1,63 @@
+<svg width="680" height="520" viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, 'Segoe UI', sans-serif;">
+  <style>
+    text { fill: #c8c6c2; }
+    .title { font-size: 14px; font-weight: 500; }
+    .sub { font-size: 12px; fill: #8b9298; }
+    .arr { stroke: #8b9298; stroke-width: 1; fill: none; }
+    marker path { fill: none; stroke: #8b9298; stroke-width: 1.5; }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <rect width="680" height="520" fill="#0f1419" rx="8"/>
+
+  <text class="title" x="340" y="28" text-anchor="middle" fill="#e8e6e3">Where sampling methods enter the SDDP algorithm</text>
+
+  <!-- Phase 1 -->
+  <rect x="40" y="48" width="600" height="130" rx="16" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="60" y="74" fill="#5dcaa5">Phase 1 — Opening tree generation</text>
+  <text class="sub" x="60" y="94" fill="#0f6e56">Per-stage NoiseMethod dispatch → pre-generated η vectors</text>
+
+  <rect x="65" y="110" width="90" height="44" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="110" y="128" text-anchor="middle" fill="#5dcaa5">SAA</text>
+  <text class="sub" x="110" y="146" text-anchor="middle" fill="#0f6e56">O(1/√N)</text>
+
+  <rect x="170" y="110" width="90" height="44" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="215" y="128" text-anchor="middle" fill="#5dcaa5">LHS</text>
+  <text class="sub" x="215" y="146" text-anchor="middle" fill="#0f6e56">O(1/N)</text>
+
+  <rect x="275" y="110" width="90" height="44" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="320" y="128" text-anchor="middle" fill="#5dcaa5">Sobol</text>
+  <text class="sub" x="320" y="146" text-anchor="middle" fill="#0f6e56">O(logᵈN/N)</text>
+
+  <rect x="380" y="110" width="90" height="44" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="425" y="128" text-anchor="middle" fill="#5dcaa5">Halton</text>
+  <text class="sub" x="425" y="146" text-anchor="middle" fill="#0f6e56">O(logᵈN/N)</text>
+
+  <rect x="485" y="110" width="90" height="44" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="530" y="128" text-anchor="middle" fill="#5dcaa5">Selective</text>
+  <text class="sub" x="530" y="146" text-anchor="middle" fill="#0f6e56">clusters</text>
+
+  <!-- Arrow -->
+  <line x1="340" y1="178" x2="340" y2="210" class="arr" marker-end="url(#a)"/>
+  <text class="sub" x="356" y="198">OpeningTree (flat Box&lt;[f64]&gt;)</text>
+
+  <!-- Phase 2 -->
+  <rect x="40" y="214" width="600" height="70" rx="12" fill="#26215c" stroke="#534ab7" stroke-width="0.5"/>
+  <text class="title" x="60" y="242" fill="#afa9ec">Phase 2 — Invariant transform</text>
+  <text class="sub" x="60" y="262" fill="#534ab7">η_independent → D · η (spectral) → PAR transform → z_inflow RHS</text>
+
+  <line x1="340" y1="284" x2="340" y2="312" class="arr" marker-end="url(#a)"/>
+
+  <!-- Phase 3 -->
+  <rect x="40" y="316" width="600" height="70" rx="12" fill="#4a1b0c" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="title" x="60" y="344" fill="#f0997b">Phase 3 — LP constraint patching</text>
+  <text class="sub" x="60" y="364" fill="#993c1d">noise_scale · η → water balance RHS + z_inflow RHS patches</text>
+
+  <line x1="340" y1="386" x2="340" y2="414" class="arr" marker-end="url(#a)"/>
+
+  <!-- Key insight -->
+  <rect x="80" y="418" width="520" height="80" rx="12" fill="#1a2028" stroke="#2d3440" stroke-width="0.5"/>
+  <text class="title" x="340" y="440" text-anchor="middle" fill="#e8e6e3">The invariant transform contract</text>
+  <text class="sub" x="340" y="460" text-anchor="middle">Every method produces standardized η ~ N(0,1)</text>
+  <text class="sub" x="340" y="478" text-anchor="middle">Switching methods = swapping Phase 1 only</text>
+</svg>

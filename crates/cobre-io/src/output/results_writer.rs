@@ -264,8 +264,7 @@ mod tests {
         use crate::config::{
             CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
             InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
-            SimulationSamplingConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
-            UpperBoundEvaluationConfig,
+            StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
         crate::Config {
             schema: None,
@@ -282,6 +281,7 @@ mod tests {
                 forward_pass: None,
                 cut_selection: CutSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
+                scenario_source: None,
             },
             upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
             policy: PolicyConfig {
@@ -297,7 +297,7 @@ mod tests {
                 output_path: None,
                 output_mode: None,
                 io_channel_capacity: 64,
-                sampling_scheme: SimulationSamplingConfig::default(),
+                scenario_source: None,
             },
             exports: ExportsConfig::default(),
             estimation: EstimationConfig::default(),

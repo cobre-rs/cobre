@@ -69,13 +69,19 @@ the system in this model.
 {
   "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/config.schema.json",
   "training": {
-    "forward_passes": 1,
+    "forward_passes": 4,
     "stopping_rules": [
       {
         "type": "iteration_limit",
         "limit": 256
       }
-    ]
+    ],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
   },
   "simulation": {
     "enabled": true,
@@ -89,17 +95,21 @@ the system in this model.
 }
 ```
 
-`forward_passes: 1` draws one scenario trajectory per training iteration, standard
-for single-cut SDDP. The iteration limit is 256 — higher than the 1dtoy case to
+`forward_passes: 4` draws four scenario trajectories per training iteration (multi-cut
+SDDP). The iteration limit is 256 — higher than the 1dtoy case to
 allow more cuts to accumulate across the 12-stage horizon. No convergence-based
 stopping rule is configured because the case runs with deterministic zero inflows,
 so the objective converges to a deterministic LP optimal rather than a stochastic
 bound.
 
+The `scenario_source` block configures per-class scenario sampling. All three
+entity classes use `in_sample` with `seed: 42` for deterministic forward-pass
+noise (though with zero inflows the noise has no practical effect).
+
 `modeling.inflow_non_negativity.method: "none"` allows the PAR(p) noise model to
-produce negative samples without truncation. This setting is inherited from the
-1dtoy configuration but has no practical effect here because no `scenarios/`
-directory is present and inflow is effectively zero throughout.
+produce negative samples without truncation. This setting has no practical effect
+here because no `scenarios/` directory is present and inflow is effectively zero
+throughout.
 
 ---
 
@@ -235,7 +245,7 @@ The `direct` direction is defined as from the lower bus ID to the higher bus ID
 ### Inflow model
 
 sddp-lab uses per-season LogNormal marginal distributions with independent hydros
-for its 4ree inflow scenarios. Cobre v0.1.x uses PAR(p) with additive normal noise.
+for its 4ree inflow scenarios. Cobre uses PAR(p) with additive normal noise.
 Converting LogNormal(mu, sigma) parameters to PAR(0) normal parameters requires
 moment-matching, but the resulting distributions have fundamentally different tail
 shapes, making convergence bound comparisons unreliable.
@@ -249,10 +259,12 @@ distributions.
 
 ### Risk measure
 
-The sddp-lab 4ree case uses CVaR (alpha=0.5, lambda=0.5). Cobre v0.1.x implements
-only the Expectation (risk-neutral) risk measure. The two objective functions are
-not comparable, so numerical results from this case cannot be cross-validated
-against sddp-lab output.
+The sddp-lab 4ree case uses CVaR (alpha=0.5, lambda=0.5). Cobre supports both
+Expectation (risk-neutral) and CVaR risk measures via `stages.json`. However, this
+example currently runs with the default Expectation risk measure to keep the case
+simple. To match sddp-lab's objective, configure CVaR in the stage definitions
+with `{"cvar": {"alpha": 0.5, "lambda": 0.5}}`. Even with matching risk measures,
+numerical results may differ due to the deterministic-inflow simplification.
 
 ### Discount rate
 
@@ -269,10 +281,11 @@ The global spillage penalty in `penalties.json` is set to 1.0 $/hm³ to match.
 
 ## Known Limitations
 
-**Results are not comparable to sddp-lab.** Three structural differences make
-objective values and dispatch patterns incomparable: deterministic versus lognormal
-inflow model, Expectation versus CVaR risk measure, and the excluded NOFICT1
-transit lines. Use this case for LP structural validation only.
+**Results are not comparable to sddp-lab.** Structural differences make objective
+values and dispatch patterns incomparable: deterministic versus lognormal inflow
+model, default Expectation versus CVaR risk measure (configurable — see
+[Risk measure](#risk-measure)), and the excluded NOFICT1 transit lines. Use this
+case for LP structural validation only.
 
 **NORTE is isolated.** Without the NOFICT1 transit lines, NORTE generation cannot
 reach SUDESTE or NORDESTE. NORTE hydro and thermal output can only serve NORTE's

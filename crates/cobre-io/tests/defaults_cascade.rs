@@ -1,7 +1,6 @@
 //! Integration tests for config/stages defaults cascade.
 #![allow(clippy::unwrap_used, clippy::panic, clippy::doc_markdown)]
 
-use cobre_core::scenario::SamplingScheme;
 use cobre_io::config::parse_config;
 use cobre_io::stages::parse_stages;
 use std::io::Write;
@@ -259,61 +258,34 @@ fn test_config_absent_exports_uses_defaults() {
     );
 }
 
-fn minimal_stages_json_with(scenario_source_fragment: &str) -> String {
-    format!(
-        r#"{{
-          "policy_graph": {{
-            "type": "finite_horizon",
-            "annual_discount_rate": 0.0,
-            "transitions": []
-          }},
-          {scenario_source_fragment}
-          "stages": [{{
-            "id": 0,
-            "start_date": "2024-01-01",
-            "end_date": "2024-02-01",
-            "blocks": [{{"id": 0, "name": "LEVE", "hours": 744.0}}],
-            "num_scenarios": 10
-          }}]
-        }}"#
-    )
+fn minimal_stages_json() -> String {
+    r#"{
+      "policy_graph": {
+        "type": "finite_horizon",
+        "annual_discount_rate": 0.0,
+        "transitions": []
+      },
+      "stages": [{
+        "id": 0,
+        "start_date": "2024-01-01",
+        "end_date": "2024-02-01",
+        "blocks": [{"id": 0, "name": "LEVE", "hours": 744.0}],
+        "num_scenarios": 10
+      }]
+    }"#
+    .to_string()
 }
 
+/// `parse_stages` must succeed when `scenario_source` is absent — the field
+/// has moved to `config.json` (`training.scenario_source` /
+/// `simulation.scenario_source`).
 #[test]
-fn test_stages_absent_scenario_source_uses_defaults() {
-    let json = minimal_stages_json_with("");
+fn test_stages_absent_scenario_source_succeeds() {
+    let json = minimal_stages_json();
     let f = write_json(&json);
     let data = parse_stages(f.path()).unwrap();
 
-    assert_eq!(
-        data.scenario_source.inflow_scheme,
-        SamplingScheme::InSample,
-        "absent scenario_source must default inflow_scheme to InSample"
-    );
-    assert!(
-        data.scenario_source.seed.is_none(),
-        "absent scenario_source must default seed to None"
-    );
-}
-
-/// Given a `stages.json` with `scenario_source.seed: 42`, `parse_stages`
-/// must preserve the seed as `Some(42)`.
-#[test]
-fn test_stages_scenario_source_seed_preserved() {
-    let json = minimal_stages_json_with(r#""scenario_source": { "seed": 42 },"#);
-    let f = write_json(&json);
-    let data = parse_stages(f.path()).unwrap();
-
-    assert_eq!(
-        data.scenario_source.seed,
-        Some(42),
-        "scenario_source.seed must be Some(42) when explicitly set"
-    );
-    assert_eq!(
-        data.scenario_source.inflow_scheme,
-        SamplingScheme::InSample,
-        "inflow_scheme must be InSample (default when class key absent)"
-    );
+    assert_eq!(data.stages.len(), 1, "should have parsed exactly one stage");
 }
 
 /// Given a `stages.json` where stages have different `num_scenarios` values,

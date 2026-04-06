@@ -1,0 +1,57 @@
+<svg width="680" height="330" viewBox="0 0 680 330" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, 'Segoe UI', sans-serif;">
+  <style>
+    text { fill: #c8c6c2; }
+    .title { font-size: 14px; font-weight: 500; }
+    .sub { font-size: 12px; fill: #8b9298; }
+    .arr { stroke: #8b9298; stroke-width: 1; fill: none; }
+    marker path { fill: none; stroke: #8b9298; stroke-width: 1.5; }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <rect width="680" height="330" fill="#0f1419" rx="8"/>
+  <text class="title" x="340" y="28" text-anchor="middle" fill="#e8e6e3">Lag state transfer (shift_lag_state)</text>
+
+  <!-- Stage t -->
+  <rect x="40" y="50" width="260" height="240" rx="16" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="170" y="74" text-anchor="middle" fill="#5dcaa5">Stage t (season m)</text>
+
+  <rect x="65" y="92" width="210" height="32" rx="6" fill="#085041" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="sub" x="170" y="112" text-anchor="middle" fill="#5dcaa5">lag₁ = z_{t-1}, lag₂ = z_{t-2}</text>
+
+  <rect x="65" y="140" width="210" height="48" rx="6" fill="#712b13" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="sub" x="170" y="160" text-anchor="middle" fill="#f0997b">z_t = b_m + ψ₁·lag₁</text>
+  <text class="sub" x="170" y="178" text-anchor="middle" fill="#f0997b">+ ψ₂·lag₂ + σ_m·η</text>
+
+  <rect x="65" y="204" width="210" height="48" rx="6" fill="#26215c" stroke="#534ab7" stroke-width="0.5"/>
+  <text class="title" x="170" y="222" text-anchor="middle" fill="#afa9ec">Outgoing lags</text>
+  <text class="sub" x="170" y="240" text-anchor="middle" fill="#534ab7">lag₁' = z_t, lag₂' = lag₁</text>
+
+  <line x1="170" y1="124" x2="170" y2="138" class="arr" marker-end="url(#a)"/>
+  <line x1="170" y1="188" x2="170" y2="202" class="arr" marker-end="url(#a)"/>
+
+  <!-- Arrow between stages -->
+  <line x1="300" y1="228" x2="378" y2="228" class="arr" marker-end="url(#a)" stroke="#534ab7" stroke-width="1.5"/>
+  <text class="sub" x="340" y="218" text-anchor="middle" fill="#afa9ec">state</text>
+
+  <!-- Annotation -->
+  <text class="sub" x="340" y="276" text-anchor="middle">Newest inflow becomes lag₁;</text>
+  <text class="sub" x="340" y="292" text-anchor="middle">old lag₁ shifts to lag₂</text>
+
+  <!-- Stage t+1 -->
+  <rect x="380" y="50" width="260" height="240" rx="16" fill="#042c53" stroke="#185fa5" stroke-width="0.5"/>
+  <text class="title" x="510" y="74" text-anchor="middle" fill="#85b7eb">Stage t+1 (season m')</text>
+
+  <rect x="405" y="92" width="210" height="32" rx="6" fill="#0c447c" stroke="#185fa5" stroke-width="0.5"/>
+  <text class="sub" x="510" y="112" text-anchor="middle" fill="#85b7eb">lag₁ = z_t, lag₂ = z_{t-1}</text>
+
+  <rect x="405" y="140" width="210" height="48" rx="6" fill="#712b13" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="sub" x="510" y="160" text-anchor="middle" fill="#f0997b">z_{t+1} = b_{m'} + ψ'₁·lag₁</text>
+  <text class="sub" x="510" y="178" text-anchor="middle" fill="#f0997b">+ ψ'₂·lag₂ + σ_{m'}·η'</text>
+
+  <rect x="405" y="204" width="210" height="48" rx="6" fill="#26215c" stroke="#534ab7" stroke-width="0.5"/>
+  <text class="title" x="510" y="222" text-anchor="middle" fill="#afa9ec">Outgoing lags</text>
+  <text class="sub" x="510" y="240" text-anchor="middle" fill="#534ab7">lag₁' = z_{t+1}, lag₂' = z_t</text>
+
+  <line x1="510" y1="124" x2="510" y2="138" class="arr" marker-end="url(#a)"/>
+  <line x1="510" y1="188" x2="510" y2="202" class="arr" marker-end="url(#a)"/>
+</svg>

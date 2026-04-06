@@ -61,47 +61,47 @@ my_case/
 
 ## File summary
 
-| File                                            | Format  | Required | Description                                   |
-| ----------------------------------------------- | ------- | -------- | --------------------------------------------- |
-| `config.json`                                   | JSON    | Yes      | Solver configuration                          |
-| `penalties.json`                                | JSON    | Yes      | Global penalty defaults                       |
-| `stages.json`                                   | JSON    | Yes      | Stage sequence and policy graph               |
-| `initial_conditions.json`                       | JSON    | Yes      | Initial reservoir storage                     |
-| `system/buses.json`                             | JSON    | Yes      | Electrical bus registry                       |
-| `system/lines.json`                             | JSON    | Yes      | Transmission line registry                    |
-| `system/hydros.json`                            | JSON    | Yes      | Hydro plant registry                          |
-| `system/thermals.json`                          | JSON    | Yes      | Thermal plant registry                        |
-| `system/non_controllable_sources.json`          | JSON    | No       | Intermittent source registry                  |
-| `system/pumping_stations.json`                  | JSON    | No       | Pumping station registry                      |
-| `system/energy_contracts.json`                  | JSON    | No       | Bilateral energy contract registry            |
-| `system/hydro_geometry.parquet`                 | Parquet | No       | Reservoir geometry elevation tables           |
-| `system/hydro_production_models.json`           | JSON    | No       | FPHA production function configs              |
-| `system/fpha_hyperplanes.parquet`               | Parquet | No       | FPHA hyperplane coefficients                  |
-| `scenarios/inflow_history.parquet`              | Parquet | No       | Historical inflow time series                 |
-| `scenarios/inflow_seasonal_stats.parquet`       | Parquet | No       | PAR model seasonal statistics                 |
-| `scenarios/inflow_ar_coefficients.parquet`      | Parquet | No       | PAR autoregressive coefficients               |
+| File                                            | Format  | Required | Description                                                                        |
+| ----------------------------------------------- | ------- | -------- | ---------------------------------------------------------------------------------- |
+| `config.json`                                   | JSON    | Yes      | Solver configuration                                                               |
+| `penalties.json`                                | JSON    | Yes      | Global penalty defaults                                                            |
+| `stages.json`                                   | JSON    | Yes      | Stage sequence and policy graph                                                    |
+| `initial_conditions.json`                       | JSON    | Yes      | Initial reservoir storage                                                          |
+| `system/buses.json`                             | JSON    | Yes      | Electrical bus registry                                                            |
+| `system/lines.json`                             | JSON    | Yes      | Transmission line registry                                                         |
+| `system/hydros.json`                            | JSON    | Yes      | Hydro plant registry                                                               |
+| `system/thermals.json`                          | JSON    | Yes      | Thermal plant registry                                                             |
+| `system/non_controllable_sources.json`          | JSON    | No       | Intermittent source registry                                                       |
+| `system/pumping_stations.json`                  | JSON    | No       | Pumping station registry                                                           |
+| `system/energy_contracts.json`                  | JSON    | No       | Bilateral energy contract registry                                                 |
+| `system/hydro_geometry.parquet`                 | Parquet | No       | Reservoir geometry elevation tables                                                |
+| `system/hydro_production_models.json`           | JSON    | No       | FPHA production function configs                                                   |
+| `system/fpha_hyperplanes.parquet`               | Parquet | No       | FPHA hyperplane coefficients                                                       |
+| `scenarios/inflow_history.parquet`              | Parquet | No       | Historical inflow time series                                                      |
+| `scenarios/inflow_seasonal_stats.parquet`       | Parquet | No       | PAR model seasonal statistics                                                      |
+| `scenarios/inflow_ar_coefficients.parquet`      | Parquet | No       | PAR autoregressive coefficients                                                    |
 | `scenarios/external_inflow_scenarios.parquet`   | Parquet | No       | External inflow scenario realizations (hydro_id, stage_id, scenario_id, value_m3s) |
-| `scenarios/external_load_scenarios.parquet`     | Parquet | No       | External load scenario realizations (bus_id, stage_id, scenario_id, value_mw)       |
-| `scenarios/external_ncs_scenarios.parquet`      | Parquet | No       | External NCS scenario realizations (ncs_id, stage_id, scenario_id, value)           |
-| `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics                |
-| `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage            |
-| `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage    |
-| `scenarios/non_controllable_stats.parquet`      | Parquet | No       | NCS stochastic availability factors           |
-| `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model                |
-| `scenarios/noise_openings.parquet`              | Parquet | No       | User-supplied backward-pass opening tree      |
-| `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds       |
-| `constraints/hydro_bounds.parquet`              | Parquet | No       | Stage-varying hydro operational bounds        |
-| `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity              |
-| `constraints/pumping_bounds.parquet`            | Parquet | No       | Stage-varying pumping flow bounds             |
-| `constraints/contract_bounds.parquet`           | Parquet | No       | Stage-varying contract power bounds           |
-| `constraints/ncs_bounds.parquet`                | Parquet | No       | Stage-varying NCS available generation bounds |
-| `constraints/exchange_factors.json`             | JSON    | No       | Block exchange factors                        |
-| `constraints/generic_constraints.json`          | JSON    | No       | User-defined LP constraints                   |
-| `constraints/generic_constraint_bounds.parquet` | Parquet | No       | Generic constraint RHS bounds                 |
-| `constraints/penalty_overrides_bus.parquet`     | Parquet | No       | Stage-varying bus excess cost                 |
-| `constraints/penalty_overrides_line.parquet`    | Parquet | No       | Stage-varying line exchange cost              |
-| `constraints/penalty_overrides_hydro.parquet`   | Parquet | No       | Stage-varying hydro penalty costs             |
-| `constraints/penalty_overrides_ncs.parquet`     | Parquet | No       | Stage-varying NCS curtailment cost            |
+| `scenarios/external_load_scenarios.parquet`     | Parquet | No       | External load scenario realizations (bus_id, stage_id, scenario_id, value_mw)      |
+| `scenarios/external_ncs_scenarios.parquet`      | Parquet | No       | External NCS scenario realizations (ncs_id, stage_id, scenario_id, value)          |
+| `scenarios/load_seasonal_stats.parquet`         | Parquet | No       | Load model seasonal statistics                                                     |
+| `scenarios/load_factors.json`                   | JSON    | No       | Load scaling factors per bus/stage                                                 |
+| `scenarios/non_controllable_factors.json`       | JSON    | No       | NCS block scaling factors per source/stage                                         |
+| `scenarios/non_controllable_stats.parquet`      | Parquet | No       | NCS stochastic availability factors                                                |
+| `scenarios/correlation.json`                    | JSON    | No       | Cross-series correlation model                                                     |
+| `scenarios/noise_openings.parquet`              | Parquet | No       | User-supplied backward-pass opening tree                                           |
+| `constraints/thermal_bounds.parquet`            | Parquet | No       | Stage-varying thermal generation bounds                                            |
+| `constraints/hydro_bounds.parquet`              | Parquet | No       | Stage-varying hydro operational bounds                                             |
+| `constraints/line_bounds.parquet`               | Parquet | No       | Stage-varying line flow capacity                                                   |
+| `constraints/pumping_bounds.parquet`            | Parquet | No       | Stage-varying pumping flow bounds                                                  |
+| `constraints/contract_bounds.parquet`           | Parquet | No       | Stage-varying contract power bounds                                                |
+| `constraints/ncs_bounds.parquet`                | Parquet | No       | Stage-varying NCS available generation bounds                                      |
+| `constraints/exchange_factors.json`             | JSON    | No       | Block exchange factors                                                             |
+| `constraints/generic_constraints.json`          | JSON    | No       | User-defined LP constraints                                                        |
+| `constraints/generic_constraint_bounds.parquet` | Parquet | No       | Generic constraint RHS bounds                                                      |
+| `constraints/penalty_overrides_bus.parquet`     | Parquet | No       | Stage-varying bus excess cost                                                      |
+| `constraints/penalty_overrides_line.parquet`    | Parquet | No       | Stage-varying line exchange cost                                                   |
+| `constraints/penalty_overrides_hydro.parquet`   | Parquet | No       | Stage-varying hydro penalty costs                                                  |
+| `constraints/penalty_overrides_ncs.parquet`     | Parquet | No       | Stage-varying NCS curtailment cost                                                 |
 
 ---
 
@@ -119,6 +119,7 @@ sections are optional and fall back to documented defaults when absent.
 | `$schema`                | string | `null`       | JSON Schema URI for editor validation (ignored during processing) |
 | `modeling`               | object | `{}`         | Inflow non-negativity treatment                                   |
 | `training`               | object | **required** | Iteration count, stopping rules, cut selection                    |
+| `estimation`             | object | `{}`         | PAR(p) model estimation settings (max order, selection criterion) |
 | `upper_bound_evaluation` | object | `{}`         | Inner approximation upper-bound settings                          |
 | `policy`                 | object | fresh mode   | Policy directory path and warm-start mode                         |
 | `simulation`             | object | disabled     | Post-training simulation settings                                 |
@@ -139,8 +140,21 @@ sections are optional and fall back to documented defaults when absent.
 | `training.stopping_rules`  | array           | **required** | At least one stopping rule entry; must include an `iteration_limit` rule                        |
 | `training.stopping_mode`   | string          | `"any"`      | How multiple rules combine: `"any"` (stop when any triggers) or `"all"` (stop when all trigger) |
 | `training.enabled`         | boolean         | `true`       | When `false`, skip training and proceed directly to simulation                                  |
-| `training.seed`            | integer or null | `null`       | Random seed for reproducible noise generation (see [Seed resolution](#seed-resolution))         |
+| `training.tree_seed`       | integer or null | `null`       | Random seed for reproducible noise generation (see [Seed resolution](#seed-resolution))         |
 | `training.cut_formulation` | string or null  | `null`       | Cut type: `"single"` or `"multi"`                                                               |
+| `training.scenario_source` | object or null  | `null`       | Per-class sampling scheme for the training forward pass (see below)                             |
+
+**`training.scenario_source` sub-section:**
+
+Configures which scenario sampling scheme is used for each entity class during training.
+When absent, all classes default to `InSample` (PAR-based noise generation).
+
+| Field                                       | Type            | Default       | Description                                                                                            |
+| ------------------------------------------- | --------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `training.scenario_source.inflow.scheme`    | string          | `"in_sample"` | Inflow sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`              |
+| `training.scenario_source.load.scheme`      | string          | `"in_sample"` | Load sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`                |
+| `training.scenario_source.ncs.scheme`       | string          | `"in_sample"` | NCS sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`                 |
+| `training.scenario_source.historical_years` | array or object | `null`        | Years eligible as inflow replay windows. List (`[2010, 2015]`) or range (`{"from": 2010, "to": 2023}`) |
 
 #### Seed resolution
 
@@ -160,11 +174,6 @@ at runtime. It governs both the training forward pass and the post-training simu
   Runs will be reproducible (same output every time) but the seed value is arbitrary.
   Set `training.seed` explicitly to make the choice intentional and visible to other
   users of the case directory.
-
-`scenario_source.seed` in `stages.json` is a separate field that is loaded and stored
-in the `System` but is **not used at runtime** for training or simulation noise.
-It is reserved for future out-of-sample and external sampling schemes. Do not rely on
-it to control reproducibility.
 
 **`training.stopping_rules` entries:**
 
@@ -213,15 +222,19 @@ Each entry has a `"type"` discriminator. Valid types:
 
 **`simulation` section:**
 
-| Field                  | Type           | Default       | Description                                                     |
-| ---------------------- | -------------- | ------------- | --------------------------------------------------------------- |
-| `enabled`              | boolean        | `false`       | Enable post-training simulation                                 |
-| `num_scenarios`        | integer        | `2000`        | Number of simulation scenarios                                  |
-| `policy_type`          | string         | `"outer"`     | Policy representation: `"outer"` (cuts) or `"inner"` (vertices) |
-| `output_path`          | string or null | `null`        | Directory for simulation output files                           |
-| `output_mode`          | string or null | `null`        | Output mode: `"streaming"` or `"batched"`                       |
-| `io_channel_capacity`  | integer        | `64`          | Channel capacity between simulation and I/O writer threads      |
-| `sampling_scheme.type` | string         | `"in_sample"` | Scenario scheme: `"in_sample"`, `"external"`, or `"historical"` |
+| Field                                         | Type            | Default       | Description                                                                                            |
+| --------------------------------------------- | --------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `enabled`                                     | boolean         | `false`       | Enable post-training simulation                                                                        |
+| `num_scenarios`                               | integer         | `2000`        | Number of simulation scenarios                                                                         |
+| `policy_type`                                 | string          | `"outer"`     | Policy representation: `"outer"` (cuts) or `"inner"` (vertices)                                        |
+| `output_path`                                 | string or null  | `null`        | Directory for simulation output files                                                                  |
+| `output_mode`                                 | string or null  | `null`        | Output mode: `"streaming"` or `"batched"`                                                              |
+| `io_channel_capacity`                         | integer         | `64`          | Channel capacity between simulation and I/O writer threads                                             |
+| `simulation.scenario_source`                  | object or null  | `null`        | Per-class sampling scheme for the simulation pass (see below)                                          |
+| `simulation.scenario_source.inflow.scheme`    | string          | `"in_sample"` | Inflow sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`              |
+| `simulation.scenario_source.load.scheme`      | string          | `"in_sample"` | Load sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`                |
+| `simulation.scenario_source.ncs.scheme`       | string          | `"in_sample"` | NCS sampling scheme: `"in_sample"`, `"historical"`, `"external"`, or `"out_of_sample"`                 |
+| `simulation.scenario_source.historical_years` | array or object | `null`        | Years eligible as inflow replay windows. List (`[2010, 2015]`) or range (`{"from": 2010, "to": 2023}`) |
 
 **`exports` section:**
 
@@ -229,7 +242,7 @@ Each entry has a `"type"` discriminator. Valid types:
 | ----------------- | -------------- | ------- | ------------------------------------------------------------------ |
 | `training`        | boolean        | `true`  | Export training summary metrics                                    |
 | `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)                              |
-| `states`          | boolean        | `true`  | Export visited states                                              |
+| `states`          | boolean        | `false` | Export visited states                                              |
 | `vertices`        | boolean        | `true`  | Export inner approximation vertices                                |
 | `simulation`      | boolean        | `true`  | Export simulation results                                          |
 | `forward_detail`  | boolean        | `false` | Export per-scenario forward-pass detail                            |
@@ -313,7 +326,7 @@ have `depth_mw: null` (unbounded).
 ### `stages.json`
 
 Defines the temporal structure of the study: stage sequence, block decomposition,
-policy graph horizon type, and scenario source configuration.
+and policy graph horizon type.
 
 **Top-level fields:**
 
@@ -321,9 +334,14 @@ policy graph horizon type, and scenario source configuration.
 | -------------------- | -------- | ------------------------------------------------------------------------------ |
 | `policy_graph`       | Yes      | Horizon type (`"finite_horizon"`), annual discount rate, and stage transitions |
 | `stages`             | Yes      | Array of study stage definitions                                               |
-| `scenario_source`    | No       | Top-level sampling scheme and seed                                             |
 | `season_definitions` | No       | Season labeling for seasonal model alignment                                   |
 | `pre_study_stages`   | No       | Pre-study stages for AR model warm-up (negative IDs)                           |
+
+> **Migration note (v0.4.0):** `scenario_source` has moved from `stages.json` to
+> `config.json`. Training and simulation now carry independent `scenario_source`
+> sub-objects under `training.scenario_source` and `simulation.scenario_source`
+> respectively. A `scenario_source` key at the top level of `stages.json` is no
+> longer read; move it to `config.json` and split it per-pass as needed.
 
 **`stages[]` entry fields:**
 

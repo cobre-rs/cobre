@@ -23,6 +23,7 @@
 use std::path::Path;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
     EvaporationModel, EvaporationReferenceSource, ResolvedProductionModel, StudySetup,
     aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
@@ -108,7 +109,8 @@ fn fpha_evaporation_case_converges() {
     // ── Step 3: prepare stochastic context (rank-0 pipeline) ──────────────────
 
     let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42).expect("prepare_stochastic must succeed");
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
 
     let system = prepare_result.system;
     let stochastic = prepare_result.stochastic;

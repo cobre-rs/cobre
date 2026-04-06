@@ -1,0 +1,55 @@
+<svg width="680" height="300" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, 'Segoe UI', sans-serif;">
+  <style>
+    text { fill: #c8c6c2; }
+    .title { font-size: 14px; font-weight: 500; }
+    .sub { font-size: 12px; fill: #8b9298; }
+    .arr { stroke: #8b9298; stroke-width: 1; fill: none; }
+    marker path { fill: none; stroke: #8b9298; stroke-width: 1.5; }
+  </style>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+  <rect width="680" height="300" fill="#0f1419" rx="8"/>
+
+  <text class="title" x="340" y="28" text-anchor="middle" fill="#e8e6e3">SDDP: iterating between forward and backward passes</text>
+
+  <!-- Stage boxes -->
+  <rect x="60" y="60" width="120" height="44" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="120" y="86" text-anchor="middle" fill="#5dcaa5">Stage 1</text>
+
+  <rect x="220" y="60" width="120" height="44" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="280" y="86" text-anchor="middle" fill="#5dcaa5">Stage 2</text>
+
+  <rect x="380" y="60" width="120" height="44" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="440" y="86" text-anchor="middle" fill="#5dcaa5">Stage 3</text>
+
+  <text class="title" x="540" y="86" text-anchor="middle" fill="#8b9298">· · ·</text>
+
+  <rect x="570" y="60" width="70" height="44" rx="8" fill="#04342c" stroke="#0f6e56" stroke-width="0.5"/>
+  <text class="title" x="605" y="86" text-anchor="middle" fill="#5dcaa5">T</text>
+
+  <!-- Forward arrows (top) -->
+  <line x1="180" y1="74" x2="218" y2="74" class="arr" marker-end="url(#a)" stroke="#85b7eb"/>
+  <line x1="340" y1="74" x2="378" y2="74" class="arr" marker-end="url(#a)" stroke="#85b7eb"/>
+  <line x1="500" y1="74" x2="530" y2="74" class="arr" marker-end="url(#a)" stroke="#85b7eb"/>
+  <text class="sub" x="340" y="56" text-anchor="middle" fill="#85b7eb">Forward pass →  sample scenarios, record costs</text>
+
+  <!-- Backward arrows (bottom) -->
+  <line x1="218" y1="96" x2="180" y2="96" class="arr" marker-end="url(#a)" stroke="#f5a623"/>
+  <line x1="378" y1="96" x2="340" y2="96" class="arr" marker-end="url(#a)" stroke="#f5a623"/>
+  <line x1="530" y1="96" x2="500" y2="96" class="arr" marker-end="url(#a)" stroke="#f5a623"/>
+  <text class="sub" x="340" y="126" text-anchor="middle" fill="#f5a623">← Backward pass  build cuts (future cost approximations)</text>
+
+  <!-- Convergence -->
+  <rect x="80" y="160" width="250" height="56" rx="8" fill="#042c53" stroke="#185fa5" stroke-width="0.5"/>
+  <text class="title" x="205" y="182" text-anchor="middle" fill="#85b7eb">Lower bound (cuts)</text>
+  <text class="sub" x="205" y="200" text-anchor="middle" fill="#185fa5">Proven minimum cost ↑</text>
+
+  <rect x="350" y="160" width="250" height="56" rx="8" fill="#4a1b0c" stroke="#993c1d" stroke-width="0.5"/>
+  <text class="title" x="475" y="182" text-anchor="middle" fill="#f0997b">Upper bound (simulation)</text>
+  <text class="sub" x="475" y="200" text-anchor="middle" fill="#993c1d">Average policy cost ↓</text>
+
+  <line x1="330" y1="188" x2="348" y2="188" class="arr" marker-end="url(#a)"/>
+
+  <rect x="160" y="240" width="360" height="36" rx="8" fill="#1a2028" stroke="#2d3440" stroke-width="0.5"/>
+  <text class="title" x="340" y="262" text-anchor="middle" fill="#e8e6e3">Gap closes → near-optimal policy</text>
+</svg>

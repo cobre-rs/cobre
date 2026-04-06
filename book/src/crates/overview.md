@@ -4,6 +4,7 @@ Cobre is organized as a Rust workspace with 11 crates. Each crate has a single r
 
 ```
 cobre/crates/
+├── cobre/              Umbrella crate re-exporting workspace API
 ├── cobre-core/         Entity model (buses, hydros, thermals, lines)
 ├── cobre-io/           JSON/Parquet input, FlatBuffers/Parquet output
 ├── cobre-stochastic/   PAR(p) models, scenario generation
@@ -60,4 +61,4 @@ The ecosystem delivers a full SDDP training and simulation pipeline:
 - **Python bindings** via PyO3 with Arrow zero-copy result loading (`cobre-python`)
 - **JSON Schema** files for all input types, hosted for `$schema` editor integration
 
-The workspace is verified by over 3,100 tests.
+The workspace is verified by over 3,150 tests.

@@ -47,7 +47,13 @@ this ordering implicitly through the Benders cuts it generates.
         "type": "iteration_limit",
         "limit": 128
       }
-    ]
+    ],
+    "scenario_source": {
+      "seed": 42,
+      "inflow": { "scheme": "in_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
   },
   "simulation": {
     "enabled": true,
@@ -64,8 +70,13 @@ this ordering implicitly through the Benders cuts it generates.
 `forward_passes: 1` draws one scenario trajectory per training iteration, which
 is standard for single-cut SDDP. The only stopping rule is an `iteration_limit`
 of 128, so the pre-generated output ran all 128 iterations. In a production study
-you would add a convergence-based rule such as `"type": "relative_gap", "tol": 0.01`
-to stop early when the optimality gap closes below 1%.
+you would add a convergence-based rule such as `"type": "bound_stalling", "iterations": 20, "tolerance": 0.01`
+to stop early when the lower bound improvement stalls.
+
+The `scenario_source` block configures per-class scenario sampling. Here all three
+entity classes (inflow, load, NCS) use `in_sample`, meaning forward-pass noise is
+drawn from the pre-generated opening tree. The `seed: 42` controls the forward-pass
+RNG (unused for `in_sample` but included for explicitness).
 
 `modeling.inflow_non_negativity.method: "none"` allows the PAR(p) noise model to
 produce negative inflow samples without truncation. This is appropriate when inflow
@@ -221,7 +232,7 @@ Training summary (from output/training/_manifest.json):
   Cuts active:             384
 ```
 
-To test for convergence, add a `relative_gap` rule alongside the iteration limit:
+To test for convergence, add a `bound_stalling` rule alongside the iteration limit:
 
 ```json
 {
@@ -229,16 +240,16 @@ To test for convergence, add a `relative_gap` rule alongside the iteration limit
     "forward_passes": 1,
     "stopping_rules": [
       { "type": "iteration_limit", "limit": 200 },
-      { "type": "relative_gap", "tol": 0.01 }
+      { "type": "bound_stalling", "iterations": 20, "tolerance": 0.01 }
     ]
   }
 }
 ```
 
 With this configuration on the 1dtoy case, the solver typically converges within
-roughly 100 iterations (gap closes below 1%). Exact iteration counts vary with the
-random seed. Numerical values like gap percentages are stochastic — your run will
-differ from any pre-recorded reference values.
+roughly 100 iterations (bound improvement stalls below 1%). Exact iteration counts
+vary with the random seed. Numerical values like gap percentages are stochastic —
+your run will differ from any pre-recorded reference values.
 
 The `convergence.parquet` file in the training output records lower bound, upper
 bound, and gap at every iteration, so you can plot convergence progress after the

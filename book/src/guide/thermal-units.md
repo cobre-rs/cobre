@@ -203,10 +203,16 @@ physical error: thermal 1 cost_segments capacity sum (657.0 MW) does not match
 
 ## GNL Configuration
 
-The optional `gnl_config` block enables GNL (Gás Natural Liquefeito, or liquefied
-natural gas) dispatch anticipation. This models thermal units that require advance
-scheduling over multiple stages due to commitment lead times — for example, an
-LNG-fired plant that must be booked several weeks before the dispatch occurs.
+> **Not yet implemented.** The `gnl_config` field is parsed and validated but has
+> no effect on the LP formulation in the current version. GNL dispatch anticipation
+> is a planned feature — see the [CHANGELOG](https://github.com/cobre-rs/cobre/blob/main/CHANGELOG.md)
+> for the implementation timeline.
+
+The optional `gnl_config` block is intended to enable GNL (Gás Natural Liquefeito,
+or liquefied natural gas) dispatch anticipation. This will model thermal units that
+require advance scheduling over multiple stages due to commitment lead times — for
+example, an LNG-fired plant that must be booked several weeks before the dispatch
+occurs.
 
 ```json
 "gnl_config": {
@@ -218,14 +224,9 @@ LNG-fired plant that must be booked several weeks before the dispatch occurs.
 | ------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `lag_stages` | integer | Number of stages of dispatch anticipation. A value of `2` means the generation commitment for stage `t` must be decided at stage `t - 2`. |
 
-When `lag_stages` is greater than zero, the LP structure couples the commitment
-decision at an earlier stage to the dispatch variable at a later stage. This is
-an advanced feature for detailed operational planning studies. For most long-term
-planning horizons where monthly stages are used and commitment detail is not the
-focus, the `gnl_config` field can be omitted.
-
-When the `gnl_config` block is absent, there is no dispatch anticipation lag — the unit
-can be committed and dispatched independently in each stage's LP.
+When implemented, `lag_stages` greater than zero will couple the commitment
+decision at an earlier stage to the dispatch variable at a later stage. For now,
+the field is accepted by the parser but silently ignored during LP construction.
 
 ---
 

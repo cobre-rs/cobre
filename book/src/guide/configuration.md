@@ -33,14 +33,52 @@ Controls the SDDP training phase.
 
 ### Optional Fields
 
-| Field           | Type               | Default | Description                                                                                                                                                                             |
-| --------------- | ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                                                                     |
-| `tree_seed`     | integer            | `null`  | Random seed for the opening scenario tree. When `null`, derived from OS entropy (non-reproducible). See [Stochastic Modeling](./stochastic-modeling.md) for the dual-seed architecture. |
-| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously.                                         |
+| Field           | Type               | Default | Description                                                                                                                                                                                             |
+| --------------- | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`       | boolean            | `true`  | Set to `false` to skip training and proceed directly to simulation (requires a pre-trained policy).                                                                                                     |
+| `tree_seed`     | integer            | `null`  | Random seed for the opening scenario tree. When `null`, a default seed of 42 is used (deterministic but arbitrary). See [Stochastic Modeling](./stochastic-modeling.md) for the dual-seed architecture. |
+| `stopping_mode` | `"any"` or `"all"` | `"any"` | How multiple stopping rules combine: `"any"` stops when the first rule is satisfied; `"all"` requires all rules to be satisfied simultaneously.                                                         |
 
-For the per-class `scenario_source` configuration in `stages.json`, see
+For the per-class `scenario_source` configuration, see the
+[`scenario_source` sub-section](#scenario_source) below and
 [Stochastic Modeling](./stochastic-modeling.md).
+
+### `scenario_source`
+
+Controls where the forward-pass noise comes from for each entity class during
+training. When absent, all classes default to `in_sample` (reusing the
+pre-generated opening tree).
+
+| Field              | Type              | Default       | Description                                                                                             |
+| ------------------ | ----------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `seed`             | integer or `null` | `null`        | Shared forward-pass seed for `out_of_sample`, `historical`, and `external` schemes.                     |
+| `inflow`           | object            | `in_sample`   | Sampling scheme for hydro inflow. Object with `"scheme"` key.                                           |
+| `load`             | object            | `in_sample`   | Sampling scheme for bus load. Object with `"scheme"` key.                                               |
+| `ncs`              | object            | `in_sample`   | Sampling scheme for NCS availability. Object with `"scheme"` key.                                       |
+| `historical_years` | array or object   | auto-discover | Restrict the pool of historical windows. List (`[1940, 1953]`) or range (`{"from": 1940, "to": 2010}`). |
+
+Valid values for `"scheme"`: `"in_sample"`, `"out_of_sample"`, `"historical"`, `"external"`.
+
+Example — out-of-sample inflow with in-sample load and NCS:
+
+```json
+{
+  "training": {
+    "tree_seed": 42,
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }],
+    "scenario_source": {
+      "seed": 99,
+      "inflow": { "scheme": "out_of_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
+  }
+}
+```
+
+See [Stochastic Modeling — Sampling Schemes](./stochastic-modeling.md#sampling-schemes)
+for a full description of each scheme and the `historical_years` field.
 
 ### Stopping Rules
 
@@ -151,6 +189,45 @@ Example:
   "simulation": {
     "enabled": true,
     "num_scenarios": 1000
+  }
+}
+```
+
+### `scenario_source`
+
+Controls where the forward-pass noise comes from during the simulation phase.
+When absent, simulation falls back to the scheme configured under
+`training.scenario_source`. This allows you to train with in-sample noise and
+simulate with a different scheme (for example, out-of-sample or historical)
+without modifying the training configuration.
+
+The fields are identical to `training.scenario_source`:
+
+| Field              | Type              | Default       | Description                                                                                             |
+| ------------------ | ----------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| `seed`             | integer or `null` | `null`        | Shared forward-pass seed for `out_of_sample`, `historical`, and `external` schemes.                     |
+| `inflow`           | object            | `in_sample`   | Sampling scheme for hydro inflow. Object with `"scheme"` key.                                           |
+| `load`             | object            | `in_sample`   | Sampling scheme for bus load. Object with `"scheme"` key.                                               |
+| `ncs`              | object            | `in_sample`   | Sampling scheme for NCS availability. Object with `"scheme"` key.                                       |
+| `historical_years` | array or object   | auto-discover | Restrict the pool of historical windows. List (`[1940, 1953]`) or range (`{"from": 1940, "to": 2010}`). |
+
+Example — simulate with out-of-sample inflow while training uses in-sample:
+
+```json
+{
+  "training": {
+    "forward_passes": 50,
+    "stopping_rules": [{ "type": "iteration_limit", "limit": 200 }]
+  },
+  "simulation": {
+    "enabled": true,
+    "num_scenarios": 2000,
+    "scenario_source": {
+      "seed": 77,
+      "inflow": { "scheme": "out_of_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    }
   }
 }
 ```
@@ -321,6 +398,12 @@ Controls which outputs are written to the results directory.
       { "type": "bound_stalling", "iterations": 20, "tolerance": 0.0001 }
     ],
     "stopping_mode": "any",
+    "scenario_source": {
+      "seed": 99,
+      "inflow": { "scheme": "out_of_sample" },
+      "load": { "scheme": "in_sample" },
+      "ncs": { "scheme": "in_sample" }
+    },
     "cut_selection": {
       "enabled": true,
       "method": "level1",
@@ -367,7 +450,7 @@ for advanced use cases and may change between releases:
 | `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)           |
 | `training.forward_pass.pass_type` | Forward pass strategy selection                             |
 | `training.solver`                 | LP solver retry budget and attempt limits                   |
-| `simulation.sampling_scheme`      | Simulation scenario sampling strategy                       |
+| `simulation.scenario_source`      | Simulation per-class scenario sampling configuration        |
 | `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing |
 
 All fields have defaults and can be omitted. For the complete list of fields

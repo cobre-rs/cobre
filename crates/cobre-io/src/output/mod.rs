@@ -334,7 +334,6 @@ impl SimulationOutput {
 /// output_dir/
 ///   training/
 ///     _SUCCESS
-///     _manifest.json
 ///     metadata.json
 ///     convergence.parquet
 ///     dictionaries/
@@ -347,7 +346,7 @@ impl SimulationOutput {
 ///       iterations.parquet
 ///   simulation/
 ///     _SUCCESS              (only when simulation_output is Some)
-///     _manifest.json        (only when simulation_output is Some)
+///     metadata.json         (only when simulation_output is Some)
 /// ```
 ///
 /// # Parameters

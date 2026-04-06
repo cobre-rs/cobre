@@ -61,7 +61,7 @@ def test_load_results_manifest_keys(run_output: pathlib.Path) -> None:
     manifest = result["training"]["manifest"]
 
     assert isinstance(manifest, dict), "manifest must be a dict"
-    assert "version" in manifest, "manifest must contain 'version'"
+    assert "cobre_version" in manifest, "manifest must contain 'cobre_version'"
     assert "status" in manifest, "manifest must contain 'status'"
     assert "convergence" in manifest, "manifest must contain 'convergence'"
 

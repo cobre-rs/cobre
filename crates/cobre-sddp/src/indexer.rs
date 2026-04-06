@@ -1096,7 +1096,7 @@ impl StageIndexer {
 
     /// Map a state-vector index to the LP column it should reference in a cut.
     ///
-    /// The outgoing state after [`shift_lag_state`] stores:
+    /// The outgoing state after `shift_lag_state` stores:
     /// - `[0, N)`: outgoing storage → LP column `j` (identity mapping)
     /// - `[N + 0·N + h]`: outgoing lag 0 for hydro `h` = realised inflow
     ///   → LP column `z_inflow.start + h`
@@ -1104,8 +1104,6 @@ impl StageIndexer {
     ///   → LP column `N + (l − 1)·N + h`
     ///
     /// When `max_par_order == 0` (no lags), this is the identity for all `j`.
-    ///
-    /// [`shift_lag_state`]: crate::noise::shift_lag_state
     #[inline]
     #[must_use]
     pub fn state_to_lp_column(&self, j: usize) -> usize {

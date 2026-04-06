@@ -255,7 +255,7 @@ pub struct HydroEstimationEntry {
 
 /// Diagnostic record for an initial lag / user stats scale mismatch.
 ///
-/// Populated by [`run_partial_estimation`] when a hydro's lag-1 past inflow
+/// Populated by `run_partial_estimation` when a hydro's lag-1 past inflow
 /// value is closer (in absolute distance) to the history-estimated mean than
 /// to the user-provided seasonal mean at the first study stage (`stage_id == 0`).
 /// This can indicate that `initial_conditions.json` was calibrated to historical
@@ -301,7 +301,7 @@ pub struct EstimationReport {
 /// standard deviation ratio diverges significantly between the user-provided
 /// profile and the history-estimated profile.
 ///
-/// Produced by [`run_partial_estimation`] (P9 diagnostic) when
+/// Produced by `run_partial_estimation` (P9 diagnostic) when
 /// `max(user_ratio / est_ratio, est_ratio / user_ratio) > 2.0` for any
 /// consecutive season pair `(season_a, season_b)`.
 #[derive(Debug, Clone)]

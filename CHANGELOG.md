@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.1] - 2026-04-06
+
+### Fixed
+
+- **Documentation accuracy** — fixed 20 documentation issues: stale JSON schemas,
+  wrong default values, dead field references, outdated examples, and missing
+  content across 12 mdbook pages.
+- `case-format.md` — `training.seed` renamed to `training.tree_seed`; `exports.states`
+  default corrected from `true` to `false`; added `estimation` section.
+- `configuration.md` — null `tree_seed` correctly documented as default seed 42
+  (not OS entropy); removed dead `simulation.sampling_scheme` reference.
+- `stochastic-modeling.md` — corrected seed behavior and `scenario_source.seed`
+  optionality rules.
+- `1dtoy.md` / `4ree.md` — updated config.json examples with `scenario_source`
+  block; replaced non-existent `relative_gap` stopping rule with `bound_stalling`.
+- `thermal-units.md` — marked GNL dispatch anticipation as not yet implemented.
+- `network-topology.md` — corrected deficit penalty resolution from three-tier to
+  two-tier.
+- `python-quickstart.md` — documented all 11 result dict keys with `None` guard.
+- `error-codes.md` — replaced stale FPHA example with `linearized_head`.
+
+### Changed
+
+- Updated VHS terminal recordings and asciinema casts to reflect v0.4.0 CLI output.
+- Embedded `validation.gif`, `validation-error.gif`, and `multithreading.gif` in
+  the Running Studies guide.
+
 ## [0.4.0] - 2026-04-06
 
 ### Added

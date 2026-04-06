@@ -498,6 +498,7 @@ mod tests {
     // Historical tests
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::cast_precision_loss)]
     fn make_historical_library() -> HistoricalScenarioLibrary {
         // 3 windows, 4 stages, 2 hydros.
         let mut lib = HistoricalScenarioLibrary::new(3, 4, 2, 1, vec![1990, 1995, 2000]);
@@ -610,6 +611,7 @@ mod tests {
     // External tests
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::cast_precision_loss)]
     fn make_external_library() -> ExternalScenarioLibrary {
         // 4 stages, 50 scenarios, 3 entities.
         let mut lib = ExternalScenarioLibrary::new(4, 50, 3, "inflow");
@@ -648,6 +650,7 @@ mod tests {
             req.scenario,
             0,
         );
+        #[allow(clippy::cast_possible_truncation)]
         let scenario_idx = (hash as usize) % 50;
         let expected = lib.eta_slice(req.stage_idx, scenario_idx);
 
@@ -723,13 +726,18 @@ mod tests {
     // apply_initial_state tests
     // -----------------------------------------------------------------------
 
-    /// Construct a library with known lag values for apply_initial_state tests.
+    /// Construct a library with known lag values for `apply_initial_state` tests.
     ///
-    /// 3 windows, 4 stages, 2 hydros, max_order=2.
+    /// 3 windows, 4 stages, 2 hydros, `max_order`=2.
     /// Lag layout per window: `lag[lag * n_hydros + hydro]`.
     /// Window 0: lag0=[1.0, 2.0], lag1=[3.0, 4.0]
     /// Window 1: lag0=[10.0, 20.0], lag1=[30.0, 40.0]
     /// Window 2: lag0=[100.0, 200.0], lag1=[300.0, 400.0]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
     fn make_historical_library_with_lags() -> HistoricalScenarioLibrary {
         let mut lib = HistoricalScenarioLibrary::new(3, 4, 2, 2, vec![1990, 1995, 2000]);
         // Populate eta values so fill() is usable too.

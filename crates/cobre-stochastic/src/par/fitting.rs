@@ -1140,7 +1140,7 @@ pub struct AicSelectionResult {
 /// # Parameters
 ///
 /// - `sigma2_per_order` — prediction error variances from
-///   [`LevinsonDurbinResult::sigma2_per_order`]. `sigma2_per_order[k]`
+///   `LevinsonDurbinResult::sigma2_per_order`. `sigma2_per_order[k]`
 ///   corresponds to AR order `k+1`. Length = `p_max`.
 /// - `n_observations` — number of historical observations for this season (`N_m`).
 ///
@@ -1223,7 +1223,7 @@ pub struct PacfSelectionResult {
     /// PACF values (partial autocorrelation coefficients) for lags `1..=p_max`.
     ///
     /// `pacf_values[k]` is the PACF at lag `k+1`. Same as
-    /// [`LevinsonDurbinResult::parcor`].
+    /// `LevinsonDurbinResult::parcor`.
     pub pacf_values: Vec<f64>,
     /// Significance threshold: `z_alpha / sqrt(n_observations)`.
     pub threshold: f64,
@@ -1242,7 +1242,7 @@ pub struct PacfSelectionResult {
 /// # Parameters
 ///
 /// - `parcor` -- partial autocorrelation coefficients from
-///   [`LevinsonDurbinResult::parcor`]. `parcor[k]` is the PACF at lag `k+1`.
+///   `LevinsonDurbinResult::parcor`. `parcor[k]` is the PACF at lag `k+1`.
 /// - `n_observations` -- number of historical observations for this season.
 /// - `z_alpha` -- z-score for the desired confidence level (e.g., `1.96`
 ///   for 95% two-sided).
@@ -1461,8 +1461,8 @@ pub fn build_periodic_yw_matrix(
     }
 
     // Fill the RHS: rhs[i] = rho(season, i+1).
-    for i in 0..order {
-        rhs[i] = periodic_autocorrelation(
+    for (i, rhs_entry) in rhs.iter_mut().enumerate().take(order) {
+        *rhs_entry = periodic_autocorrelation(
             season,
             i + 1,
             n_seasons,
@@ -3655,8 +3655,9 @@ mod tests {
     /// 2-season PAR(2) process (3 analytical identities):
     /// 1. PACF(k) matches `estimate_periodic_ar_coefficients(order=k)[k-1]`.
     /// 2. PACF(1) = rho(season, 1) exactly.
-    /// 3. PACF(1) > phi_1 when phi_2 > 0 (lag-1 autocorrelation effect).
-    /// Also verifies significance at orders 1 and 2 exceeds 95% threshold.
+    /// 3. PACF(1) > `phi_1` when `phi_2` > 0 (lag-1 autocorrelation effect).
+    ///
+    ///    Also verifies significance at orders 1 and 2 exceeds 95% threshold.
     #[test]
     fn periodic_pacf_two_season_par2_analytical_verification() {
         let phi_1 = 0.7_f64;

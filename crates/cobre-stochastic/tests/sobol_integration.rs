@@ -337,7 +337,7 @@ fn build_sobol_context(
 fn sobol_2d_star_discrepancy() {
     let n = 64_usize;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2]);
+    let corr = identity_correlation(&[1, 2]);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
     let dims = ClassDimensions {
@@ -345,7 +345,7 @@ fn sobol_2d_star_discrepancy() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -394,7 +394,7 @@ fn sobol_normal_statistics() {
     let n = 256_usize;
     let dim = 1_usize;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = identity_correlation(&[1]);
+    let corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
     let dims = ClassDimensions {
@@ -402,7 +402,7 @@ fn sobol_normal_statistics() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -435,7 +435,7 @@ fn sobol_correlation_applied() {
     let n = 256_usize;
     let rho = 0.8_f64;
     let stages = vec![make_stage_sobol(0, 0, n)];
-    let mut corr = correlated_correlation(&[1, 2], rho);
+    let corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
     let dims = ClassDimensions {
@@ -443,7 +443,7 @@ fn sobol_correlation_applied() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)

@@ -721,7 +721,7 @@ mod tests {
         let mut noise = [1.0_f64, 0.0];
         dc.apply_correlation(0, &mut noise, &entity_order);
 
-        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d00 = f64::midpoint(f64::sqrt(1.8), f64::sqrt(0.2));
         let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         assert!((noise[0] - d00).abs() < 1e-8, "noise[0]={}", noise[0]);
         assert!((noise[1] - d10).abs() < 1e-8, "noise[1]={}", noise[1]);
@@ -771,7 +771,7 @@ mod tests {
         let mut noise = [0.5_f64, 1.0]; // noise[0]=entity2, noise[1]=entity1
         dc.apply_correlation(0, &mut noise, &entity_order);
 
-        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d00 = f64::midpoint(f64::sqrt(1.8), f64::sqrt(0.2));
         let d01 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         // correlated[0] = D[0][0]*1.0 + D[0][1]*0.5; scattered to noise[1]
         let expected_noise1 = d00 * 1.0 + d01 * 0.5;
@@ -821,7 +821,7 @@ mod tests {
 
         // Stage 0 uses "wet": z=[1,0] -> spectral D*[1,0]=[D[0][0], D[1][0]].
         // For [[1,0.8],[0.8,1]]: D[0][0]=(sqrt(1.8)+sqrt(0.2))/2, D[1][0]=(sqrt(1.8)-sqrt(0.2))/2.
-        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d00 = f64::midpoint(f64::sqrt(1.8), f64::sqrt(0.2));
         let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         let mut noise0 = [1.0_f64, 0.0];
         dc.apply_correlation(0, &mut noise0, &entity_order);
@@ -951,7 +951,7 @@ mod tests {
         let mut inflow_noise = [1.0_f64, 0.0];
         dc.apply_correlation_for_class(0, &mut inflow_noise, &class_order, "inflow");
 
-        let d00 = (f64::sqrt(1.8) + f64::sqrt(0.2)) / 2.0;
+        let d00 = f64::midpoint(f64::sqrt(1.8), f64::sqrt(0.2));
         let d10 = (f64::sqrt(1.8) - f64::sqrt(0.2)) / 2.0;
         assert!(
             (inflow_noise[0] - d00).abs() < 1e-8,

@@ -123,7 +123,7 @@ fn saa_golden_value_regression() {
         make_stage(1, 1, 3),
         make_stage(2, 2, 3),
     ];
-    let mut corr = identity_correlation(&[1, 2]);
+    let corr = identity_correlation(&[1, 2]);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
     let dims = ClassDimensions {
@@ -131,7 +131,7 @@ fn saa_golden_value_regression() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, 2, &mut corr, &entity_order, dims).unwrap();
+    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
 
     assert_eq!(
         tree.opening(0, 0)[0],

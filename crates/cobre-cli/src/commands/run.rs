@@ -230,7 +230,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
 
     // Shared runtime context for metadata output files.
     let hostname = cobre_io::get_hostname();
-    let mpi_world_size = ctx.comm.size() as u32;
+    let mpi_world_size = u32::try_from(ctx.comm.size()).unwrap_or(u32::MAX);
 
     if training_enabled {
         apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
@@ -1088,25 +1088,44 @@ fn run_simulation_phase(
     }
 
     if ctx.is_root {
-        let sim_ctx = cobre_io::OutputContext {
-            hostname: hostname.to_string(),
-            solver: "highs".to_string(),
-            started_at: sim_started_at,
-            completed_at: cobre_io::now_iso8601(),
+        write_sim_outputs_on_root(
+            ctx,
+            hostname,
             mpi_world_size,
-            mpi_ranks_participated: mpi_world_size,
-        };
-        write_simulation_outputs(&WriteSimulationArgs {
-            output_dir: &ctx.output_dir,
-            sim_output: &merged_sim_output,
-            sim_solver_stats: &global_scenario_stats,
-            output_ctx: &sim_ctx,
-            quiet: ctx.quiet,
-            stderr: &ctx.stderr,
-        })?;
+            sim_started_at,
+            &merged_sim_output,
+            &global_scenario_stats,
+        )?;
     }
 
     Ok(())
+}
+
+/// Write simulation output files on rank 0.
+fn write_sim_outputs_on_root(
+    ctx: &RunContext<impl Communicator>,
+    hostname: &str,
+    mpi_world_size: u32,
+    sim_started_at: String,
+    merged_sim_output: &cobre_io::SimulationOutput,
+    global_scenario_stats: &[(u32, cobre_sddp::SolverStatsDelta)],
+) -> Result<(), CliError> {
+    let sim_ctx = cobre_io::OutputContext {
+        hostname: hostname.to_string(),
+        solver: "highs".to_string(),
+        started_at: sim_started_at,
+        completed_at: cobre_io::now_iso8601(),
+        mpi_world_size,
+        mpi_ranks_participated: mpi_world_size,
+    };
+    write_simulation_outputs(&WriteSimulationArgs {
+        output_dir: &ctx.output_dir,
+        sim_output: merged_sim_output,
+        sim_solver_stats: global_scenario_stats,
+        output_ctx: &sim_ctx,
+        quiet: ctx.quiet,
+        stderr: &ctx.stderr,
+    })
 }
 
 /// Print the simulation summary from aggregated solver stats and cost statistics.

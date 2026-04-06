@@ -208,7 +208,7 @@ impl SpectralFactor {
 /// convergence, a warning is logged and the current (approximately diagonal)
 /// state is returned.
 ///
-/// Variable names use single characters (a, v, t, c, s, tau, a_pq, etc.) to
+/// Variable names use single characters (a, v, t, c, s, tau, `a_pq`, etc.) to
 /// match the mathematical specification; renaming would obscure the derivation.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
 fn jacobi_eigen(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
@@ -515,6 +515,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn spectral_of_20x20_identity() {
         let n = 20_usize;
         let id: Vec<Vec<f64>> = (0..n)

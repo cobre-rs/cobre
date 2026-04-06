@@ -314,6 +314,7 @@ impl HistoricalScenarioLibrary {
 /// Panics in debug builds if dimension mismatches between `library`, `par`,
 /// and `stages` are detected. Does not panic for valid inputs where all
 /// windows were pre-validated by ticket-018.
+#[allow(clippy::too_many_lines)]
 pub fn standardize_historical_windows(
     library: &mut HistoricalScenarioLibrary,
     inflow_history: &[InflowHistoryRow],
@@ -389,16 +390,13 @@ pub fn standardize_historical_windows(
         .collect();
 
     // Year range from the inflow history.
-    let (min_year, max_year) = match (
+    let (Some(min_year), Some(max_year)) = (
         inflow_history.iter().map(|r| r.date.year()).min(),
         inflow_history.iter().map(|r| r.date.year()).max(),
-    ) {
-        (Some(lo), Some(hi)) => (lo, hi),
-        _ => {
-            // Empty history — nothing to do (early-exit guard above already
-            // covers the n_hydros/n_stages/window_years checks).
-            return;
-        }
+    ) else {
+        // Empty history — nothing to do (early-exit guard above already
+        // covers the n_hydros/n_stages/window_years checks).
+        return;
     };
     #[allow(clippy::cast_sign_loss)]
     let n_years = (max_year - min_year + 1) as usize;
@@ -839,10 +837,11 @@ mod tests {
     use super::{Stage, standardize_historical_windows};
     use crate::par::precompute::PrecomputedPar;
 
-    /// Build a monthly stage with the given array index and 0-based season_id (0=Jan..11=Dec).
+    /// Build a monthly stage with the given array index and 0-based `season_id` (0=Jan..11=Dec).
     ///
     /// Uses a 12-season cycle so that wrap-around (Dec→Jan) causes a year-offset
     /// increment in `build_observation_sequence`, matching the window.rs tests.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn make_monthly_stage(index: usize, season_id: usize) -> Stage {
         let month = (season_id as u32) + 1;
         Stage {
@@ -872,7 +871,7 @@ mod tests {
     /// Build a row keyed by `month0` (0-based month: 0=Jan, 11=Dec).
     ///
     /// The lookup in `standardize_historical_windows` uses `date.month0()` as
-    /// the season_id. This helper makes that mapping explicit.
+    /// the `season_id`. This helper makes that mapping explicit.
     fn make_row(hydro_id: EntityId, year: i32, month0: u32, value: f64) -> InflowHistoryRow {
         InflowHistoryRow {
             hydro_id,
@@ -898,8 +897,8 @@ mod tests {
     /// and window year 1990 with observations [120.0, 90.0, ...], the eta values
     /// at stage 0 and 1 must be (120-100)/30 and (90-100)/30.
     ///
-    /// With 12 monthly stages (season_ids 0-11), n_seasons=12. max_order=0.
-    /// Full sequence: [(0,0),(0,1),...,(0,11)] — all year_offset=0 because the
+    /// With 12 monthly stages (`season_ids` 0-11), `n_seasons`=12. `max_order`=0.
+    /// Full sequence: [(0,0),(0,1),...,(0,11)] — all `year_offset`=0 because the
     /// sequence 0→1→...→11 never wraps backwards. So all study observations
     /// are in year `window_year` itself.
     #[test]
@@ -958,14 +957,14 @@ mod tests {
     // Test 2: AR(1) uses RAW historical lags (not reconstructed)
     // -----------------------------------------------------------------------
 
-    /// Single hydro, AR(1), psi_orig=0.5 in original units, base=80, sigma=25.
+    /// Single hydro, AR(1), `psi_orig`=0.5 in original units, base=80, sigma=25.
     ///
     /// Uses 12 monthly stages so that the lag season (one step before Jan) is Dec.
-    /// With n_seasons=12 and max_order=1:
+    /// With `n_seasons`=12 and `max_order`=1:
     ///   - Lag season: (0 - 1 + 12) % 12 = 11 (Dec)
     ///   - Full sequence: [(0,11),(1,0),(1,1),...,(1,11)]
-    ///     * season 11→0 wraps → year_offset becomes 1
-    ///   - Lag observation: (window_year + 0, season 11) = (1990, Dec) → month0=11
+    ///     * season 11→0 wraps → `year_offset` becomes 1
+    ///   - Lag observation: (`window_year` + 0, season 11) = (1990, Dec) → month0=11
     ///   - Stage 0 observation: (1990 + 1, season 0) = (1991, Jan) → month0=0
     ///   - Stage 1 observation: (1991, Feb) → month0=1
     ///
@@ -973,8 +972,8 @@ mod tests {
     /// For stage 1: lags are RAW → lag[0] = 130.0 (Jan 1991 raw observation)
     ///              eta = (95 - 80 - 0.5*130) / 25 = -50/25 = -2.0
     ///
-    /// PAR parametrisation: mean=160, std=25, psi_star=0.5 (when stds equal,
-    /// psi_orig = psi_star). base = mean - psi_orig*mean_lag = 160 - 0.5*160 = 80.
+    /// PAR parametrisation: mean=160, std=25, `psi_star`=0.5 (when stds equal,
+    /// `psi_orig` = `psi_star`). base = mean - `psi_orig`*`mean_lag` = 160 - 0.5*160 = 80.
     #[test]
     fn test_ar1_standardization_uses_raw_lags() {
         let hydro = EntityId(1);
@@ -1060,9 +1059,9 @@ mod tests {
     /// Two hydros, two window years, AR(0). All four (window,stage) slices must
     /// be independently populated with the correct eta values.
     ///
-    /// Uses season_ids 0 and 1 (n_seasons=2). With max_order=0 and seasons 0→1
-    /// (increasing, no wrap), all year_offsets are 0. Observations are at
-    /// year = window_year itself.
+    /// Uses `season_ids` 0 and 1 (`n_seasons`=2). With `max_order`=0 and seasons 0→1
+    /// (increasing, no wrap), all `year_offset`s are 0. Observations are at
+    /// year = `window_year` itself.
     #[test]
     fn test_multi_hydro_multi_window() {
         let h1 = EntityId(1);
@@ -1149,18 +1148,18 @@ mod tests {
     // Test 4: pre-study lag buffer populated correctly
     // -----------------------------------------------------------------------
 
-    /// Single hydro, max_order=2 (AR(2) dummy), full 12-stage monthly year.
+    /// Single hydro, `max_order`=2 (AR(2) dummy), full 12-stage monthly year.
     ///
-    /// With n_seasons=12 and max_order=2, the lag seasons for stage 0 (Jan) are:
+    /// With `n_seasons`=12 and `max_order`=2, the lag seasons for stage 0 (Jan) are:
     ///   - lag-2 (oldest, buf index 1): season (0-2+12)%12 = 10 (Nov) at year+0
     ///   - lag-1 (most recent, buf index 0): season (0-1+12)%12 = 11 (Dec) at year+0
     ///
     /// Full sequence: [(0,10),(0,11),(1,0),(1,1),...,(1,11)]
-    ///   Wrap at 11→0 increments year_offset to 1 for study stages.
+    ///   Wrap at 11→0 increments `year_offset` to 1 for study stages.
     ///
-    /// The lag buffer layout is [lag*n_hydros + h] where lag=0 = most recent:
-    ///   lag_slice[0] = Dec 1990 = 66.0
-    ///   lag_slice[1] = Nov 1990 = 55.0
+    /// The lag buffer layout is [`lag*n_hydros + h`] where lag=0 = most recent:
+    ///   `lag_slice`[0] = Dec 1990 = 66.0
+    ///   `lag_slice`[1] = Nov 1990 = 55.0
     #[test]
     fn test_pre_study_lags_populated() {
         let hydro = EntityId(1);
@@ -1240,8 +1239,8 @@ mod tests {
 
     /// Single hydro, single stage, sigma=0, observation matches deterministic value.
     ///
-    /// With 1 stage (season_id=0, n_seasons=1) and max_order=0:
-    ///   Full sequence: [(0,0)]. year_offset=0. Observation at year=window_year.
+    /// With 1 stage (`season_id`=0, `n_seasons`=1) and `max_order`=0:
+    ///   Full sequence: [(0,0)]. `year_offset`=0. Observation at year=`window_year`.
     #[test]
     fn test_sigma_zero_returns_zero_eta() {
         let hydro = EntityId(1);
@@ -1278,7 +1277,8 @@ mod tests {
     use super::validate_historical_library;
     use crate::StochasticError;
 
-    /// Build a minimal valid Stage with season_id: Some(season).
+    /// Build a minimal valid Stage with `season_id`: `Some(season)`.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn make_validate_stage(index: usize, season_id: Option<usize>) -> Stage {
         Stage {
             index,
@@ -1329,7 +1329,7 @@ mod tests {
 
     /// Given a library where `eta_slice(2, 5)[1]` is `f64::NEG_INFINITY`,
     /// `validate_historical_library` returns `Err` with a message containing
-    /// "V2.3" and "NEG_INFINITY".
+    /// "V2.3" and `"NEG_INFINITY"`.
     #[test]
     fn test_neg_infinity_eta_fails_v2_3() {
         let n_windows = 5;
@@ -1367,7 +1367,7 @@ mod tests {
     }
 
     /// Given a stage with `season_id: None`, `validate_historical_library`
-    /// returns `Err` with a message containing "V2.1" and "season_id".
+    /// returns `Err` with a message containing "V2.1" and `"season_id"`.
     #[test]
     fn test_missing_season_id_fails_v2_1() {
         let lib = HistoricalScenarioLibrary::new(1, 2, 2, 0, vec![1990]);

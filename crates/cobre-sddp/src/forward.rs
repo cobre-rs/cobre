@@ -2424,6 +2424,7 @@ mod tests {
     /// running with 4 workspaces. This verifies the static partitioning
     /// produces deterministic results regardless of workspace count.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_forward_pass_parallel_cost_agreement() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
@@ -3373,6 +3374,7 @@ mod tests {
     /// `max(0, 300 + 30 * eta) * block_factor`.  Since no load factors file is
     /// supplied, `block_factor = 1.0`, so `load_rhs_buf[0] = max(0, 300 + 30 * eta)`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn forward_pass_load_noise_positive_realization() {
         let n_load_buses = 1usize;
         let stochastic = make_stochastic_context_1_hydro_1_load_bus(300.0, 30.0);

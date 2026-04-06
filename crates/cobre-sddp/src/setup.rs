@@ -3599,15 +3599,16 @@ mod tests {
     /// Build a system that has `inflow_scheme = Historical` and the inflow
     /// history needed to discover at least one window.
     ///
-    /// The system has 1 hydro, 1 bus, 1 thermal, 2 monthly stages (season_id
-    /// Some(0) and Some(1)), and historical data covering years 1990-1991.
+    /// The system has 1 hydro, 1 bus, 1 thermal, 2 monthly stages (`season_id`
+    /// `Some(0)` and `Some(1)`), and historical data covering years 1990-1991.
     /// With `max_par_order = 0` (no AR coefficients), a window is valid if
     /// we have observations for both study months. Year 1990 covers months 0-1
     /// so season 0 and 1 are available under year 1990.
     #[allow(
         clippy::too_many_lines,
         clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
     )]
     fn system_with_historical_inflow(n_stages: usize) -> cobre_core::System {
         use chrono::NaiveDate;
@@ -3615,6 +3616,43 @@ mod tests {
             scenario::{InflowHistoryRow, ScenarioSource},
             system::SystemBuilder,
         };
+
+        fn default_hydro_bounds() -> HydroStageBounds {
+            HydroStageBounds {
+                min_storage_hm3: 0.0,
+                max_storage_hm3: 200.0,
+                min_turbined_m3s: 0.0,
+                max_turbined_m3s: 100.0,
+                min_outflow_m3s: 0.0,
+                max_outflow_m3s: None,
+                min_generation_mw: 0.0,
+                max_generation_mw: 250.0,
+                max_diversion_m3s: None,
+                filling_inflow_m3s: 0.0,
+                water_withdrawal_m3s: 0.0,
+            }
+        }
+
+        fn default_hydro_penalties() -> HydroStagePenalties {
+            HydroStagePenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 500.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            }
+        }
 
         let bus = Bus {
             id: EntityId(1),
@@ -3747,43 +3785,6 @@ mod tests {
 
         let n_st = n_stages.max(1);
 
-        fn default_hydro_bounds() -> HydroStageBounds {
-            HydroStageBounds {
-                min_storage_hm3: 0.0,
-                max_storage_hm3: 200.0,
-                min_turbined_m3s: 0.0,
-                max_turbined_m3s: 100.0,
-                min_outflow_m3s: 0.0,
-                max_outflow_m3s: None,
-                min_generation_mw: 0.0,
-                max_generation_mw: 250.0,
-                max_diversion_m3s: None,
-                filling_inflow_m3s: 0.0,
-                water_withdrawal_m3s: 0.0,
-            }
-        }
-
-        fn default_hydro_penalties() -> HydroStagePenalties {
-            HydroStagePenalties {
-                spillage_cost: 0.01,
-                diversion_cost: 0.0,
-                fpha_turbined_cost: 0.0,
-                storage_violation_below_cost: 500.0,
-                filling_target_violation_cost: 0.0,
-                turbined_violation_below_cost: 0.0,
-                outflow_violation_below_cost: 0.0,
-                outflow_violation_above_cost: 0.0,
-                generation_violation_below_cost: 0.0,
-                evaporation_violation_cost: 0.0,
-                water_withdrawal_violation_cost: 0.0,
-                water_withdrawal_violation_pos_cost: 0.0,
-                water_withdrawal_violation_neg_cost: 0.0,
-                evaporation_violation_pos_cost: 0.0,
-                evaporation_violation_neg_cost: 0.0,
-                inflow_nonnegativity_cost: 1000.0,
-            }
-        }
-
         let bounds = ResolvedBounds::new(
             &BoundsCountsSpec {
                 n_hydros: 1,
@@ -3905,8 +3906,17 @@ mod tests {
     /// inflow rows, when `StudySetup::new()` is called, then
     /// `external_inflow_library()` returns `Some` and `n_entities() > 0`.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
     fn external_inflow_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
         use cobre_core::scenario::{ExternalScenarioRow, ScenarioSource};
+        use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
 
         // Build external inflow rows: 3 scenarios × 1 hydro × 2 stages.
         // Hydro ID = 3 (from minimal_system). Stage IDs 0, 1. Scenario IDs 0, 1, 2.
@@ -3926,7 +3936,6 @@ mod tests {
         // We need to rebuild the system with external scenario source and rows.
         // Use SystemBuilder to produce a system that carries external rows.
         // minimal_system builds with its own SystemBuilder call, so we rebuild.
-        use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
 
         let bus = Bus {
             id: EntityId(1),
@@ -3995,8 +4004,6 @@ mod tests {
                 inflow_nonnegativity_cost: 1000.0,
             },
         };
-
-        use chrono::NaiveDate;
         let stages: Vec<Stage> = (0..2usize)
             .map(|i| Stage {
                 index: i,
@@ -4181,11 +4188,16 @@ mod tests {
     /// rows, when `StudySetup::new()` is called, then
     /// `external_load_library()` returns `Some` and `n_entities() > 0`.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
     fn external_load_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
         use cobre_core::scenario::{ExternalLoadRow, ScenarioSource};
-
-        // Reuse the same bus/thermal/hydro setup from external inflow test,
-        // but set load_scheme = External and provide external load rows.
         use cobre_core::{scenario::InflowModel as CoreInflowModel, system::SystemBuilder};
 
         let bus = Bus {
@@ -4256,7 +4268,6 @@ mod tests {
             },
         };
 
-        use chrono::NaiveDate;
         let stages: Vec<Stage> = (0..2usize)
             .map(|i| Stage {
                 index: i,
@@ -4457,9 +4468,13 @@ mod tests {
     #[allow(
         clippy::too_many_lines,
         clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
     )]
     fn external_ncs_library_built_when_scheme_is_external() {
+        use chrono::NaiveDate;
+        use cobre_core::scenario::InflowModel as CoreInflowModel;
         use cobre_core::{
             NonControllableSource,
             scenario::{ExternalNcsRow, NcsModel, ScenarioSource},
@@ -4545,9 +4560,6 @@ mod tests {
             max_generation_mw: 100.0,
             curtailment_cost: 0.01,
         };
-
-        use chrono::NaiveDate;
-        use cobre_core::scenario::InflowModel as CoreInflowModel;
 
         let stages: Vec<Stage> = (0..2usize)
             .map(|i| Stage {
@@ -4758,6 +4770,13 @@ mod tests {
     /// that references a year with no data, when `StudySetup::new()` is
     /// called, then it returns `Err` with a message about windows.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
     fn historical_library_fails_when_no_valid_windows() {
         // system_with_historical_inflow has data for years 1990-1991.
         // We use HistoricalYears::List with year 2050 (no data) to force

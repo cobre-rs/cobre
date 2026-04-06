@@ -598,7 +598,7 @@ pub(crate) fn build_observation_sequence(
     let mut result = Vec::with_capacity(full_seasons.len());
     if n_seasons == 1 {
         // Annual: each entry in full_seasons is a separate year offset.
-        #[allow(clippy::cast_possible_wrap)]
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         for (i, &season) in full_seasons.iter().enumerate() {
             result.push((i as i32, season));
         }
@@ -853,7 +853,7 @@ mod tests {
     // Factory tests
     // -----------------------------------------------------------------------
 
-    /// AC: all InSample class schemes returns Ok.
+    /// AC: all `InSample` class schemes returns Ok.
     #[test]
     fn test_build_all_in_sample() {
         let (ctx, stages) = build_test_ctx(None);
@@ -865,7 +865,7 @@ mod tests {
         );
     }
 
-    /// AC: OutOfSample with no forward_seed returns MissingScenarioSource.
+    /// AC: `OutOfSample` with no `forward_seed` returns `MissingScenarioSource`.
     #[test]
     fn test_build_out_of_sample_missing_seed() {
         let (ctx, stages) = build_test_ctx(None);
@@ -882,7 +882,7 @@ mod tests {
         }
     }
 
-    /// AC: OutOfSample with forward_seed returns Ok with correlation refs set.
+    /// AC: `OutOfSample` with `forward_seed` returns Ok with correlation refs set.
     #[test]
     fn test_build_out_of_sample_with_seed() {
         let (ctx, stages) = build_test_ctx(Some(99));
@@ -929,7 +929,7 @@ mod tests {
         );
     }
 
-    /// AC: Historical inflow with no library returns MissingScenarioSource.
+    /// AC: Historical inflow with no library returns `MissingScenarioSource`.
     #[test]
     fn test_build_historical_missing_library() {
         let (ctx, stages) = build_test_ctx(None);
@@ -998,7 +998,7 @@ mod tests {
         );
     }
 
-    /// AC: Historical load returns MissingScenarioSource with scheme "historical_load".
+    /// AC: Historical load returns `MissingScenarioSource` with scheme `"historical_load"`.
     #[test]
     fn test_build_historical_load_unsupported() {
         let (ctx, stages) = build_test_ctx(None);

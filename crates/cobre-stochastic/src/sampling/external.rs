@@ -893,7 +893,7 @@ mod tests {
     /// stage 1 must use the raw external value from stage 0 (130.0) as lag-1.
     ///
     /// Parameters: base=80, psi=[0.5], sigma=25.
-    /// past_inflows: values_m3s=[110.0] for hydro 1.
+    /// `past_inflows`: `values_m3s`=[110.0] for hydro 1.
     #[test]
     fn test_inflow_ar1_uses_external_lags() {
         let hydro_id = EntityId(1);
@@ -966,7 +966,7 @@ mod tests {
     // Load standardization tests
     // -----------------------------------------------------------------------
 
-    /// 1 bus, 1 stage, 1 scenario. value_mw=240, mean=200, std=40 → eta=1.0.
+    /// 1 bus, 1 stage, 1 scenario. `value_mw`=240, mean=200, std=40 → eta=1.0.
     #[test]
     fn test_load_standardization() {
         let bus_id = EntityId(3);
@@ -1026,7 +1026,7 @@ mod tests {
     // std=0 guard test
     // -----------------------------------------------------------------------
 
-    /// When std_mw=0.0, eta must be 0.0 (not NaN or infinity).
+    /// When `std_mw`=0.0, eta must be 0.0 (not NaN or infinity).
     #[test]
     fn test_std_zero_returns_zero() {
         let bus_id = EntityId(5);
@@ -1137,7 +1137,7 @@ mod tests {
     use super::validate_external_library;
     use crate::StochasticError;
 
-    /// Build a valid ExternalScenarioLibrary with all-finite eta values.
+    /// Build a valid `ExternalScenarioLibrary` with all-finite eta values.
     fn make_valid_library(
         n_stages: usize,
         n_scenarios: usize,
@@ -1156,12 +1156,12 @@ mod tests {
         lib
     }
 
-    /// Build a HashSet of EntityIds from a range of i32 values.
+    /// Build a `HashSet` of `EntityId`s from a range of i32 values.
     fn entity_id_set(ids: impl IntoIterator<Item = i32>) -> HashSet<EntityId> {
         ids.into_iter().map(EntityId).collect()
     }
 
-    /// Build a rows_per_stage vector where each stage has `n_scenarios * n_entities` rows.
+    /// Build a `rows_per_stage` vector where each stage has `n_scenarios * n_entities` rows.
     fn uniform_rows_per_stage(
         n_stages: usize,
         n_scenarios: usize,

@@ -331,7 +331,7 @@ fn lhs_marginal_uniformity() {
     let n = 100_usize;
     let dim = 5_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4, 5]);
+    let corr = identity_correlation(&[1, 2, 3, 4, 5]);
     let entity_order = vec![
         EntityId(1),
         EntityId(2),
@@ -345,7 +345,7 @@ fn lhs_marginal_uniformity() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, dim, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -381,7 +381,7 @@ fn lhs_no_stratum_collision() {
     let n = 80_usize;
     let dim = 4_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1, 2, 3, 4]);
+    let corr = identity_correlation(&[1, 2, 3, 4]);
     let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
 
     let dims = ClassDimensions {
@@ -389,7 +389,7 @@ fn lhs_no_stratum_collision() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(99, &stages, dim, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(99, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let n_f = n as f64;
@@ -423,7 +423,7 @@ fn lhs_normal_statistics() {
     let n = 1000_usize;
     let dim = 1_usize;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = identity_correlation(&[1]);
+    let corr = identity_correlation(&[1]);
     let entity_order = vec![EntityId(1)];
 
     let dims = ClassDimensions {
@@ -431,7 +431,7 @@ fn lhs_normal_statistics() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(12345, &stages, dim, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -464,7 +464,7 @@ fn lhs_correlation_applied() {
     let n = 2000_usize;
     let rho = 0.8_f64;
     let stages = vec![make_stage_lhs_no_block(0, 0, n)];
-    let mut corr = correlated_correlation(&[1, 2], rho);
+    let corr = correlated_correlation(&[1, 2], rho);
     let entity_order = vec![EntityId(1), EntityId(2)];
 
     let dims = ClassDimensions {
@@ -472,7 +472,7 @@ fn lhs_correlation_applied() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(54321, &stages, 2, &mut corr, &entity_order, dims)
+    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)

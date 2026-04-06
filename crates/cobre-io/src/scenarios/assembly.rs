@@ -339,8 +339,7 @@ mod tests {
         let result = assemble_inflow_models(vec![], coefficients);
         assert!(
             result.is_ok(),
-            "empty stats + non-empty AR must return Ok, got: {:?}",
-            result
+            "empty stats + non-empty AR must return Ok, got: {result:?}"
         );
         let models = result.unwrap();
         assert!(

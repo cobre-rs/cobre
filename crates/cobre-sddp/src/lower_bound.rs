@@ -473,14 +473,14 @@ mod tests {
             profiles,
             schedule: vec![],
         };
-        let mut decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
+        let decomposed = DecomposedCorrelation::build(&corr_model).unwrap();
         let entity_order = vec![entity_id];
 
         cobre_stochastic::tree::generate::generate_opening_tree(
             42,
             &[stage],
             1, // dim = 1 hydro
-            &mut decomposed,
+            &decomposed,
             &entity_order,
             cobre_stochastic::ClassDimensions {
                 n_hydros: 1,

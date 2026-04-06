@@ -927,6 +927,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_solve_par_noise_sigma_zero_matching_target() {
         // deterministic_value = 100.0 + 0.5 * 50.0 = 125.0; target matches → 0.0
         let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 125.0);
@@ -937,6 +938,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_solve_par_noise_sigma_zero_non_matching_target() {
         // deterministic_value = 125.0; target = 200.0 → residual = 75.0 → NEG_INFINITY
         let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 200.0);
@@ -948,6 +950,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_solve_par_noise_sigma_zero_near_matching_target() {
         // deterministic_value = 125.0; target within 1e-11 → still matches
         let eta = solve_par_noise(100.0, &[0.5], 1, &[50.0], 0.0, 125.0 + 1e-11);
@@ -958,6 +961,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_solve_par_noise_batch_sigma_zero_matching_target() {
         // Build a single-hydro, single-stage PAR with sigma=0 (std_m3s=0 → sigma=0).
         // AR(0) with mean=125.0, std=0.0 → deterministic_value=125.0.

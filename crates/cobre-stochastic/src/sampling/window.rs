@@ -285,7 +285,7 @@ mod tests {
     // Test helpers
     // -----------------------------------------------------------------------
 
-    /// Build a monthly history for `hydro_id` spanning years [from_year, to_year].
+    /// Build a monthly history for `hydro_id` spanning years [`from_year`, `to_year`].
     /// Each month has one row on the 1st of the month.
     fn monthly_history(hydro_id: EntityId, from_year: i32, to_year: i32) -> Vec<InflowHistoryRow> {
         (from_year..=to_year)
@@ -299,7 +299,8 @@ mod tests {
             .collect()
     }
 
-    /// Build 12 monthly study stages with season_ids 0–11.
+    /// Build 12 monthly study stages with `season_ids` 0–11.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn twelve_monthly_stages() -> Vec<Stage> {
         (0_usize..12)
             .map(|i| Stage {

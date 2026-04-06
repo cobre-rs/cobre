@@ -1175,6 +1175,7 @@ fn d17_level1_cut_selection_convergence() {
 /// - At least one `CutSelectionComplete` event with `cuts_deactivated > 0`.
 /// - `active_count() < populated_count` for the stage-0 FCF pool.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn d18_lml1_cut_selection_convergence() {
     use cobre_sddp::cut_selection::CutSelectionStrategy;
 

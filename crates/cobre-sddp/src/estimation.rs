@@ -140,7 +140,7 @@ impl EstimationPath {
             manifest.scenarios_inflow_ar_coefficients_parquet,
         ) {
             // No history — AR alone is meaningless; row 1.
-            (false, false, false) | (false, false, true) => Self::Deterministic,
+            (false, false, _) => Self::Deterministic,
             // No history, stats present, no AR — row 2.
             (false, true, false) => Self::UserStatsWhiteNoise,
             // No history, stats present, AR present — row 3.
@@ -530,6 +530,7 @@ fn run_estimation(
 /// - **Fitting stats** (history-derived, step 4) are used for YW matrix construction.
 /// - **User stats** (from `system.inflow_models()`, step 7) are used for the final
 ///   `assemble_inflow_models` call that drives the scenario generator.
+#[allow(clippy::too_many_lines)]
 fn run_partial_estimation(
     system: System,
     case_dir: &Path,
@@ -725,7 +726,7 @@ fn run_partial_estimation(
     ))
 }
 
-/// Inner function that runs the P7 (UserArHistoryStats) estimation pipeline.
+/// Inner function that runs the P7 (`UserArHistoryStats`) estimation pipeline.
 ///
 /// Used when `inflow_history.parquet` and `inflow_ar_coefficients.parquet` are
 /// both present but `inflow_seasonal_stats.parquet` is absent. Seasonal stats
@@ -2222,6 +2223,7 @@ mod tests {
     /// `inflow_seasonal_stats.parquet` but not `inflow_ar_coefficients.parquet`.
     #[allow(clippy::cast_possible_wrap)]
     fn build_system_with_user_stats(n_years: usize) -> System {
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::InflowModel;
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
 
@@ -2266,7 +2268,6 @@ mod tests {
             })
             .collect();
 
-        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         let hydro = Hydro {
             id: hydro_id,
             name: "H1".to_string(),
@@ -2454,6 +2455,7 @@ mod tests {
     ///
     /// Returns the warnings collected. Extracted to avoid code duplication
     /// across the three lag-scale warning tests.
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn collect_lag_scale_warnings(
         hydro_id: EntityId,
         lag_value: f64,
@@ -3950,6 +3952,7 @@ mod tests {
     /// 2-season PAR(2) model (phi_1=0.7, phi_2=0.15). Checks termination,
     /// order preservation, and coefficient matching.
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn iterative_pacf_reduction_stable_par2_not_spuriously_reduced() {
         use cobre_stochastic::par::fitting::{
             estimate_periodic_ar_coefficients, periodic_pacf, select_order_pacf,
@@ -4117,6 +4120,7 @@ mod tests {
     /// phi_2=0.15). Runs full PACF order selection pipeline and verifies
     /// recovered coefficients match true values within 0.15 tolerance.
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn roundtrip_estimation_two_season_par2_recovers_coefficients() {
         use chrono::NaiveDate;
 
@@ -4242,6 +4246,7 @@ mod tests {
     /// seasons). Each estimate must carry the coefficients from the FIRST stage
     /// in the season (stage 0 for season 0, stage 2 for season 1).
     #[test]
+    #[allow(clippy::cast_sign_loss)]
     fn test_ar_rows_to_estimates_groups_by_season() {
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
@@ -5151,8 +5156,7 @@ mod tests {
         let pair_0_1 = warnings.iter().find(|w| w.season_a == 0 && w.season_b == 1);
         assert!(
             pair_0_1.is_some(),
-            "expected a warning for season pair 0→1, got {:?}",
-            warnings
+            "expected a warning for season pair 0→1, got {warnings:?}"
         );
         let w = pair_0_1.unwrap();
         assert_eq!(
@@ -5176,8 +5180,7 @@ mod tests {
         let warnings = collect_std_ratio_warnings(EntityId(1), &[100.0, 20.0], &[90.0, 18.0]);
         assert!(
             warnings.is_empty(),
-            "expected no StdRatioDivergence when ratios are similar, got {:?}",
-            warnings
+            "expected no StdRatioDivergence when ratios are similar, got {warnings:?}"
         );
     }
 

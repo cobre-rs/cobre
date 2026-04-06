@@ -47,6 +47,7 @@ pub struct OutputContext {
 ///
 /// Tries `/proc/sys/kernel/hostname` first (Linux), then the `HOSTNAME`
 /// environment variable, falling back to `"unknown"`.
+#[must_use]
 pub fn get_hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|s| s.trim().to_string())
@@ -55,6 +56,7 @@ pub fn get_hostname() -> String {
 }
 
 /// Return the current UTC time as an ISO 8601 string (e.g. `"2026-04-05T14:30:00Z"`).
+#[must_use]
 pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }

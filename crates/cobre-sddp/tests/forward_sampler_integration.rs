@@ -20,7 +20,9 @@
     clippy::cast_possible_wrap,
     clippy::needless_range_loop,
     clippy::trivially_copy_pass_by_ref,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::cast_lossless,
+    clippy::unnecessary_cast
 )]
 
 use std::collections::BTreeMap;

@@ -141,6 +141,62 @@ pub struct StochasticSummary {
     pub seed: u64,
 }
 
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Build the AR order summary from the estimation report or loaded inflow models.
+///
+/// Returns `None` when `n_hydros == 0`.
+fn build_ar_order_summary(
+    system: &System,
+    estimation_report: Option<&EstimationReport>,
+    n_hydros: usize,
+) -> Option<ArOrderSummary> {
+    if n_hydros == 0 {
+        return None;
+    }
+
+    let (method, orders): (String, Vec<usize>) = if let Some(report) = estimation_report {
+        let orders: Vec<usize> = report
+            .entries
+            .values()
+            .map(|entry| entry.selected_order as usize)
+            .collect();
+        (report.method.clone(), orders)
+    } else {
+        // Derive from loaded inflow models: use max AR coefficient length per hydro.
+        let orders: Vec<usize> = system
+            .hydros()
+            .iter()
+            .map(|h| {
+                system
+                    .inflow_models()
+                    .iter()
+                    .filter(|m| m.hydro_id == h.id)
+                    .map(|m| m.ar_coefficients.len())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        ("fixed".to_string(), orders)
+    };
+
+    let min_order = orders.iter().copied().min().unwrap_or(0);
+    let max_order = orders.iter().copied().max().unwrap_or(0);
+
+    let mut order_counts = vec![0usize; max_order + 1];
+    for &ord in &orders {
+        order_counts[ord] += 1;
+    }
+
+    Some(ArOrderSummary {
+        method,
+        order_counts,
+        min_order,
+        max_order,
+        n_hydros,
+    })
+}
+
 // ── Builder function ──────────────────────────────────────────────────────────
 
 /// Build a [`StochasticSummary`] from the system, stochastic context, and estimation report.
@@ -187,50 +243,7 @@ pub fn build_stochastic_summary(
     };
 
     // Build AR order summary from estimation report or inflow model coefficients.
-    let ar_summary = if n_hydros > 0 {
-        let (method, orders): (String, Vec<usize>) = if let Some(report) = estimation_report {
-            let orders: Vec<usize> = report
-                .entries
-                .values()
-                .map(|entry| entry.selected_order as usize)
-                .collect();
-            (report.method.clone(), orders)
-        } else {
-            // Derive from loaded inflow models: use max AR coefficient length per hydro.
-            let orders: Vec<usize> = system
-                .hydros()
-                .iter()
-                .map(|h| {
-                    system
-                        .inflow_models()
-                        .iter()
-                        .filter(|m| m.hydro_id == h.id)
-                        .map(|m| m.ar_coefficients.len())
-                        .max()
-                        .unwrap_or(0)
-                })
-                .collect();
-            ("fixed".to_string(), orders)
-        };
-
-        let min_order = orders.iter().copied().min().unwrap_or(0);
-        let max_order = orders.iter().copied().max().unwrap_or(0);
-
-        let mut order_counts = vec![0usize; max_order + 1];
-        for &ord in &orders {
-            order_counts[ord] += 1;
-        }
-
-        Some(ArOrderSummary {
-            method,
-            order_counts,
-            min_order,
-            max_order,
-            n_hydros,
-        })
-    } else {
-        None
-    };
+    let ar_summary = build_ar_order_summary(system, estimation_report, n_hydros);
 
     // Correlation source from provenance — replaces the heuristic that mirrored
     // inflow source. When the correlation was Generated from system data, its

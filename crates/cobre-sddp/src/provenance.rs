@@ -121,13 +121,13 @@ fn component_to_source(cp: ComponentProvenance) -> ProvenanceSource {
 ///
 /// | Path                  | Seasonal stats | AR coefficients |
 /// |-----------------------|---------------|-----------------|
-/// | `Deterministic`       | N/A           | N/A             |
-/// | `UserStatsWhiteNoise` | UserFile      | N/A             |
-/// | `UserProvidedNoHistory` | UserFile    | UserFile        |
-/// | `FullEstimation`      | Estimated     | Estimated       |
-/// | `UserArHistoryStats`  | Estimated     | UserFile        |
-/// | `PartialEstimation`   | UserFile      | Estimated       |
-/// | `UserProvidedAll`     | UserFile      | UserFile        |
+/// | `Deterministic`       | N/A           | N/A               |
+/// | `UserStatsWhiteNoise` | `UserFile`    | N/A               |
+/// | `UserProvidedNoHistory` | `UserFile`  | `UserFile`        |
+/// | `FullEstimation`      | `Estimated`   | `Estimated`       |
+/// | `UserArHistoryStats`  | `Estimated`   | `UserFile`        |
+/// | `PartialEstimation`   | `UserFile`    | `Estimated`       |
+/// | `UserProvidedAll`     | `UserFile`    | `UserFile`        |
 ///
 /// Correlation and opening-tree sources are derived from the
 /// [`StochasticProvenance`] embedded in the stochastic context.
@@ -248,6 +248,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn make_estimation_report(method: &str, orders: &[u32], fallbacks: &[i32]) -> EstimationReport {
         let entries: BTreeMap<EntityId, HydroEstimationEntry> = orders
             .iter()

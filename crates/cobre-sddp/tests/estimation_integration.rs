@@ -881,7 +881,7 @@ fn build_system_for_par1_with_user_stats() -> cobre_core::System {
 ///   `write_inflow_seasonal_stats` with known user values
 ///   (`USER_MEAN = 12345.6`, `USER_STD = 1111.1`).
 /// - No `inflow_ar_coefficients.parquet` → `PartialEstimation` path.
-/// - System pre-loaded with user inflow models (same USER_MEAN / USER_STD).
+/// - System pre-loaded with user inflow models (same `USER_MEAN` / `USER_STD`).
 ///
 /// Asserts:
 /// - Every returned `InflowModel` has `mean_m3s == USER_MEAN` (bitwise).

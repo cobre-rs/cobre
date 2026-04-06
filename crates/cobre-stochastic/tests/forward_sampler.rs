@@ -31,7 +31,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    ForwardSampler, StochasticError,
+    StochasticError,
     context::{ClassSchemes, StochasticContext, build_stochastic_context},
     sampling::insample::sample_forward,
     sampling::{ForwardSamplerConfig, SampleRequest, build_forward_sampler},

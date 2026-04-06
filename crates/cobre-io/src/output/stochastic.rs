@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        use crate::scenarios::{assemble_opening_tree, parse_noise_openings, NoiseOpeningRow};
+        use crate::scenarios::{NoiseOpeningRow, assemble_opening_tree, parse_noise_openings};
 
         let tree = make_tree_2s_2d();
         let tmp = tempfile::tempdir().expect("tempdir must succeed");
@@ -1951,7 +1951,7 @@ mod tests {
 
         let default_mat = &recovered.profiles["default"].groups[0].matrix;
         assert!((default_mat[0][0] - 1.0).abs() < 1e-10);
-        assert!((default_mat[0][1] - 0.0).abs() < 1e-10);
+        assert!(default_mat[0][1].abs() < 1e-10);
 
         let s0_mat = &recovered.profiles["season_0"].groups[0].matrix;
         assert!((s0_mat[0][1] - 0.8).abs() < 1e-10);

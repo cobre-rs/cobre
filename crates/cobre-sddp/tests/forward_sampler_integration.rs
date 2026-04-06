@@ -325,7 +325,7 @@ fn make_correlation(entity_ids: &[EntityId]) -> CorrelationModel {
     );
 
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }

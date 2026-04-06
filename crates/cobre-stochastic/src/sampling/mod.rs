@@ -13,7 +13,7 @@
 //! [`ForwardSampler`] is a composite struct that unifies all supported sampling
 //! strategies under a single `sample()` dispatch method. It holds three
 //! [`ClassSampler`] instances (one per entity class) and applies per-class
-//! Cholesky correlation only for `OutOfSample` class samplers. Use
+//! spectral correlation only for `OutOfSample` class samplers. Use
 //! [`build_forward_sampler`] to construct the appropriate sampler from a
 //! [`SamplingScheme`] and a [`StochasticContext`].
 //!
@@ -80,7 +80,7 @@ impl<'b> ForwardNoise<'b> {
 /// and `External` samplers produce pre-correlated noise and must not apply it again.
 #[derive(Debug)]
 pub struct CorrelationRef<'a> {
-    /// Pre-decomposed Cholesky factors for this entity class.
+    /// Pre-decomposed spectral factors for this entity class.
     pub decomposed: &'a DecomposedCorrelation,
     /// Canonical entity ID ordering for the class segment.
     pub entity_order: &'a [EntityId],
@@ -97,7 +97,7 @@ pub struct CorrelationRef<'a> {
 ///
 /// The `sample()` method splits the caller-supplied `noise_buf` into three
 /// segments `[hydros | load_buses | ncs]`, delegates to each class sampler's
-/// `fill()`, then applies per-class Cholesky correlation where `Some(corr_ref)`
+/// `fill()`, then applies per-class spectral correlation where `Some(corr_ref)`
 /// is present.
 pub struct ForwardSampler<'a> {
     /// Class sampler for inflow (hydro) entities.
@@ -200,7 +200,7 @@ impl ForwardSampler<'_> {
     /// Draw noise for a single `(iteration, scenario, stage)` triple.
     ///
     /// Splits `req.noise_buf` into per-class segments `[hydros | load_buses | ncs]`,
-    /// calls `fill()` on each class sampler, then applies per-class Cholesky
+    /// calls `fill()` on each class sampler, then applies per-class spectral
     /// correlation where `Some(corr_ref)` is present.
     ///
     /// # Errors
@@ -412,7 +412,7 @@ fn build_class_sampler<'a>(
 ///
 /// Constructs three [`ClassSampler`] instances (one per entity class: inflow,
 /// load, NCS) and assembles them into a [`ForwardSampler`] with per-class
-/// Cholesky correlation refs where applicable.
+/// spectral correlation refs where applicable.
 ///
 /// A `None` scheme in `config.class_schemes` is treated as `InSample` (the
 /// default).
@@ -771,7 +771,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }

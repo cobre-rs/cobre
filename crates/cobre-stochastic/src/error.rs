@@ -5,7 +5,7 @@
 //! stochastic layer:
 //!
 //! - PAR model parameter validation
-//! - Cholesky decomposition of correlation matrices
+//! - Spectral decomposition of correlation matrices
 //! - Correlation profile validation
 //! - Seed derivation for deterministic noise generation
 //! - Noise method dispatch (tree generation)

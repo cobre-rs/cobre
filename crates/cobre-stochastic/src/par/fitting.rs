@@ -20,7 +20,7 @@
 //!    `max_order == 0`.
 //! 7. [`estimate_correlation`] — computes the Pearson correlation matrix of
 //!    PAR model residuals across entities, returning a [`CorrelationModel`]
-//!    suitable for downstream Cholesky decomposition.
+//!    suitable for downstream spectral decomposition.
 //!
 //! ## Periodic Yule-Walker equations
 //!

@@ -353,7 +353,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
         },
     );
     let correlation = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };

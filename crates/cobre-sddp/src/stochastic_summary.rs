@@ -252,7 +252,7 @@ pub fn build_stochastic_summary(
 
     // Correlation dimension spans all correlated entities: hydros + load buses + NCS.
     // `stochastic.dim()` returns `n_hydros + n_load_buses + n_stochastic_ncs`, which is
-    // the full noise dimension that the Cholesky decomposition operates on.
+    // the full noise dimension that the spectral decomposition operates on.
     let n_correlated = stochastic.dim();
     let correlation_dim = if n_correlated > 0 {
         Some(format!("{n_correlated}x{n_correlated}"))
@@ -525,7 +525,7 @@ mod tests {
             },
         );
         cobre_core::scenario::CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }

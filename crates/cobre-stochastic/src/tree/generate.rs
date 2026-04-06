@@ -1,4 +1,4 @@
-//! Opening scenario tree generation from pre-decomposed Cholesky factors
+//! Opening scenario tree generation from pre-decomposed spectral factors
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
@@ -22,7 +22,7 @@ use crate::{
 ///
 /// The canonical noise vector layout is `[hydros | load buses | NCS entities]`.
 /// These counts split the flat noise vector into per-class segments for independent
-/// Cholesky correlation application within each entity class.
+/// spectral correlation application within each entity class.
 ///
 /// # Invariant
 ///
@@ -59,7 +59,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// The `Selective` method returns an error.
 ///
 /// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
-/// like LHS that require all openings for a stage simultaneously. Cholesky correlation
+/// like LHS that require all openings for a stage simultaneously. spectral correlation
 /// is applied per class (inflow, load, ncs) in-place after noise generation.
 ///
 /// The `entity_order` slice must have layout `[hydros | load buses | NCS entities]` and
@@ -218,7 +218,7 @@ mod tests {
             },
         );
         DecomposedCorrelation::build(&CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         })
@@ -248,7 +248,7 @@ mod tests {
             },
         );
         DecomposedCorrelation::build(&CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         })
@@ -870,8 +870,8 @@ mod tests {
         }
     }
 
-    /// Per-class Cholesky application produces bit-identical results to full-vector
-    /// Cholesky when the correlation groups are all same-type (block-diagonal L).
+    /// Per-class spectral application produces bit-identical results to full-vector
+    /// spectral when the correlation groups are all same-type (block-diagonal L).
     ///
     /// Generates a tree with 2 hydros (rho=0.8 inflow group) and 0 load/NCS
     /// using the new per-class path, then verifies the output against expected
@@ -911,7 +911,7 @@ mod tests {
             },
         );
         let corr_model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -990,7 +990,7 @@ mod tests {
 
     /// Same as [`test_per_class_tree_matches_full_vector_tree`] but with a
     /// multi-class layout: 2 hydros (correlated at rho=0.8) and 1 load bus
-    /// (identity group). Verifies that the per-class Cholesky path produces
+    /// (identity group). Verifies that the per-class spectral path produces
     /// bit-identical results to the full-vector path for mixed-class scenarios.
     #[test]
     fn test_per_class_tree_matches_full_vector_multi_class() {
@@ -1025,7 +1025,7 @@ mod tests {
             },
         )]);
         let corr_model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -1101,12 +1101,12 @@ mod tests {
     /// Generates a tree with 2 correlated hydros (rho=0.8) using LHS noise via
     /// `generate_opening_tree`, then manually reproduces the full-vector path
     /// (call `generate_lhs` on the full stage batch, then apply full-vector
-    /// Cholesky per opening) and asserts bit-identical results.
+    /// spectral per opening) and asserts bit-identical results.
     ///
     /// The LHS batch generator fills the entire `[n_openings × dim]` buffer in
     /// one call, after which each opening's noise slice is transformed by the
-    /// Cholesky factor. This mirrors the per-class path, which splits the noise
-    /// into class segments and applies each class's Cholesky factor separately.
+    /// spectral factor. This mirrors the per-class path, which splits the noise
+    /// into class segments and applies each class's spectral factor separately.
     /// Under a same-type correlation group (block-diagonal L) the two paths must
     /// produce identical output (ticket-m9).
     #[test]
@@ -1136,7 +1136,7 @@ mod tests {
             },
         );
         let corr_model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -1170,7 +1170,7 @@ mod tests {
         .unwrap();
 
         // Reproduce the full-vector path: generate all openings for a stage
-        // in one LHS batch, then apply full-vector Cholesky per opening.
+        // in one LHS batch, then apply full-vector spectral per opening.
         use crate::tree::lhs::generate_lhs;
         corr_full.resolve_positions(&entity_order);
 
@@ -1246,7 +1246,7 @@ mod tests {
             },
         );
         let corr_model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -1280,7 +1280,7 @@ mod tests {
         .unwrap();
 
         // Reproduce the full-vector path: generate all openings for a stage
-        // in one QMC-Halton batch, then apply full-vector Cholesky per opening.
+        // in one QMC-Halton batch, then apply full-vector spectral per opening.
         use crate::tree::qmc_halton::generate_qmc_halton;
         corr_full.resolve_positions(&entity_order);
 

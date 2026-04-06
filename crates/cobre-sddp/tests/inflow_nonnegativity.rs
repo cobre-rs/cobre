@@ -250,7 +250,7 @@ fn build_system() -> cobre_core::System {
         },
     );
     let correlation = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };

@@ -2,7 +2,7 @@
 //!
 //! Generates fresh N(0,1) noise on-the-fly during forward pass by:
 //! 1. Dispatching on [`NoiseMethod`] to fill output with independent N(0,1) samples
-//! 2. Applying spatial Cholesky correlation in-place
+//! 2. Applying spatial spectral correlation in-place
 //!
 //! Supported methods: SAA, LHS, QMC (Sobol/Halton), Selective (falls back to SAA).
 
@@ -37,7 +37,7 @@ pub(crate) struct FreshNoiseSpec {
 /// Generate fresh correlated N(0,1) noise for a single `(iteration, scenario, stage)` triple.
 ///
 /// Fills `output[0..spec.dim]` with independent N(0,1) samples, then applies
-/// spatial Cholesky correlation in-place. No heap allocation inside this function.
+/// spatial spectral correlation in-place. No heap allocation inside this function.
 ///
 /// # Errors
 ///
@@ -65,7 +65,7 @@ pub(crate) fn sample_fresh(
 /// Fill `output[0..spec.dim]` with independent N(0,1) noise without applying correlation.
 ///
 /// Dispatches on [`NoiseMethod`] exactly as [`sample_fresh`] does for the
-/// uncorrelated phase, but omits the Cholesky correlation step. Correlation is
+/// uncorrelated phase, but omits the spectral correlation step. Correlation is
 /// applied externally by the composite `ForwardSampler` after all class segments
 /// have been filled.
 ///
@@ -200,7 +200,7 @@ mod tests {
             },
         );
         DecomposedCorrelation::build(&CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         })

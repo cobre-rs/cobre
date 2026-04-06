@@ -232,7 +232,7 @@ estimation steps automatically before building the scenario model:
 
 4. **Spatial correlation** — The contemporaneous correlation between
    hydro plants is estimated from the historical residuals after AR fitting.
-   The resulting correlation matrix is used by the Cholesky-based noise
+   The resulting correlation matrix is used by the spectral noise
    generator in exactly the same way as a manually specified
    `correlation.json`.
 
@@ -268,14 +268,17 @@ for the `1dtoy` example, which has only one hydro plant.
 
 ### Configuring spatial correlation
 
-For multi-entity systems, Cobre supports Cholesky-based spatial correlation.
+For multi-entity systems, Cobre supports spectral spatial correlation.
 A correlation model is specified in `correlation.json` in the case directory
-and defines named correlation groups, each with a symmetric positive-definite
-correlation matrix.
+and defines named correlation groups, each with a symmetric correlation matrix.
+The spectral method (eigendecomposition + matrix square root) is preferred
+because it handles estimated matrices that are not strictly positive-definite
+and rank-deficient matrices naturally, without requiring the matrix to satisfy
+Cholesky conditions.
 
 ```json
 {
-  "method": "cholesky",
+  "method": "spectral",
   "profiles": {
     "default": {
       "correlation_groups": [
@@ -295,6 +298,9 @@ correlation matrix.
   }
 }
 ```
+
+> **Backward compatibility**: `"method": "cholesky"` is accepted for existing
+> case files and behaves identically to `"spectral"` as of v0.4.0.
 
 ### Valid entity types
 
@@ -875,7 +881,7 @@ use external files while NCS uses the in-sample opening tree.
 ## User-Supplied Opening Trees
 
 By default, Cobre generates the backward-pass opening tree internally using
-SipHash-derived seeds and the spatial correlation Cholesky factor. If you need
+SipHash-derived seeds and the spatial correlation spectral factor. If you need
 to supply your own noise realizations — for cross-tool comparison, sensitivity
 analysis, or round-trip replay — you can place `scenarios/noise_openings.parquet`
 in the case directory before running.
@@ -936,7 +942,7 @@ noise.
   study stages. If you want to replace a subset of stages while keeping the rest
   internally generated, you must supply a complete tree and duplicate the
   internally generated values for the unmodified stages.
-- User-supplied noise is used as-is. The Cholesky spatial correlation factor
+- User-supplied noise is used as-is. The spectral spatial correlation factor
   is not applied again. You are responsible for any spatial correlation structure
   encoded in the values you supply.
 
@@ -1023,5 +1029,5 @@ page in the methodology reference, or Oliveira et al. (2022), _Energies_
 
 - [Anatomy of a Case](../tutorial/anatomy-of-a-case.md) — introductory walkthrough of the `scenarios/` directory and Parquet schemas
 - [Configuration](./configuration.md) — full documentation of `config.json` fields including `tree_seed` and `forward_passes`
-- [cobre-stochastic](../crates/stochastic.md) — internal architecture of the stochastic crate: PAR preprocessing, Cholesky correlation, opening tree, and seed derivation
+- [cobre-stochastic](../crates/stochastic.md) — internal architecture of the stochastic crate: PAR preprocessing, spectral correlation, opening tree, and seed derivation
 - [ADR: Noise Method Dispatch and Forward Sampler](../../docs/design/adr-noise-method-forward-sampler.md) — design decisions behind the noise method enum, per-stage dispatch, and OutOfSample forward sampler

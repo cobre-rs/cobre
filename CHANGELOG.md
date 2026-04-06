@@ -47,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Replace Cholesky-based spatial correlation with spectral decomposition** --
+  Correlation matrices are now factored via eigendecomposition and a symmetric
+  matrix square root `D = V * diag(sqrt(lambda)) * V^T` (cyclic Jacobi
+  algorithm with negative-eigenvalue clipping). This eliminates
+  positive-definiteness requirements on estimated correlation matrices and
+  handles rank-deficient matrices naturally. The `method` field in
+  `correlation.json` now defaults to `"spectral"`; `"cholesky"` is accepted
+  for backward compatibility.
 - **`training.seed` renamed to `training.tree_seed`** -- The `config.json`
   field controlling the scenario-tree random seed is now `tree_seed`. No
   backward-compatible alias is provided; old configs must be updated.
@@ -80,8 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string in `scenario_source` is gone. Configs using the flat format
   receive a descriptive parse-time error directing them to the per-class
   format.
-
-
 
 ## [0.3.2] - 2026-03-30
 

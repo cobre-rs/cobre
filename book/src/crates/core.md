@@ -654,7 +654,7 @@ is the user-facing clarity-first representation.
 
 The `scenario` module holds clarity-first data containers for the raw scenario
 pipeline parameters loaded from input files. These are raw input-facing types;
-performance-adapted views (pre-computed LP arrays, Cholesky-decomposed matrices)
+performance-adapted views (pre-computed LP arrays, spectrally decomposed matrices)
 belong in downstream crates (`cobre-stochastic`, `cobre-sddp`).
 
 ### SamplingScheme and ScenarioSource
@@ -750,7 +750,7 @@ and `id: EntityId`. Using `String` rather than an enum preserves forward
 compatibility when additional stochastic variable types are added.
 
 `profiles` uses `BTreeMap` rather than `HashMap` to preserve deterministic
-iteration order (declaration-order invariance). Cholesky decomposition of the
+iteration order (declaration-order invariance). Spectral decomposition of the
 correlation matrices is NOT performed here; that belongs to `cobre-stochastic`.
 
 ```rust
@@ -772,7 +772,7 @@ profiles.insert("default".to_string(), CorrelationProfile {
 });
 
 let model = CorrelationModel {
-    method: "cholesky".to_string(),
+    method: "spectral".to_string(), // "cholesky" also accepted for backward compatibility
     profiles,
     schedule: vec![],
 };

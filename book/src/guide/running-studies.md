@@ -195,7 +195,7 @@ cp -r my_case/output/stochastic/* my_case/scenarios/
 cobre run my_case
 ```
 
-The re-run is faster (no Levinson-Durbin fitting or Cholesky decomposition)
+The re-run is faster (no Levinson-Durbin fitting or spectral decomposition)
 and produces bit-for-bit identical stochastic artifacts.
 
 For the complete schema of each exported file, see

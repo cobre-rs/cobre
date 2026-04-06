@@ -365,7 +365,7 @@ impl DecomposedCorrelation {
     /// Applies spatial correlation to a single entity-class noise segment.
     ///
     /// This is the per-class counterpart to [`apply_correlation`]. It applies the
-    /// Cholesky transform only for groups whose `entity_type` matches the given
+    /// spectral transform only for groups whose `entity_type` matches the given
     /// `entity_type` argument.
     ///
     /// The `class_noise` and `class_entity_order` slices contain only the

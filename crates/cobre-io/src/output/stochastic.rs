@@ -1385,7 +1385,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         }
@@ -1432,7 +1432,7 @@ mod tests {
             },
         );
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![
                 CorrelationScheduleEntry {
@@ -1464,7 +1464,7 @@ mod tests {
 
         let recovered = parse_correlation(&path).expect("parse must succeed after write");
 
-        assert_eq!(recovered.method, "cholesky", "method must match");
+        assert_eq!(recovered.method, "spectral", "method must match");
         assert_eq!(recovered.profiles.len(), 1, "profiles.len must be 1");
         assert!(recovered.schedule.is_empty(), "schedule must be empty");
 
@@ -1498,7 +1498,7 @@ mod tests {
 
         assert_eq!(recovered.profiles.len(), 2, "profiles.len must be 2");
         assert_eq!(recovered.schedule.len(), 2, "schedule.len must be 2");
-        assert_eq!(recovered.method, "cholesky");
+        assert_eq!(recovered.method, "spectral");
 
         let keys: Vec<&String> = recovered.profiles.keys().collect();
         assert_eq!(keys[0], "default");
@@ -1916,7 +1916,7 @@ mod tests {
         );
 
         let original = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![
                 CorrelationScheduleEntry {

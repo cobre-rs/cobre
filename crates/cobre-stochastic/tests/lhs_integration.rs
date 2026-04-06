@@ -129,7 +129,7 @@ fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -159,7 +159,7 @@ fn correlated_correlation(entity_ids: &[i32], rho: f64) -> DecomposedCorrelation
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };
@@ -189,7 +189,7 @@ fn identity_correlation_model(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -457,7 +457,7 @@ fn lhs_normal_statistics() {
 ///
 /// With a 2×2 correlation matrix with off-diagonal rho=0.8 and N=2000 openings,
 /// the sample Pearson correlation between the two dimensions must be within 0.1
-/// of the target 0.8. This exercises the Cholesky correlation transform applied
+/// of the target 0.8. This exercises the spectral correlation transform applied
 /// after LHS stratified sampling inside `generate_opening_tree`.
 #[test]
 fn lhs_correlation_applied() {
@@ -499,7 +499,7 @@ fn lhs_correlation_applied() {
     assert!(
         (sample_corr - rho).abs() < 0.1,
         "sample correlation {sample_corr:.4} too far from target {rho} (tolerance 0.1); \
-         Cholesky correlation transform may not be applied correctly for LHS"
+         spectral correlation transform may not be applied correctly for LHS"
     );
 }
 

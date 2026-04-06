@@ -149,7 +149,7 @@ fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }

@@ -19,7 +19,7 @@
 //! - [`CorrelationModel`] — named correlation profiles with entity groups
 //!   and correlation matrices
 //!
-//! Performance-adapted views (`PrecomputedPar`, Cholesky-decomposed matrices)
+//! Performance-adapted views (`PrecomputedPar`, spectrally decomposed matrices)
 //! belong in downstream solver crates (`cobre-stochastic`).
 //!
 //! ## Declaration-order invariance
@@ -537,7 +537,7 @@ pub struct CorrelationEntity {
 /// coefficient between `entities[i]` and `entities[j]`.
 /// `matrix.len()` must equal `entities.len()`.
 ///
-/// Cholesky decomposition of the matrix is NOT performed here; that
+/// Spectral decomposition of the matrix is NOT performed here; that
 /// belongs to `cobre-stochastic`.
 ///
 /// See [Input Scenarios §5](input-scenarios.md).
@@ -647,8 +647,9 @@ pub struct CorrelationScheduleEntry {
 /// deterministic iteration order, satisfying the declaration-order
 /// invariance requirement (design-principles.md §3).
 ///
-/// `method` is always `"cholesky"` for the minimal viable solver but stored
-/// as a `String` for forward compatibility with future decomposition methods.
+/// `method` defaults to `"spectral"`. The value `"cholesky"` is accepted for
+/// backward compatibility with existing case files. Stored as a `String` for
+/// forward compatibility with future decomposition methods.
 ///
 /// Source: `correlation.json`.
 /// See [Input Scenarios §5](input-scenarios.md) and
@@ -675,7 +676,7 @@ pub struct CorrelationScheduleEntry {
 /// });
 ///
 /// let model = CorrelationModel {
-///     method: "cholesky".to_string(),
+///     method: "spectral".to_string(),
 ///     profiles,
 ///     schedule: vec![],
 /// };
@@ -684,8 +685,9 @@ pub struct CorrelationScheduleEntry {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CorrelationModel {
-    /// Decomposition method. Always `"cholesky"` for the minimal viable solver.
-    /// Stored as `String` for forward compatibility.
+    /// Decomposition method. Defaults to `"spectral"`. `"cholesky"` is also
+    /// accepted for backward compatibility with existing case files.
+    /// Stored as `String` for forward compatibility with future methods.
     pub method: String,
 
     /// Named correlation profiles keyed by profile name.
@@ -712,7 +714,7 @@ impl Default for ScenarioSource {
 impl Default for CorrelationModel {
     fn default() -> Self {
         Self {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: Vec::new(),
         }
@@ -807,7 +809,7 @@ mod tests {
         profiles.insert("dry".to_string(), make_profile(&[1, 2]));
 
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![
                 CorrelationScheduleEntry {
@@ -1064,7 +1066,7 @@ mod tests {
             },
         );
         let model = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };

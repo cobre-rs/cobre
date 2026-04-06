@@ -25,7 +25,7 @@ for deterministic noise generation.
 | `noise`                   | Deterministic noise generation: SipHash-1-3 seed derivation (`seed`) and `Pcg64` RNG construction (`rng`)                                                                           |
 | `noise::quantile`         | Beasley-Springer-Moro inverse normal CDF (`norm_quantile`)                                                                                                                          |
 | `normal`                  | Normal noise precomputation for load demand modeling: `PrecomputedNormal` cache with stage-major layout                                                                             |
-| `correlation`             | Cholesky-based spatial correlation: decomposition (`cholesky`) and profile resolution (`resolve`)                                                                                   |
+| `correlation`             | Spectral spatial correlation: eigendecomposition (`spectral`) and profile resolution (`resolve`)                                                                                    |
 | `tree`                    | Opening scenario tree: flat storage structure (`opening_tree`) and tree generation (`generate`)                                                                                     |
 | `tree::lhs`               | Latin Hypercube Sampling: batch `generate_lhs` and point-wise `sample_lhs_point`                                                                                                    |
 | `tree::qmc_sobol`         | Sobol QMC sequence generation with Joe-Kuo direction tables and Matousek scrambling                                                                                                 |
@@ -101,18 +101,19 @@ PCG family provides good statistical quality with fast generation, suitable
 for producing large numbers of standard-normal samples via the `StandardNormal`
 distribution.
 
-### Cholesky-based spatial correlation
+### Spectral spatial correlation
 
 Hydro inflow series at neighboring plants are spatially correlated. `cobre-stochastic`
-applies a Cholesky transformation to convert independent standard-normal samples
+applies a spectral transformation to convert independent standard-normal samples
 into correlated samples.
 
-The Cholesky decomposition is hand-rolled using the Cholesky-Banachiewicz
-algorithm (~150 lines). No external linear algebra crate is added to the
-dependency tree. The lower-triangular factor `L` (such that `Sigma = L * L^T`)
-is stored in **packed lower-triangular format**: element `(i, j)` with `j <=
-i` is at index `i*(i+1)/2 + j`. This eliminates the zero upper-triangle
-entries and halves memory usage.
+The spectral decomposition uses a cyclic Jacobi eigendecomposition (~200 lines).
+No external linear algebra crate is added to the dependency tree. The symmetric
+matrix square root `D = V * diag(sqrt(lambda)) * V^T` (where `V` is the matrix
+of eigenvectors and `lambda` are the eigenvalues) is stored in **dense n x n
+format**. Negative eigenvalues are clipped to zero before the square root,
+making the method robust to estimated correlation matrices that are not
+positive-definite or are rank-deficient.
 
 Correlation profiles can be defined per-season. `DecomposedCorrelation` holds
 all profiles in a `BTreeMap<String, Vec<GroupFactor>>` — the `BTreeMap`
@@ -127,7 +128,7 @@ canonical entity order and stores them on each `GroupFactor` as
 avoids a per-call O(n) linear scan and heap allocation on the hot path.
 
 If a correlation group's entity IDs are only partially present in
-`entity_order`, the Cholesky transform is skipped for that group entirely.
+`entity_order`, the spectral transform is skipped for that group entirely.
 Entities not in any group retain their independent noise values unchanged.
 
 ### Opening tree structure
@@ -245,7 +246,7 @@ external numerical library is required.
 `ForwardSampler<'a>` is a composite struct that unifies all supported
 forward-pass sampling strategies under a single `sample()` dispatch method.
 It holds three `ClassSampler<'a>` instances — one per entity class (inflow,
-load, NCS) — and applies per-class Cholesky correlation only for
+load, NCS) — and applies per-class spectral correlation only for
 `OutOfSample` class samplers. Use `build_forward_sampler` to construct the
 appropriate sampler from a `ForwardSamplerConfig` and a `StochasticContext`.
 
@@ -270,7 +271,7 @@ allocation.
 
 The `sample()` method splits the caller-supplied `noise_buf` into three
 segments `[hydros | load_buses | ncs]`, delegates to each class sampler's
-`fill()`, then applies per-class Cholesky correlation where
+`fill()`, then applies per-class spectral correlation where
 `Some(CorrelationRef)` is present. Correlation is only applied to
 `OutOfSample` class samplers; `InSample`, `Historical`, and `External`
 samplers produce pre-correlated noise that must not be transformed again.
@@ -370,7 +371,7 @@ the following steps:
    (QmcHalton). `Selective` falls back to SAA with a `tracing::warn!`.
 
 After all three class buffers are filled, `ForwardSampler::sample()` applies
-per-class Cholesky correlation for each class that has `Some(CorrelationRef)`.
+per-class spectral correlation for each class that has `Some(CorrelationRef)`.
 The correlation transform calls `decomposed.apply_correlation_for_class(stage,
 buf, entity_order, class_name)` in-place, transforming the independent N(0,1)
 noise to spatially correlated noise. The final `ForwardNoise` wraps the full
@@ -381,7 +382,7 @@ combined buffer slice.
 single ready-to-use value:
 
 1. `PrecomputedPar` — PAR coefficient cache for LP RHS patching.
-2. `DecomposedCorrelation` — pre-decomposed Cholesky factors for all profiles.
+2. `DecomposedCorrelation` — pre-decomposed spectral factors for all profiles.
 3. `OpeningTree` — pre-generated noise realizations for the backward pass.
 
 `build_stochastic_context(&system, base_seed)` runs the full preprocessing
@@ -533,7 +534,7 @@ order wins (parsimony principle).
 `estimate_correlation` computes the Pearson correlation matrix of PAR model
 residuals across entities. Residuals are the standardized deviations of
 historical observations from their seasonal means. The output is a
-`CorrelationModel` (from `cobre-core`) suitable for downstream Cholesky
+`CorrelationModel` (from `cobre-core`) suitable for downstream spectral
 decomposition.
 
 ## Public types
@@ -576,7 +577,7 @@ as an empty sentinel for systems without normal-noise entities.
 
 ### `DecomposedCorrelation`
 
-Holds Cholesky-decomposed correlation factors for all profiles, keyed by
+Holds spectrally decomposed correlation factors for all profiles, keyed by
 profile name in a `BTreeMap`. Built via `DecomposedCorrelation::build`, which
 validates and decomposes all profiles eagerly — errors surface at initialization,
 not at per-stage lookup time. Call `resolve_positions` once with the canonical
@@ -655,7 +656,7 @@ Returned by all fallible APIs. Nine variants covering six failure domains:
 | Variant                       | When it occurs                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------- |
 | `InvalidParParameters`        | AR order > 0 with zero standard deviation, or ill-conditioned coefficients        |
-| `CholeskyDecompositionFailed` | Correlation matrix is not positive-definite                                       |
+| `SpectralDecompositionFailed` | Eigendecomposition of correlation matrix failed to converge                       |
 | `InvalidCorrelation`          | Missing default profile, ambiguous profile set, or out-of-range correlation entry |
 | `InsufficientData`            | Fewer historical records than the PAR order requires, or index out of bounds      |
 | `SeedDerivationError`         | Hash computation produces an invalid result during seed derivation                |
@@ -712,16 +713,18 @@ Output of `select_order_aic`. Fields: `selected_order` (0 for white noise),
 
 ### `GroupFactor`
 
-A single correlation group's Cholesky factor with its associated entity ID
-mapping. Fields: `factor: CholeskyFactor`, `entity_ids: Vec<EntityId>`, and
+A single correlation group's spectral factor with its associated entity ID
+mapping. Fields: `factor: SpectralFactor`, `entity_ids: Vec<EntityId>`, and
 pre-computed `positions: Option<Box<[usize]>>` (filled by `resolve_positions`).
 
-### `CholeskyFactor`
+### `SpectralFactor`
 
-The lower-triangular Cholesky factor `L` of a correlation matrix, stored in
-packed row-major form. Element `(i, j)` with `j <= i` is at index
-`i*(i+1)/2 + j`. Constructed via `CholeskyFactor::decompose(&matrix)` and
-applied via `transform(&input, &mut output)`.
+The symmetric matrix square root `D = V * diag(sqrt(lambda)) * V^T` of a
+correlation matrix, stored in dense n x n format. Computed via cyclic Jacobi
+eigendecomposition with negative-eigenvalue clipping (robustness to
+non-positive-definite and rank-deficient matrices). Constructed via
+`SpectralFactor::decompose(&matrix)` and applied via
+`transform(&input, &mut output)`.
 
 ## Usage examples
 
@@ -844,19 +847,20 @@ heap-allocated `Vec`. The fast path covers the overwhelming majority of
 practical correlation groups, eliminating heap allocation from the inner loop
 for typical study configurations.
 
-### Incremental `row_base` in Cholesky transform
+### Dense mat-vec in spectral transform
 
-The packed lower-triangular storage index for element `(i, j)` is
-`i*(i+1)/2 + j`. Rather than recomputing the triangular index from scratch for
-each row, the `transform` method maintains an incremental `row_base` variable
-that is incremented by `i+1` at the end of each row. This eliminates a
-multiplication per row iteration on the hot path of the Cholesky forward
-substitution.
+The spectral `SpectralFactor` stores the matrix square root `D` in dense n x n
+format (replacing the packed lower-triangular storage used by the former Cholesky
+approach). The `transform` method computes `y = D * x` via a straightforward
+dense matrix-vector multiply. For typical small-to-medium correlation groups
+(n ≤ 64), this fits in L1/L2 cache and avoids indirect indexed loads, making
+the extra memory usage (n² vs n(n+1)/2 words) a worthwhile trade-off for
+simpler code and robustness to rank-deficient matrices.
 
 ### `Box<[f64]>` for the no-resize invariant
 
 All fixed-size hot-path arrays in `PrecomputedPar`, `PrecomputedNormal`,
-`OpeningTree`, and `CholeskyFactor` use `Box<[f64]>` rather than `Vec<f64>`.
+`OpeningTree`, and `SpectralFactor` use `Box<[f64]>` rather than `Vec<f64>`.
 The boxed-slice type communicates that these arrays are immutable after
 construction, eliminates the capacity word from each allocation, and allows
 the optimizer to treat the length as a compile-time-stable bound.
@@ -921,7 +925,7 @@ for correct behavior in a distributed, multi-run setting:
 - **Declaration-order invariance**: inserting hydros in reversed order into a
   `SystemBuilder` (which sorts by `EntityId` internally) produces a
   `StochasticContext` with bitwise-identical PAR arrays, opening tree, and
-  Cholesky transform output. This verifies the canonical-order invariant across
+  spectral transform output. This verifies the canonical-order invariant across
   the full preprocessing pipeline.
 - **Infrastructure genericity gate**: a grep audit confirms that no algorithm-specific
   references appear anywhere in the crate source tree. The gate is encoded as a

@@ -479,7 +479,7 @@ mod tests {
         let mut profiles = BTreeMap::new();
         profiles.insert("default".to_string(), CorrelationProfile { groups });
         CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule,
         }

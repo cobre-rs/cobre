@@ -209,7 +209,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
         },
     );
     let corr_model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };

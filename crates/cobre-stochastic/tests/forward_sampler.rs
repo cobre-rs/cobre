@@ -182,7 +182,7 @@ fn identity_correlation(ids: &[i32]) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }
@@ -211,7 +211,7 @@ fn correlated_correlation(ids: &[i32], rho: f64) -> CorrelationModel {
         },
     );
     CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     }

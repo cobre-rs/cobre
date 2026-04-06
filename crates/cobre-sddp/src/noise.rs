@@ -441,7 +441,7 @@ mod tests {
             },
         );
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles,
             schedule: vec![],
         };
@@ -588,7 +588,7 @@ mod tests {
             .collect();
 
         let correlation = CorrelationModel {
-            method: "cholesky".to_string(),
+            method: "spectral".to_string(),
             profiles: BTreeMap::new(),
             schedule: vec![],
         };

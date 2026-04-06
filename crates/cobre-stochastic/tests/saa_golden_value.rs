@@ -10,7 +10,7 @@
 //! - `base_seed = 42`
 //! - 3 stages, all `NoiseMethod::Saa`, branching factor 3
 //! - `dim = 2` (2 hydro entities: `EntityId(1)`, `EntityId(2)`)
-//! - Identity correlation (Cholesky transform is a no-op)
+//! - Identity correlation (spectral transform is a no-op)
 //!
 //! The 6 pinned constants cover stage 0, all 3 openings, both dimensions.
 
@@ -99,7 +99,7 @@ fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         },
     );
     let model = CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles,
         schedule: vec![],
     };

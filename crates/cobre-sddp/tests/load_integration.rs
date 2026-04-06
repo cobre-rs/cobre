@@ -270,7 +270,7 @@ fn build_system_with_load(
     // Empty correlation profiles: `build_stochastic_context` treats this as
     // independent (identity) correlation for all noise entities.
     let correlation = cobre_core::scenario::CorrelationModel {
-        method: "cholesky".to_string(),
+        method: "spectral".to_string(),
         profiles: BTreeMap::new(),
         schedule: vec![],
     };

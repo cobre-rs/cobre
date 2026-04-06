@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -1657,13 +1657,13 @@ mod tests {
     // estimate_seasonal_stats tests
     // -----------------------------------------------------------------------
 
-    use chrono::NaiveDate;
+    use chrono::{Datelike, NaiveDate};
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -2021,7 +2021,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -2287,6 +2287,154 @@ mod tests {
             "off-diagonal |r| = {} must be < 0.15 for independent series",
             matrix[1][0]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-season correlation tests
+    // -----------------------------------------------------------------------
+
+    /// Build monthly stages cycling through `n_seasons` season IDs over `n_years` years.
+    fn multi_season_stages(start_year: i32, n_years: usize, n_seasons: usize) -> Vec<Stage> {
+        (0..(n_years * n_seasons))
+            .map(|i| {
+                let year = start_year + (i / 12) as i32;
+                let month = (i % 12) as u32 + 1;
+                let (end_year, end_month) = if month == 12 {
+                    (year + 1, 1)
+                } else {
+                    (year, month + 1)
+                };
+                make_stage(
+                    i as i32 + 1,
+                    i,
+                    year,
+                    month,
+                    end_year,
+                    end_month,
+                    Some(i % n_seasons),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn estimate_correlation_multi_season_produces_per_season_profiles() {
+        let n_seasons = 12;
+        let stages = multi_season_stages(2000, 40, n_seasons);
+        let hydro_ids = vec![EntityId::from(1), EntityId::from(2)];
+
+        let mut observations = Vec::new();
+        for i in 0..stages.len() {
+            let year = 2000 + (i / 12) as i32;
+            let month = (i % 12) as u32 + 1;
+            let date = NaiveDate::from_ymd_opt(year, month, 15).unwrap();
+            let val = (year * 12 + month as i32) as f64;
+            observations.push((EntityId::from(1), date, val));
+            observations.push((EntityId::from(2), date, val + 5.0));
+        }
+
+        let stats = estimate_seasonal_stats(&observations, &stages, &hydro_ids).unwrap();
+        let estimates =
+            estimate_ar_coefficients(&observations, &stats, &stages, &hydro_ids, 0).unwrap();
+        let corr =
+            estimate_correlation(&observations, &estimates, &stats, &stages, &hydro_ids).unwrap();
+
+        assert_eq!(corr.profiles.len(), n_seasons + 1);
+        assert!(corr.profiles.contains_key("default"));
+        for s in 0..n_seasons {
+            assert!(corr.profiles.contains_key(&format!("season_{s:02}")));
+        }
+
+        assert_eq!(corr.schedule.len(), 480);
+        for (i, entry) in corr.schedule.iter().enumerate() {
+            let expected_season = i % n_seasons;
+            assert_eq!(entry.profile_name, format!("season_{expected_season:02}"));
+        }
+
+        for s in 0..n_seasons {
+            let matrix = &corr.profiles[&format!("season_{s:02}")].groups[0].matrix;
+            assert_eq!(matrix.len(), 2);
+            assert_eq!(matrix[0].len(), 2);
+            assert!((matrix[0][0] - 1.0).abs() < 1e-10);
+            assert!((matrix[1][1] - 1.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn estimate_correlation_multi_season_schedule_maps_stages_to_seasons() {
+        let n_seasons = 4;
+        let stages = multi_season_stages(2000, 40, n_seasons);
+        let hydro_ids = vec![EntityId::from(1), EntityId::from(2)];
+
+        let mut observations = Vec::new();
+        for (i, _) in stages.iter().enumerate() {
+            let year = 2000 + (i / 12) as i32;
+            let month = (i % 12) as u32 + 1;
+            let date = NaiveDate::from_ymd_opt(year, month, 15).unwrap();
+            let val = (i + 1) as f64 * 10.0;
+            observations.push((EntityId::from(1), date, val));
+            observations.push((EntityId::from(2), date, val + 3.0));
+        }
+
+        let stats = estimate_seasonal_stats(&observations, &stages, &hydro_ids).unwrap();
+        let estimates =
+            estimate_ar_coefficients(&observations, &stats, &stages, &hydro_ids, 0).unwrap();
+        let corr =
+            estimate_correlation(&observations, &estimates, &stats, &stages, &hydro_ids).unwrap();
+
+        assert_eq!(corr.schedule.len(), 160);
+        for (i, entry) in corr.schedule.iter().enumerate() {
+            assert_eq!(entry.profile_name, format!("season_{}", i % n_seasons));
+        }
+
+        // Spot-check specific mappings
+        assert_eq!(corr.schedule[0].profile_name, "season_0");
+        assert_eq!(corr.schedule[1].profile_name, "season_1");
+        assert_eq!(corr.schedule[4].profile_name, "season_0");
+
+        // All schedule entries reference valid stages
+        let valid_ids: std::collections::HashSet<_> = stages.iter().map(|s| s.id).collect();
+        for entry in &corr.schedule {
+            assert!(valid_ids.contains(&entry.stage_id));
+        }
+    }
+
+    #[test]
+    fn estimate_correlation_multi_season_per_season_values_differ() {
+        let stages = multi_season_stages(2000, 40, 2);
+        let hydro_ids = vec![EntityId::from(1), EntityId::from(2)];
+
+        let mut observations = Vec::new();
+        for (i, stage) in stages.iter().enumerate() {
+            let year = 2000 + (i / 12) as i32;
+            let month = (i % 12) as u32 + 1;
+            let date = NaiveDate::from_ymd_opt(year, month, 15).unwrap();
+            let base = (i + 1) as f64 * 10.0 + 100.0;
+            let val2 = if stage.season_id == Some(0) {
+                base
+            } else {
+                -base
+            };
+            observations.push((EntityId::from(1), date, base));
+            observations.push((EntityId::from(2), date, val2));
+        }
+
+        let stats = estimate_seasonal_stats(&observations, &stages, &hydro_ids).unwrap();
+        let estimates =
+            estimate_ar_coefficients(&observations, &stats, &stages, &hydro_ids, 0).unwrap();
+        let corr =
+            estimate_correlation(&observations, &estimates, &stats, &stages, &hydro_ids).unwrap();
+
+        let matrix_s0 = &corr.profiles["season_0"].groups[0].matrix;
+        assert!(matrix_s0[0][1] > 0.9);
+        assert!(matrix_s0[1][0] > 0.9);
+
+        let matrix_s1 = &corr.profiles["season_1"].groups[0].matrix;
+        assert!(matrix_s1[0][1] < -0.9);
+        assert!(matrix_s1[1][0] < -0.9);
+
+        let matrix_def = &corr.profiles["default"].groups[0].matrix;
+        assert!(matrix_def[0][1] > -1.0 && matrix_def[0][1] < 1.0);
     }
 
     // -----------------------------------------------------------------------
@@ -2752,8 +2900,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -3481,5 +3629,101 @@ mod tests {
         for (k, &v) in pacf_s0.iter().enumerate() {
             assert!(v.is_finite(), "PACF({}) = {v} not finite", k + 1);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_correlation fallback and backward-compatibility tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn estimate_correlation_min_sample_fallback() {
+        let stages = multi_season_stages(2000, 40, 2);
+        let hydro_ids = vec![EntityId::from(1), EntityId::from(2)];
+
+        let mut observations = Vec::new();
+        let mut s1_count = 0;
+        for (i, stage) in stages.iter().enumerate() {
+            let date =
+                NaiveDate::from_ymd_opt(stage.start_date.year(), stage.start_date.month(), 15)
+                    .unwrap();
+
+            match stage.season_id {
+                Some(0) => {
+                    let val = (i + 1) as f64 * 10.0;
+                    observations.push((EntityId::from(1), date, val));
+                    observations.push((EntityId::from(2), date, val));
+                }
+                Some(1) if s1_count < 5 => {
+                    let val = (i + 1) as f64 * 5.0;
+                    observations.push((EntityId::from(1), date, val));
+                    observations.push((EntityId::from(2), date, val + 1.0));
+                    s1_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        let stats = estimate_seasonal_stats(&observations, &stages, &hydro_ids).unwrap();
+        let estimates =
+            estimate_ar_coefficients(&observations, &stats, &stages, &hydro_ids, 0).unwrap();
+        let corr =
+            estimate_correlation(&observations, &estimates, &stats, &stages, &hydro_ids).unwrap();
+
+        assert!(corr.profiles.contains_key("default"));
+        assert!(corr.profiles.contains_key("season_0"));
+        assert!(!corr.profiles.contains_key("season_1"));
+
+        let season_0_ids: std::collections::HashSet<_> = stages
+            .iter()
+            .filter(|s| s.season_id == Some(0))
+            .map(|s| s.id)
+            .collect();
+        let season_1_ids: std::collections::HashSet<_> = stages
+            .iter()
+            .filter(|s| s.season_id == Some(1))
+            .map(|s| s.id)
+            .collect();
+
+        for entry in &corr.schedule {
+            assert!(season_0_ids.contains(&entry.stage_id));
+            assert!(!season_1_ids.contains(&entry.stage_id));
+        }
+
+        let scheduled: std::collections::HashSet<_> =
+            corr.schedule.iter().map(|e| e.stage_id).collect();
+        for id in &season_0_ids {
+            assert!(scheduled.contains(id));
+        }
+    }
+
+    #[test]
+    fn estimate_correlation_single_season_backward_compat() {
+        let stages = single_season_stages(2000, 20, 1);
+        let hydro_ids = vec![EntityId::from(1), EntityId::from(2)];
+
+        let mut observations = Vec::new();
+        for (i, year) in (2000..2020).enumerate() {
+            let val = (i + 1) as f64 * 10.0;
+            let date = NaiveDate::from_ymd_opt(year, 1, 15).unwrap();
+            observations.push((EntityId::from(1), date, val));
+            observations.push((EntityId::from(2), date, val));
+        }
+
+        let stats = estimate_seasonal_stats(&observations, &stages, &hydro_ids).unwrap();
+        let estimates =
+            estimate_ar_coefficients(&observations, &stats, &stages, &hydro_ids, 0).unwrap();
+        let corr =
+            estimate_correlation(&observations, &estimates, &stats, &stages, &hydro_ids).unwrap();
+
+        assert_eq!(corr.profiles.len(), 1);
+        assert!(corr.profiles.contains_key("default"));
+        assert!(corr.schedule.is_empty());
+
+        let matrix = &corr.profiles["default"].groups[0].matrix;
+        assert_eq!(matrix.len(), 2);
+        assert!((matrix[0][0] - 1.0).abs() < 1e-10);
+        assert!((matrix[1][1] - 1.0).abs() < 1e-10);
+        assert!((matrix[0][1] - 1.0).abs() < 1e-10);
+        assert!((matrix[1][0] - 1.0).abs() < 1e-10);
     }
 }

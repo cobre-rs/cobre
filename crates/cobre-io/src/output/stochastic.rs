@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn write_then_read_round_trips() {
-        use crate::scenarios::{NoiseOpeningRow, assemble_opening_tree, parse_noise_openings};
+        use crate::scenarios::{assemble_opening_tree, parse_noise_openings, NoiseOpeningRow};
 
         let tree = make_tree_2s_2d();
         let tmp = tempfile::tempdir().expect("tempdir must succeed");
@@ -1863,4 +1863,102 @@ mod tests {
     // -------------------------------------------------------------------------
     // write_fitting_report_aic_scores_preserved
     // -------------------------------------------------------------------------
+
+    // =========================================================================
+    // write_correlation_json_multi_profile_round_trip
+    // =========================================================================
+
+    #[test]
+    fn write_correlation_json_multi_profile_round_trip() {
+        use crate::scenarios::parse_correlation;
+
+        let entities = vec![
+            CorrelationEntity {
+                entity_type: "inflow".to_string(),
+                id: EntityId::from(1),
+            },
+            CorrelationEntity {
+                entity_type: "inflow".to_string(),
+                id: EntityId::from(2),
+            },
+        ];
+
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "all".to_string(),
+                    entities: entities.clone(),
+                    matrix: vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+                }],
+            },
+        );
+        profiles.insert(
+            "season_0".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "all".to_string(),
+                    entities: entities.clone(),
+                    matrix: vec![vec![1.0, 0.8], vec![0.8, 1.0]],
+                }],
+            },
+        );
+        profiles.insert(
+            "season_1".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "all".to_string(),
+                    entities: entities.clone(),
+                    matrix: vec![vec![1.0, 0.3], vec![0.3, 1.0]],
+                }],
+            },
+        );
+
+        let original = CorrelationModel {
+            method: "cholesky".to_string(),
+            profiles,
+            schedule: vec![
+                CorrelationScheduleEntry {
+                    stage_id: 1,
+                    profile_name: "season_0".to_string(),
+                },
+                CorrelationScheduleEntry {
+                    stage_id: 2,
+                    profile_name: "season_1".to_string(),
+                },
+            ],
+        };
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("correlation.json");
+
+        write_correlation_json(&path, &original).expect("write must succeed");
+        assert!(path.exists());
+
+        let recovered = parse_correlation(&path).expect("parse must succeed");
+
+        assert_eq!(recovered.profiles.len(), 3);
+        assert!(recovered.profiles.contains_key("default"));
+        assert!(recovered.profiles.contains_key("season_0"));
+        assert!(recovered.profiles.contains_key("season_1"));
+
+        assert_eq!(recovered.schedule.len(), 2);
+        assert_eq!(recovered.schedule[0].stage_id, 1);
+        assert_eq!(recovered.schedule[0].profile_name, "season_0");
+        assert_eq!(recovered.schedule[1].stage_id, 2);
+        assert_eq!(recovered.schedule[1].profile_name, "season_1");
+
+        let default_mat = &recovered.profiles["default"].groups[0].matrix;
+        assert!((default_mat[0][0] - 1.0).abs() < 1e-10);
+        assert!((default_mat[0][1] - 0.0).abs() < 1e-10);
+
+        let s0_mat = &recovered.profiles["season_0"].groups[0].matrix;
+        assert!((s0_mat[0][1] - 0.8).abs() < 1e-10);
+        assert!((s0_mat[1][0] - 0.8).abs() < 1e-10);
+
+        let s1_mat = &recovered.profiles["season_1"].groups[0].matrix;
+        assert!((s1_mat[0][1] - 0.3).abs() < 1e-10);
+        assert!((s1_mat[1][0] - 0.3).abs() < 1e-10);
+    }
 }

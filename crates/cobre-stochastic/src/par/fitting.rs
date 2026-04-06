@@ -833,9 +833,8 @@ fn warn_degenerate_hydros(
             }
 
             // Warn: >50% negative observations.
-            let neg_count = vals.iter().filter(|&&v| v < 0.0).count();
             #[allow(clippy::cast_precision_loss)]
-            let neg_frac = neg_count as f64 / vals.len() as f64;
+            let neg_frac = vals.iter().filter(|&&v| v < 0.0).count() as f64 / vals.len() as f64;
             if neg_frac > 0.5 {
                 tracing::warn!(
                     hydro_id = hydro_id.0,
@@ -865,24 +864,23 @@ fn warn_degenerate_hydros(
             if let Some(residuals) = per_season_residuals
                 .get(hidx)
                 .and_then(|m| m.get(&season_id))
+                .filter(|r| r.len() >= 2)
             {
-                if residuals.len() >= 2 {
-                    let r_vals: Vec<f64> = residuals.values().copied().collect();
-                    #[allow(clippy::cast_precision_loss)]
-                    let r_mean = r_vals.iter().sum::<f64>() / r_vals.len() as f64;
-                    #[allow(clippy::cast_precision_loss)]
-                    let r_var = r_vals.iter().map(|v| (v - r_mean).powi(2)).sum::<f64>()
-                        / (r_vals.len() - 1) as f64;
-                    let r_std = r_var.sqrt();
-                    if r_std < 1e-8 {
-                        tracing::warn!(
-                            hydro_id = hydro_id.0,
-                            season = season_id,
-                            residual_std = r_std,
-                            "hydro has near-zero residual variance in season \
-                             (included in correlation; near-zero eigenvalue expected)"
-                        );
-                    }
+                let r_vals: Vec<f64> = residuals.values().copied().collect();
+                #[allow(clippy::cast_precision_loss)]
+                let r_mean = r_vals.iter().sum::<f64>() / r_vals.len() as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let r_std = (r_vals.iter().map(|v| (v - r_mean).powi(2)).sum::<f64>()
+                    / (r_vals.len() - 1) as f64)
+                    .sqrt();
+                if r_std < 1e-8 {
+                    tracing::warn!(
+                        hydro_id = hydro_id.0,
+                        season = season_id,
+                        residual_std = r_std,
+                        "hydro has near-zero residual variance in season \
+                         (included in correlation; near-zero eigenvalue expected)"
+                    );
                 }
             }
         }

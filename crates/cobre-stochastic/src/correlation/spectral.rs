@@ -73,34 +73,33 @@ impl SpectralFactor {
                 return Err(StochasticError::InvalidCorrelation {
                     profile_name: String::new(),
                     reason: format!(
-                        "matrix is not square: row {i} has {} columns but {} rows",
-                        row.len(),
-                        n
+                        "matrix is not square: row {i} has {} columns but {n} rows",
+                        row.len()
                     ),
                 });
             }
         }
+
         #[allow(clippy::needless_range_loop)]
-        for i in 0..n {
-            for j in 0..i {
-                let diff = (matrix[i][j] - matrix[j][i]).abs();
-                if diff > SYMMETRY_TOL {
-                    return Err(StochasticError::InvalidCorrelation {
-                        profile_name: String::new(),
-                        reason: format!(
-                            "matrix is not symmetric: |M[{i}][{j}] - M[{j}][{i}]| = {diff:.2e} > {SYMMETRY_TOL:.2e}"
-                        ),
-                    });
+        {
+            for i in 0..n {
+                for j in 0..i {
+                    let diff = (matrix[i][j] - matrix[j][i]).abs();
+                    if diff > SYMMETRY_TOL {
+                        return Err(StochasticError::InvalidCorrelation {
+                            profile_name: String::new(),
+                            reason: format!(
+                                "matrix is not symmetric: |M[{i}][{j}] - M[{j}][{i}]| = {diff:.2e} > {SYMMETRY_TOL:.2e}"
+                            ),
+                        });
+                    }
                 }
             }
         }
 
         let mut work = vec![0.0_f64; n * n];
-        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
-            for j in 0..n {
-                work[i * n + j] = matrix[i][j];
-            }
+            work[i * n..][..n].copy_from_slice(&matrix[i]);
         }
 
         let (mut lambdas, v) = jacobi_eigen(&mut work, n);
@@ -130,7 +129,6 @@ impl SpectralFactor {
 
         let sqrt_lambdas: Vec<f64> = lambdas.iter().map(|&l| l.sqrt()).collect();
         let mut d = vec![0.0_f64; n * n];
-        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             for j in 0..n {
                 let mut acc = 0.0_f64;
@@ -214,7 +212,6 @@ impl SpectralFactor {
 /// match the mathematical specification; renaming would obscure the derivation.
 #[allow(clippy::many_single_char_names, clippy::similar_names)]
 fn jacobi_eigen(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
-    // Initialise the eigenvector matrix as identity.
     let mut v = vec![0.0_f64; n * n];
     for i in 0..n {
         v[i * n + i] = 1.0;
@@ -226,8 +223,7 @@ fn jacobi_eigen(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
         let mut off_norm_sq = 0.0_f64;
         for i in 0..n {
             for j in 0..i {
-                let val = a[i * n + j];
-                off_norm_sq += 2.0 * val * val;
+                off_norm_sq += 2.0 * a[i * n + j].powi(2);
             }
         }
 
@@ -240,8 +236,7 @@ fn jacobi_eigen(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
                 dim = n,
                 max_sweeps,
                 off_diagonal_norm = off_norm_sq.sqrt(),
-                "Jacobi eigendecomposition did not converge within the maximum \
-                 number of sweeps; returning approximate result"
+                "Jacobi eigendecomposition did not converge within maximum sweeps"
             );
             break;
         }
@@ -306,14 +301,9 @@ mod tests {
         let n = factor.dim();
         let d = &factor.data;
         let mut result = vec![0.0_f64; n * n];
-        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             for j in 0..n {
-                let mut acc = 0.0_f64;
-                for k in 0..n {
-                    acc += d[i * n + k] * d[j * n + k];
-                }
-                result[i * n + j] = acc;
+                result[i * n + j] = (0..n).map(|k| d[i * n + k] * d[j * n + k]).sum();
             }
         }
         result
@@ -326,10 +316,10 @@ mod tests {
             for j in 0..n {
                 let expected = matrix[i][j];
                 let actual = gram[i * n + j];
+                let diff = (actual - expected).abs();
                 assert!(
-                    (actual - expected).abs() <= tol,
-                    "D*D^T[{i}][{j}] = {actual:.6e}, expected {expected:.6e}, diff = {:.6e}",
-                    (actual - expected).abs()
+                    diff <= tol,
+                    "D*D^T[{i}][{j}] = {actual:.6e}, expected {expected:.6e}, diff = {diff:.6e}"
                 );
             }
         }
@@ -349,11 +339,7 @@ mod tests {
     fn spectral_of_1x1_identity() {
         let factor = decompose(&[vec![1.0]]);
         assert_eq!(factor.dim(), 1);
-        assert!(
-            (factor.data[0] - 1.0).abs() < 1e-10,
-            "D[0][0] = {}, expected 1.0",
-            factor.data[0]
-        );
+        assert!((factor.data[0] - 1.0).abs() < 1e-10);
     }
 
     #[test]

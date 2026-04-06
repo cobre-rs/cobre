@@ -2,20 +2,20 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
+use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     tree::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
+        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
     },
+    StochasticError,
 };
 
 /// Per-class entity counts for the noise dimension.
@@ -154,16 +154,16 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
 
-    use super::{ClassDimensions, generate_opening_tree};
+    use super::{generate_opening_tree, ClassDimensions};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn test_per_class_tree_matches_full_vector_multi_class() {
         let rho = 0.8_f64;
-        let cholesky = vec![vec![1.0, rho], vec![rho, 1.0]];
+        let corr_matrix = vec![vec![1.0, rho], vec![rho, 1.0]];
         let inflow_group = CorrelationGroup {
             name: "hydro_inflow".to_string(),
             entities: vec![
@@ -1008,7 +1008,7 @@ mod tests {
                     entity_type: "inflow".to_string(),
                 },
             ],
-            matrix: cholesky,
+            matrix: corr_matrix,
         };
         let load_group = CorrelationGroup {
             name: "load_bus".to_string(),

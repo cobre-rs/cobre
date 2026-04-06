@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-04-06
 
 ### Added
 
@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Window discovery algorithm** -- Historical sampling uses an automatic
   window discovery pass over `inflow_history.parquet` to build the eligible
   replay pool before the first forward iteration.
+- **Noise method dispatch** -- `cobre-stochastic` supports pluggable noise
+  generation methods (`InSample`, `LatinHypercube`, `QmcSobol`, `QmcHalton`)
+  via the `noise_method` field in `config.json`. Latin Hypercube Sampling,
+  Sobol, and Halton quasi-Monte Carlo sequences are new options for
+  low-discrepancy scenario generation.
+- **Per-season correlation estimation** -- Correlation matrices are now
+  estimated independently for each season when sufficient paired observations
+  exist, with fallback to the pooled matrix for seasons below the
+  `MIN_CORRELATION_PAIRS` threshold.
+- **Stochastic provenance summary** -- New `stochastic_provenance.json` output
+  file records PAR model fitting diagnostics, correlation estimation metadata,
+  and sampler configuration for reproducibility auditing.
 
 ### Changed
 
@@ -55,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handles rank-deficient matrices naturally. The `method` field in
   `correlation.json` now defaults to `"spectral"`; `"cholesky"` is accepted
   for backward compatibility.
+- **Degenerate hydro filtering removed** -- The `classify_degenerate_hydros`
+  function and associated constants (`MAX_NEGATIVE_FRACTION`,
+  `MIN_RESIDUAL_STD`) have been removed. With spectral decomposition,
+  degenerate hydros are included in correlation estimation; their near-zero
+  correlations produce near-zero eigenvalues naturally.
+- **Output metadata overhaul** -- Training and simulation output directories
+  now write structured `metadata.json` files with timing, iteration counts,
+  and completion status. The retry histogram is normalized into a separate
+  Parquet file.
+- **Solver retry budget table** -- The 12-level retry escalation ladder is
+  decoupled from a magic constant and uses a configurable budget table.
 - **`training.seed` renamed to `training.tree_seed`** -- The `config.json`
   field controlling the scenario-tree random seed is now `tree_seed`. No
   backward-compatible alias is provided; old configs must be updated.
@@ -88,6 +111,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string in `scenario_source` is gone. Configs using the flat format
   receive a descriptive parse-time error directing them to the per-class
   format.
+- **`classify_degenerate_hydros` function** -- Removed from `fitting.rs`
+  along with `MAX_NEGATIVE_FRACTION` and `MIN_RESIDUAL_STD` constants.
+  Spectral decomposition handles degenerate series naturally.
+
+### Fixed
+
+- **MPI reproducibility** -- Fixed four bugs affecting multi-rank training
+  reproducibility: NCS/load factors and `forward_seed` are now broadcast to
+  non-root MPI ranks; training stats and simulation costs are aggregated
+  across ranks.
+- **Cut lag coefficient remapping** -- Fixed incorrect LP column mapping for
+  cut lag coefficients in backward pass.
+- **Periodic Yule-Walker solver** -- Fixed forward periodic YW equation
+  assembly that could produce incorrect PAR coefficients for multi-season
+  models.
 
 ## [0.3.2] - 2026-03-30
 

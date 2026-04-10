@@ -82,10 +82,20 @@ pub struct VisitedStatesArchive {
 }
 
 impl VisitedStatesArchive {
+    /// Maximum number of state vectors to pre-allocate per stage.
+    ///
+    /// Prevents excessive upfront virtual memory reservation when
+    /// `max_iterations * total_forward_passes` is very large (e.g., 1000 × 100).
+    /// The `Vec` will grow beyond this cap on demand via its doubling strategy.
+    const MAX_INITIAL_CAPACITY: usize = 4096;
+
     /// Creates a new archive with one [`StageStates`] per stage.
     ///
-    /// Each stage buffer is pre-allocated for
-    /// `max_iterations * total_forward_passes` state vectors.
+    /// Each stage buffer is pre-allocated for up to
+    /// `max_iterations * total_forward_passes` state vectors, capped at
+    /// [`Self::MAX_INITIAL_CAPACITY`] to avoid excessive virtual memory
+    /// reservation on large configurations. The underlying `Vec` will grow
+    /// beyond the cap if needed.
     #[must_use]
     pub fn new(
         num_stages: usize,
@@ -93,9 +103,10 @@ impl VisitedStatesArchive {
         max_iterations: u64,
         total_forward_passes: usize,
     ) -> Self {
-        let capacity_per_stage = usize::try_from(max_iterations)
+        let total_states = usize::try_from(max_iterations)
             .unwrap_or(usize::MAX)
             .saturating_mul(total_forward_passes);
+        let capacity_per_stage = total_states.min(Self::MAX_INITIAL_CAPACITY);
         let stages = (0..num_stages)
             .map(|_| StageStates::new(state_dimension, capacity_per_stage))
             .collect();

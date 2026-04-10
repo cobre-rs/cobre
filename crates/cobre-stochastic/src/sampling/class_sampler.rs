@@ -23,13 +23,13 @@
 use cobre_core::temporal::NoiseMethod;
 
 use crate::{
-    StochasticError,
     noise::seed::derive_forward_seed,
     sampling::{
+        out_of_sample::{fill_uncorrelated, FreshNoiseSpec},
         ExternalScenarioLibrary, HistoricalScenarioLibrary,
-        out_of_sample::{FreshNoiseSpec, fill_uncorrelated},
     },
     tree::opening_tree::OpeningTreeView,
+    StochasticError,
 };
 
 use super::insample;
@@ -286,7 +286,7 @@ impl ClassSampler<'_> {
                 };
                 // TODO(ticket-028): replace with fill_uncorrelated call once
                 // ticket-028 extracts this into a dedicated function.
-                fill_uncorrelated(spec, output, perm_scratch)?;
+                fill_uncorrelated(spec, None, output, perm_scratch)?;
                 Ok(())
             }
 

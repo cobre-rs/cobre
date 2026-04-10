@@ -68,8 +68,10 @@ use crate::cut_selection::CutMetadata;
 /// [`active_count`]: CutPool::active_count
 #[derive(Debug, Clone)]
 pub struct CutPool {
-    /// Per-slot coefficient arrays. Each inner `Vec` has length `state_dimension`.
-    pub coefficients: Vec<Vec<f64>>,
+    /// Flat coefficient storage. Coefficients for slot `i` occupy the range
+    /// `i * state_dimension .. (i + 1) * state_dimension`. Length is always
+    /// `capacity * state_dimension`.
+    pub coefficients: Vec<f64>,
 
     /// Per-slot intercept values.
     pub intercepts: Vec<f64>,
@@ -156,7 +158,7 @@ impl CutPool {
         };
 
         Self {
-            coefficients: vec![vec![0.0; state_dimension]; capacity],
+            coefficients: vec![0.0; capacity * state_dimension],
             intercepts: vec![0.0; capacity],
             metadata: vec![default_meta; capacity],
             active: vec![false; capacity],
@@ -237,7 +239,8 @@ impl CutPool {
         );
 
         self.intercepts[slot] = intercept;
-        self.coefficients[slot].copy_from_slice(coefficients);
+        let start = slot * self.state_dimension;
+        self.coefficients[start..start + self.state_dimension].copy_from_slice(coefficients);
         debug_assert!(
             !self.active[slot],
             "add_cut: slot {slot} is already active (double-insert)"
@@ -280,7 +283,14 @@ impl CutPool {
             .iter()
             .enumerate()
             .filter(|&(_, &is_active)| is_active)
-            .map(|(i, _)| (i, self.intercepts[i], self.coefficients[i].as_slice()))
+            .map(|(i, _)| {
+                let start = i * self.state_dimension;
+                (
+                    i,
+                    self.intercepts[i],
+                    &self.coefficients[start..start + self.state_dimension],
+                )
+            })
     }
 
     /// Count the number of active cuts.
@@ -482,7 +492,7 @@ impl CutPool {
         records: &[cobre_io::OwnedPolicyCutRecord],
     ) -> Self {
         let capacity = records.len();
-        let mut coefficients = Vec::with_capacity(capacity);
+        let mut coefficients = Vec::with_capacity(capacity * state_dimension);
         let mut intercepts = Vec::with_capacity(capacity);
         let mut active = Vec::with_capacity(capacity);
         let mut metadata = Vec::with_capacity(capacity);
@@ -495,7 +505,7 @@ impl CutPool {
                 record.coefficients.len(),
                 state_dimension
             );
-            coefficients.push(record.coefficients.clone());
+            coefficients.extend_from_slice(&record.coefficients);
             intercepts.push(record.intercept);
             active.push(record.is_active);
             if record.is_active {
@@ -571,7 +581,7 @@ impl CutPool {
             domination_count: 0,
         };
 
-        let mut coefficients = vec![vec![0.0; state_dimension]; capacity];
+        let mut coefficients = vec![0.0_f64; capacity * state_dimension];
         let mut intercepts = vec![0.0; capacity];
         let mut active = vec![false; capacity];
         let mut metadata = vec![default_meta; capacity];
@@ -584,7 +594,8 @@ impl CutPool {
                 record.coefficients.len(),
                 state_dimension
             );
-            coefficients[i].copy_from_slice(&record.coefficients);
+            let start = i * state_dimension;
+            coefficients[start..start + state_dimension].copy_from_slice(&record.coefficients);
             intercepts[i] = record.intercept;
             active[i] = record.is_active;
             if record.is_active {
@@ -651,12 +662,8 @@ mod tests {
         assert_eq!(pool.populated_count, 0);
         assert_eq!(pool.active_count(), 0);
         assert!(pool.active.iter().all(|&a| !a));
-        assert_eq!(pool.coefficients.len(), 100);
-        assert!(
-            pool.coefficients
-                .iter()
-                .all(|c| c.iter().all(|&v| v == 0.0))
-        );
+        assert_eq!(pool.coefficients.len(), 100 * 9);
+        assert!(pool.coefficients.iter().all(|&v| v == 0.0));
         assert!(pool.intercepts.iter().all(|&v| v == 0.0));
     }
 
@@ -676,7 +683,7 @@ mod tests {
         assert_eq!(pool.active_count(), 1);
         assert!(pool.active[0]);
         assert_eq!(pool.intercepts[0], 5.0);
-        assert_eq!(pool.coefficients[0], vec![1.0; 9]);
+        assert_eq!(&pool.coefficients[0..9], vec![1.0; 9].as_slice());
         assert_eq!(pool.metadata[0].iteration_generated, 0);
         assert_eq!(pool.metadata[0].forward_pass_index, 0);
         assert_eq!(pool.populated_count, 1);

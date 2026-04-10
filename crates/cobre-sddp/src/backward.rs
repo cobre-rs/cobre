@@ -80,16 +80,16 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     cut_sync::CutSyncBuffers,
     forward::{build_cut_row_batch_into, partition},
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
+    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -238,6 +238,13 @@ pub struct BackwardPassSpec<'a> {
     /// `last_active_iter` reflect trial points from ALL ranks, not just this
     /// rank's local forward passes.
     pub metadata_sync_buf: &'a mut Vec<u64>,
+
+    /// Pre-allocated receive buffer for the `allreduce(Sum)` that aggregates
+    /// per-slot binding increments across MPI ranks.
+    ///
+    /// Reused across stages to avoid per-stage allocation (F1-003 fix).
+    /// Resized to `pool_size` before each allreduce call.
+    pub global_increments_buf: &'a mut Vec<u64>,
 
     /// Pre-allocated buffer for packing real (non-padded) gathered state
     /// vectors when archiving visited states for dominated cut selection.
@@ -784,17 +791,18 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             // Allreduce(Sum): every rank contributes its local increments and
             // receives the global sum. For a single rank (LocalBackend) this
             // is an identity copy — no behavior change.
-            let mut global_increments = vec![0u64; pool_size];
+            spec.global_increments_buf.clear();
+            spec.global_increments_buf.resize(pool_size, 0u64);
             comm.allreduce(
                 spec.metadata_sync_buf,
-                &mut global_increments,
+                spec.global_increments_buf,
                 ReduceOp::Sum,
             )
             .map_err(SddpError::from)?;
 
             // Apply global increments: slots with any increment from any rank
             // have their active_count increased and last_active_iter updated.
-            for (slot, &inc) in global_increments.iter().enumerate() {
+            for (slot, &inc) in spec.global_increments_buf.iter().enumerate() {
                 if inc > 0 {
                     fcf.pools[successor].metadata[slot].active_count += inc;
                     fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
@@ -849,13 +857,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BasisStore, SolverWorkspace},
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1151,7 +1159,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1160,8 +1167,9 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -1446,6 +1454,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -1536,6 +1545,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -1626,6 +1636,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -1712,6 +1723,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -1798,6 +1810,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -1882,6 +1895,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2010,6 +2024,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2116,6 +2131,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2227,6 +2243,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2325,6 +2342,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2432,6 +2450,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2534,6 +2553,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2630,6 +2650,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2733,6 +2754,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2863,6 +2885,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -2931,6 +2954,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -3002,7 +3026,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -3287,6 +3311,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -3430,6 +3455,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -3578,6 +3604,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -3691,6 +3718,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,
@@ -3813,6 +3841,7 @@ mod tests {
                 successor_active_slots_buf: &mut Vec::new(),
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
             },
             &comm,

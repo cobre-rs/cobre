@@ -21,14 +21,14 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    ConvergenceSummary, OutputError, SimulationMetadata, TrainingMetadata,
-    read_convergence_summary, read_simulation_metadata, read_training_metadata,
+    read_convergence_summary, read_simulation_metadata, read_training_metadata, ConvergenceSummary,
+    OutputError, SimulationMetadata, TrainingMetadata,
 };
 
 use crate::{
     error::CliError,
     summary::{
-        SimulationSummary, TrainingSummary, print_simulation_summary, print_training_summary,
+        print_simulation_summary, print_training_summary, SimulationSummary, TrainingSummary,
     },
 };
 
@@ -134,13 +134,13 @@ fn build_training_summary(
         total_cuts_generated: metadata.cuts.total_generated,
         total_lp_solves: convergence.total_lp_solves,
         total_time_ms: convergence.total_time_ms,
-        total_first_try: 0,
-        total_retried: 0,
-        total_failed: 0,
-        total_solve_time_seconds: 0.0,
-        total_basis_offered: 0,
-        total_basis_rejections: 0,
-        total_simplex_iterations: 0,
+        total_first_try: None,
+        total_retried: None,
+        total_failed: None,
+        total_solve_time_seconds: None,
+        total_basis_offered: None,
+        total_basis_rejections: None,
+        total_simplex_iterations: None,
     }
 }
 
@@ -153,14 +153,14 @@ fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary 
         total_time_ms: 0,
         mean_cost: None,
         std_cost: None,
-        total_lp_solves: 0,
-        total_first_try: 0,
-        total_retried: 0,
-        total_failed_solves: 0,
-        total_solve_time_seconds: 0.0,
-        total_basis_offered: 0,
-        total_basis_rejections: 0,
-        total_simplex_iterations: 0,
+        total_lp_solves: None,
+        total_first_try: None,
+        total_retried: None,
+        total_failed_solves: None,
+        total_solve_time_seconds: None,
+        total_basis_offered: None,
+        total_basis_rejections: None,
+        total_simplex_iterations: None,
     }
 }
 
@@ -193,7 +193,7 @@ mod tests {
         MetadataIterations, MetadataProblemDimensions, MpiInfo, TrainingMetadata,
     };
 
-    use super::{SummaryArgs, build_training_summary, convergence_fallback};
+    use super::{build_training_summary, convergence_fallback, SummaryArgs};
 
     fn make_training_metadata() -> TrainingMetadata {
         TrainingMetadata {

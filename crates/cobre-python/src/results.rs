@@ -22,16 +22,16 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use arrow::array::{Array, BooleanArray, Float64Array, Int8Array, Int32Array, Int64Array};
+use arrow::array::{Array, BooleanArray, Float64Array, Int32Array, Int64Array, Int8Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use pyo3::BoundObject;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
+use pyo3::BoundObject;
 
 /// Canonicalize a path and return an appropriate Python error on failure.
 fn canonicalize_dir(path: &Path) -> PyResult<PathBuf> {
@@ -114,7 +114,7 @@ fn read_json_file(path: &std::path::Path) -> PyResult<serde_json::Value> {
 /// ```python
 /// {
 ///     "training": {
-///         "manifest": { ... },           # contents of training/metadata.json
+///         "manifest": { ... },           # alias for metadata (same contents)
 ///         "metadata": { ... },           # contents of training/metadata.json
 ///         "convergence_path": "/abs/...", # absolute path to convergence.parquet
 ///         "timing_path": "/abs/...",      # absolute path to timing/iterations.parquet
@@ -158,7 +158,6 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> 
         )));
     }
 
-    let manifest_val = read_json_file(&training_dir.join("metadata.json"))?;
     let metadata_val = read_json_file(&training_dir.join("metadata.json"))?;
 
     let convergence_path = training_dir
@@ -183,7 +182,7 @@ pub fn load_results(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> 
     let result = PyDict::new(py);
 
     let training_dict = PyDict::new(py);
-    training_dict.set_item("manifest", json_value_to_py(py, &manifest_val)?)?;
+    training_dict.set_item("manifest", json_value_to_py(py, &metadata_val)?)?;
     training_dict.set_item("metadata", json_value_to_py(py, &metadata_val)?)?;
     training_dict.set_item("convergence_path", &convergence_path)?;
     training_dict.set_item("timing_path", &timing_path)?;

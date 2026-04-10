@@ -52,31 +52,34 @@
 //!
 //! ## Hot-path allocation discipline
 //!
-//! No allocations occur per scenario or per stage during the inner loops.
-//! The [`TrajectoryRecord`] slice is pre-allocated by the caller. The only
-//! allocation inside the function is the [`RowBatch`] built by
-//! `build_cut_row_batch`, which runs once per stage template (before the
-//! scenario loop) — not once per scenario.
+//! No allocations occur per scenario during the inner loops. Per-worker
+//! buffers (`trajectory_costs`, `raw_noise_buf`, `perm_scratch`) are
+//! allocated once at the start of each iteration — one allocation per worker,
+//! not per scenario. The [`TrajectoryRecord`] slice is pre-allocated by the
+//! caller. The only additional allocation inside the function is the
+//! [`RowBatch`] built by `build_cut_row_batch`, which runs once per stage
+//! template (before the scenario loop) — not once per scenario.
 
 use std::time::Instant;
 
 use cobre_comm::Communicator;
+use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -201,22 +204,20 @@ pub fn sync_forward<C: Communicator>(
 
     comm.allgatherv(&local.scenario_costs, &mut global_costs, &counts, &displs)?;
 
-    // Canonical-order sequential summation. All ranks iterate global_costs in
+    // Canonical-order single-pass statistics. All ranks iterate global_costs in
     // the same order, producing bit-identical statistics regardless of rank count.
-    #[allow(clippy::cast_precision_loss)]
-    let global_n_f64 = global_n as f64;
-    let mut cost_sum = 0.0_f64;
-    let mut cost_sum_sq = 0.0_f64;
+    // Welford's online algorithm is used instead of the two-pass naive formula to
+    // avoid catastrophic cancellation when sum_sq ≈ n * mean^2 (F1-007 fix).
+    // MPI Welford merge is not used here because the full gathered array is
+    // already available — a single sequential pass suffices.
+    let mut welford = WelfordAccumulator::new();
     for &c in &global_costs {
-        cost_sum += c;
-        cost_sum_sq += c * c;
+        welford.update(c);
     }
-    let mean = cost_sum / global_n_f64;
-
+    let mean = welford.mean();
     let (std_dev, ci_95) = if global_n > 1 {
-        let variance = (cost_sum_sq - global_n_f64 * mean * mean) / (global_n_f64 - 1.0);
-        let sd = variance.max(0.0).sqrt();
-        let ci = 1.96_f64 * sd / global_n_f64.sqrt();
+        let sd = welford.sample_std_dev();
+        let ci = welford.sample_ci_95_half_width();
         (sd, ci)
     } else {
         (0.0_f64, 0.0_f64)
@@ -316,7 +317,7 @@ pub fn build_cut_row_batch_into(
     let mask = &indexer.nonzero_state_indices;
     let is_sparse = !mask.is_empty();
 
-    let num_cuts: usize = fcf.active_cuts(stage).count();
+    let num_cuts: usize = fcf.pools[stage].active_count();
 
     if num_cuts == 0 {
         batch.row_starts.push(0_i32);
@@ -460,7 +461,13 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
 
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
-    let nnz_per_cut = n_state + 1;
+    let mask = &indexer.nonzero_state_indices;
+    let is_sparse = !mask.is_empty();
+    let nnz_per_cut = if is_sparse {
+        mask.len() + 1
+    } else {
+        n_state + 1
+    };
 
     let mut new_count = 0usize;
     let mut nz_offset = 0usize;
@@ -480,22 +487,22 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
         );
 
         // Build the row using the same transformation as build_cut_row_batch_into.
-        // state_to_lp_column remaps outgoing-state indices to LP columns
-        // (identity for storage; z_inflow for lag 0; shifted incoming lag for
-        // lag l ≥ 1).
+        // Sparse path iterates only nonzero state indices; dense path iterates
+        // all. Both use state_to_lp_column to remap outgoing-state indices to
+        // LP columns.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch_buf.row_starts.push(nz_offset as i32);
 
-        for (j, &c) in coefficients.iter().enumerate() {
-            let lp_col = indexer.state_to_lp_column(j);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            batch_buf.col_indices.push(lp_col as i32);
-            let d = if col_scale.is_empty() {
-                1.0
-            } else {
-                col_scale[lp_col]
-            };
-            batch_buf.values.push(-c * d);
+        if is_sparse {
+            for &j in mask {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch_buf, lp_col, coefficients[j], col_scale);
+            }
+        } else {
+            for (j, &c) in coefficients.iter().enumerate() {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch_buf, lp_col, c, col_scale);
+            }
         }
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -1121,20 +1128,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.

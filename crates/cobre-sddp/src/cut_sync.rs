@@ -42,8 +42,8 @@
 use cobre_comm::Communicator;
 
 use crate::{
-    FutureCostFunction, SddpError,
     cut::wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
+    FutureCostFunction, SddpError,
 };
 
 /// Pre-allocated byte buffers for gathering cut wire records across all MPI
@@ -383,7 +383,7 @@ impl CutSyncBuffers {
                 iteration as u32,
                 meta.forward_pass_index,
                 pool.intercepts[slot],
-                &pool.coefficients[slot],
+                &pool.coefficients[slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
             );
             n_packed += 1;
         }
@@ -508,11 +508,11 @@ mod tests {
 
     use super::CutSyncBuffers;
     use crate::{
-        SddpError,
         cut::{
             fcf::FutureCostFunction,
             wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
         },
+        SddpError,
     };
 
     // ── Unit tests ────────────────────────────────────────────────────────────

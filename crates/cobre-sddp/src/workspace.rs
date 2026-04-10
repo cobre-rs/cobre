@@ -67,23 +67,39 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
-            scratch: ScratchBuffers {
-                noise_buf: Vec::with_capacity(hydro_count),
-                inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                par_inflow_buf: Vec::with_capacity(hydro_count),
-                eta_floor_buf: Vec::with_capacity(hydro_count),
-                zero_targets_buf: vec![0.0_f64; hydro_count],
-                ncs_col_upper_buf: Vec::new(),
-                ncs_col_lower_buf: Vec::new(),
-                ncs_col_indices_buf: Vec::new(),
-                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                row_lower_buf: Vec::new(),
-                z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
-                effective_eta_buf: Vec::with_capacity(hydro_count),
-                unscaled_primal: Vec::new(),
-                unscaled_dual: Vec::new(),
-            },
+            scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+        }
+    }
+}
+
+impl ScratchBuffers {
+    /// Allocate scratch buffers sized for the given per-worker parameters.
+    ///
+    /// Extracted from the three `SolverWorkspace` construction sites
+    /// (`SolverWorkspace::new`, `WorkspacePool::new`, `WorkspacePool::try_new`)
+    /// to keep them in sync (F1-008 fix).
+    pub(crate) fn new(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
+    ) -> Self {
+        Self {
+            noise_buf: Vec::with_capacity(hydro_count),
+            inflow_m3s_buf: Vec::with_capacity(hydro_count),
+            lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+            par_inflow_buf: Vec::with_capacity(hydro_count),
+            eta_floor_buf: Vec::with_capacity(hydro_count),
+            zero_targets_buf: vec![0.0_f64; hydro_count],
+            ncs_col_upper_buf: Vec::new(),
+            ncs_col_lower_buf: Vec::new(),
+            ncs_col_indices_buf: Vec::new(),
+            load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+            row_lower_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
+            effective_eta_buf: Vec::with_capacity(hydro_count),
+            unscaled_primal: Vec::new(),
+            unscaled_dual: Vec::new(),
         }
     }
 }
@@ -386,8 +402,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.

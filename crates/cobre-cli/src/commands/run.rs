@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{create_communicator, Communicator, ReduceOp};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
@@ -28,10 +28,10 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
     setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -42,8 +42,8 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -930,13 +930,13 @@ fn run_training_phase(
         total_cuts_generated: training_output.cut_stats.total_generated,
         total_lp_solves: global_lp_solves,
         total_time_ms: training_result.total_time_ms,
-        total_first_try,
-        total_retried,
-        total_failed,
-        total_solve_time_seconds: total_solve_time_s,
-        total_basis_offered,
-        total_basis_rejections,
-        total_simplex_iterations: total_simplex_iter,
+        total_first_try: Some(total_first_try),
+        total_retried: Some(total_retried),
+        total_failed: Some(total_failed),
+        total_solve_time_seconds: Some(total_solve_time_s),
+        total_basis_offered: Some(total_basis_offered),
+        total_basis_rejections: Some(total_basis_rejections),
+        total_simplex_iterations: Some(total_simplex_iter),
     };
     if !ctx.quiet && ctx.is_root {
         crate::summary::print_training_summary(&ctx.stderr, &training_summary);
@@ -951,7 +951,7 @@ fn run_training_phase(
 
 /// Aggregate solver statistics from the training stats log.
 fn aggregate_solver_stats(
-    stats_log: &[(u64, String, i32, cobre_sddp::SolverStatsDelta)],
+    stats_log: &[(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)],
 ) -> (u64, u64, u64, f64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
@@ -1154,14 +1154,14 @@ fn print_sim_summary(
             total_time_ms: sim_time_ms,
             mean_cost: Some(cost_summary.mean_cost),
             std_cost: Some(cost_summary.std_cost),
-            total_lp_solves: agg.lp_solves,
-            total_first_try: agg.first_try_successes,
-            total_retried: agg.lp_successes.saturating_sub(agg.first_try_successes),
-            total_failed_solves: agg.lp_failures,
-            total_solve_time_seconds: agg.solve_time_ms / 1000.0,
-            total_basis_offered: agg.basis_offered,
-            total_basis_rejections: agg.basis_rejections,
-            total_simplex_iterations: agg.simplex_iterations,
+            total_lp_solves: Some(agg.lp_solves),
+            total_first_try: Some(agg.first_try_successes),
+            total_retried: Some(agg.lp_successes.saturating_sub(agg.first_try_successes)),
+            total_failed_solves: Some(agg.lp_failures),
+            total_solve_time_seconds: Some(agg.solve_time_ms / 1000.0),
+            total_basis_offered: Some(agg.basis_offered),
+            total_basis_rejections: Some(agg.basis_rejections),
+            total_simplex_iterations: Some(agg.simplex_iterations),
         },
     );
 }

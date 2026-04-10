@@ -207,9 +207,10 @@ impl From<cobre_sddp::SddpError> for CliError {
             },
             cobre_sddp::SddpError::Io(load_err) => Self::from(load_err),
             cobre_sddp::SddpError::Validation(msg) => Self::Validation { report: msg },
-            cobre_sddp::SddpError::Communication(msg) | cobre_sddp::SddpError::Simulation(msg) => {
-                Self::Internal { message: msg }
-            }
+            cobre_sddp::SddpError::Communication(comm_err) => Self::Internal {
+                message: comm_err.to_string(),
+            },
+            cobre_sddp::SddpError::Simulation(msg) => Self::Internal { message: msg },
             cobre_sddp::SddpError::Stochastic(stoch_err) => Self::Internal {
                 message: stoch_err.to_string(),
             },
@@ -446,7 +447,12 @@ mod tests {
 
     #[test]
     fn from_sddp_error_communication_maps_to_internal() {
-        let sddp_err = cobre_sddp::SddpError::Communication("allgatherv timed out".to_string());
+        let sddp_err =
+            cobre_sddp::SddpError::Communication(cobre_comm::CommError::CollectiveFailed {
+                operation: "allgatherv",
+                mpi_error_code: 1,
+                message: "timed out".to_string(),
+            });
         let cli_err = CliError::from(sddp_err);
         assert!(
             matches!(cli_err, CliError::Internal { .. }),

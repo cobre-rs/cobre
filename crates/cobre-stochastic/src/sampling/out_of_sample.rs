@@ -11,13 +11,16 @@ use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     noise::{rng::rng_from_seed, seed::derive_forward_seed},
     tree::{
-        lhs::{LhsPointSpec, sample_lhs_point},
-        qmc_halton::{HaltonPointSpec, scrambled_halton_point},
-        qmc_sobol::{MAX_SOBOL_DIM, SobolPointSpec, scrambled_sobol_point},
+        lhs::{sample_lhs_point, LhsPointSpec},
+        qmc_halton::{scrambled_halton_point, HaltonPointSpec},
+        qmc_sobol::{
+            scrambled_sobol_point, scrambled_sobol_point_precomputed, SobolPointSpec,
+            SobolPrecomputed, MAX_SOBOL_DIM,
+        },
     },
+    StochasticError,
 };
 
 /// Parameters for a single out-of-sample noise draw.
@@ -56,7 +59,7 @@ pub(crate) fn sample_fresh(
     correlation: &crate::correlation::resolve::DecomposedCorrelation,
     entity_order: &[cobre_core::EntityId],
 ) -> Result<(), StochasticError> {
-    fill_uncorrelated(spec, output, perm_scratch)?;
+    fill_uncorrelated(spec, None, output, perm_scratch)?;
     #[allow(clippy::cast_possible_wrap)]
     correlation.apply_correlation(spec.stage_id as i32, &mut output[..spec.dim], entity_order);
     Ok(())
@@ -80,6 +83,7 @@ pub(crate) fn sample_fresh(
 /// `perm_scratch.len() < spec.total_scenarios`.
 pub(crate) fn fill_uncorrelated(
     spec: FreshNoiseSpec,
+    sobol_ctx: Option<&SobolPrecomputed>,
     output: &mut [f64],
     perm_scratch: &mut [usize],
 ) -> Result<(), StochasticError> {
@@ -114,7 +118,11 @@ pub(crate) fn fill_uncorrelated(
                 total_scenarios: spec.total_scenarios,
                 dim: spec.dim,
             };
-            scrambled_sobol_point(&sobol_spec, output);
+            if let Some(ctx) = sobol_ctx {
+                scrambled_sobol_point_precomputed(&sobol_spec, ctx, output);
+            } else {
+                scrambled_sobol_point(&sobol_spec, output);
+            }
         }
         NoiseMethod::QmcHalton => {
             let halton_spec = HaltonPointSpec {
@@ -168,14 +176,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
-        EntityId,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::NoiseMethod,
+        EntityId,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
 
-    use super::{FreshNoiseSpec, fill_uncorrelated, sample_fresh};
+    use super::{fill_uncorrelated, sample_fresh, FreshNoiseSpec};
 
     fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         let n = entity_ids.len();
@@ -423,8 +431,8 @@ mod tests {
         let mut out_b = vec![0.0f64; spec.dim];
         let mut perm = vec![0usize; spec.total_scenarios as usize];
 
-        fill_uncorrelated(spec, &mut out_a, &mut perm).unwrap();
-        fill_uncorrelated(spec, &mut out_b, &mut perm).unwrap();
+        fill_uncorrelated(spec, None, &mut out_a, &mut perm).unwrap();
+        fill_uncorrelated(spec, None, &mut out_b, &mut perm).unwrap();
 
         assert_eq!(
             out_a, out_b,
@@ -441,7 +449,7 @@ mod tests {
         let mut output = vec![0.0f64; spec.dim];
         let mut perm = vec![0usize; spec.total_scenarios as usize];
 
-        let result = fill_uncorrelated(spec, &mut output, &mut perm);
+        let result = fill_uncorrelated(spec, None, &mut output, &mut perm);
 
         match result {
             Err(StochasticError::DimensionExceedsCapacity {
@@ -479,7 +487,7 @@ mod tests {
             let mut output = vec![0.0f64; spec.dim];
             let mut perm = vec![0usize; spec.total_scenarios as usize];
 
-            let result = fill_uncorrelated(spec, &mut output, &mut perm);
+            let result = fill_uncorrelated(spec, None, &mut output, &mut perm);
 
             assert!(
                 result.is_ok(),

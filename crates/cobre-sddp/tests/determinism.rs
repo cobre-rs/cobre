@@ -29,7 +29,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -37,17 +36,18 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId,
 };
 use cobre_sddp::{
-    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext, simulate, sync_forward, train,
+    simulate, sync_forward, train, EntityCounts, ForwardResult, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{build_stochastic_context, ClassSchemes, StochasticContext};
 
 // ===========================================================================
 // Shared communicator stub
@@ -177,9 +177,9 @@ impl SolverInterface for MockSolver3H {
 /// Uses PAR(0) (no AR lags) and a single opening per stage so the fixture
 /// remains small while still exercising more code paths than a 1-hydro system.
 fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let zero_penalties = || HydroPenalties {
         spillage_cost: 0.0,
@@ -703,11 +703,12 @@ fn test_training_determinism_across_thread_counts() {
                 pool_1.intercepts[s].to_bits(),
                 pool_4.intercepts[s].to_bits()
             );
-            assert_eq!(pool_1.coefficients[s].len(), pool_4.coefficients[s].len());
-            for (&coeff_1, &coeff_4) in pool_1.coefficients[s]
-                .iter()
-                .zip(pool_4.coefficients[s].iter())
-            {
+            let sd = pool_1.state_dimension;
+            let start = s * sd;
+            let c1 = &pool_1.coefficients[start..start + sd];
+            let c4 = &pool_4.coefficients[start..start + sd];
+            assert_eq!(c1.len(), c4.len());
+            for (&coeff_1, &coeff_4) in c1.iter().zip(c4.iter()) {
                 assert_eq!(coeff_1.to_bits(), coeff_4.to_bits());
             }
         }

@@ -31,14 +31,38 @@ use std::ops::Range;
 use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
-use crate::StageIndexer;
-use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
+use crate::lp_builder::{GenericConstraintRowEntry, COST_SCALE_FACTOR};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
     SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
     SimulationInflowLagResult, SimulationNonControllableResult, SimulationPumpingResult,
     SimulationStageResult, SimulationThermalResult,
 };
+use crate::StageIndexer;
+
+/// Pre-computed reverse lookups from system hydro index to local FPHA/evaporation
+/// index. Built once per `extract_hydros` call to replace O(N) linear searches
+/// with O(1) array lookups.
+struct HydroReverseLookup {
+    /// `fpha[h]` is `Some(local_idx)` if hydro `h` is FPHA, `None` otherwise.
+    fpha: Vec<Option<usize>>,
+    /// `evap[h]` is `Some(local_idx)` if hydro `h` has evaporation, `None` otherwise.
+    evap: Vec<Option<usize>>,
+}
+
+impl HydroReverseLookup {
+    fn build(indexer: &StageIndexer, n_hydros: usize) -> Self {
+        let mut fpha = vec![None; n_hydros];
+        for (local, &sys) in indexer.fpha_hydro_indices.iter().enumerate() {
+            fpha[sys] = Some(local);
+        }
+        let mut evap = vec![None; n_hydros];
+        for (local, &sys) in indexer.evap_hydro_indices.iter().enumerate() {
+            evap[sys] = Some(local);
+        }
+        Self { fpha, evap }
+    }
+}
 
 /// System entity counts needed to populate per-entity result [`Vec`]s.
 ///
@@ -231,7 +255,11 @@ impl StageExtractionSpec<'_> {
     fn col_scale_factor(&self, col: usize) -> f64 {
         if col < self.col_scale.len() {
             let d = self.col_scale[col];
-            if d == 0.0 { 1.0 } else { d }
+            if d == 0.0 {
+                1.0
+            } else {
+                d
+            }
         } else {
             1.0
         }
@@ -243,6 +271,7 @@ impl StageExtractionSpec<'_> {
 fn extract_hydro_no_turbine(
     view: &SolutionView<'_>,
     spec: &StageExtractionSpec<'_>,
+    lookup: &HydroReverseLookup,
     h: usize,
     hydro_id: i32,
     stage_id: u32,
@@ -303,9 +332,8 @@ fn extract_hydro_no_turbine(
             (0.0, 0.0, 0.0, 0.0)
         };
 
-    // Determine if hydro `h` is FPHA. FPHA identification comes from
-    // StageIndexer, not from EntityCounts.hydro_productivities.
-    let is_fpha = indexer.fpha_hydro_indices.contains(&h);
+    // Determine if hydro `h` is FPHA via O(1) reverse lookup.
+    let is_fpha = lookup.fpha[h].is_some();
     let productivity_mw_per_m3s = if is_fpha {
         None
     } else {
@@ -314,7 +342,7 @@ fn extract_hydro_no_turbine(
 
     // Evaporation: read from LP columns when present; fall back to 0.0.
     let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
-        if let Some(local_evap_idx) = indexer.evap_hydro_indices.iter().position(|&e| e == h) {
+        if let Some(local_evap_idx) = lookup.evap[h] {
             let ei = &indexer.evap_indices[local_evap_idx];
             let q_ev = view.primal[ei.q_ev_col];
             let neg = view.primal[ei.f_evap_plus_col]; // f_evap_plus = under-evaporation
@@ -379,7 +407,12 @@ struct HydroStageContext {
 
 impl HydroStageContext {
     /// Read all stage-level scalars for hydro at system index `h`.
-    fn new(view: &SolutionView<'_>, spec: &StageExtractionSpec<'_>, h: usize) -> Self {
+    fn new(
+        view: &SolutionView<'_>,
+        spec: &StageExtractionSpec<'_>,
+        lookup: &HydroReverseLookup,
+        h: usize,
+    ) -> Self {
         let indexer = spec.indexer;
         let storage_final = view.primal[indexer.storage.start + h];
         let storage_initial = view.primal[indexer.storage_in.start + h];
@@ -415,14 +448,14 @@ impl HydroStageContext {
         // can read generation from the LP `g_{h,k}` column rather than computing
         // turbined * productivity. productivity_mw_per_m3s is None for FPHA hydros
         // because they use a piecewise function, not a scalar constant.
-        let fpha_local: Option<usize> = indexer.fpha_hydro_indices.iter().position(|&e| e == h);
+        let fpha_local: Option<usize> = lookup.fpha[h];
         let productivity_mw_per_m3s = if fpha_local.is_some() {
             None
         } else {
             Some(spec.hydro_productivities[h])
         };
         // Evaporation: stage-level (one column per hydro, same for all blocks).
-        let local_evap: Option<usize> = indexer.evap_hydro_indices.iter().position(|&e| e == h);
+        let local_evap: Option<usize> = lookup.evap[h];
         let (evaporation_m3s, evaporation_violation_neg_m3s, evaporation_violation_pos_m3s) =
             if let Some(lei) = local_evap {
                 let ei = &indexer.evap_indices[lei];
@@ -454,6 +487,7 @@ impl HydroStageContext {
 fn extract_hydro_per_block<'a>(
     view: &'a SolutionView<'a>,
     spec: &'a StageExtractionSpec<'a>,
+    lookup: &'a HydroReverseLookup,
     h: usize,
     hydro_id: i32,
     stage_id: u32,
@@ -462,7 +496,7 @@ fn extract_hydro_per_block<'a>(
     let n_blks = indexer.n_blks;
 
     // Extract stage-level scalars once; the per-block closure captures them.
-    let ctx = HydroStageContext::new(view, spec, h);
+    let ctx = HydroStageContext::new(view, spec, lookup, h);
 
     // Look up diversion source indices for this hydro (for inflow computation).
     let hydro_entity_id = EntityId(hydro_id);
@@ -556,19 +590,25 @@ fn extract_hydros(
     stage_id: u32,
 ) -> Vec<SimulationHydroResult> {
     let indexer = spec.indexer;
+    let n_hydros = spec.entity_counts.hydro_ids.len();
+    let lookup = HydroReverseLookup::build(indexer, n_hydros);
     if indexer.turbine.is_empty() || indexer.n_blks == 0 {
         spec.entity_counts
             .hydro_ids
             .iter()
             .enumerate()
-            .map(|(h, &hydro_id)| extract_hydro_no_turbine(view, spec, h, hydro_id, stage_id))
+            .map(|(h, &hydro_id)| {
+                extract_hydro_no_turbine(view, spec, &lookup, h, hydro_id, stage_id)
+            })
             .collect()
     } else {
         spec.entity_counts
             .hydro_ids
             .iter()
             .enumerate()
-            .flat_map(|(h, &hydro_id)| extract_hydro_per_block(view, spec, h, hydro_id, stage_id))
+            .flat_map(|(h, &hydro_id)| {
+                extract_hydro_per_block(view, spec, &lookup, h, hydro_id, stage_id)
+            })
             .collect()
     }
 }
@@ -854,7 +894,11 @@ fn compute_cost_result(
     let scale_factor = |col: usize| -> f64 {
         if col < col_scale.len() {
             let d = col_scale[col];
-            if d == 0.0 { 1.0 } else { d }
+            if d == 0.0 {
+                1.0
+            } else {
+                d
+            }
         } else {
             1.0
         }
@@ -1309,11 +1353,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
-        assign_scenarios, extract_stage_result,
+        accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts,
+        SolutionView, StageExtractionSpec,
     };
-    use crate::StageIndexer;
     use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
+    use crate::StageIndexer;
 
     // -------------------------------------------------------------------------
     // assign_scenarios
@@ -1592,7 +1636,7 @@ mod tests {
         );
 
         assert_eq!(result.inflow_lags.len(), 2); // 2 hydros × 1 lag each
-        // Hydro 10, lag 0 → primal[2] = 50.0
+                                                 // Hydro 10, lag 0 → primal[2] = 50.0
         assert_eq!(result.inflow_lags[0].hydro_id, 10);
         assert_eq!(result.inflow_lags[0].lag_index, 0);
         assert_eq!(result.inflow_lags[0].inflow_m3s, 50.0);
@@ -1806,7 +1850,7 @@ mod tests {
         primal[1] = 200.0; // storage h1
         primal[2] = 50.0; // lag h0
         primal[3] = 60.0; // lag h1
-        // primal[4..6] = z_inflow (zeros)
+                          // primal[4..6] = z_inflow (zeros)
         primal[6] = 90.0; // storage_in h0
         primal[7] = 180.0; // storage_in h1
         primal[8] = 500.0; // theta
@@ -1814,7 +1858,7 @@ mod tests {
         primal[10] = 40.0; // turbine h1 b0
         primal[11] = 5.0; // spillage h0 b0
         primal[12] = 0.0; // spillage h1 b0
-        // primal[13..15] = diversion (zeros)
+                          // primal[13..15] = diversion (zeros)
         primal[15] = 80.0; // thermal t0 b0
         primal[16] = 15.0; // line_fwd l0 b0
         primal[17] = 0.0; // line_rev l0 b0
@@ -2482,7 +2526,7 @@ mod tests {
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 50.0; // storage h0
         primal[1] = 80.0; // storage h1
-        // primal[2..4] = z_inflow (zeros)
+                          // primal[2..4] = z_inflow (zeros)
         primal[4] = 45.0; // storage_in h0
         primal[5] = 75.0; // storage_in h1
         primal[6] = 0.0; // theta
@@ -2490,7 +2534,7 @@ mod tests {
         primal[8] = 30.0; // turbine h1 b0
         primal[9] = 0.0; // spillage h0 b0
         primal[10] = 0.0; // spillage h1 b0
-        // primal[11..13] = diversion (zeros)
+                          // primal[11..13] = diversion (zeros)
         primal[13] = 75.0; // FPHA generation h0 b0 — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
@@ -2660,12 +2704,12 @@ mod tests {
         let n_cols = indexer.generation_below_slack.end;
         let mut primal = vec![0.0_f64; n_cols];
         primal[0] = 200.0; // storage h0
-        // primal[1] = z_inflow h0 (zero)
+                           // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
         primal[3] = 0.0; // theta
         primal[4] = 10.0; // turbine h0 b0
         primal[5] = 0.0; // spillage h0 b0
-        // primal[6] = diversion h0 b0 (zero)
+                         // primal[6] = diversion h0 b0 (zero)
         primal[7] = 3.5; // Q_ev — acceptance criterion value
 
         let obj = vec![0.0_f64; n_cols];
@@ -2733,8 +2777,8 @@ mod tests {
         primal[0] = 200.0;
         // primal[1] = z_inflow h0 (zero)
         primal[2] = 190.0; // storage_in h0
-        // primal[3] = theta = 0
-        // primal[6] = diversion h0 b0 (zero)
+                           // primal[3] = theta = 0
+                           // primal[6] = diversion h0 b0 (zero)
         primal[7] = 2.0; // Q_ev
         primal[8] = 0.5; // f_evap_plus (under-evaporation -> neg)
         primal[9] = 0.0; // f_evap_minus (over-evaporation -> pos)
@@ -2813,7 +2857,7 @@ mod tests {
 
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
-        // FPHA generation column 13: objective_coeff=0.01
+                      // FPHA generation column 13: objective_coeff=0.01
         obj[13] = 0.01;
 
         let dual = vec![0.0_f64; 2];
@@ -2904,8 +2948,8 @@ mod tests {
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
         obj[13] = 0.01; // FPHA generation cost (scaled)
-        // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
-        //                           = 1.0 * 500 + 0.01 * 30 = 500.3
+                        // objective in scaled space = theta_coeff * theta + fpha_coeff * fpha
+                        //                           = 1.0 * 500 + 0.01 * 30 = 500.3
         let objective_val = 500.3_f64;
 
         let dual = vec![0.0_f64; 2];
@@ -2990,7 +3034,7 @@ mod tests {
 
         let mut obj = vec![0.0_f64; n_cols];
         obj[6] = 1.0; // theta coefficient (undiscounted)
-        // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
+                      // c_orig / K = 0.005.  With col_scale = 2.0: obj_coeff = 0.005 * 2.0 = 0.01.
         obj[13] = 0.01;
 
         // Build col_scale: all 1.0 except column 13 = 2.0.

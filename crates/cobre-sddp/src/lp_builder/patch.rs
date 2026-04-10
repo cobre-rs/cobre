@@ -250,9 +250,10 @@ impl PatchBuffer {
         // The noise value is computed by the caller as:
         //   noise[h] = template.row_lower[base_row + h] + noise_scale[h] * eta
         // where `template.row_lower` is already scaled (by `apply_row_scale`).
-        // The `noise_scale` factor is in original units and is NOT rescaled, so
-        // `noise[h]` is already the best-available approximation of the scaled RHS
-        // and must be written as-is without additional prescaling.
+        // The `noise_scale` factor IS pre-scaled by the row scaling factor
+        // during LP setup (see `setup.rs`: noise_scale[h] *= row_scale[base_row + h]),
+        // so `noise[h]` is already in the correct scaled units and must be
+        // written as-is without additional prescaling here.
         let cat3_start = n * (1 + l);
         for (h, &nv) in noise.iter().enumerate() {
             let slot = cat3_start + h;
@@ -547,7 +548,7 @@ pub fn ar_dynamics_row_offset(base_row: usize, hydro_index: usize) -> usize {
     clippy::cast_possible_truncation
 )]
 mod tests {
-    use super::{PatchBuffer, ar_dynamics_row_offset};
+    use super::{ar_dynamics_row_offset, PatchBuffer};
     use crate::indexer::StageIndexer;
 
     /// Convenience: make an indexer without repeating N/L everywhere.

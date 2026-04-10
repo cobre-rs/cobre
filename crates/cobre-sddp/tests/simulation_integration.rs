@@ -20,7 +20,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -28,21 +27,22 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{build_stochastic_context, ClassSchemes, StochasticContext};
 
 use cobre_io::{
-    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
-    write_policy_checkpoint, write_results,
+    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
+    SimulationOutput, StageCutsPayload,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    build_training_output, simulate, train,
+    build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext,
 };
 
 /// Single-rank communicator for testing.
@@ -623,7 +623,8 @@ fn train_simulate_write_cycle() {
                         iteration: meta.iteration_generated as u32,
                         forward_pass_index: meta.forward_pass_index,
                         intercept: pool.intercepts[slot],
-                        coefficients: &pool.coefficients[slot],
+                        coefficients: &pool.coefficients
+                            [slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
                         is_active: pool.active[slot],
                         domination_count: meta.domination_count as u32,
                     }
@@ -816,11 +817,9 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(
-        output_dir
-            .join("training/timing/iterations.parquet")
-            .is_file()
-    );
+    assert!(output_dir
+        .join("training/timing/iterations.parquet")
+        .is_file());
 
     let metadata_path = output_dir.join("training/metadata.json");
     assert!(metadata_path.is_file());

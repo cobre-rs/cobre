@@ -419,8 +419,9 @@ fn select_dominated(
         let mut max_val = f64::NEG_INFINITY;
         for k in 0..populated {
             if pool.active[k] {
+                let coeff_start = k * n_state;
                 let val = pool.intercepts[k]
-                    + pool.coefficients[k]
+                    + pool.coefficients[coeff_start..coeff_start + n_state]
                         .iter()
                         .zip(x_hat)
                         .map(|(c, x)| c * x)
@@ -497,14 +498,22 @@ pub fn parse_cut_selection_config(
             threshold: u64::from(threshold),
             check_frequency: u64::from(check_frequency),
         })),
-        "lml1" => Ok(Some(CutSelectionStrategy::Lml1 {
-            memory_window: u64::from(threshold),
-            check_frequency: u64::from(check_frequency),
-        })),
-        "domination" => Ok(Some(CutSelectionStrategy::Dominated {
-            threshold: f64::from(threshold),
-            check_frequency: u64::from(check_frequency),
-        })),
+        "lml1" => {
+            let window = config.memory_window.unwrap_or(threshold);
+            Ok(Some(CutSelectionStrategy::Lml1 {
+                memory_window: u64::from(window),
+                check_frequency: u64::from(check_frequency),
+            }))
+        }
+        "domination" => {
+            let epsilon = config
+                .domination_epsilon
+                .unwrap_or_else(|| f64::from(threshold));
+            Ok(Some(CutSelectionStrategy::Dominated {
+                threshold: epsilon,
+                check_frequency: u64::from(check_frequency),
+            }))
+        }
         other => Err(format!("unknown cut_selection.method: \"{other}\"")),
     }
 }
@@ -895,6 +904,8 @@ mod tests {
             threshold: Some(0),
             check_frequency: Some(5),
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -921,6 +932,8 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -946,6 +959,8 @@ mod tests {
             threshold: Some(0),
             check_frequency: Some(10),
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -972,6 +987,8 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -990,6 +1007,8 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -1003,6 +1022,8 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg).unwrap();
         assert!(
@@ -1019,6 +1040,8 @@ mod tests {
             threshold: None,
             check_frequency: Some(0),
             cut_activity_tolerance: None,
+            memory_window: None,
+            domination_epsilon: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());

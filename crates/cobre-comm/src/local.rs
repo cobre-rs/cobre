@@ -258,6 +258,37 @@ impl LocalCommunicator for LocalBackend {
     }
 }
 
+impl crate::TopologyProvider for LocalBackend {
+    /// Return the cached single-host, single-rank execution topology.
+    ///
+    /// Because `LocalBackend` is a ZST with no per-instance storage, the
+    /// topology is stored in a process-wide `OnceLock` and initialized on
+    /// first call. The topology is always a single host with a single rank.
+    fn topology(&self) -> &crate::ExecutionTopology {
+        use std::sync::OnceLock;
+
+        use crate::BackendKind;
+        use crate::topology::{ExecutionTopology, HostInfo};
+
+        static TOPOLOGY: OnceLock<ExecutionTopology> = OnceLock::new();
+        TOPOLOGY.get_or_init(|| {
+            let hostname = std::env::var("HOSTNAME")
+                .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
+                .unwrap_or_else(|_| "localhost".to_string());
+            ExecutionTopology {
+                backend: BackendKind::Local,
+                world_size: 1,
+                hosts: vec![HostInfo {
+                    hostname,
+                    ranks: vec![0],
+                }],
+                mpi: None,
+                slurm: None,
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {

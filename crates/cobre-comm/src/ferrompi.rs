@@ -18,7 +18,7 @@
 
 use crate::BackendError;
 
-/// MPI communication backend wrapping ferrompi v0.2.
+/// MPI communication backend wrapping ferrompi v0.3.
 ///
 /// Holds the MPI environment handle (`Mpi`), the world communicator, and the
 /// intra-node shared communicator. Field declaration order is significant:
@@ -79,6 +79,13 @@ pub struct FerrompiBackend {
     ///
     /// Cached at construction for the same reason as `rank`.
     size: usize,
+
+    /// Cached execution topology gathered during initialization.
+    ///
+    /// Collected once via the collective `world.topology(&mpi)` call during
+    /// `FerrompiBackend::new` and cached here. All subsequent queries are
+    /// non-collective and allocation-free.
+    topology: crate::ExecutionTopology,
 }
 
 // SAFETY: ferrompi::Mpi is !Send + !Sync because PhantomData<*const ()> opts out
@@ -102,17 +109,19 @@ unsafe impl Sync for FerrompiBackend {}
 impl FerrompiBackend {
     /// Initialize MPI and construct a `FerrompiBackend`.
     ///
-    /// Follows the three-step initialization sequence from the spec (backend-ferrompi.md SS2.1):
+    /// Follows the four-step initialization sequence:
     ///
     /// 1. Initialize MPI with `ThreadLevel::Funneled` via `Mpi::init_thread`.
     /// 2. Obtain the world communicator and cache rank and size.
     /// 3. Create the intra-node shared communicator via `world.split_shared()`.
+    /// 4. Gather and cache the execution topology via the collective `world.topology(&mpi)`.
     ///
     /// # Errors
     ///
     /// Returns [`BackendError::InitializationFailed`] if:
     /// - `Mpi::init_thread` fails (e.g., MPI runtime not installed, already initialized).
     /// - `world.split_shared()` fails (e.g., MPI communicator split error).
+    /// - `world.topology()` fails (e.g., allgather or broadcast error).
     pub fn new() -> Result<Self, BackendError> {
         let mpi = ferrompi::Mpi::init_thread(ferrompi::ThreadLevel::Funneled).map_err(|e| {
             BackendError::InitializationFailed {
@@ -134,12 +143,43 @@ impl FerrompiBackend {
                 source: Box::new(e),
             })?;
 
+        // Collective: all ranks gather topology. Must be called before returning
+        // so all ranks participate (collective operation).
+        let ferrompi_topo =
+            world
+                .topology(&mpi)
+                .map_err(|e| BackendError::InitializationFailed {
+                    backend: "mpi".to_string(),
+                    source: Box::new(e),
+                })?;
+
+        #[allow(clippy::cast_sign_loss)]
+        let topology = crate::ExecutionTopology {
+            backend: crate::BackendKind::Mpi,
+            world_size: size,
+            hosts: ferrompi_topo
+                .hosts()
+                .iter()
+                .map(|h| crate::HostInfo {
+                    hostname: h.hostname.clone(),
+                    ranks: h.ranks.iter().map(|&r| r as usize).collect(),
+                })
+                .collect(),
+            mpi: Some(crate::MpiRuntimeInfo {
+                library_version: sanitize_library_version(ferrompi_topo.library_version()),
+                standard_version: ferrompi_topo.standard_version().to_string(),
+                thread_level: format!("{:?}", ferrompi_topo.thread_level()),
+            }),
+            slurm: convert_slurm_info(&ferrompi_topo),
+        };
+
         Ok(Self {
             mpi,
             world,
             shared: Some(shared),
             rank,
             size,
+            topology,
         })
     }
 
@@ -167,6 +207,59 @@ impl FerrompiBackend {
     #[allow(dead_code)]
     pub(crate) fn shared(&self) -> Option<&ferrompi::Communicator> {
         self.shared.as_ref()
+    }
+}
+
+/// Convert SLURM metadata from `ferrompi::TopologyInfo` to `crate::SlurmJobInfo`.
+///
+/// Extract a concise library identifier from `MPI_Get_library_version`.
+///
+/// MPI implementations return widely different formats:
+/// - **Open MPI**: `"Open MPI v4.1.6"` (already clean)
+/// - **MPICH**: `"MPICH Version:      4.3.2\nMPICH Release date: ...\n..."` (multi-line)
+/// - **Intel MPI**: `"Intel(R) MPI Library 2021.6 ..."` (single line, long)
+///
+/// This function extracts the implementation name and version as a single-line
+/// string suitable for display and metadata JSON. For MPICH, it parses
+/// `"MPICH Version: X.Y.Z"` from the first line. For other implementations,
+/// it takes only the first line and trims it.
+fn sanitize_library_version(raw: &str) -> String {
+    let first_line = raw.lines().next().unwrap_or(raw).trim();
+
+    // MPICH format: "MPICH Version:      4.3.2"
+    if let Some(rest) = first_line.strip_prefix("MPICH Version:") {
+        return format!("MPICH {}", rest.trim());
+    }
+
+    first_line.to_string()
+}
+
+/// With the `numa` feature enabled, reads SLURM job metadata from the topology.
+/// Without the feature, always returns `None` (env-var reads are not available).
+#[cfg(feature = "numa")]
+fn convert_slurm_info(topo: &ferrompi::TopologyInfo) -> Option<crate::SlurmJobInfo> {
+    topo.slurm().map(|s| crate::SlurmJobInfo {
+        job_id: s.job_id.clone(),
+        node_list: s.node_list.clone(),
+        #[allow(clippy::cast_sign_loss)]
+        cpus_per_task: s.cpus_per_task.map(|v| v as u32),
+    })
+}
+
+/// Without the `numa` feature, SLURM information is not available.
+#[cfg(not(feature = "numa"))]
+fn convert_slurm_info(_topo: &ferrompi::TopologyInfo) -> Option<crate::SlurmJobInfo> {
+    None
+}
+
+#[cfg(feature = "mpi")]
+impl crate::TopologyProvider for FerrompiBackend {
+    /// Returns the cached execution topology gathered during [`FerrompiBackend::new`].
+    ///
+    /// Non-collective and allocation-free. The topology was collected once via
+    /// `world.topology(&mpi)` during initialization.
+    fn topology(&self) -> &crate::ExecutionTopology {
+        &self.topology
     }
 }
 
@@ -497,6 +590,34 @@ mod tests {
     fn test_ferrompi_backend_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<FerrompiBackend>();
+    }
+
+    #[test]
+    fn sanitize_mpich_multiline() {
+        let raw = "MPICH Version:      4.3.2\n\
+                    MPICH Release date: Mon Oct  6 11:14:20 AM CDT 2025\n\
+                    MPICH ABI:          17:2:5\n\
+                    MPICH Device:       ch4:ofi";
+        assert_eq!(super::sanitize_library_version(raw), "MPICH 4.3.2");
+    }
+
+    #[test]
+    fn sanitize_openmpi_clean() {
+        assert_eq!(
+            super::sanitize_library_version("Open MPI v4.1.6"),
+            "Open MPI v4.1.6"
+        );
+    }
+
+    #[test]
+    fn sanitize_intel_mpi() {
+        let raw = "Intel(R) MPI Library 2021.6 for Linux* OS";
+        assert_eq!(super::sanitize_library_version(raw), raw);
+    }
+
+    #[test]
+    fn sanitize_empty() {
+        assert_eq!(super::sanitize_library_version(""), "");
     }
 
     #[cfg(feature = "mpi")]

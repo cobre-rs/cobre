@@ -188,9 +188,31 @@ pub struct CutSelectionConfig {
     #[serde(default)]
     pub method: Option<String>,
 
-    /// Minimum iterations before first pruning pass.
+    /// Generic threshold (deprecated — prefer method-specific fields below).
+    ///
+    /// Interpretation depends on the method:
+    /// - `"level1"`: minimum iterations before first pruning pass
+    /// - `"lml1"`: memory window size (iterations)
+    /// - `"domination"`: epsilon for domination test (integer-limited)
+    ///
+    /// Use `memory_window` for lml1 and `domination_epsilon` for domination
+    /// to avoid the integer limitation. This field is retained for backwards
+    /// compatibility.
     #[serde(default)]
     pub threshold: Option<u32>,
+
+    /// Memory window size for the `"lml1"` method (iterations).
+    ///
+    /// Overrides `threshold` when the method is `"lml1"`. Ignored for other methods.
+    #[serde(default)]
+    pub memory_window: Option<u32>,
+
+    /// Epsilon for the `"domination"` method.
+    ///
+    /// Overrides `threshold` when the method is `"domination"`. Accepts
+    /// fractional values (e.g., `1e-6`) unlike the integer-limited `threshold`.
+    #[serde(default)]
+    pub domination_epsilon: Option<f64>,
 
     /// Iterations between pruning checks.
     #[serde(default)]

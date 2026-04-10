@@ -266,6 +266,19 @@ unsafe extern "C" {
     /// Return the number of rows in the incumbent model.
     /// Wraps `Highs_getNumRow()`.
     pub fn cobre_highs_get_num_row(highs: *const c_void) -> c_int;
+
+    // ============================================================
+    // Version query (no solver instance required)
+    // ============================================================
+
+    /// Return the `HiGHS` major version number. Wraps `Highs_versionMajor()`.
+    pub fn cobre_highs_version_major() -> c_int;
+
+    /// Return the `HiGHS` minor version number. Wraps `Highs_versionMinor()`.
+    pub fn cobre_highs_version_minor() -> c_int;
+
+    /// Return the `HiGHS` patch version number. Wraps `Highs_versionPatch()`.
+    pub fn cobre_highs_version_patch() -> c_int;
 }
 
 #[cfg(test)]

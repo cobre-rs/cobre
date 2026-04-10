@@ -980,7 +980,8 @@ fn d12_checkpoint_round_trip() {
                         iteration: meta.iteration_generated as u32,
                         forward_pass_index: meta.forward_pass_index,
                         intercept: pool.intercepts[slot],
-                        coefficients: &pool.coefficients[slot],
+                        coefficients: &pool.coefficients
+                            [slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
                         is_active: pool.active[slot],
                         domination_count: meta.domination_count as u32,
                     }

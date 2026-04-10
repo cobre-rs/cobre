@@ -272,3 +272,19 @@ int32_t cobre_highs_get_num_col(const void* highs) {
 int32_t cobre_highs_get_num_row(const void* highs) {
     return (int32_t)Highs_getNumRow(highs);
 }
+
+/* =========================================================================
+ * Version query (no instance required)
+ * ========================================================================= */
+
+int32_t cobre_highs_version_major(void) {
+    return (int32_t)Highs_versionMajor();
+}
+
+int32_t cobre_highs_version_minor(void) {
+    return (int32_t)Highs_versionMinor();
+}
+
+int32_t cobre_highs_version_patch(void) {
+    return (int32_t)Highs_versionPatch();
+}

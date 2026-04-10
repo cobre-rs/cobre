@@ -783,9 +783,37 @@ impl Drop for HighsSolver {
     }
 }
 
+/// Returns the `HiGHS` version as a `"major.minor.patch"` string.
+///
+/// This is a free function — no solver instance is required.
+///
+/// # Example
+///
+/// ```rust
+/// # #[cfg(feature = "highs")]
+/// # {
+/// let v = cobre_solver::highs_version();
+/// assert!(v.contains('.'), "version string should be 'major.minor.patch'");
+/// # }
+/// ```
+#[must_use]
+pub fn highs_version() -> String {
+    // SAFETY: These are pure query functions with no arguments. The HiGHS C API
+    // documents them as safe to call without any prior initialisation; they read
+    // only compile-time constants embedded in the library.
+    let major = unsafe { crate::ffi::cobre_highs_version_major() };
+    let minor = unsafe { crate::ffi::cobre_highs_version_minor() };
+    let patch = unsafe { crate::ffi::cobre_highs_version_patch() };
+    format!("{major}.{minor}.{patch}")
+}
+
 impl SolverInterface for HighsSolver {
     fn name(&self) -> &'static str {
         "HiGHS"
+    }
+
+    fn solver_name_version(&self) -> String {
+        format!("HiGHS {}", highs_version())
     }
 
     fn load_model(&mut self, template: &StageTemplate) {

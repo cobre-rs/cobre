@@ -185,10 +185,11 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
 /// A single row in the solver stats log: (iteration, phase, stage, delta).
 ///
 /// - `iteration`: 1-based iteration number.
-/// - `phase`: `"forward"`, `"backward"`, or `"lower_bound"`.
+/// - `phase`: `"forward"`, `"backward"`, or `"lower_bound"` — a `&'static str`
+///   to avoid per-iteration heap allocation (F1-005 fix).
 /// - `stage`: stage index for backward phase (per-stage), `-1` for forward/LB.
 /// - `delta`: the solver counter delta for this entry.
-pub type SolverStatsEntry = (u64, String, i32, SolverStatsDelta);
+pub type SolverStatsEntry = (u64, &'static str, i32, SolverStatsDelta);
 
 /// Number of scalar fields in [`SolverStatsDelta`] (excludes the histogram `Vec`).
 ///

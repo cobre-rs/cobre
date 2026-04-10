@@ -236,18 +236,39 @@ fn broadcast_basis_cache<C: Communicator>(
     comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
 
     // Step 3: deserialize back into Vec<Option<Basis>>.
+    // All index arithmetic is bounds-checked to convert a corrupted broadcast
+    // into a recoverable error instead of an index-out-of-bounds panic.
     let mut cache: Vec<Option<Basis>> = Vec::with_capacity(num_stages);
     let mut pos = 0_usize;
-    for _ in 0..num_stages {
+    for stage in 0..num_stages {
+        if pos >= buf.len() {
+            return Err(SddpError::Validation(format!(
+                "broadcast_basis_cache: buffer truncated at stage {stage} (pos={pos}, len={})",
+                buf.len()
+            )));
+        }
         let sentinel = buf[pos];
         pos += 1;
         if sentinel == 0 {
             cache.push(None);
         } else {
+            if pos + 2 > buf.len() {
+                return Err(SddpError::Validation(format!(
+                    "broadcast_basis_cache: buffer truncated reading lengths at stage {stage}"
+                )));
+            }
             let col_len = buf[pos] as usize;
             pos += 1;
             let row_len = buf[pos] as usize;
             pos += 1;
+            if pos + col_len + row_len > buf.len() {
+                return Err(SddpError::Validation(format!(
+                    "broadcast_basis_cache: buffer truncated reading basis data at stage {stage} \
+                     (need {}, have {})",
+                    col_len + row_len,
+                    buf.len() - pos
+                )));
+            }
             let col_status = buf[pos..pos + col_len].to_vec();
             pos += col_len;
             let row_status = buf[pos..pos + row_len].to_vec();
@@ -551,6 +572,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Pre-allocated buffer for cut binding metadata allreduce. Sized per
     // stage to the successor pool's metadata length after sync_packed_cuts.
     let mut bwd_metadata_sync_buf: Vec<u64> = Vec::new();
+    // Pre-allocated receive buffer for the allreduce(Sum) of binding
+    // increment counts. Reused across stages to avoid per-stage allocation.
+    let mut bwd_global_increments_buf: Vec<u64> = Vec::new();
     // Pre-allocated buffer for packing real (non-padded) gathered state vectors
     // when archiving visited states for dominated cut selection (ticket-003).
     // Pre-sized to the true total forward passes to avoid first-iteration
@@ -610,7 +634,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
         };
         let fwd_solve_time_ms = fwd_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "forward".to_string(), -1, fwd_delta));
+        solver_stats_log.push((iteration, "forward", -1, fwd_delta));
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 
@@ -658,6 +682,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
             visited_archive: visited_archive.as_mut(),
             metadata_sync_buf: &mut bwd_metadata_sync_buf,
+            global_increments_buf: &mut bwd_global_increments_buf,
             real_states_buf: &mut bwd_real_states_buf,
         };
 
@@ -689,12 +714,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             let total_ms = agg.solve_time_ms;
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             for (stage_idx, delta) in &backward_result.stage_stats {
-                solver_stats_log.push((
-                    iteration,
-                    "backward".to_string(),
-                    *stage_idx as i32,
-                    delta.clone(),
-                ));
+                solver_stats_log.push((iteration, "backward", *stage_idx as i32, delta.clone()));
             }
             total_ms
         };
@@ -861,7 +881,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
         let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
         let lb_solve_time_ms = lb_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "lower_bound".to_string(), -1, lb_delta));
+        solver_stats_log.push((iteration, "lower_bound", -1, lb_delta));
 
         let (should_stop, rule_results) = convergence_monitor.update(lb, &sync_result);
 
@@ -1080,6 +1100,9 @@ mod tests {
     }
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _t: &StageTemplate) {}
         fn add_rows(&mut self, _r: &RowBatch) {}
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}

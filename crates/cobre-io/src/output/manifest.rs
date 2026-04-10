@@ -26,21 +26,22 @@ use super::error::OutputError;
 /// Runtime context for metadata output files.
 ///
 /// Captures environment information not available from the solver output
-/// or configuration alone: hostname, MPI topology, and wall-clock timestamps.
-/// Built by the CLI or Python entry point and passed to the output writers.
+/// or configuration alone: hostname, execution distribution, and wall-clock
+/// timestamps. Built by the CLI or Python entry point and passed to the
+/// output writers.
 pub struct OutputContext {
     /// Hostname of the machine that produced this output.
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`), if known.
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when the phase started.
     pub started_at: String,
     /// ISO 8601 timestamp when the phase completed.
     pub completed_at: String,
-    /// Total MPI ranks in the communicator.
-    pub mpi_world_size: u32,
-    /// MPI ranks that participated in computation.
-    pub mpi_ranks_participated: u32,
+    /// Execution distribution and environment information.
+    pub distribution: DistributionInfo,
 }
 
 /// Read the system hostname.
@@ -63,13 +64,35 @@ pub fn now_iso8601() -> String {
 
 // ── Shared nested structs ────────────────────────────────────────────────────
 
-/// MPI participation information embedded in metadata files.
+/// Execution distribution information embedded in metadata files.
+///
+/// Captures the communication backend, process topology, and optional
+/// MPI/scheduler metadata for reproducibility. Replaces the previous
+/// `MpiInfo` struct with richer environment context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MpiInfo {
-    /// Total number of MPI ranks in the communicator.
+pub struct DistributionInfo {
+    /// Communication backend: `"mpi"` or `"local"`.
+    pub backend: String,
+    /// Total number of processes in the communicator.
     pub world_size: u32,
-    /// Number of ranks that actually participated in computation.
+    /// Number of processes that actually participated in computation.
     pub ranks_participated: u32,
+    /// Number of distinct physical hosts.
+    pub num_nodes: u32,
+    /// Rayon threads per process.
+    pub threads_per_rank: u32,
+    /// MPI implementation version, e.g. `"Open MPI v4.1.6"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpi_library: Option<String>,
+    /// MPI standard version, e.g. `"MPI 4.0"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpi_standard: Option<String>,
+    /// Negotiated MPI thread safety level, e.g. `"Funneled"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_level: Option<String>,
+    /// SLURM job ID, if running under SLURM.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slurm_job_id: Option<String>,
 }
 
 /// Selected training configuration fields captured for reproducibility.
@@ -162,6 +185,9 @@ pub struct TrainingMetadata {
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when training started.
     pub started_at: String,
     /// ISO 8601 timestamp when training completed.
@@ -180,8 +206,8 @@ pub struct TrainingMetadata {
     pub convergence: MetadataConvergence,
     /// Cut pool summary.
     pub cuts: MetadataCuts,
-    /// MPI participation information.
-    pub mpi: MpiInfo,
+    /// Execution distribution and environment information.
+    pub distribution: DistributionInfo,
 }
 
 // ── SimulationMetadata ───────────────────────────────────────────────────────
@@ -197,6 +223,9 @@ pub struct SimulationMetadata {
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when simulation started.
     pub started_at: String,
     /// ISO 8601 timestamp when simulation completed.
@@ -207,8 +236,8 @@ pub struct SimulationMetadata {
     pub status: String,
     /// Scenario completion counts.
     pub scenarios: MetadataScenarios,
-    /// MPI participation information.
-    pub mpi: MpiInfo,
+    /// Execution distribution and environment information.
+    pub distribution: DistributionInfo,
 }
 
 // ── Writers ──────────────────────────────────────────────────────────────────
@@ -304,11 +333,26 @@ mod tests {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    fn make_distribution_info() -> DistributionInfo {
+        DistributionInfo {
+            backend: "local".to_string(),
+            world_size: 1,
+            ranks_participated: 1,
+            num_nodes: 1,
+            threads_per_rank: 1,
+            mpi_library: None,
+            mpi_standard: None,
+            thread_level: None,
+            slurm_job_id: None,
+        }
+    }
+
     fn make_training_metadata() -> TrainingMetadata {
         TrainingMetadata {
             cobre_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: Some("1.8.0".to_string()),
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
             duration_seconds: 16_200.0,
@@ -341,10 +385,7 @@ mod tests {
                 total_active: 980_000,
                 peak_active: 1_100_000,
             },
-            mpi: MpiInfo {
-                world_size: 1,
-                ranks_participated: 1,
-            },
+            distribution: make_distribution_info(),
         }
     }
 
@@ -353,6 +394,7 @@ mod tests {
             cobre_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: Some("1.8.0".to_string()),
             started_at: "2026-01-17T13:00:00Z".to_string(),
             completed_at: "2026-01-17T13:15:00Z".to_string(),
             duration_seconds: 900.0,
@@ -362,10 +404,7 @@ mod tests {
                 completed: 100,
                 failed: 0,
             },
-            mpi: MpiInfo {
-                world_size: 1,
-                ranks_participated: 1,
-            },
+            distribution: make_distribution_info(),
         }
     }
 
@@ -397,7 +436,10 @@ mod tests {
         assert_eq!(decoded.cuts.total_generated, original.cuts.total_generated);
         assert_eq!(decoded.cuts.total_active, original.cuts.total_active);
         assert_eq!(decoded.cuts.peak_active, original.cuts.peak_active);
-        assert_eq!(decoded.mpi.world_size, original.mpi.world_size);
+        assert_eq!(
+            decoded.distribution.world_size,
+            original.distribution.world_size
+        );
     }
 
     #[test]
@@ -411,7 +453,10 @@ mod tests {
         assert_eq!(decoded.scenarios.total, original.scenarios.total);
         assert_eq!(decoded.scenarios.completed, original.scenarios.completed);
         assert_eq!(decoded.scenarios.failed, original.scenarios.failed);
-        assert_eq!(decoded.mpi.world_size, original.mpi.world_size);
+        assert_eq!(
+            decoded.distribution.world_size,
+            original.distribution.world_size
+        );
     }
 
     // ── Writer tests ─────────────────────────────────────────────────────────

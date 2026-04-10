@@ -44,23 +44,28 @@
 //!
 //! ## LP rebuild sequence
 //!
-//! For each `(scenario, stage)` pair the LP is rebuilt in three steps:
+//! For each `(worker, stage)` pair:
 //!
 //! 1. `solver.load_model(template)` — reset to the structural LP.
 //! 2. `solver.add_rows(cut_batch)` — append active Benders cuts.
+//!
+//! For each scenario within that stage, only row bounds are patched:
 //! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
 //!
 //! ## Hot-path allocation discipline
 //!
-//! No allocations occur per scenario or per stage during the inner loops.
-//! The [`TrajectoryRecord`] slice is pre-allocated by the caller. The only
-//! allocation inside the function is the [`RowBatch`] built by
-//! `build_cut_row_batch`, which runs once per stage template (before the
-//! scenario loop) — not once per scenario.
+//! No allocations occur per scenario during the inner loops. Per-worker
+//! buffers (`trajectory_costs`, `raw_noise_buf`, `perm_scratch`) are
+//! allocated once at the start of each iteration — one allocation per worker,
+//! not per scenario. The [`TrajectoryRecord`] slice is pre-allocated by the
+//! caller. The only additional allocation inside the function is the
+//! [`RowBatch`] built by `build_cut_row_batch`, which runs once per stage
+//! template (before the scenario loop) — not once per scenario.
 
 use std::time::Instant;
 
 use cobre_comm::Communicator;
+use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
@@ -201,22 +206,20 @@ pub fn sync_forward<C: Communicator>(
 
     comm.allgatherv(&local.scenario_costs, &mut global_costs, &counts, &displs)?;
 
-    // Canonical-order sequential summation. All ranks iterate global_costs in
+    // Canonical-order single-pass statistics. All ranks iterate global_costs in
     // the same order, producing bit-identical statistics regardless of rank count.
-    #[allow(clippy::cast_precision_loss)]
-    let global_n_f64 = global_n as f64;
-    let mut cost_sum = 0.0_f64;
-    let mut cost_sum_sq = 0.0_f64;
+    // Welford's online algorithm is used instead of the two-pass naive formula to
+    // avoid catastrophic cancellation when sum_sq ≈ n * mean^2 (F1-007 fix).
+    // MPI Welford merge is not used here because the full gathered array is
+    // already available — a single sequential pass suffices.
+    let mut welford = WelfordAccumulator::new();
     for &c in &global_costs {
-        cost_sum += c;
-        cost_sum_sq += c * c;
+        welford.update(c);
     }
-    let mean = cost_sum / global_n_f64;
-
+    let mean = welford.mean();
     let (std_dev, ci_95) = if global_n > 1 {
-        let variance = (cost_sum_sq - global_n_f64 * mean * mean) / (global_n_f64 - 1.0);
-        let sd = variance.max(0.0).sqrt();
-        let ci = 1.96_f64 * sd / global_n_f64.sqrt();
+        let sd = welford.sample_std_dev();
+        let ci = welford.sample_ci_95_half_width();
         (sd, ci)
     } else {
         (0.0_f64, 0.0_f64)
@@ -316,7 +319,7 @@ pub fn build_cut_row_batch_into(
     let mask = &indexer.nonzero_state_indices;
     let is_sparse = !mask.is_empty();
 
-    let num_cuts: usize = fcf.active_cuts(stage).count();
+    let num_cuts: usize = fcf.pools[stage].active_count();
 
     if num_cuts == 0 {
         batch.row_starts.push(0_i32);
@@ -460,7 +463,13 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
 
     let n_state = indexer.n_state;
     let theta_col = indexer.theta;
-    let nnz_per_cut = n_state + 1;
+    let mask = &indexer.nonzero_state_indices;
+    let is_sparse = !mask.is_empty();
+    let nnz_per_cut = if is_sparse {
+        mask.len() + 1
+    } else {
+        n_state + 1
+    };
 
     let mut new_count = 0usize;
     let mut nz_offset = 0usize;
@@ -480,22 +489,22 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
         );
 
         // Build the row using the same transformation as build_cut_row_batch_into.
-        // state_to_lp_column remaps outgoing-state indices to LP columns
-        // (identity for storage; z_inflow for lag 0; shifted incoming lag for
-        // lag l ≥ 1).
+        // Sparse path iterates only nonzero state indices; dense path iterates
+        // all. Both use state_to_lp_column to remap outgoing-state indices to
+        // LP columns.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         batch_buf.row_starts.push(nz_offset as i32);
 
-        for (j, &c) in coefficients.iter().enumerate() {
-            let lp_col = indexer.state_to_lp_column(j);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            batch_buf.col_indices.push(lp_col as i32);
-            let d = if col_scale.is_empty() {
-                1.0
-            } else {
-                col_scale[lp_col]
-            };
-            batch_buf.values.push(-c * d);
+        if is_sparse {
+            for &j in mask {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch_buf, lp_col, coefficients[j], col_scale);
+            }
+        } else {
+            for (j, &c) in coefficients.iter().enumerate() {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch_buf, lp_col, c, col_scale);
+            }
         }
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -634,6 +643,9 @@ struct StageKey<'a> {
     iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.
     raw_noise: &'a [f64],
+    /// Total LP row count (template + active cuts) for pre-allocating basis
+    /// storage and avoiding per-scenario heap reallocation.
+    basis_row_capacity: usize,
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -663,6 +675,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         num_stages,
         iteration,
         raw_noise,
+        basis_row_capacity,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -791,8 +804,9 @@ fn run_forward_stage<S: SolverInterface + Send>(
     let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
     let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
+    // Skip primal storage: only rec.state is consumed downstream; primals
+    // are read directly from the solver when needed (simulation).
     rec.primal.clear();
-    rec.primal.extend_from_slice(unscaled_primal);
     // Skip dual storage: rec.dual is not read by the backward pass or any
     // training-path code. Simulation reads duals directly from the solver view.
     rec.dual.clear();
@@ -822,7 +836,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {
-        let mut rb = Basis::new(ctx.templates[t].num_cols, ctx.templates[t].num_rows);
+        let mut rb = Basis::new(ctx.templates[t].num_cols, basis_row_capacity);
         ws.solver.get_basis(&mut rb);
         *basis_slice.get_mut(m, t) = Some(rb);
     }
@@ -1065,6 +1079,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         num_stages,
                         iteration: *iteration,
                         raw_noise,
+                        basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(
@@ -1236,6 +1251,9 @@ mod tests {
     }
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
 
         fn add_rows(&mut self, _cuts: &RowBatch) {}
@@ -3696,6 +3714,9 @@ mod tests {
     }
 
     impl SolverInterface for RecordingMockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
 
         fn add_rows(&mut self, cuts: &RowBatch) {
@@ -3938,6 +3959,9 @@ mod tests {
     }
 
     impl SolverInterface for BoundRecordingMockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
         fn add_rows(&mut self, _cuts: &RowBatch) {}
         fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {

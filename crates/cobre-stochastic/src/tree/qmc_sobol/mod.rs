@@ -184,6 +184,75 @@ pub fn generate_qmc_sobol(
     }
 }
 
+/// Precomputed direction matrix and scramble parameters for Sobol generation.
+///
+/// Build once per (`sampling_seed`, `iteration`, `stage_id`, `dim`) tuple and
+/// reuse across all scenarios at that stage. This avoids redundantly computing
+/// the direction matrix and scramble params per scenario.
+#[derive(Debug, Clone)]
+pub struct SobolPrecomputed {
+    directions: Vec<[u32; 32]>,
+    scramble: Vec<(u32, u32)>,
+}
+
+impl SobolPrecomputed {
+    /// Precompute the direction matrix and scramble parameters for a given
+    /// (seed, iteration, stage, dim) combination.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `dim > MAX_SOBOL_DIM`.
+    #[must_use]
+    pub fn new(sampling_seed: u64, iteration: u32, stage_id: u32, dim: usize) -> Self {
+        let seed = derive_opening_seed(sampling_seed, iteration, stage_id);
+        let directions = build_direction_matrix(dim);
+        let scramble = derive_scramble_params(seed, dim);
+        Self {
+            directions,
+            scramble,
+        }
+    }
+}
+
+/// Generate one scenario's noise vector using a precomputed Sobol context.
+///
+/// Same as [`scrambled_sobol_point`] but avoids recomputing the direction
+/// matrix and scramble parameters per call.
+///
+/// # Panics
+///
+/// Panics if `output.len() < spec.dim` or `spec.dim > MAX_SOBOL_DIM`.
+pub fn scrambled_sobol_point_precomputed(
+    spec: &SobolPointSpec,
+    ctx: &SobolPrecomputed,
+    output: &mut [f64],
+) {
+    assert!(
+        output.len() >= spec.dim,
+        "output too short: need {}, got {}",
+        spec.dim,
+        output.len(),
+    );
+
+    for (d, out) in output.iter_mut().enumerate().take(spec.dim) {
+        let mut xd = 0u32;
+        let mut scenario = spec.scenario;
+        let mut j = 0usize;
+        while scenario != 0 {
+            if scenario & 1 == 1 {
+                xd ^= ctx.directions[d][j];
+            }
+            scenario >>= 1;
+            j += 1;
+        }
+
+        let (a, b) = ctx.scramble[d];
+        let xp = a.wrapping_mul(xd).wrapping_add(b);
+        let u = (f64::from(xp) * INV_2_32).clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+        *out = norm_quantile(u);
+    }
+}
+
 /// Configuration for single-scenario Sobol point generation.
 ///
 /// Bundles the parameters needed by [`scrambled_sobol_point`] to generate

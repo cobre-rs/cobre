@@ -30,10 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
-    ArOrderSummary, DEFAULT_SEED, EstimationReport, FutureCostFunction, HydroModelSummary,
-    ModelProvenanceReport, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
+    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
+    StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -75,7 +75,7 @@ fn write_policy_checkpoint(
     export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyCheckpointMetadata, write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -299,6 +299,7 @@ fn write_training_artifacts(
     setup: &StudySetup,
     training: &TrainingPhaseResult,
     seed: u64,
+    n_threads: usize,
 ) -> Result<(), String> {
     write_policy_checkpoint(
         &output_dir.join(setup.policy_path()),
@@ -337,10 +338,20 @@ fn write_training_artifacts(
     let training_ctx = cobre_io::OutputContext {
         hostname: cobre_io::get_hostname(),
         solver: "highs".to_string(),
+        solver_version: Some(cobre_solver::highs_version()),
         started_at: training.started_at.clone(),
         completed_at: cobre_io::now_iso8601(),
-        mpi_world_size: 1,
-        mpi_ranks_participated: 1,
+        distribution: cobre_io::DistributionInfo {
+            backend: "local".to_string(),
+            world_size: 1,
+            ranks_participated: 1,
+            num_nodes: 1,
+            threads_per_rank: u32::try_from(n_threads).unwrap_or(u32::MAX),
+            mpi_library: None,
+            mpi_standard: None,
+            thread_level: None,
+            slurm_job_id: None,
+        },
     };
     cobre_io::write_training_results(output_dir, &training.output, system, config, &training_ctx)
         .map_err(|e| format!("training results output: {e}"))?;
@@ -415,10 +426,20 @@ fn run_simulation_phase_py(
     let sim_ctx = cobre_io::OutputContext {
         hostname: cobre_io::get_hostname(),
         solver: "highs".to_string(),
+        solver_version: Some(cobre_solver::highs_version()),
         started_at: sim_started_at,
         completed_at: cobre_io::now_iso8601(),
-        mpi_world_size: 1,
-        mpi_ranks_participated: 1,
+        distribution: cobre_io::DistributionInfo {
+            backend: "local".to_string(),
+            world_size: 1,
+            ranks_participated: 1,
+            num_nodes: 1,
+            threads_per_rank: u32::try_from(n_threads).unwrap_or(u32::MAX),
+            mpi_library: None,
+            mpi_standard: None,
+            thread_level: None,
+            slurm_job_id: None,
+        },
     };
     cobre_io::write_simulation_results(output_dir, &sim_out, &sim_ctx)
         .map_err(|e| format!("simulation results output: {e}"))?;
@@ -574,7 +595,15 @@ fn run_inner(
 
         let training = run_training_phase_py(&mut setup, n_threads)?;
 
-        write_training_artifacts(&output_dir, &system, &config, &setup, &training, seed)?;
+        write_training_artifacts(
+            &output_dir,
+            &system,
+            &config,
+            &setup,
+            &training,
+            seed,
+            n_threads,
+        )?;
 
         if let Some(ref e) = training.error {
             return Err(format!(

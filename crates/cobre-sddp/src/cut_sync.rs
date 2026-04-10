@@ -383,7 +383,7 @@ impl CutSyncBuffers {
                 iteration as u32,
                 meta.forward_pass_index,
                 pool.intercepts[slot],
-                &pool.coefficients[slot],
+                &pool.coefficients[slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
             );
             n_packed += 1;
         }

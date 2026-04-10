@@ -134,13 +134,13 @@ fn build_training_summary(
         total_cuts_generated: metadata.cuts.total_generated,
         total_lp_solves: convergence.total_lp_solves,
         total_time_ms: convergence.total_time_ms,
-        total_first_try: 0,
-        total_retried: 0,
-        total_failed: 0,
-        total_solve_time_seconds: 0.0,
-        total_basis_offered: 0,
-        total_basis_rejections: 0,
-        total_simplex_iterations: 0,
+        total_first_try: None,
+        total_retried: None,
+        total_failed: None,
+        total_solve_time_seconds: None,
+        total_basis_offered: None,
+        total_basis_rejections: None,
+        total_simplex_iterations: None,
     }
 }
 
@@ -153,14 +153,14 @@ fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary 
         total_time_ms: 0,
         mean_cost: None,
         std_cost: None,
-        total_lp_solves: 0,
-        total_first_try: 0,
-        total_retried: 0,
-        total_failed_solves: 0,
-        total_solve_time_seconds: 0.0,
-        total_basis_offered: 0,
-        total_basis_rejections: 0,
-        total_simplex_iterations: 0,
+        total_lp_solves: None,
+        total_first_try: None,
+        total_retried: None,
+        total_failed_solves: None,
+        total_solve_time_seconds: None,
+        total_basis_offered: None,
+        total_basis_rejections: None,
+        total_simplex_iterations: None,
     }
 }
 
@@ -189,8 +189,8 @@ mod tests {
     use std::path::PathBuf;
 
     use cobre_io::{
-        ConvergenceSummary, MetadataConfiguration, MetadataConvergence, MetadataCuts,
-        MetadataIterations, MetadataProblemDimensions, MpiInfo, TrainingMetadata,
+        ConvergenceSummary, DistributionInfo, MetadataConfiguration, MetadataConvergence,
+        MetadataCuts, MetadataIterations, MetadataProblemDimensions, TrainingMetadata,
     };
 
     use super::{SummaryArgs, build_training_summary, convergence_fallback};
@@ -200,6 +200,7 @@ mod tests {
             cobre_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: None,
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
             duration_seconds: 16_200.0,
@@ -232,9 +233,16 @@ mod tests {
                 total_active: 980_000,
                 peak_active: 1_100_000,
             },
-            mpi: MpiInfo {
+            distribution: DistributionInfo {
+                backend: "local".to_string(),
                 world_size: 1,
                 ranks_participated: 1,
+                num_nodes: 1,
+                threads_per_rank: 1,
+                mpi_library: None,
+                mpi_standard: None,
+                thread_level: None,
+                slurm_job_id: None,
             },
         }
     }

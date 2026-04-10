@@ -103,6 +103,9 @@ impl MockSolver {
 }
 
 impl SolverInterface for MockSolver {
+    fn solver_name_version(&self) -> String {
+        "MockSolver 0.0.0".to_string()
+    }
     fn load_model(&mut self, _template: &StageTemplate) {}
     fn add_rows(&mut self, _cuts: &RowBatch) {}
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
@@ -623,7 +626,8 @@ fn train_simulate_write_cycle() {
                         iteration: meta.iteration_generated as u32,
                         forward_pass_index: meta.forward_pass_index,
                         intercept: pool.intercepts[slot],
-                        coefficients: &pool.coefficients[slot],
+                        coefficients: &pool.coefficients
+                            [slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
                         is_active: pool.active[slot],
                         domination_count: meta.domination_count as u32,
                     }
@@ -786,10 +790,20 @@ fn train_simulate_write_cycle() {
     let output_ctx = cobre_io::OutputContext {
         hostname: "test-host".to_string(),
         solver: "highs".to_string(),
+        solver_version: None,
         started_at: "2026-01-17T08:00:00Z".to_string(),
         completed_at: "2026-01-17T12:30:00Z".to_string(),
-        mpi_world_size: 1,
-        mpi_ranks_participated: 1,
+        distribution: cobre_io::DistributionInfo {
+            backend: "local".to_string(),
+            world_size: 1,
+            ranks_participated: 1,
+            num_nodes: 1,
+            threads_per_rank: 1,
+            mpi_library: None,
+            mpi_standard: None,
+            thread_level: None,
+            slurm_job_id: None,
+        },
     };
     write_results(
         output_dir,
@@ -887,6 +901,9 @@ impl SizedMockSolver {
 }
 
 impl SolverInterface for SizedMockSolver {
+    fn solver_name_version(&self) -> String {
+        "MockSolver 0.0.0".to_string()
+    }
     fn load_model(&mut self, template: &StageTemplate) {
         self.primal.resize(template.num_cols, 0.0);
         self.dual.resize(template.num_rows, 0.0);

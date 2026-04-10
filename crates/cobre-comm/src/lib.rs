@@ -34,6 +34,7 @@
 
 mod factory;
 mod local;
+pub mod topology;
 mod traits;
 mod types;
 
@@ -42,7 +43,10 @@ mod ferrompi;
 
 pub use factory::{BackendKind, available_backends, create_communicator};
 pub use local::{HeapRegion, LocalBackend};
-pub use traits::{CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion};
+pub use topology::{ExecutionTopology, HostInfo, MpiRuntimeInfo, SlurmJobInfo};
+pub use traits::{
+    CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion, TopologyProvider,
+};
 pub use types::{BackendError, CommError, ReduceOp};
 
 #[cfg(feature = "mpi")]

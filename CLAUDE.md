@@ -7,7 +7,7 @@ vertical is SDDP-based hydrothermal dispatch.
 
 - **Language**: Rust 2024 edition, MSRV 1.86
 - **License**: Apache-2.0
-- **Workspace**: 11 crates (8 workspace + 2 excluded stubs + 1 external `ferrompi`)
+- **Workspace**: 11 crates (8 workspace + 3 excluded: `cobre-mcp` stub, `cobre-tui` stub, `cobre-python`)
 - **Build**: `cargo build --workspace`
 - **Test**: `cargo test --workspace --all-features`
 - **Format**: `cargo fmt --all` (CI enforces `--check`)
@@ -20,7 +20,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,400+ tests, including 23 deterministic regression cases (D01–D16, D19–D25)
+3,400+ tests, including 24 deterministic regression cases (D01–D16, D19–D26)
 and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
@@ -49,7 +49,7 @@ discovery, per-class external scenario files, same-type correlation enforcement.
 
 These are non-negotiable. Violations must be fixed before committing.
 
-- `unsafe_code = "forbid"` — no unsafe anywhere
+- `unsafe_code = "forbid"` workspace default — `cobre-solver`, `cobre-comm`, and `cobre-python` override to `allow` for FFI/MPI/PyO3
 - `unwrap_used = "deny"` — no `.unwrap()` in library code (ok in tests)
 - `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI
 - **Never use `Box<dyn Trait>`** — enum dispatch for closed variant sets

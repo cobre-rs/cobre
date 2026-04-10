@@ -239,6 +239,22 @@ int32_t cobre_highs_get_num_col(const void* highs);
  *  Wraps Highs_getNumRow(). */
 int32_t cobre_highs_get_num_row(const void* highs);
 
+/* =========================================================================
+ * Version query (no instance required)
+ * ========================================================================= */
+
+/** Return the HiGHS major version number.
+ *  Wraps Highs_versionMajor(). */
+int32_t cobre_highs_version_major(void);
+
+/** Return the HiGHS minor version number.
+ *  Wraps Highs_versionMinor(). */
+int32_t cobre_highs_version_minor(void);
+
+/** Return the HiGHS patch version number.
+ *  Wraps Highs_versionPatch(). */
+int32_t cobre_highs_version_patch(void);
+
 #ifdef __cplusplus
 }
 #endif

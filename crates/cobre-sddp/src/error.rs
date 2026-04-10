@@ -39,11 +39,10 @@ pub enum SddpError {
 
     /// A distributed communication operation failed.
     ///
-    /// The underlying [`cobre_comm::CommError`] is serialised to a `String`
-    /// so that `SddpError` remains `Send + Sync` regardless of the backend's
-    /// internal state.
+    /// Wraps a [`cobre_comm::CommError`] from MPI collectives, buffer
+    /// validation, or shared memory operations.
     #[error("communication error: {0}")]
-    Communication(String),
+    Communication(#[from] cobre_comm::CommError),
 
     /// Stochastic model construction or scenario generation failed.
     ///
@@ -94,12 +93,6 @@ pub enum SddpError {
     Simulation(String),
 }
 
-impl From<cobre_comm::CommError> for SddpError {
-    fn from(err: cobre_comm::CommError) -> Self {
-        Self::Communication(err.to_string())
-    }
-}
-
 impl From<EstimationError> for SddpError {
     fn from(err: EstimationError) -> Self {
         match err {
@@ -144,10 +137,14 @@ mod tests {
 
     #[test]
     fn display_communication_variant_contains_message() {
-        let err = SddpError::Communication("allgatherv timed out".to_string());
+        let err = SddpError::Communication(CommError::CollectiveFailed {
+            operation: "allgatherv",
+            mpi_error_code: 1,
+            message: "timed out".to_string(),
+        });
         let msg = err.to_string();
         assert!(msg.contains("communication"), "{msg}");
-        assert!(msg.contains("allgatherv timed out"), "{msg}");
+        assert!(msg.contains("allgatherv"), "{msg}");
     }
 
     #[test]
@@ -230,10 +227,13 @@ mod tests {
     }
 
     #[test]
-    fn from_comm_error_wraps_as_string() {
+    fn from_comm_error_wraps_directly() {
         let inner = CommError::InvalidCommunicator;
         let err: SddpError = inner.into();
-        assert!(matches!(err, SddpError::Communication(_)));
+        assert!(matches!(
+            err,
+            SddpError::Communication(CommError::InvalidCommunicator)
+        ));
         let msg = err.to_string();
         assert!(msg.contains("MPI"), "{msg}");
     }
@@ -256,7 +256,7 @@ mod tests {
     fn sddp_error_satisfies_std_error_trait() {
         let variants: Vec<SddpError> = vec![
             SddpError::Solver(SolverError::Infeasible),
-            SddpError::Communication("network partition".to_string()),
+            SddpError::Communication(CommError::InvalidCommunicator),
             SddpError::Stochastic(StochasticError::InsufficientData {
                 context: "no data".to_string(),
             }),
@@ -280,7 +280,7 @@ mod tests {
     fn all_variants_debug_non_empty() {
         let variants: Vec<SddpError> = vec![
             SddpError::Solver(SolverError::Unbounded),
-            SddpError::Communication("test comm error".to_string()),
+            SddpError::Communication(CommError::InvalidCommunicator),
             SddpError::Stochastic(StochasticError::InvalidCorrelation {
                 profile_name: "test".to_string(),
                 reason: "bad value".to_string(),

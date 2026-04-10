@@ -66,6 +66,33 @@ impl WelfordAccumulator {
         self.variance().sqrt()
     }
 
+    /// Sample variance (`m2 / (n-1)`) using Bessel's correction, or `0.0`
+    /// if fewer than 2 observations.
+    ///
+    /// Use this instead of [`variance`] when the accumulator holds a sample
+    /// drawn from a population and an unbiased variance estimate is needed.
+    ///
+    /// [`variance`]: WelfordAccumulator::variance
+    #[must_use]
+    pub fn sample_variance(&self) -> f64 {
+        if self.count < 2 {
+            0.0
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            let count_f64 = self.count as f64;
+            self.m2 / (count_f64 - 1.0)
+        }
+    }
+
+    /// Sample standard deviation (square root of [`sample_variance`]), or
+    /// `0.0` if fewer than 2 observations.
+    ///
+    /// [`sample_variance`]: WelfordAccumulator::sample_variance
+    #[must_use]
+    pub fn sample_std_dev(&self) -> f64 {
+        self.sample_variance().sqrt()
+    }
+
     /// Half-width of the 95% confidence interval (`1.96 * std / sqrt(n)`).
     ///
     /// Returns `0.0` when fewer than 2 observations are available.
@@ -77,6 +104,21 @@ impl WelfordAccumulator {
             #[allow(clippy::cast_precision_loss)]
             let count_f64 = self.count as f64;
             1.96 * self.std_dev() / count_f64.sqrt()
+        }
+    }
+
+    /// Half-width of the 95% confidence interval using the sample standard
+    /// deviation (`1.96 * sample_std / sqrt(n)`).
+    ///
+    /// Returns `0.0` when fewer than 2 observations are available.
+    #[must_use]
+    pub fn sample_ci_95_half_width(&self) -> f64 {
+        if self.count < 2 {
+            0.0
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            let count_f64 = self.count as f64;
+            1.96 * self.sample_std_dev() / count_f64.sqrt()
         }
     }
 }

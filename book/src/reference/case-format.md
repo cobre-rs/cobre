@@ -158,21 +158,21 @@ When absent, all classes default to `InSample` (PAR-based noise generation).
 
 #### Seed resolution
 
-`training.seed` in `config.json` is the **only** seed that controls noise generation
+`training.tree_seed` in `config.json` is the **only** seed that controls noise generation
 at runtime. It governs both the training forward pass and the post-training simulation.
 
-- When `training.seed` is a non-null integer, the CLI uses `|seed|` (unsigned absolute
+- When `training.tree_seed` is a non-null integer, the CLI uses `|seed|` (unsigned absolute
   value) as the base seed for deterministic SipHash-1-3 noise generation. Results are
   bit-for-bit reproducible across runs with the same seed.
-- When `training.seed` is absent or `null`, the CLI applies a **default seed of 42**
+- When `training.tree_seed` is absent or `null`, the CLI applies a **default seed of 42**
   and prints a warning to stderr:
 
   ```
-  warning: no random seed specified in config.json (training.seed); using default seed 42. Set training.seed for reproducible results.
+  warning: no random seed specified in config.json (training.tree_seed); using default seed 42. Set training.tree_seed for reproducible results.
   ```
 
   Runs will be reproducible (same output every time) but the seed value is arbitrary.
-  Set `training.seed` explicitly to make the choice intentional and visible to other
+  Set `training.tree_seed` explicitly to make the choice intentional and visible to other
   users of the case directory.
 
 **`training.stopping_rules` entries:**
@@ -722,7 +722,7 @@ on failure:
   equal the configured number of study stages.
 - **Missing opening indices** — for each stage, every opening index from 0 to
   `openings_per_stage − 1` must be present for every entity. Gaps are not
-  permitted; partial-stage override is not supported in v0.1.x.
+  permitted; partial-stage override is not supported.
 
 The total row count must equal `n_stages × openings_per_stage × (n_hydros +
 n_load_buses)`.

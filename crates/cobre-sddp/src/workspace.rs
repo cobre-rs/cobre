@@ -67,23 +67,39 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
-            scratch: ScratchBuffers {
-                noise_buf: Vec::with_capacity(hydro_count),
-                inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                par_inflow_buf: Vec::with_capacity(hydro_count),
-                eta_floor_buf: Vec::with_capacity(hydro_count),
-                zero_targets_buf: vec![0.0_f64; hydro_count],
-                ncs_col_upper_buf: Vec::new(),
-                ncs_col_lower_buf: Vec::new(),
-                ncs_col_indices_buf: Vec::new(),
-                load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                row_lower_buf: Vec::new(),
-                z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
-                effective_eta_buf: Vec::with_capacity(hydro_count),
-                unscaled_primal: Vec::new(),
-                unscaled_dual: Vec::new(),
-            },
+            scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+        }
+    }
+}
+
+impl ScratchBuffers {
+    /// Allocate scratch buffers sized for the given per-worker parameters.
+    ///
+    /// Extracted from the three `SolverWorkspace` construction sites
+    /// (`SolverWorkspace::new`, `WorkspacePool::new`, `WorkspacePool::try_new`)
+    /// to keep them in sync (F1-008 fix).
+    pub(crate) fn new(
+        hydro_count: usize,
+        max_par_order: usize,
+        n_load_buses: usize,
+        max_blocks: usize,
+    ) -> Self {
+        Self {
+            noise_buf: Vec::with_capacity(hydro_count),
+            inflow_m3s_buf: Vec::with_capacity(hydro_count),
+            lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
+            par_inflow_buf: Vec::with_capacity(hydro_count),
+            eta_floor_buf: Vec::with_capacity(hydro_count),
+            zero_targets_buf: vec![0.0_f64; hydro_count],
+            ncs_col_upper_buf: Vec::new(),
+            ncs_col_lower_buf: Vec::new(),
+            ncs_col_indices_buf: Vec::new(),
+            load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
+            row_lower_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
+            effective_eta_buf: Vec::with_capacity(hydro_count),
+            unscaled_primal: Vec::new(),
+            unscaled_dual: Vec::new(),
         }
     }
 }
@@ -124,23 +140,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory(),
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
-                scratch: ScratchBuffers {
-                    noise_buf: Vec::with_capacity(hydro_count),
-                    inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                    lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                    par_inflow_buf: Vec::with_capacity(hydro_count),
-                    eta_floor_buf: Vec::with_capacity(hydro_count),
-                    zero_targets_buf: vec![0.0_f64; hydro_count],
-                    ncs_col_upper_buf: Vec::new(),
-                    ncs_col_lower_buf: Vec::new(),
-                    ncs_col_indices_buf: Vec::new(),
-                    load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                    row_lower_buf: Vec::new(),
-                    z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
-                    effective_eta_buf: Vec::with_capacity(hydro_count),
-                    unscaled_primal: Vec::new(),
-                    unscaled_dual: Vec::new(),
-                },
+                scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
             })
             .collect();
         Self { workspaces }
@@ -183,23 +183,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 solver: solver_factory()?,
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
-                scratch: ScratchBuffers {
-                    noise_buf: Vec::with_capacity(hydro_count),
-                    inflow_m3s_buf: Vec::with_capacity(hydro_count),
-                    lag_matrix_buf: Vec::with_capacity(max_par_order * hydro_count),
-                    par_inflow_buf: Vec::with_capacity(hydro_count),
-                    eta_floor_buf: Vec::with_capacity(hydro_count),
-                    zero_targets_buf: vec![0.0_f64; hydro_count],
-                    ncs_col_upper_buf: Vec::new(),
-                    ncs_col_lower_buf: Vec::new(),
-                    ncs_col_indices_buf: Vec::new(),
-                    load_rhs_buf: Vec::with_capacity(n_load_buses * max_blocks),
-                    row_lower_buf: Vec::new(),
-                    z_inflow_rhs_buf: Vec::with_capacity(hydro_count),
-                    effective_eta_buf: Vec::with_capacity(hydro_count),
-                    unscaled_primal: Vec::new(),
-                    unscaled_dual: Vec::new(),
-                },
+                scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
             });
         }
         Ok(Self { workspaces })
@@ -394,6 +378,9 @@ mod tests {
     struct MockSolver;
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _t: &StageTemplate) {}
         fn add_rows(&mut self, _r: &RowBatch) {}
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}

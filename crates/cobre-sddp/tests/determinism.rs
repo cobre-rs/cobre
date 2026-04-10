@@ -132,6 +132,9 @@ impl MockSolver3H {
 }
 
 impl SolverInterface for MockSolver3H {
+    fn solver_name_version(&self) -> String {
+        "MockSolver 0.0.0".to_string()
+    }
     fn load_model(&mut self, _template: &StageTemplate) {}
     fn add_rows(&mut self, _cuts: &RowBatch) {}
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
@@ -703,11 +706,12 @@ fn test_training_determinism_across_thread_counts() {
                 pool_1.intercepts[s].to_bits(),
                 pool_4.intercepts[s].to_bits()
             );
-            assert_eq!(pool_1.coefficients[s].len(), pool_4.coefficients[s].len());
-            for (&coeff_1, &coeff_4) in pool_1.coefficients[s]
-                .iter()
-                .zip(pool_4.coefficients[s].iter())
-            {
+            let sd = pool_1.state_dimension;
+            let start = s * sd;
+            let c1 = &pool_1.coefficients[start..start + sd];
+            let c4 = &pool_4.coefficients[start..start + sd];
+            assert_eq!(c1.len(), c4.len());
+            for (&coeff_1, &coeff_4) in c1.iter().zip(c4.iter()) {
                 assert_eq!(coeff_1.to_bits(), coeff_4.to_bits());
             }
         }

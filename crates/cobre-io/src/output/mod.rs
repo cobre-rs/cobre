@@ -28,8 +28,8 @@ pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
-    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
-    MetadataProblemDimensions, MetadataScenarios, MpiInfo, OutputContext, SimulationMetadata,
+    DistributionInfo, MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
     TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
     write_simulation_metadata, write_training_metadata,
 };

@@ -1,6 +1,7 @@
 //! Post-run summary block for the `cobre run` command.
 //!
 //! Provides separate printing functions for each phase of the run:
+//! - [`print_execution_topology`] — execution topology (backend, threads, layout)
 //! - [`print_stochastic_summary`] — stochastic preprocessing statistics
 //! - [`print_training_summary`] — training convergence metrics
 //! - [`print_simulation_summary`] — simulation completion stats
@@ -31,6 +32,168 @@ pub fn print_hydro_model_summary(stderr: &Term, summary: &HydroModelSummary) {
         "  Evaporation:   {}",
         format_evaporation_line(summary)
     ));
+}
+
+/// Format a sorted list of rank indices into a compact range string.
+///
+/// Contiguous sequences use en-dash notation (`0–3`). Non-contiguous ranks are
+/// comma-separated. Mixed sequences interleave both styles: `0–2, 7, 9–11`.
+/// An empty slice returns an empty string.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(format_rank_list(&[0, 1, 2, 3]), "0–3");
+/// assert_eq!(format_rank_list(&[0, 2, 5]),    "0, 2, 5");
+/// assert_eq!(format_rank_list(&[0, 1, 2, 7, 9, 10, 11]), "0–2, 7, 9–11");
+/// ```
+fn format_rank_list(ranks: &[usize]) -> String {
+    if ranks.is_empty() {
+        return String::new();
+    }
+    let mut segments: Vec<String> = Vec::new();
+    let mut start = ranks[0];
+    let mut end = ranks[0];
+
+    for &r in &ranks[1..] {
+        if r == end + 1 {
+            end = r;
+        } else {
+            if end > start {
+                segments.push(format!("{start}\u{2013}{end}"));
+            } else {
+                segments.push(format!("{start}"));
+            }
+            start = r;
+            end = r;
+        }
+    }
+    // Flush final segment.
+    if end > start {
+        segments.push(format!("{start}\u{2013}{end}"));
+    } else {
+        segments.push(format!("{start}"));
+    }
+    segments.join(", ")
+}
+
+/// Print the execution topology summary to `stderr`.
+///
+/// Renders a bold header followed by indented detail lines showing the
+/// communication backend, threading configuration, and process layout.
+/// Called once after the banner, before any phase output.
+///
+/// For a **local** backend the output is:
+///
+/// ```text
+/// Execution
+///   Backend:   local
+///   Host:      hostname
+///   Threads:   5 rayon threads
+/// ```
+///
+/// For **MPI** on a single node:
+///
+/// ```text
+/// Execution
+///   Backend:   MPI (Open MPI v4.1.6, MPI 4.0)
+///   Threads:   Funneled, 5 rayon threads per rank
+///   Layout:    4 ranks on hostname
+/// ```
+///
+/// For **MPI** across multiple nodes, a per-host breakdown is added, and an
+/// optional SLURM line is appended when scheduler metadata is present.
+pub fn print_execution_topology(
+    stderr: &Term,
+    topology: &cobre_comm::ExecutionTopology,
+    n_threads: usize,
+    solver_name: &str,
+    solver_version: Option<&str>,
+) {
+    use cobre_comm::BackendKind;
+
+    let thread_word = if n_threads == 1 {
+        "rayon thread"
+    } else {
+        "rayon threads"
+    };
+
+    let _ = stderr.write_line(&format!("{}", console::style("Execution").bold()));
+
+    // Solver line — always shown regardless of backend.
+    let solver_line = match solver_version {
+        Some(v) => format!("{solver_name} {v}"),
+        None => solver_name.to_string(),
+    };
+    let _ = stderr.write_line(&format!("  Solver:    {solver_line}"));
+
+    match topology.backend {
+        BackendKind::Local => {
+            let _ = stderr.write_line("  Backend:   local");
+            let _ = stderr.write_line(&format!("  Host:      {}", topology.leader_hostname()));
+            let _ = stderr.write_line(&format!("  Threads:   {n_threads} {thread_word}"));
+        }
+        BackendKind::Mpi => {
+            // Backend line with library and standard version.
+            let backend_detail = if let Some(ref mpi) = topology.mpi {
+                format!("MPI ({}, {})", mpi.library_version, mpi.standard_version)
+            } else {
+                "MPI".to_string()
+            };
+            let _ = stderr.write_line(&format!("  Backend:   {backend_detail}"));
+
+            // Thread level + rayon thread count.
+            let thread_line = if let Some(ref mpi) = topology.mpi {
+                format!("{}, {n_threads} {thread_word} per rank", mpi.thread_level)
+            } else {
+                format!("{n_threads} {thread_word} per rank")
+            };
+            let _ = stderr.write_line(&format!("  Threads:   {thread_line}"));
+
+            // Layout: single-node or multi-node.
+            let world_size = topology.world_size;
+            let rank_word = if world_size == 1 { "rank" } else { "ranks" };
+            let num_hosts = topology.num_hosts();
+            if num_hosts <= 1 {
+                let _ = stderr.write_line(&format!(
+                    "  Layout:    {world_size} {rank_word} on {}",
+                    topology.leader_hostname()
+                ));
+            } else {
+                let node_word = if num_hosts == 1 { "node" } else { "nodes" };
+                let _ = stderr.write_line(&format!(
+                    "  Layout:    {world_size} {rank_word} across {num_hosts} {node_word}"
+                ));
+                for host in &topology.hosts {
+                    let count = host.ranks.len();
+                    let rank_count_word = if count == 1 { "rank" } else { "ranks" };
+                    let range = format_rank_list(&host.ranks);
+                    let _ = stderr.write_line(&format!(
+                        "    {}: ranks {range}  ({count} {rank_count_word})",
+                        host.hostname
+                    ));
+                }
+            }
+
+            // Optional SLURM line.
+            if let Some(ref slurm) = topology.slurm {
+                let mut slurm_parts: Vec<String> = Vec::new();
+                slurm_parts.push(format!("job {}", slurm.job_id));
+                if let Some(ref node_list) = slurm.node_list {
+                    slurm_parts.push(format!("nodes {node_list}"));
+                }
+                if let Some(cpus) = slurm.cpus_per_task {
+                    slurm_parts.push(format!("{cpus} CPUs/task"));
+                }
+                let _ = stderr.write_line(&format!("  SLURM:     {}", slurm_parts.join(", ")));
+            }
+        }
+        // Auto (unresolved) backend: print minimal info.
+        BackendKind::Auto => {
+            let _ = stderr.write_line(&format!("  Backend:   {:?}", topology.backend));
+            let _ = stderr.write_line(&format!("  Threads:   {n_threads} {thread_word}"));
+        }
+    }
 }
 
 /// Classify how FPHA planes were obtained for display purposes.
@@ -282,25 +445,28 @@ pub struct TrainingSummary {
     pub total_time_ms: u64,
 
     /// Number of solves that returned optimal on the first attempt.
-    pub total_first_try: u64,
+    ///
+    /// `None` when solver stats are unavailable (e.g. `cobre summary`
+    /// reads metadata.json which does not persist per-solve stats).
+    pub total_first_try: Option<u64>,
 
     /// Number of solves that required retry escalation.
-    pub total_retried: u64,
+    pub total_retried: Option<u64>,
 
     /// Number of solves that exhausted all retry levels.
-    pub total_failed: u64,
+    pub total_failed: Option<u64>,
 
     /// Total LP solve wall-clock time in seconds.
-    pub total_solve_time_seconds: f64,
+    pub total_solve_time_seconds: Option<f64>,
 
     /// Total number of `solve_with_basis` calls.
-    pub total_basis_offered: u64,
+    pub total_basis_offered: Option<u64>,
 
     /// Total number of basis rejections.
-    pub total_basis_rejections: u64,
+    pub total_basis_rejections: Option<u64>,
 
     /// Total simplex iterations across all solves.
-    pub total_simplex_iterations: u64,
+    pub total_simplex_iterations: Option<u64>,
 }
 
 /// Simulation completion statistics for display in the post-run summary.
@@ -324,28 +490,28 @@ pub struct SimulationSummary {
     pub std_cost: Option<f64>,
 
     /// Total LP solves across all scenarios.
-    pub total_lp_solves: u64,
+    pub total_lp_solves: Option<u64>,
 
     /// Solves that returned optimal on the first attempt.
-    pub total_first_try: u64,
+    pub total_first_try: Option<u64>,
 
     /// Solves that required retry escalation before succeeding.
-    pub total_retried: u64,
+    pub total_retried: Option<u64>,
 
     /// Solves that exhausted all retry levels.
-    pub total_failed_solves: u64,
+    pub total_failed_solves: Option<u64>,
 
     /// Cumulative LP solve wall-clock time in seconds.
-    pub total_solve_time_seconds: f64,
+    pub total_solve_time_seconds: Option<f64>,
 
     /// Number of `solve_with_basis` calls.
-    pub total_basis_offered: u64,
+    pub total_basis_offered: Option<u64>,
 
     /// Times the basis was rejected (cold-start fallback).
-    pub total_basis_rejections: u64,
+    pub total_basis_rejections: Option<u64>,
 
     /// Total simplex iterations across all solves.
-    pub total_simplex_iterations: u64,
+    pub total_simplex_iterations: Option<u64>,
 }
 
 /// All data needed to render the complete post-run summary block.
@@ -487,30 +653,39 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
         "  Cuts:         {} active / {} generated",
         t.total_cuts_active, t.total_cuts_generated
     ));
-    let _ = stderr.write_line(&format!(
-        "  LP solves:    {} ({} first-try, {} retried, {} failed)",
-        t.total_lp_solves, t.total_first_try, t.total_retried, t.total_failed
-    ));
-    #[allow(clippy::cast_precision_loss)]
-    let avg_ms = if t.total_lp_solves > 0 {
-        t.total_solve_time_seconds * 1000.0 / t.total_lp_solves as f64
-    } else {
-        0.0
-    };
-    let _ = stderr.write_line(&format!(
-        "  LP time:      {:.1}s total, {avg_ms:.1}ms avg",
-        t.total_solve_time_seconds
-    ));
-    if t.total_basis_offered > 0 {
-        #[allow(clippy::cast_precision_loss)]
-        let hit_pct =
-            (1.0 - t.total_basis_rejections as f64 / t.total_basis_offered as f64) * 100.0;
+    if let (Some(first_try), Some(retried), Some(failed)) =
+        (t.total_first_try, t.total_retried, t.total_failed)
+    {
         let _ = stderr.write_line(&format!(
-            "  Basis reuse:  {hit_pct:.1}% hit ({} rejections / {} offered)",
-            t.total_basis_rejections, t.total_basis_offered
+            "  LP solves:    {} ({first_try} first-try, {retried} retried, {failed} failed)",
+            t.total_lp_solves
+        ));
+    } else {
+        let _ = stderr.write_line(&format!("  LP solves:    {}", t.total_lp_solves));
+    }
+    if let Some(solve_time) = t.total_solve_time_seconds {
+        #[allow(clippy::cast_precision_loss)]
+        let avg_ms = if t.total_lp_solves > 0 {
+            solve_time * 1000.0 / t.total_lp_solves as f64
+        } else {
+            0.0
+        };
+        let _ = stderr.write_line(&format!(
+            "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
         ));
     }
-    let _ = stderr.write_line(&format!("  Simplex iter: {}", t.total_simplex_iterations));
+    if let (Some(offered), Some(rejections)) = (t.total_basis_offered, t.total_basis_rejections) {
+        if offered > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let hit_pct = (1.0 - rejections as f64 / offered as f64) * 100.0;
+            let _ = stderr.write_line(&format!(
+                "  Basis reuse:  {hit_pct:.1}% hit ({rejections} rejections / {offered} offered)"
+            ));
+        }
+    }
+    if let Some(simplex) = t.total_simplex_iterations {
+        let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
+    }
 }
 
 /// Print the simulation completion summary to `stderr`.
@@ -538,30 +713,43 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
             "  Expected cost: {mean:.5e} +/- {ci95:.5e} (std: {std:.5e})"
         ));
     }
-    let _ = stderr.write_line(&format!(
-        "  LP solves:    {} ({} first-try, {} retried, {} failed)",
-        sim.total_lp_solves, sim.total_first_try, sim.total_retried, sim.total_failed_solves
-    ));
-    #[allow(clippy::cast_precision_loss)]
-    let avg_ms = if sim.total_lp_solves > 0 {
-        sim.total_solve_time_seconds * 1000.0 / sim.total_lp_solves as f64
-    } else {
-        0.0
-    };
-    let _ = stderr.write_line(&format!(
-        "  LP time:      {:.1}s total, {avg_ms:.1}ms avg",
-        sim.total_solve_time_seconds
-    ));
-    if sim.total_basis_offered > 0 {
-        #[allow(clippy::cast_precision_loss)]
-        let hit_pct =
-            (1.0 - sim.total_basis_rejections as f64 / sim.total_basis_offered as f64) * 100.0;
+    if let (Some(lp_solves), Some(first_try), Some(retried), Some(failed)) = (
+        sim.total_lp_solves,
+        sim.total_first_try,
+        sim.total_retried,
+        sim.total_failed_solves,
+    ) {
         let _ = stderr.write_line(&format!(
-            "  Basis reuse:  {hit_pct:.1}% hit ({} rejections / {} offered)",
-            sim.total_basis_rejections, sim.total_basis_offered
+            "  LP solves:    {lp_solves} ({first_try} first-try, {retried} retried, {failed} failed)"
+        ));
+    } else if let Some(lp_solves) = sim.total_lp_solves {
+        let _ = stderr.write_line(&format!("  LP solves:    {lp_solves}"));
+    }
+    if let (Some(lp_solves), Some(solve_time)) = (sim.total_lp_solves, sim.total_solve_time_seconds)
+    {
+        #[allow(clippy::cast_precision_loss)]
+        let avg_ms = if lp_solves > 0 {
+            solve_time * 1000.0 / lp_solves as f64
+        } else {
+            0.0
+        };
+        let _ = stderr.write_line(&format!(
+            "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
         ));
     }
-    let _ = stderr.write_line(&format!("  Simplex iter: {}", sim.total_simplex_iterations));
+    if let (Some(offered), Some(rejections)) = (sim.total_basis_offered, sim.total_basis_rejections)
+    {
+        if offered > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let hit_pct = (1.0 - rejections as f64 / offered as f64) * 100.0;
+            let _ = stderr.write_line(&format!(
+                "  Basis reuse:  {hit_pct:.1}% hit ({rejections} rejections / {offered} offered)"
+            ));
+        }
+    }
+    if let Some(simplex) = sim.total_simplex_iterations {
+        let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
+    }
 }
 
 /// Print the output directory path and write duration to `stderr`.
@@ -621,13 +809,13 @@ mod tests {
             total_cuts_generated: 1200,
             total_lp_solves: 36_000,
             total_time_ms: 5_000,
-            total_first_try: 35_900,
-            total_retried: 100,
-            total_failed: 0,
-            total_solve_time_seconds: 28.8,
-            total_basis_offered: 34_000,
-            total_basis_rejections: 200,
-            total_simplex_iterations: 1_800_000,
+            total_first_try: Some(35_900),
+            total_retried: Some(100),
+            total_failed: Some(0),
+            total_solve_time_seconds: Some(28.8),
+            total_basis_offered: Some(34_000),
+            total_basis_rejections: Some(200),
+            total_simplex_iterations: Some(1_800_000),
         }
     }
 
@@ -693,14 +881,14 @@ mod tests {
             total_time_ms: 10_000,
             mean_cost: None,
             std_cost: None,
-            total_lp_solves: 0,
-            total_first_try: 0,
-            total_retried: 0,
-            total_failed_solves: 0,
-            total_solve_time_seconds: 0.0,
-            total_basis_offered: 0,
-            total_basis_rejections: 0,
-            total_simplex_iterations: 0,
+            total_lp_solves: None,
+            total_first_try: None,
+            total_retried: None,
+            total_failed_solves: None,
+            total_solve_time_seconds: None,
+            total_basis_offered: None,
+            total_basis_rejections: None,
+            total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));
         let s = format_summary_string(&summary);
@@ -858,14 +1046,14 @@ mod tests {
             total_time_ms: 5_000,
             mean_cost: None,
             std_cost: None,
-            total_lp_solves: 0,
-            total_first_try: 0,
-            total_retried: 0,
-            total_failed_solves: 0,
-            total_solve_time_seconds: 0.0,
-            total_basis_offered: 0,
-            total_basis_rejections: 0,
-            total_simplex_iterations: 0,
+            total_lp_solves: None,
+            total_first_try: None,
+            total_retried: None,
+            total_failed_solves: None,
+            total_solve_time_seconds: None,
+            total_basis_offered: None,
+            total_basis_rejections: None,
+            total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));
         print_summary(&Term::buffered_stderr(), &summary);
@@ -1303,6 +1491,38 @@ mod tests {
         assert!(
             !s.contains("max order"),
             "output must NOT contain 'max order' when ar_method is None, got: {s}"
+        );
+    }
+
+    // ── format_rank_list tests ────────────────────────────────────────────────
+
+    use super::format_rank_list;
+
+    #[test]
+    fn test_format_rank_list_empty() {
+        assert_eq!(format_rank_list(&[]), "");
+    }
+
+    #[test]
+    fn test_format_rank_list_single() {
+        assert_eq!(format_rank_list(&[5]), "5");
+    }
+
+    #[test]
+    fn test_format_rank_list_contiguous() {
+        assert_eq!(format_rank_list(&[0, 1, 2, 3]), "0\u{2013}3");
+    }
+
+    #[test]
+    fn test_format_rank_list_non_contiguous() {
+        assert_eq!(format_rank_list(&[0, 2, 5]), "0, 2, 5");
+    }
+
+    #[test]
+    fn test_format_rank_list_mixed() {
+        assert_eq!(
+            format_rank_list(&[0, 1, 2, 7, 9, 10, 11]),
+            "0\u{2013}2, 7, 9\u{2013}11"
         );
     }
 }

@@ -286,7 +286,7 @@ impl ClassSampler<'_> {
                 };
                 // TODO(ticket-028): replace with fill_uncorrelated call once
                 // ticket-028 extracts this into a dedicated function.
-                fill_uncorrelated(spec, output, perm_scratch)?;
+                fill_uncorrelated(spec, None, output, perm_scratch)?;
                 Ok(())
             }
 

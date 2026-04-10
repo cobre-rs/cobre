@@ -84,9 +84,9 @@ pub use output::policy::{
     serialize_stage_states, write_policy_checkpoint,
 };
 pub use output::{
-    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, MetadataConfiguration,
-    MetadataConvergence, MetadataCuts, MetadataIterations, MetadataProblemDimensions,
-    MetadataScenarios, MpiInfo, OutputContext, OutputError, ParquetWriterConfig,
+    ConvergenceSummary, CutSelectionRecord, CutStatistics, DistributionInfo, IterationRecord,
+    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, OutputContext, OutputError, ParquetWriterConfig,
     SimulationMetadata, SimulationOutput, SolverStatsRow, TrainingMetadata, TrainingOutput,
     TrainingParquetWriter, get_hostname, now_iso8601, read_convergence_summary,
     read_simulation_metadata, read_training_metadata, write_cut_selection_records,
@@ -137,6 +137,9 @@ use std::path::Path;
 /// After all layers pass, three-tier penalty/bound resolution and scenario assembly
 /// are performed before constructing the [`System`].
 ///
+/// Warnings collected during validation are silently discarded. Use [`validate_case`]
+/// when you need to inspect or display warnings alongside the loaded [`System`].
+///
 /// # Errors
 ///
 /// - [`LoadError::IoError`] — a required file is missing or cannot be read.
@@ -147,4 +150,18 @@ use std::path::Path;
 ///   across Layers 1-5, or `SystemBuilder` rejected the assembled data.
 pub fn load_case(path: &Path) -> Result<System, LoadError> {
     pipeline::run_pipeline(path)
+}
+
+/// Load a case directory and return both the fully-validated [`System`] and a
+/// [`ValidationReport`] containing all warnings collected during the pipeline.
+///
+/// This function runs the same five-layer validation pipeline as [`load_case`] but
+/// preserves warnings so that callers can display them to the user. Errors still
+/// cause the function to return `Err`; warnings never block loading.
+///
+/// # Errors
+///
+/// Same error conditions as [`load_case`].
+pub fn validate_case(path: &Path) -> Result<(System, ValidationReport), LoadError> {
+    pipeline::run_pipeline_with_report(path)
 }

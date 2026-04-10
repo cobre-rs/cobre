@@ -18,22 +18,29 @@ pub struct ValidateArgs {
     pub case_dir: PathBuf,
 }
 
-fn format_constraint_description(term: &Term, description: &str, path: &Path) {
-    let lines: Vec<&str> = description.lines().collect();
+fn format_constraint_description(
+    term: &Term,
+    description: &str,
+    warning_count: usize,
+    path: &Path,
+) {
+    let error_lines: Vec<&str> = description.lines().collect();
     let _ = term.write_line(&format!(
-        "Validation: {} errors, 0 warnings in {}",
-        lines.len(),
+        "Validation: {} errors, {} warnings in {}",
+        error_lines.len(),
+        warning_count,
         path.display()
     ));
-    for line in lines {
+    for line in error_lines {
         let _ = term.write_line(&format!("{} {line}", style("error:").red().bold()));
     }
 }
 
 /// Execute the `validate` subcommand.
 ///
-/// Calls `cobre_io::load_case` on the given case directory and prints a
-/// structured diagnostic report to stdout.
+/// Calls `cobre_io::validate_case` on the given case directory and prints a
+/// structured diagnostic report to stdout, including any warnings collected
+/// during the validation pipeline.
 ///
 /// # Errors
 ///
@@ -54,8 +61,8 @@ pub fn execute(args: ValidateArgs) -> Result<(), CliError> {
         });
     }
 
-    match cobre_io::load_case(&args.case_dir) {
-        Ok(system) => {
+    match cobre_io::validate_case(&args.case_dir) {
+        Ok((system, report)) => {
             // Print entity counts — one per line for easy grep/pipe consumption.
             let _ = stdout.write_line(&format!(
                 "Valid case: {} buses, {} hydros, {} thermals, {} lines",
@@ -68,6 +75,25 @@ pub fn execute(args: ValidateArgs) -> Result<(), CliError> {
             let _ = stdout.write_line(&format!("  hydros: {}", system.n_hydros()));
             let _ = stdout.write_line(&format!("  thermals: {}", system.n_thermals()));
             let _ = stdout.write_line(&format!("  lines: {}", system.n_lines()));
+            if report.warning_count > 0 {
+                let _ = stdout.write_line(&format!(
+                    "Validation: 0 errors, {} warnings in {}",
+                    report.warning_count,
+                    args.case_dir.display()
+                ));
+                for entry in &report.warnings {
+                    let location = if let Some(entity) = &entry.entity {
+                        format!("{} ({})", entry.file, entity)
+                    } else {
+                        entry.file.clone()
+                    };
+                    let _ = stdout.write_line(&format!(
+                        "{} {location}: {}",
+                        style("warning:").yellow().bold(),
+                        entry.message
+                    ));
+                }
+            }
             Ok(())
         }
         Err(cobre_io::LoadError::IoError { path, source }) => Err(CliError::Io {
@@ -75,7 +101,8 @@ pub fn execute(args: ValidateArgs) -> Result<(), CliError> {
             context: path.display().to_string(),
         }),
         Err(cobre_io::LoadError::ConstraintError { description }) => {
-            format_constraint_description(&stdout, &description, &args.case_dir);
+            // Warnings are not available when errors abort the pipeline, so report 0.
+            format_constraint_description(&stdout, &description, 0, &args.case_dir);
             Err(CliError::Validation {
                 report: description,
             })

@@ -66,7 +66,7 @@ training and load the policy in warm-start mode:
 ```json
 {
   "training": { "enabled": false },
-  "policy": { "path": "./policy" }
+  "policy": { "mode": "warm_start", "path": "./policy" }
 }
 ```
 

@@ -117,15 +117,19 @@ pub struct CutPool {
 }
 
 impl CutPool {
-    /// Create a new `CutPool` with lazily-grown storage.
+    /// Create a new `CutPool` with all slots pre-allocated and initialized
+    /// to zero / inactive.
     ///
-    /// No coefficient, intercept, or metadata arrays are allocated at
-    /// construction. Storage grows on demand via [`ensure_capacity`] when
-    /// [`add_cut`] is called. The `capacity` parameter is stored as a
-    /// theoretical maximum for debug assertions only.
+    /// # Parameters
     ///
-    /// [`ensure_capacity`]: CutPool::ensure_capacity
-    /// [`add_cut`]: CutPool::add_cut
+    /// - `capacity`: total number of cut slots to allocate.
+    /// - `state_dimension`: length of the state vector (number of coefficients
+    ///   per cut).
+    /// - `forward_passes`: number of forward passes per training iteration.
+    ///   Used by the slot formula: `slot = warm_start_count + iteration *
+    ///   forward_passes + forward_pass_index`.
+    /// - `warm_start_count`: number of warm-start cuts that occupy the first
+    ///   slots. Offsets slot indices for iteration-generated cuts.
     ///
     /// # Example
     ///
@@ -134,8 +138,9 @@ impl CutPool {
     ///
     /// let pool = CutPool::new(50, 4, 5, 0);
     /// assert_eq!(pool.capacity, 50);
-    /// assert_eq!(pool.coefficients.len(), 0);
+    /// assert_eq!(pool.state_dimension, 4);
     /// assert_eq!(pool.active_count(), 0);
+    /// assert_eq!(pool.populated_count, 0);
     /// ```
     #[must_use]
     pub fn new(
@@ -144,30 +149,6 @@ impl CutPool {
         forward_passes: u32,
         warm_start_count: u32,
     ) -> Self {
-        Self {
-            coefficients: Vec::new(),
-            intercepts: Vec::new(),
-            metadata: Vec::new(),
-            active: Vec::new(),
-            populated_count: 0,
-            capacity,
-            state_dimension,
-            forward_passes,
-            warm_start_count,
-            cached_active_count: 0,
-        }
-    }
-
-    /// Grow all parallel arrays to accommodate at least `slot + 1` entries.
-    ///
-    /// Uses a doubling strategy with a minimum of 16 slots. No-op if current
-    /// allocation is already sufficient.
-    fn ensure_capacity(&mut self, slot: usize) {
-        let needed = slot + 1;
-        if needed <= self.intercepts.len() {
-            return;
-        }
-        let new_len = needed.max(self.intercepts.len() * 2).max(16);
         let default_meta = CutMetadata {
             iteration_generated: 0,
             forward_pass_index: 0,
@@ -175,11 +156,19 @@ impl CutPool {
             last_active_iter: 0,
             domination_count: 0,
         };
-        self.coefficients
-            .resize(new_len * self.state_dimension, 0.0);
-        self.intercepts.resize(new_len, 0.0);
-        self.metadata.resize(new_len, default_meta);
-        self.active.resize(new_len, false);
+
+        Self {
+            coefficients: vec![0.0; capacity * state_dimension],
+            intercepts: vec![0.0; capacity],
+            metadata: vec![default_meta; capacity],
+            active: vec![false; capacity],
+            populated_count: 0,
+            capacity,
+            state_dimension,
+            forward_passes,
+            warm_start_count,
+            cached_active_count: 0,
+        }
     }
 
     /// Compute the deterministic slot index for a cut.
@@ -239,7 +228,7 @@ impl CutPool {
 
         debug_assert!(
             slot < self.capacity,
-            "cut slot {slot} exceeds theoretical capacity {}",
+            "cut slot {slot} is out of bounds (capacity = {})",
             self.capacity
         );
         debug_assert!(
@@ -248,7 +237,6 @@ impl CutPool {
             coefficients.len(),
             self.state_dimension
         );
-        self.ensure_capacity(slot);
 
         self.intercepts[slot] = intercept;
         let start = slot * self.state_dimension;
@@ -360,9 +348,8 @@ impl CutPool {
     pub fn deactivate(&mut self, indices: &[u32]) {
         for &idx in indices {
             let i = idx as usize;
-            let allocated = self.intercepts.len();
-            debug_assert!(i < allocated, "deactivate index {i} out of bounds");
-            if i < allocated && self.active[i] {
+            debug_assert!(i < self.capacity, "deactivate index {i} out of bounds");
+            if i < self.capacity && self.active[i] {
                 self.active[i] = false;
                 self.cached_active_count -= 1;
             }
@@ -586,22 +573,31 @@ impl CutPool {
         #[allow(clippy::cast_possible_truncation)]
         let capacity = warm_start_count + (max_iterations as usize) * (forward_passes as usize);
 
-        let mut coefficients = Vec::with_capacity(warm_start_count * state_dimension);
-        let mut intercepts = Vec::with_capacity(warm_start_count);
-        let mut active = Vec::with_capacity(warm_start_count);
-        let mut metadata = Vec::with_capacity(warm_start_count);
+        let default_meta = CutMetadata {
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 0,
+            domination_count: 0,
+        };
+
+        let mut coefficients = vec![0.0_f64; capacity * state_dimension];
+        let mut intercepts = vec![0.0; capacity];
+        let mut active = vec![false; capacity];
+        let mut metadata = vec![default_meta; capacity];
         let mut cached_active_count = 0usize;
 
-        for record in records {
+        for (i, record) in records.iter().enumerate() {
             debug_assert!(
                 record.coefficients.len() == state_dimension,
                 "new_with_warm_start: coefficients length {} != state_dimension {}",
                 record.coefficients.len(),
                 state_dimension
             );
-            coefficients.extend_from_slice(&record.coefficients);
-            intercepts.push(record.intercept);
-            active.push(record.is_active);
+            let start = i * state_dimension;
+            coefficients[start..start + state_dimension].copy_from_slice(&record.coefficients);
+            intercepts[i] = record.intercept;
+            active[i] = record.is_active;
             if record.is_active {
                 cached_active_count += 1;
             }
@@ -609,13 +605,13 @@ impl CutPool {
             // are never matched by pack_local_cuts (which filters on the
             // current training iteration). This prevents double-counting
             // warm-start cuts as new training cuts in cut sync.
-            metadata.push(CutMetadata {
+            metadata[i] = CutMetadata {
                 iteration_generated: u64::MAX,
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
                 domination_count: u64::from(record.domination_count),
-            });
+            };
         }
 
         #[allow(clippy::cast_possible_truncation)]
@@ -665,9 +661,10 @@ mod tests {
         assert_eq!(pool.warm_start_count, 0);
         assert_eq!(pool.populated_count, 0);
         assert_eq!(pool.active_count(), 0);
-        assert_eq!(pool.active.len(), 0);
-        assert_eq!(pool.coefficients.len(), 0);
-        assert_eq!(pool.intercepts.len(), 0);
+        assert!(pool.active.iter().all(|&a| !a));
+        assert_eq!(pool.coefficients.len(), 100 * 9);
+        assert!(pool.coefficients.iter().all(|&v| v == 0.0));
+        assert!(pool.intercepts.iter().all(|&v| v == 0.0));
     }
 
     #[test]
@@ -675,25 +672,6 @@ mod tests {
         let pool = CutPool::new(0, 4, 5, 0);
         assert_eq!(pool.capacity, 0);
         assert_eq!(pool.active_count(), 0);
-    }
-
-    #[test]
-    fn lazy_growth_starts_empty() {
-        let pool = CutPool::new(100, 3, 1, 0);
-        assert_eq!(pool.coefficients.len(), 0);
-        assert_eq!(pool.intercepts.len(), 0);
-        assert_eq!(pool.active.len(), 0);
-    }
-
-    #[test]
-    fn lazy_growth_allocates_on_add() {
-        let mut pool = CutPool::new(100, 3, 1, 0);
-        pool.add_cut(0, 0, 7.0, &[1.0, 2.0, 3.0]);
-        assert!(pool.coefficients.len() >= 3);
-        let cuts: Vec<_> = pool.active_cuts().collect();
-        assert_eq!(cuts.len(), 1);
-        assert_eq!(cuts[0].1, 7.0);
-        assert_eq!(cuts[0].2, &[1.0, 2.0, 3.0]);
     }
 
     #[test]

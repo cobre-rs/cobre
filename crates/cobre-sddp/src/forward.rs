@@ -1251,6 +1251,9 @@ mod tests {
     }
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
 
         fn add_rows(&mut self, _cuts: &RowBatch) {}
@@ -3711,6 +3714,9 @@ mod tests {
     }
 
     impl SolverInterface for RecordingMockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
 
         fn add_rows(&mut self, cuts: &RowBatch) {
@@ -3953,6 +3959,9 @@ mod tests {
     }
 
     impl SolverInterface for BoundRecordingMockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _template: &StageTemplate) {}
         fn add_rows(&mut self, _cuts: &RowBatch) {}
         fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {

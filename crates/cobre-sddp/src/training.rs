@@ -1100,6 +1100,9 @@ mod tests {
     }
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, _t: &StageTemplate) {}
         fn add_rows(&mut self, _r: &RowBatch) {}
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}

@@ -1002,6 +1002,9 @@ mod tests {
     }
 
     impl SolverInterface for MockSolver {
+        fn solver_name_version(&self) -> String {
+            "MockSolver 0.0.0".to_string()
+        }
         fn load_model(&mut self, template: &StageTemplate) {
             self.current_num_rows = template.num_rows;
         }
@@ -3898,10 +3901,11 @@ mod tests {
     /// Used by `work_stealing_produces_identical_results_across_worker_counts`
     /// to compare FCF state across different worker counts.
     ///
-    /// The MockSolver returns objective=100.0 and dual[0]=-5.0 for every solve,
+    /// The `MockSolver` returns objective=100.0 and dual[0]=-5.0 for every solve,
     /// which is deterministic (no dependence on call order or worker identity).
     /// Each trial point i gets state [(i + 1) as f64 * 10.0] so that distinct
     /// cuts are generated and the ordering invariant is meaningful.
+    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
     fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
         use crate::lp_builder::PatchBuffer;
 

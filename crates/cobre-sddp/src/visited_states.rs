@@ -93,7 +93,7 @@ impl VisitedStatesArchive {
     ///
     /// Each stage buffer is pre-allocated for up to
     /// `max_iterations * total_forward_passes` state vectors, capped at
-    /// [`Self::MAX_INITIAL_CAPACITY`] to avoid excessive virtual memory
+    /// `MAX_INITIAL_CAPACITY` to avoid excessive virtual memory
     /// reservation on large configurations. The underlying `Vec` will grow
     /// beyond the cap if needed.
     #[must_use]

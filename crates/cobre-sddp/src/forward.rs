@@ -44,13 +44,12 @@
 //!
 //! ## LP rebuild sequence
 //!
-//! For each `(worker, stage)` pair the LP structure is rebuilt in two steps:
+//! For each `(worker, stage)` pair:
 //!
 //! 1. `solver.load_model(template)` — reset to the structural LP.
 //! 2. `solver.add_rows(cut_batch)` — append active Benders cuts.
 //!
-//! Then, for each scenario within that stage, only row bounds are patched:
-//!
+//! For each scenario within that stage, only row bounds are patched:
 //! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
 //!
 //! ## Hot-path allocation discipline
@@ -70,19 +69,19 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
-    ForwardSamplerConfig, SampleRequest,
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -805,9 +804,8 @@ fn run_forward_stage<S: SolverInterface + Send>(
     let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
     let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
-    // Skip primal storage: rec.primal is not read by the backward pass,
-    // training loop, or state exchange. Only rec.state is consumed downstream.
-    // Simulation reads primals directly from the solver view.
+    // Skip primal storage: only rec.state is consumed downstream; primals
+    // are read directly from the solver when needed (simulation).
     rec.primal.clear();
     // Skip dual storage: rec.dual is not read by the backward pass or any
     // training-path code. Simulation reads duals directly from the solver view.
@@ -1138,20 +1136,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
-        ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
-        context::{StageContext, TrainingContext},
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        context::{StageContext, TrainingContext},
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.

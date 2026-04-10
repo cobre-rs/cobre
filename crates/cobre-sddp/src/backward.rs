@@ -49,8 +49,10 @@
 //! Within a rank, the outer per-stage loop remains sequential (stage `t`
 //! depends on cuts generated at stage `t+1`). The inner trial-point loop is
 //! parallelised across [`SolverWorkspace`] instances using rayon's
-//! `par_iter_mut`. Trial points are statically partitioned across workspaces
-//! (not rayon default work-stealing) to ensure deterministic assignment.
+//! `par_iter_mut`. Trial points are dynamically distributed via atomic counter
+//! work-stealing: each worker loops, claiming the next available trial-point
+//! index via `fetch_add(1, Relaxed)` on a shared `AtomicUsize` counter, and
+//! stops when the returned index reaches `local_work`.
 //!
 //! Each worker thread generates cuts into a thread-local `StagedCut` buffer
 //! rather than directly into the FCF. After the parallel region completes for
@@ -73,23 +75,24 @@
 //! The `binding_slots` vector inside each `StagedCut` is allocated per
 //! trial point — a flat buffer optimization is deferred to profiling.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     cut_sync::CutSyncBuffers,
-    forward::{build_cut_row_batch_into, partition},
+    forward::build_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
-    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
+    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
-    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -535,7 +538,9 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
 /// Evaluate all trial points for a single backward stage, returning staged cuts.
 ///
 /// Runs the parallel trial-point loop over `0..spec.local_work` for the
-/// successor of stage `t`. Workers are statically partitioned across `workspaces`.
+/// successor of stage `t`. Trial points are dynamically distributed across
+/// `workspaces` via atomic counter work-stealing: each worker claims the next
+/// available index via `fetch_add(1, Relaxed)` on a shared `AtomicUsize` counter.
 /// Returns `Vec<StagedCut>` in completion order (unsorted); caller sorts by
 /// `trial_point_idx` before inserting into the FCF.
 fn process_stage_backward<S: SolverInterface + Send>(
@@ -546,22 +551,20 @@ fn process_stage_backward<S: SolverInterface + Send>(
     succ: &SuccessorSpec<'_>,
 ) -> Vec<Result<Vec<StagedCut>, SddpError>> {
     let n_openings = succ.probabilities.len();
-    let n_workers = workspaces.len().max(1);
     let local_work = spec.local_work;
+
+    let next_trial = AtomicUsize::new(0);
 
     workspaces
         .par_iter_mut()
-        .enumerate()
-        .map(|(worker_id, ws)| {
-            let (start_m, end_m) = partition(local_work, n_workers, worker_id);
+        .map(|ws| {
+            // Load the LP structure once per worker per stage — every worker
+            // calls this unconditionally. When `local_work < n_workers`, some
+            // workers will load the LP and immediately find no work via the
+            // atomic counter, which is acceptable overhead.
+            load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
 
-            // Load the LP structure once per worker per stage; trial points
-            // only patch bounds. Skip for workers with no assigned work.
-            if start_m < end_m {
-                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
-            }
-
-            let mut staged: Vec<StagedCut> = Vec::with_capacity(end_m - start_m);
+            let mut staged: Vec<StagedCut> = Vec::new();
             let n_state = training_ctx.indexer.n_state;
             let mut accum = TrialAccumulators {
                 outcomes: (0..n_openings)
@@ -574,7 +577,11 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 slot_increments: vec![0u64; succ.successor_populated_count],
             };
 
-            for m in start_m..end_m {
+            loop {
+                let m = next_trial.fetch_add(1, Ordering::Relaxed);
+                if m >= local_work {
+                    break;
+                }
                 accum.slot_increments.fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
@@ -596,9 +603,9 @@ fn process_stage_backward<S: SolverInterface + Send>(
 /// Sweeps stages from `num_stages - 2` down to `0` (the last stage `T-1` has
 /// no successor stage and therefore produces no cuts). For each stage, the
 /// trial-point loop is parallelised across the provided [`SolverWorkspace`]
-/// instances using static work partitioning. Each worker generates cut data
-/// into a thread-local `StagedCut` buffer. After the parallel region, staged
-/// cuts are sorted by trial-point index and inserted into the FCF in
+/// instances using atomic counter work-stealing. Each worker generates cut
+/// data into a thread-local `StagedCut` buffer. After the parallel region,
+/// staged cuts are sorted by trial-point index and inserted into the FCF in
 /// deterministic order.
 ///
 /// The outer per-stage loop remains sequential: stage `t` depends on cuts
@@ -735,9 +742,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         };
         let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
-        // Capture parallel region wall-clock immediately, before sequential
-        // post-processing (cut merge, sync, metadata). Previously this was
-        // measured after all post-parallel work, inflating the metric.
+        // Capture wall-clock before sequential post-processing to avoid
+        // inflating the parallel region time with merge, sync, and metadata work.
         #[allow(clippy::cast_possible_truncation)]
         let parallel_wall_ms = process_start.elapsed().as_millis() as u64;
 
@@ -745,14 +751,17 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         for worker_result in worker_staged {
             staged_cuts_buf.extend(worker_result?);
         }
-        // Ordering invariant: each worker processes a contiguous index range
-        // [start_m, end_m) in ascending order, and rayon's indexed collect()
-        // preserves worker order, so concatenation is globally sorted.
+        // With work-stealing, workers claim trial points in arbitrary order so
+        // the concatenated buffer is not necessarily sorted. Sort explicitly to
+        // ensure deterministic FCF insertion order regardless of thread
+        // scheduling.
+        staged_cuts_buf.sort_by_key(|cut| cut.trial_point_idx);
+        // Belt-and-suspenders: verify the sort produced the expected ordering.
         debug_assert!(
             staged_cuts_buf
                 .windows(2)
                 .all(|w| w[0].trial_point_idx <= w[1].trial_point_idx),
-            "backward pass cuts must be sorted by trial_point_idx after worker concatenation"
+            "backward pass cuts must be sorted by trial_point_idx after explicit sort"
         );
 
         for cut in &staged_cuts_buf {
@@ -861,13 +870,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
+    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BasisStore, SolverWorkspace},
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1163,6 +1172,7 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1171,9 +1181,8 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
-        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -3030,7 +3039,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
+        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -3883,5 +3892,188 @@ mod tests {
         // Pool[2] (terminal successor) received no cuts and no binding
         // was checked against it — metadata should be at defaults.
         assert_eq!(fcf.pools[2].populated_count, 0);
+    }
+
+    /// Build N identical `SolverWorkspace<MockSolver>` instances and run a
+    /// 2-stage backward pass with 6 trial points. Returns the resulting FCF.
+    ///
+    /// Used by `work_stealing_produces_identical_results_across_worker_counts`
+    /// to compare FCF state across different worker counts.
+    ///
+    /// The MockSolver returns objective=100.0 and dual[0]=-5.0 for every solve,
+    /// which is deterministic (no dependence on call order or worker identity).
+    /// Each trial point i gets state [(i + 1) as f64 * 10.0] so that distinct
+    /// cuts are generated and the ordering invariant is meaningful.
+    fn run_backward_pass_with_n_workers(n_workers: usize) -> FutureCostFunction {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 2_usize;
+        let local_work = 6_usize;
+        let n_openings = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state; // 1
+
+        // Use forward_passes = local_work so the FCF pool is large enough for
+        // all trial points in a single iteration (iteration 0, slots 0..5).
+        #[allow(clippy::cast_possible_truncation)]
+        let forward_passes = local_work as u32;
+        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 64, 0);
+
+        // Build `local_work` trial points with distinct states so each cut
+        // has a different intercept. State for trial point i = (i+1)*10.0.
+        let states: Vec<Vec<f64>> = (0..local_work)
+            .map(|i| vec![(i + 1) as f64 * 10.0])
+            .collect();
+        let mut exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        // Each workspace gets the same deterministic solution.
+        // MockSolver::always_ok returns objective=100.0, dual[0]=-5.0 for
+        // every call regardless of call order or worker identity.
+        let solution = solution_1_0(100.0, -5.0);
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|_| SolverWorkspace {
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                },
+            })
+            .collect();
+
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let comm = StubComm;
+        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
+
+        let result = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+            },
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 0,
+                local_work: exchange.local_count(),
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+            },
+            &comm,
+        )
+        .unwrap();
+
+        // Confirm all 6 trial points produced cuts at stage 0.
+        assert_eq!(
+            result.cuts_generated, local_work,
+            "n_workers={n_workers}: expected {local_work} cuts, got {}",
+            result.cuts_generated,
+        );
+
+        fcf
+    }
+
+    #[test]
+    fn work_stealing_produces_identical_results_across_worker_counts() {
+        // Acceptance criterion: the FCF state after running the backward pass
+        // with 1 workspace must be bit-identical to the state after running
+        // with 3 workspaces, given the same inputs. This verifies that the
+        // sort-by-trial_point_idx post-processing in the work-stealing
+        // implementation produces a deterministic FCF regardless of which
+        // worker claims which trial point.
+        let fcf_1 = run_backward_pass_with_n_workers(1);
+        let fcf_3 = run_backward_pass_with_n_workers(3);
+
+        let num_stages = 2;
+
+        // Verify that both runs produced cuts (belt-and-suspenders guard so
+        // that an empty FCF cannot cause a false positive).
+        assert!(
+            fcf_1.active_cuts(0).count() > 0,
+            "1-worker run produced no cuts at stage 0"
+        );
+
+        for stage in 0..num_stages {
+            let cuts_1: Vec<_> = fcf_1.active_cuts(stage).collect();
+            let cuts_3: Vec<_> = fcf_3.active_cuts(stage).collect();
+            assert_eq!(
+                cuts_1.len(),
+                cuts_3.len(),
+                "stage {stage}: cut count mismatch ({} vs {})",
+                cuts_1.len(),
+                cuts_3.len(),
+            );
+            for (i, ((s1, int1, c1), (s3, int3, c3))) in cuts_1.iter().zip(&cuts_3).enumerate() {
+                assert_eq!(
+                    s1, s3,
+                    "stage {stage}, cut {i}: slot mismatch ({s1} vs {s3})"
+                );
+                assert_eq!(
+                    int1, int3,
+                    "stage {stage}, cut {i}: intercept mismatch ({int1} vs {int3})"
+                );
+                assert_eq!(
+                    c1, c3,
+                    "stage {stage}, cut {i}: coefficients mismatch ({c1:?} vs {c3:?})"
+                );
+            }
+        }
     }
 }

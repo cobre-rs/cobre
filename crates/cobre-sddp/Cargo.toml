@@ -13,11 +13,11 @@ keywords = ["sddp", "hydrothermal", "dispatch", "optimization", "energy"]
 categories = ["science", "simulation", "mathematics"]
 
 [dependencies]
-cobre-core = { version = "0.4.1", path = "../cobre-core" }
-cobre-solver = { version = "0.4.1", path = "../cobre-solver" }
-cobre-comm = { version = "0.4.1", path = "../cobre-comm" }
-cobre-stochastic = { version = "0.4.1", path = "../cobre-stochastic" }
-cobre-io = { version = "0.4.1", path = "../cobre-io" }
+cobre-core = { version = "0.4.2", path = "../cobre-core" }
+cobre-solver = { version = "0.4.2", path = "../cobre-solver" }
+cobre-comm = { version = "0.4.2", path = "../cobre-comm" }
+cobre-stochastic = { version = "0.4.2", path = "../cobre-stochastic" }
+cobre-io = { version = "0.4.2", path = "../cobre-io" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

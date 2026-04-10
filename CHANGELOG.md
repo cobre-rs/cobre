@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.2] - 2026-04-10
+
+### Added
+
+- **Execution topology reporting** — leverage ferrompi v0.3.0 to gather MPI
+  library version, rank-to-host mapping, thread level, and SLURM job metadata
+  at initialization. New `TopologyProvider` trait in cobre-comm with
+  `ExecutionTopology` types. Displayed after the banner during `cobre run` and
+  persisted in metadata JSON output.
+- **Solver version reporting** — expose HiGHS version via `Highs_versionMajor`,
+  `Highs_versionMinor`, `Highs_versionPatch` C API wrappers. Version displayed
+  in the `Execution` section, `cobre version`, and metadata JSON.
+- **Backward pass work-stealing** — replace static partitioning with atomic
+  counter work-stealing for better load balance across MPI ranks.
+- **Stage-major simulation loop** — refactor simulation pipeline from
+  scenario-major to stage-major ordering, eliminating redundant LP setup calls.
+- **Lazy FCF growth** — `CutPool` grows its coefficient storage on demand
+  rather than pre-allocating to max capacity.
+- **Parallel lower bound evaluation** — evaluate lower bound across openings
+  in parallel using the rayon thread pool.
+- **`SolverInterface::solver_name_version()`** — new trait method for solver
+  identity reporting.
+
+### Changed
+
+- **Metadata JSON schema** (breaking) — `mpi` object replaced by `distribution`
+  with richer fields: `backend`, `world_size`, `ranks_participated`,
+  `num_nodes`, `threads_per_rank`, `mpi_library`, `mpi_standard`,
+  `thread_level`, `slurm_job_id`, and `solver_version`.
+- **`cobre version` output** — now shows the HiGHS version alongside the
+  solver name.
+
+### Fixed
+
+- Fixed 34 assessment findings across the workspace (error handling, edge cases,
+  documentation accuracy).
+- Fixed rustdoc private-intra-doc-link warning in `visited_states.rs`.
+- MPICH multi-line `MPI_Get_library_version` output is now sanitized to a
+  single-line identifier for display.
+
 ## [0.4.1] - 2026-04-06
 
 ### Fixed

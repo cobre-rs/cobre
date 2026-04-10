@@ -12,45 +12,45 @@
 use std::path::Path;
 
 use cobre_core::{
+    GenericConstraint,
     entities::{Bus, EnergyContract, Hydro, Line, NonControllableSource, PumpingStation, Thermal},
     initial_conditions::InitialConditions,
     penalty::GlobalPenaltyDefaults,
     scenario::{CorrelationModel, NcsModel},
-    GenericConstraint,
 };
 
 use crate::{
-    config::{parse_config, Config},
+    LoadError,
+    config::{Config, parse_config},
     constraints::{
+        BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry, GenericConstraintBoundsRow,
+        HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow, LinePenaltyOverrideRow,
+        NcsBoundsRow, NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow,
         load_contract_bounds, load_exchange_factors, load_generic_constraint_bounds,
         load_generic_constraints, load_hydro_bounds, load_line_bounds, load_ncs_bounds,
         load_penalty_overrides_bus, load_penalty_overrides_hydro, load_penalty_overrides_line,
         load_penalty_overrides_ncs, load_pumping_bounds, load_thermal_bounds,
-        BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry, GenericConstraintBoundsRow,
-        HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow, LinePenaltyOverrideRow,
-        NcsBoundsRow, NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow,
     },
     extensions::{
-        load_fpha_hyperplanes, load_production_models, parse_hydro_geometry, FphaHyperplaneRow,
-        HydroGeometryRow, ProductionModelConfig,
+        FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, load_fpha_hyperplanes,
+        load_production_models, parse_hydro_geometry,
     },
     initial_conditions::parse_initial_conditions,
     penalties::parse_penalties,
     scenarios::{
-        load_correlation, load_external_inflow_scenarios, load_external_load_scenarios,
-        load_external_ncs_scenarios, load_inflow_ar_coefficients, load_inflow_history,
-        load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats, load_ncs_stats,
-        load_non_controllable_factors, ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow,
-        InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry,
-        LoadSeasonalStatsRow, NcsFactorEntry,
+        ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowArCoefficientRow,
+        InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
+        NcsFactorEntry, load_correlation, load_external_inflow_scenarios,
+        load_external_load_scenarios, load_external_ncs_scenarios, load_inflow_ar_coefficients,
+        load_inflow_history, load_inflow_seasonal_stats, load_load_factors,
+        load_load_seasonal_stats, load_ncs_stats, load_non_controllable_factors,
     },
     stages::StagesData,
     system::{
         load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
         parse_hydros, parse_lines, parse_thermals,
     },
-    validation::{structural::FileManifest, ErrorKind, ValidationContext},
-    LoadError,
+    validation::{ErrorKind, ValidationContext, structural::FileManifest},
 };
 
 // ── ParsedData ────────────────────────────────────────────────────────────────
@@ -772,7 +772,7 @@ fn sentinel_penalties() -> GlobalPenaltyDefaults {
 )]
 mod tests {
     use super::*;
-    use crate::validation::{structural::validate_structure, ErrorKind, ValidationContext};
+    use crate::validation::{ErrorKind, ValidationContext, structural::validate_structure};
     use std::fs;
     use tempfile::TempDir;
 
@@ -1063,10 +1063,12 @@ mod tests {
         map_load_error(&err, "system/hydros.json", &mut ctx);
         assert_eq!(ctx.errors().len(), 1);
         assert_eq!(ctx.errors()[0].kind, ErrorKind::FileNotFound);
-        assert!(ctx.errors()[0]
-            .file
-            .to_string_lossy()
-            .contains("system/hydros.json"));
+        assert!(
+            ctx.errors()[0]
+                .file
+                .to_string_lossy()
+                .contains("system/hydros.json")
+        );
     }
 
     /// `map_load_error` maps `ParseError` to `ErrorKind::ParseError`.
@@ -1077,10 +1079,12 @@ mod tests {
         map_load_error(&err, "stages.json", &mut ctx);
         assert_eq!(ctx.errors().len(), 1);
         assert_eq!(ctx.errors()[0].kind, ErrorKind::ParseError);
-        assert!(ctx.errors()[0]
-            .file
-            .to_string_lossy()
-            .contains("stages.json"));
+        assert!(
+            ctx.errors()[0]
+                .file
+                .to_string_lossy()
+                .contains("stages.json")
+        );
     }
 
     /// `map_load_error` maps `SchemaError` to `ErrorKind::SchemaViolation`.
@@ -1095,9 +1099,11 @@ mod tests {
         map_load_error(&err, "system/buses.json", &mut ctx);
         assert_eq!(ctx.errors().len(), 1);
         assert_eq!(ctx.errors()[0].kind, ErrorKind::SchemaViolation);
-        assert!(ctx.errors()[0]
-            .file
-            .to_string_lossy()
-            .contains("system/buses.json"));
+        assert!(
+            ctx.errors()[0]
+                .file
+                .to_string_lossy()
+                .contains("system/buses.json")
+        );
     }
 }

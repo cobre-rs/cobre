@@ -23,13 +23,13 @@
 use cobre_core::temporal::NoiseMethod;
 
 use crate::{
+    StochasticError,
     noise::seed::derive_forward_seed,
     sampling::{
-        out_of_sample::{fill_uncorrelated, FreshNoiseSpec},
         ExternalScenarioLibrary, HistoricalScenarioLibrary,
+        out_of_sample::{FreshNoiseSpec, fill_uncorrelated},
     },
     tree::opening_tree::OpeningTreeView,
-    StochasticError,
 };
 
 use super::insample;

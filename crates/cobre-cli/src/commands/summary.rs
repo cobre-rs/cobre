@@ -21,14 +21,14 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    read_convergence_summary, read_simulation_metadata, read_training_metadata, ConvergenceSummary,
-    OutputError, SimulationMetadata, TrainingMetadata,
+    ConvergenceSummary, OutputError, SimulationMetadata, TrainingMetadata,
+    read_convergence_summary, read_simulation_metadata, read_training_metadata,
 };
 
 use crate::{
     error::CliError,
     summary::{
-        print_simulation_summary, print_training_summary, SimulationSummary, TrainingSummary,
+        SimulationSummary, TrainingSummary, print_simulation_summary, print_training_summary,
     },
 };
 
@@ -193,7 +193,7 @@ mod tests {
         MetadataIterations, MetadataProblemDimensions, MpiInfo, TrainingMetadata,
     };
 
-    use super::{build_training_summary, convergence_fallback, SummaryArgs};
+    use super::{SummaryArgs, build_training_summary, convergence_fallback};
 
     fn make_training_metadata() -> TrainingMetadata {
         TrainingMetadata {

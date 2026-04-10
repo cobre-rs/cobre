@@ -735,6 +735,11 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         };
         let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
+        // Capture parallel region wall-clock immediately, before sequential
+        // post-processing (cut merge, sync, metadata). Previously this was
+        // measured after all post-parallel work, inflating the metric.
+        #[allow(clippy::cast_possible_truncation)]
+        let parallel_wall_ms = process_start.elapsed().as_millis() as u64;
 
         staged_cuts_buf.clear();
         for worker_result in worker_staged {
@@ -819,11 +824,10 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
 
         // Rayon overhead: wall-clock of the parallel region minus the average
         // per-worker solve time. This is an upper bound on barrier + scheduling.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         {
-            let process_wall_ms = process_start.elapsed().as_millis() as u64;
             let avg_solve_ms = (stage_delta.solve_time_ms / n_workers) as u64;
-            rayon_overhead_ms += process_wall_ms.saturating_sub(avg_solve_ms);
+            rayon_overhead_ms += parallel_wall_ms.saturating_sub(avg_solve_ms);
         }
 
         stage_stats.push((successor, stage_delta));

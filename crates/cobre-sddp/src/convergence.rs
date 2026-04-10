@@ -151,22 +151,23 @@ impl ConvergenceMonitor {
         self.iteration_count += 1;
         self.lower_bound_history.push(lb);
 
-        // Move the history into MonitorState without cloning (F1-004 fix).
-        // Take the vec out, evaluate, then restore it so the monitor retains
-        // its history for the next iteration.
+        // Move vecs into MonitorState without cloning. Take them out, evaluate,
+        // then restore so the monitor retains its data for the next iteration.
         let history = std::mem::take(&mut self.lower_bound_history);
+        let sim_costs = std::mem::take(&mut self.simulation_costs);
         let state = MonitorState {
             iteration: self.iteration_count,
             wall_time_seconds: self.start_time.elapsed().as_secs_f64(),
             lower_bound: self.lower_bound,
             lower_bound_history: history,
             shutdown_requested: self.shutdown_requested,
-            simulation_costs: self.simulation_costs.clone(),
+            simulation_costs: sim_costs,
         };
 
         let result = self.rule_set.evaluate(&state);
-        // Restore the history back into the monitor.
+        // Restore the data back into the monitor.
         self.lower_bound_history = state.lower_bound_history;
+        self.simulation_costs = state.simulation_costs;
         result
     }
 

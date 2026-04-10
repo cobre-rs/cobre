@@ -44,10 +44,13 @@
 //!
 //! ## LP rebuild sequence
 //!
-//! For each `(scenario, stage)` pair the LP is rebuilt in three steps:
+//! For each `(worker, stage)` pair the LP structure is rebuilt in two steps:
 //!
 //! 1. `solver.load_model(template)` — reset to the structural LP.
 //! 2. `solver.add_rows(cut_batch)` — append active Benders cuts.
+//!
+//! Then, for each scenario within that stage, only row bounds are patched:
+//!
 //! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
 //!
 //! ## Hot-path allocation discipline
@@ -641,6 +644,9 @@ struct StageKey<'a> {
     iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.
     raw_noise: &'a [f64],
+    /// Total LP row count (template + active cuts) for pre-allocating basis
+    /// storage and avoiding per-scenario heap reallocation.
+    basis_row_capacity: usize,
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -670,6 +676,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         num_stages,
         iteration,
         raw_noise,
+        basis_row_capacity,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -798,8 +805,10 @@ fn run_forward_stage<S: SolverInterface + Send>(
     let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
     let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
+    // Skip primal storage: rec.primal is not read by the backward pass,
+    // training loop, or state exchange. Only rec.state is consumed downstream.
+    // Simulation reads primals directly from the solver view.
     rec.primal.clear();
-    rec.primal.extend_from_slice(unscaled_primal);
     // Skip dual storage: rec.dual is not read by the backward pass or any
     // training-path code. Simulation reads duals directly from the solver view.
     rec.dual.clear();
@@ -829,7 +838,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
     if let Some(rb) = basis_slice.get_mut(m, t) {
         ws.solver.get_basis(rb);
     } else {
-        let mut rb = Basis::new(ctx.templates[t].num_cols, ctx.templates[t].num_rows);
+        let mut rb = Basis::new(ctx.templates[t].num_cols, basis_row_capacity);
         ws.solver.get_basis(&mut rb);
         *basis_slice.get_mut(m, t) = Some(rb);
     }
@@ -1072,6 +1081,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         num_stages,
                         iteration: *iteration,
                         raw_noise,
+                        basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(

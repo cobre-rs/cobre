@@ -41,22 +41,30 @@ use crate::StochasticError;
 // ---------------------------------------------------------------------------
 
 /// Resolve a stage ID to a season ID using modular arithmetic on the season
-/// cycle length. Works for both positive and negative stage IDs.
+/// cycle length, accounting for the offset between stage IDs and season IDs.
 ///
-/// For a monthly system (`n_seasons = 12`):
-/// - `stage_id = -1`  -> season 11 (December)
-/// - `stage_id = -12` -> season 0  (January)
-/// - `stage_id = -13` -> season 11 (December, wraps)
-/// - `stage_id = 5`   -> season 5
-fn resolve_season_id(stage_id: i32, n_seasons: usize) -> usize {
+/// The `season_offset` is the season ID of stage 0. For a study starting in
+/// March with `season_id = 2`, the offset is 2. This ensures pre-study stages
+/// (negative `stage_id`) map to the correct season.
+///
+/// For a March-start monthly system (`n_seasons = 12`, `season_offset = 2`):
+/// - `stage_id = -1`  -> season 1  (February)
+/// - `stage_id = -2`  -> season 0  (January)
+/// - `stage_id = -3`  -> season 11 (December)
+/// - `stage_id = 0`   -> season 2  (March)
+///
+/// For a January-start system (`season_offset = 0`) the offset has no effect.
+fn resolve_season_id(stage_id: i32, n_seasons: usize, season_offset: usize) -> usize {
     debug_assert!(n_seasons > 0, "n_seasons must be positive");
     // n_seasons is always small (12 for monthly, 52 for weekly) so truncation
     // from usize to i32 is safe in practice. The debug_assert above guards
     // against zero; values > i32::MAX are not realistic for season counts.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     let n = n_seasons as i32;
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let offset = season_offset as i32;
     #[allow(clippy::cast_sign_loss)]
-    let result = ((stage_id % n + n) % n) as usize;
+    let result = (((stage_id + offset) % n + n) % n) as usize;
     result
 }
 
@@ -440,6 +448,12 @@ fn fill_stage_arrays(
         .collect::<HashSet<_>>()
         .len();
 
+    // Season offset: the season_id of the first stage. For a March-start study
+    // with season_id=2, pre-study stage -1 maps to season 1 (February), not
+    // season 11 (December). Without this offset the modular arithmetic assumes
+    // stage_id 0 ≡ season 0, which is only true for January-start studies.
+    let season_offset = stages.iter().find_map(|s| s.season_id).unwrap_or(0);
+
     let stage_to_season: HashMap<i32, usize> = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.id, sid)))
@@ -500,15 +514,15 @@ fn fill_stage_arrays(
                         // and any pre-study entries explicitly present in
                         // inflow_models).
                         //
-                        // Tier 2: season-based fallback using modular arithmetic.
-                        // For negative lag_stage_id, resolve to season_id via:
-                        //   season_id = ((lag_stage_id % n) + n) % n
-                        // where n = n_seasons (i32 cast).
+                        // Tier 2: season-based fallback using modular arithmetic
+                        // with the season offset so that pre-study stages map
+                        // to the correct month.
                         let (mu_lag, s_lag) =
                             if let Some(&stats) = model_stats.get(&(h_idx, lag_stage_id)) {
                                 stats
                             } else if n_seasons > 0 {
-                                let season_id = resolve_season_id(lag_stage_id, n_seasons);
+                                let season_id =
+                                    resolve_season_id(lag_stage_id, n_seasons, season_offset);
                                 season_stats
                                     .get(&(h_idx, season_id))
                                     .copied()
@@ -1046,25 +1060,45 @@ mod tests {
 
     #[test]
     fn season_fallback_deep_negative_wraps_correctly() {
-        // Property test of the modular arithmetic formula.
-        assert_eq!(resolve_season_id(-1, 12), 11);
-        assert_eq!(resolve_season_id(-6, 12), 6);
-        assert_eq!(resolve_season_id(-12, 12), 0);
-        assert_eq!(resolve_season_id(-13, 12), 11);
-        assert_eq!(resolve_season_id(0, 12), 0);
-        assert_eq!(resolve_season_id(5, 12), 5);
+        // January-start: offset=0, same as bare modular arithmetic.
+        assert_eq!(resolve_season_id(-1, 12, 0), 11);
+        assert_eq!(resolve_season_id(-6, 12, 0), 6);
+        assert_eq!(resolve_season_id(-12, 12, 0), 0);
+        assert_eq!(resolve_season_id(-13, 12, 0), 11);
+        assert_eq!(resolve_season_id(0, 12, 0), 0);
+        assert_eq!(resolve_season_id(5, 12, 0), 5);
 
         // Additional edge cases.
-        assert_eq!(resolve_season_id(-24, 12), 0);
-        assert_eq!(resolve_season_id(-25, 12), 11);
-        assert_eq!(resolve_season_id(12, 12), 0);
-        assert_eq!(resolve_season_id(13, 12), 1);
+        assert_eq!(resolve_season_id(-24, 12, 0), 0);
+        assert_eq!(resolve_season_id(-25, 12, 0), 11);
+        assert_eq!(resolve_season_id(12, 12, 0), 0);
+        assert_eq!(resolve_season_id(13, 12, 0), 1);
 
         // Non-12 cycle lengths.
-        assert_eq!(resolve_season_id(-1, 4), 3);
-        assert_eq!(resolve_season_id(-5, 4), 3);
-        assert_eq!(resolve_season_id(-4, 4), 0);
-        assert_eq!(resolve_season_id(-1, 1), 0);
+        assert_eq!(resolve_season_id(-1, 4, 0), 3);
+        assert_eq!(resolve_season_id(-5, 4, 0), 3);
+        assert_eq!(resolve_season_id(-4, 4, 0), 0);
+        assert_eq!(resolve_season_id(-1, 1, 0), 0);
+    }
+
+    #[test]
+    fn season_fallback_with_nonzero_offset() {
+        // March-start study: stage 0 = season 2, offset = 2.
+        // stage -1 should be February (season 1), not December (season 11).
+        assert_eq!(resolve_season_id(-1, 12, 2), 1);
+        assert_eq!(resolve_season_id(-2, 12, 2), 0);
+        assert_eq!(resolve_season_id(-3, 12, 2), 11);
+        assert_eq!(resolve_season_id(0, 12, 2), 2);
+        assert_eq!(resolve_season_id(9, 12, 2), 11);
+
+        // April-start: offset = 3.
+        assert_eq!(resolve_season_id(-1, 12, 3), 2);
+        assert_eq!(resolve_season_id(-4, 12, 3), 11);
+        assert_eq!(resolve_season_id(0, 12, 3), 3);
+
+        // Deep negative with offset.
+        assert_eq!(resolve_season_id(-13, 12, 2), 1);
+        assert_eq!(resolve_season_id(-25, 12, 2), 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1147,7 +1181,7 @@ mod tests {
         let psi_h3 = lp.psi_slice(0, 2);
         for (lag, (&psi_val, &psi_star)) in psi_h3.iter().zip(&psi_star_h3).enumerate() {
             let lag_i32 = i32::try_from(lag).unwrap();
-            let lag_season = resolve_season_id(-(lag_i32 + 1), 12);
+            let lag_season = resolve_season_id(-(lag_i32 + 1), 12, 0);
             let expected = psi_star * s_0 / season_std(lag_season);
             assert!(
                 (psi_val - expected).abs() < 1e-10,
@@ -1160,7 +1194,7 @@ mod tests {
         let mut expected_base = mu_0;
         for (lag, &psi_val) in psi_h3.iter().enumerate().take(6) {
             let lag_i32 = i32::try_from(lag).unwrap();
-            let lag_season = resolve_season_id(-(lag_i32 + 1), 12);
+            let lag_season = resolve_season_id(-(lag_i32 + 1), 12, 0);
             expected_base -= psi_val * season_mean(lag_season);
         }
         assert!(
@@ -1281,5 +1315,159 @@ mod tests {
                 psi_s12[1]
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-January start: season offset regression test
+    // -----------------------------------------------------------------------
+
+    /// Build 12 monthly stages starting at March (`season_id`=2).
+    ///
+    /// Stage 0 → season 2 (Mar), stage 1 → season 3 (Apr), ...,
+    /// stage 9 → season 11 (Dec), stage 10 → season 0 (Jan),
+    /// stage 11 → season 1 (Feb).
+    fn make_march_start_stages() -> Vec<Stage> {
+        (0..12_usize)
+            .map(|i| make_stage(i, i32::try_from(i).unwrap(), Some((i + 2) % 12)))
+            .collect()
+    }
+
+    /// Build inflow models matching March-start stages.
+    ///
+    /// Stats follow the same `mean = 100 + season*10, std = 20 + season*2`
+    /// formula but are keyed by `stage_id` (not `season_id`). The underlying
+    /// season stats are resolved via the stage's `season_id`.
+    fn make_march_start_models(
+        hydro_id: i32,
+        ar_stage: i32,
+        ar_coeffs: &[f64],
+        residual: f64,
+    ) -> Vec<InflowModel> {
+        (0..12_i32)
+            .map(|i| {
+                #[allow(clippy::cast_sign_loss)]
+                let season = ((i + 2) % 12) as usize;
+                let mean = season_mean(season);
+                let std = season_std(season);
+                let (c, r) = if i == ar_stage {
+                    (ar_coeffs.to_vec(), residual)
+                } else {
+                    (vec![], 1.0)
+                };
+                make_model(hydro_id, i, mean, std, c, r)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn march_start_ar1_resolves_to_february() {
+        // Stage 0 = March (season 2), AR(1). Lag-1 → stage -1 → season 1 (Feb).
+        // Without the season offset fix, stage -1 resolves to season 11 (Dec).
+        let stages = make_march_start_stages();
+        let models = make_march_start_models(1, 0, &[0.5], 0.9);
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        // Stage 0 is season 2 (March): mean=120, std=24.
+        let s_mar = season_std(2); // 24.0
+        let mu_mar = season_mean(2); // 120.0
+
+        // Lag-1 should be February (season 1): mean=110, std=22.
+        let s_feb = season_std(1); // 22.0
+        let mu_feb = season_mean(1); // 110.0
+
+        let expected_psi = 0.5 * s_mar / s_feb;
+        let expected_base = mu_mar - expected_psi * mu_feb;
+
+        assert!(
+            (lp.psi_slice(0, 0)[0] - expected_psi).abs() < 1e-10,
+            "psi[0] should use Feb (season 1, std=22), got {} (expected {})",
+            lp.psi_slice(0, 0)[0],
+            expected_psi
+        );
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "base should use Feb mean; expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
+        );
+
+        // Verify it does NOT match the old (wrong) December resolution.
+        let s_dec = season_std(11); // 42.0
+        let wrong_psi = 0.5 * s_mar / s_dec;
+        assert!(
+            (lp.psi_slice(0, 0)[0] - wrong_psi).abs() > 0.1,
+            "psi should NOT match December fallback ({wrong_psi})"
+        );
+    }
+
+    #[test]
+    fn march_start_ar6_all_lags_use_correct_seasons() {
+        // Stage 0 = March (season 2), AR(6). Lags 1-6 → stages -1..-6.
+        // Correct seasons: 1 (Feb), 0 (Jan), 11 (Dec), 10 (Nov), 9 (Oct), 8 (Sep).
+        let stages = make_march_start_stages();
+        let psi_star = [0.3, 0.2, 0.15, 0.1, 0.08, 0.05];
+        let models = make_march_start_models(1, 0, &psi_star, 0.85);
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        let s_mar = season_std(2);
+        let expected_lag_seasons = [1, 0, 11, 10, 9, 8]; // Feb, Jan, Dec, Nov, Oct, Sep
+
+        let psi = lp.psi_slice(0, 0);
+        for (lag, &expected_season) in expected_lag_seasons.iter().enumerate() {
+            let expected_psi = psi_star[lag] * s_mar / season_std(expected_season);
+            assert!(
+                (psi[lag] - expected_psi).abs() < 1e-10,
+                "lag {}: expected season {expected_season} (psi={expected_psi:.6}), got psi={:.6}",
+                lag + 1,
+                psi[lag]
+            );
+        }
+
+        // Deterministic base.
+        let mu_mar = season_mean(2);
+        let mut expected_base = mu_mar;
+        for (lag, &expected_season) in expected_lag_seasons.iter().enumerate() {
+            expected_base -= psi[lag] * season_mean(expected_season);
+        }
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "base: expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
+        );
+    }
+
+    #[test]
+    fn march_start_parity_with_january_start_at_later_stage() {
+        // When all lags are within the study period, the season offset should
+        // not matter because the exact-match path (tier 1) is used.
+        // Stage 6 (September in March-start) with AR(2): lags hit stages 5, 4
+        // (both in study). This should match a January-start study at the
+        // same season.
+        let march_stages = make_march_start_stages();
+        let march_models = make_march_start_models(1, 6, &[0.4, 0.25], 0.9);
+
+        let jan_stages = make_monthly_stages();
+        // Stage 8 in January-start is also September (season 8).
+        // Give it the same AR coefficients at the equivalent stage.
+        let jan_models = make_monthly_models(1, 8, &[0.4, 0.25], 0.9);
+
+        let lp_mar = PrecomputedPar::build(&march_models, &march_stages, &[EntityId(1)]).unwrap();
+        let lp_jan = PrecomputedPar::build(&jan_models, &jan_stages, &[EntityId(1)]).unwrap();
+
+        // Both should have identical psi and base for their September stage
+        // since all lags are resolved via exact match.
+        assert!(
+            (lp_mar.psi_slice(6, 0)[0] - lp_jan.psi_slice(8, 0)[0]).abs() < 1e-10,
+            "September psi[0] should match: march={}, jan={}",
+            lp_mar.psi_slice(6, 0)[0],
+            lp_jan.psi_slice(8, 0)[0]
+        );
+        assert!(
+            (lp_mar.deterministic_base(6, 0) - lp_jan.deterministic_base(8, 0)).abs() < 1e-10,
+            "September base should match: march={}, jan={}",
+            lp_mar.deterministic_base(6, 0),
+            lp_jan.deterministic_base(8, 0)
+        );
     }
 }

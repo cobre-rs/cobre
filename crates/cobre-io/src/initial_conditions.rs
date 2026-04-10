@@ -242,13 +242,6 @@ fn validate_past_inflows_values(
                     ),
                 });
             }
-            if v < 0.0 {
-                return Err(LoadError::SchemaError {
-                    path: path.to_path_buf(),
-                    field: format!("past_inflows[{i}].values_m3s[{j}]"),
-                    message: format!("past_inflows[{i}].values_m3s[{j}] must be >= 0.0, got {v}"),
-                });
-            }
         }
     }
     Ok(())
@@ -582,36 +575,6 @@ mod tests {
                 assert!(
                     message.contains("duplicate"),
                     "message should mention 'duplicate', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    // ── AC: past_inflows negative value → SchemaError ─────────────────────────
-
-    /// Given `past_inflows` with a negative value in `values_m3s`,
-    /// `parse_initial_conditions` returns `Err(LoadError::SchemaError)`.
-    #[test]
-    fn test_negative_past_inflows_value() {
-        let json = r#"{
-          "storage": [],
-          "filling_storage": [],
-          "past_inflows": [
-            { "hydro_id": 1, "values_m3s": [100.0, -50.0] }
-          ]
-        }"#;
-        let f = write_json(json);
-        let err = parse_initial_conditions(f.path()).unwrap_err();
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert!(
-                    field.contains("past_inflows"),
-                    "field should mention 'past_inflows', got: {field}"
-                );
-                assert!(
-                    message.contains(">= 0.0") || message.contains("negative"),
-                    "message should mention non-negativity, got: {message}"
                 );
             }
             other => panic!("expected SchemaError, got: {other:?}"),

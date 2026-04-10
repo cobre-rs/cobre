@@ -26,7 +26,7 @@ Validate the case (checks all 5 validation layers):
 cobre validate examples/4ree
 ```
 
-Run the optimization (deterministic inflows, Expectation risk measure):
+Run the optimization:
 
 ```sh
 cobre run examples/4ree
@@ -86,27 +86,28 @@ Decision: exclude NOFICT1 entirely.
 ### Inflow model (NOT converted)
 
 sddp-lab uses "Naive" inflow scenarios with per-season LogNormal marginal
-distributions and identity Gaussian copulas (independent hydros). Cobre v0.1.x
-uses PAR(p) with additive normal noise.
+distributions and identity Gaussian copulas (independent hydros). Cobre uses
+PAR(p) with additive normal noise.
 
 Converting LogNormal(mu, sigma) parameters to PAR(0) normal parameters requires
 moment-matching (`mean = exp(mu + sigma^2/2)`), but the resulting distributions
 have fundamentally different tail shapes, making convergence bound comparisons
 unreliable.
 
-Decision: run with **deterministic inflows** (no `scenarios/` directory). The
-solver will use zero inflow at each stage, which means hydro generation will be
-driven entirely by initial storage drawdown. This is physically unrealistic but
-sufficient to verify the LP formulation and that validation passes.
-
-The full stochastic conversion will be revisited when Cobre supports lognormal
-inflow distributions.
+Decision: provide seasonal statistics via the `scenarios/` directory and run
+with stochastic inflows using PAR(p). The `scenarios/inflow_seasonal_stats.parquet`
+file supplies per-season means and standard deviations derived from the sddp-lab
+LogNormal parameters via moment-matching. The resulting inflow distributions differ
+from the original LogNormal tails, so convergence bounds remain incomparable with
+sddp-lab, but the model produces physically plausible hydro dispatch rather than
+zero-inflow drawdown.
 
 ### Risk measure
 
-sddp-lab's 4ree uses CVaR (alpha=0.5, lambda=0.5). Cobre v0.1.x supports only
-the Expectation (risk-neutral) risk measure. The two objective functions are not
-comparable.
+sddp-lab's 4ree uses CVaR (alpha=0.5, lambda=0.5). This example uses the default
+Expectation (risk-neutral) risk measure. CVaR is also available via `stages.json`.
+The two objective functions are not directly comparable even with matching risk
+measures due to the differences in inflow distributions noted above.
 
 ### Discount rate
 
@@ -132,13 +133,9 @@ Initial reservoir storage values are taken directly from `hydros.csv`:
 ## Known Limitations
 
 - **Results are NOT comparable to sddp-lab**: different stochastic model
-  (deterministic vs. lognormal), different risk measure (Expectation vs. CVaR),
+  (PAR(p) normal vs. lognormal), different risk measure (Expectation vs. CVaR),
   and excluded NOFICT1 transit lines all mean the objective values and dispatch
   patterns will differ.
 - **NORTE is isolated**: without the NOFICT1 transit lines, NORTE generation
   cannot reach SUDESTE or NORDESTE. NORTE hydro and thermal generation can only
   serve NORTE's own load.
-- **Zero inflow**: running without a `scenarios/` directory means the PAR model
-  produces zero inflow at every stage. The LP will dispatch from initial storage
-  only, which drains rapidly. Use this case for structural validation, not
-  for meaningful dispatch results.

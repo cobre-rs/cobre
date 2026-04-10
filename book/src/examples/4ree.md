@@ -98,18 +98,17 @@ the system in this model.
 `forward_passes: 4` draws four scenario trajectories per training iteration (multi-cut
 SDDP). The iteration limit is 256 — higher than the 1dtoy case to
 allow more cuts to accumulate across the 12-stage horizon. No convergence-based
-stopping rule is configured because the case runs with deterministic zero inflows,
-so the objective converges to a deterministic LP optimal rather than a stochastic
-bound.
+stopping rule is configured; the iteration limit acts as the sole termination
+criterion.
 
 The `scenario_source` block configures per-class scenario sampling. All three
 entity classes use `in_sample` with `seed: 42` for deterministic forward-pass
-noise (though with zero inflows the noise has no practical effect).
+noise.
 
 `modeling.inflow_non_negativity.method: "none"` allows the PAR(p) noise model to
 produce negative samples without truncation. This setting has no practical effect
-here because no `scenarios/` directory is present and inflow is effectively zero
-throughout.
+here because the seasonal statistics have non-negative means that dominate the
+noise.
 
 ---
 
@@ -250,12 +249,12 @@ Converting LogNormal(mu, sigma) parameters to PAR(0) normal parameters requires
 moment-matching, but the resulting distributions have fundamentally different tail
 shapes, making convergence bound comparisons unreliable.
 
-Decision: run with **deterministic inflows** — no `scenarios/` directory is
-provided. The PAR model produces zero inflow at each stage, so hydro generation
-is driven entirely by initial storage drawdown. This is physically unrealistic but
-sufficient to verify the LP structure and that validation passes. The full
-stochastic conversion will be revisited when Cobre supports lognormal inflow
-distributions.
+Decision: provide seasonal statistics via the `scenarios/` directory and run with
+stochastic inflows using PAR(p). The `scenarios/inflow_seasonal_stats.parquet`
+file supplies per-season means and standard deviations derived from the sddp-lab
+LogNormal parameters via moment-matching. The resulting distributions differ from
+the original LogNormal tails, so convergence bounds remain incomparable with
+sddp-lab, but the model produces physically plausible hydro dispatch.
 
 ### Risk measure
 
@@ -282,17 +281,13 @@ The global spillage penalty in `penalties.json` is set to 1.0 $/hm³ to match.
 ## Known Limitations
 
 **Results are not comparable to sddp-lab.** Structural differences make objective
-values and dispatch patterns incomparable: deterministic versus lognormal inflow
-model, default Expectation versus CVaR risk measure (configurable — see
-[Risk measure](#risk-measure)), and the excluded NOFICT1 transit lines. Use this
-case for LP structural validation only.
+values and dispatch patterns incomparable: PAR(p) normal versus lognormal inflow
+distributions (different tail shapes despite moment-matching), default Expectation
+versus CVaR risk measure (configurable — see [Risk measure](#risk-measure)), and
+the excluded NOFICT1 transit lines. Use this case for LP structural validation and
+for verifying that stochastic inflow sampling behaves correctly.
 
 **NORTE is isolated.** Without the NOFICT1 transit lines, NORTE generation cannot
 reach SUDESTE or NORDESTE. NORTE hydro and thermal output can only serve NORTE's
 own load. This understates inter-regional trade relative to the actual Brazilian
 system.
-
-**Zero inflow throughout.** Running without a `scenarios/` directory means the PAR
-model produces zero inflow at every stage. The LP dispatches entirely from initial
-reservoir storage, which drains rapidly across the 12-month horizon. This produces
-an LP feasibility stress test rather than a physically realistic energy study.

@@ -1,30 +1,34 @@
 //! Pipeline orchestrator for the five-layer validation and `System` construction pipeline.
 //!
-//! [`run_pipeline`] wires together all five validation layers, the resolution step,
-//! the scenario assembly step, and `SystemBuilder::build` into a single callable
-//! that either returns a fully-validated [`cobre_core::System`] or a
+//! [`run_pipeline`] and [`run_pipeline_with_report`] wire together all five validation
+//! layers, the resolution step, the scenario assembly step, and `SystemBuilder::build`
+//! into single callables that either return a fully-validated [`cobre_core::System`] or a
 //! [`LoadError`] explaining what went wrong.
+//!
+//! Use [`run_pipeline_with_report`] when the caller needs access to warnings collected
+//! during validation (e.g., the `validate` CLI subcommand).
 
 use std::collections::HashMap;
 
-use cobre_core::{SystemBuilder, scenario::CorrelationModel};
+use cobre_core::{scenario::CorrelationModel, SystemBuilder};
 
 use crate::{
-    LoadError,
+    report::{generate_report, ValidationReport},
     resolution::{
-        BoundsEntitySlices, BoundsOverrides, PenaltiesEntitySlices, PenaltiesOverrides,
         resolve_bounds, resolve_exchange_factors, resolve_generic_constraint_bounds,
         resolve_load_factors, resolve_ncs_bounds, resolve_ncs_factors, resolve_penalties,
+        BoundsEntitySlices, BoundsOverrides, PenaltiesEntitySlices, PenaltiesOverrides,
     },
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
-        ValidationContext,
         dimensional::validate_dimensional_consistency,
         referential::validate_referential_integrity,
         schema::validate_schema,
         semantic::{validate_semantic_hydro_thermal, validate_semantic_stages_penalties_scenarios},
         structural::validate_structure,
+        ValidationContext,
     },
+    LoadError,
 };
 
 use cobre_core::System;
@@ -34,7 +38,8 @@ use std::path::Path;
 ///
 /// Executes all five validation layers, the three-tier resolution step, scenario
 /// assembly, and `SystemBuilder::build`. Returns `Ok(System)` when every layer
-/// succeeds, or the first `Err(LoadError)` encountered.
+/// succeeds, or the first `Err(LoadError)` encountered. Warnings collected during
+/// validation are silently discarded; use [`run_pipeline_with_report`] to retrieve them.
 ///
 /// # Errors
 ///
@@ -45,6 +50,22 @@ use std::path::Path;
 /// - [`LoadError::SchemaError`] — AR coefficient count mismatch in scenario assembly.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
+    run_pipeline_with_report(path).map(|(system, _report)| system)
+}
+
+/// Run the complete loading pipeline and return both the [`System`] and a
+/// [`ValidationReport`] containing any warnings collected during validation.
+///
+/// This is the same pipeline as [`run_pipeline`] but preserves warnings so that
+/// callers (e.g., the `validate` CLI subcommand) can display them to the user.
+///
+/// # Errors
+///
+/// Same error conditions as [`run_pipeline`].
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_pipeline_with_report(
+    path: &Path,
+) -> Result<(System, ValidationReport), LoadError> {
     let mut ctx = ValidationContext::new();
 
     // Layer 1 — structural validation (required files present on disk).
@@ -68,10 +89,8 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
     validate_semantic_hydro_thermal(&data, &mut ctx);
     validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
 
-    // Convert all collected errors to a single LoadError. Warnings are silently
-    // discarded here — they were already emitted to `ctx` and callers that want
-    // them can inspect `ctx` before calling `into_result`, but the public API
-    // only surfaces errors.
+    // Capture warnings before consuming the context. Errors cause early return.
+    let report = generate_report(&ctx);
     ctx.into_result()?;
 
     // ── Resolution step ───────────────────────────────────────────────────────
@@ -189,5 +208,5 @@ pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {
                 .join("\n"),
         })?;
 
-    Ok(system)
+    Ok((system, report))
 }

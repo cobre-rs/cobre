@@ -55,11 +55,8 @@ pub mod system;
 pub mod validation;
 
 pub use broadcast::{deserialize_system, serialize_system};
-pub use config::{Config, EstimationConfig, OrderSelectionMethod, PolicyMode, parse_config};
+pub use config::{parse_config, Config, EstimationConfig, OrderSelectionMethod, PolicyMode};
 pub use constraints::{
-    BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow, ExchangeFactorEntry,
-    GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow, LineBoundsRow,
-    LinePenaltyOverrideRow, NcsPenaltyOverrideRow, PumpingBoundsRow, ThermalBoundsRow,
     load_contract_bounds, load_exchange_factors, load_generic_constraint_bounds,
     load_generic_constraints, load_hydro_bounds, load_line_bounds, load_penalty_overrides_bus,
     load_penalty_overrides_hydro, load_penalty_overrides_line, load_penalty_overrides_ncs,
@@ -67,55 +64,58 @@ pub use constraints::{
     parse_generic_constraint_bounds, parse_generic_constraints, parse_hydro_bounds,
     parse_line_bounds, parse_penalty_overrides_bus, parse_penalty_overrides_hydro,
     parse_penalty_overrides_line, parse_penalty_overrides_ncs, parse_pumping_bounds,
-    parse_thermal_bounds,
+    parse_thermal_bounds, BlockExchangeFactor, BusPenaltyOverrideRow, ContractBoundsRow,
+    ExchangeFactorEntry, GenericConstraintBoundsRow, HydroBoundsRow, HydroPenaltyOverrideRow,
+    LineBoundsRow, LinePenaltyOverrideRow, NcsPenaltyOverrideRow, PumpingBoundsRow,
+    ThermalBoundsRow,
 };
 pub use error::LoadError;
 pub use extensions::{
-    FittingWindow, FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig,
-    SeasonConfig, SelectionMode, StageRange, load_fpha_hyperplanes, load_hydro_geometry,
-    load_production_models, parse_fpha_hyperplanes, parse_hydro_geometry, parse_production_models,
+    load_fpha_hyperplanes, load_hydro_geometry, load_production_models, parse_fpha_hyperplanes,
+    parse_hydro_geometry, parse_production_models, FittingWindow, FphaColumnLayout,
+    FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig, SelectionMode,
+    StageRange,
 };
 pub use initial_conditions::parse_initial_conditions;
 pub use output::policy::{
-    OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord, PolicyCheckpoint,
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, StageCutsReadResult,
-    StageStatesPayload, StageStatesReadResult, deserialize_stage_basis, deserialize_stage_cuts,
-    deserialize_stage_states, read_policy_checkpoint, serialize_stage_basis, serialize_stage_cuts,
-    serialize_stage_states, write_policy_checkpoint,
+    deserialize_stage_basis, deserialize_stage_cuts, deserialize_stage_states,
+    read_policy_checkpoint, serialize_stage_basis, serialize_stage_cuts, serialize_stage_states,
+    write_policy_checkpoint, OwnedPolicyBasisRecord, OwnedPolicyCutRecord, PolicyBasisRecord,
+    PolicyCheckpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    StageCutsReadResult, StageStatesPayload, StageStatesReadResult,
 };
 pub use output::{
-    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, MetadataConfiguration,
-    MetadataConvergence, MetadataCuts, MetadataIterations, MetadataProblemDimensions,
-    MetadataScenarios, MpiInfo, OutputContext, OutputError, ParquetWriterConfig,
-    SimulationMetadata, SimulationOutput, SolverStatsRow, TrainingMetadata, TrainingOutput,
-    TrainingParquetWriter, get_hostname, now_iso8601, read_convergence_summary,
-    read_simulation_metadata, read_training_metadata, write_cut_selection_records,
-    write_dictionaries, write_fpha_hyperplanes, write_provenance_report, write_results,
-    write_scaling_report, write_simulation_metadata, write_simulation_results,
-    write_simulation_solver_stats, write_solver_stats, write_training_metadata,
-    write_training_results,
+    get_hostname, now_iso8601, read_convergence_summary, read_simulation_metadata,
+    read_training_metadata, write_cut_selection_records, write_dictionaries,
+    write_fpha_hyperplanes, write_provenance_report, write_results, write_scaling_report,
+    write_simulation_metadata, write_simulation_results, write_simulation_solver_stats,
+    write_solver_stats, write_training_metadata, write_training_results, ConvergenceSummary,
+    CutSelectionRecord, CutStatistics, IterationRecord, MetadataConfiguration, MetadataConvergence,
+    MetadataCuts, MetadataIterations, MetadataProblemDimensions, MetadataScenarios, MpiInfo,
+    OutputContext, OutputError, ParquetWriterConfig, SimulationMetadata, SimulationOutput,
+    SolverStatsRow, TrainingMetadata, TrainingOutput, TrainingParquetWriter,
 };
 pub use penalties::parse_penalties;
-pub use report::{ReportEntry, ValidationReport, generate_report};
+pub use report::{generate_report, ReportEntry, ValidationReport};
 pub use resolution::{resolve_bounds, resolve_penalties};
 pub use scenarios::{
-    BlockFactor, ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowArCoefficientRow,
-    InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
-    NoiseOpeningRow, ScenarioData, assemble_inflow_models, assemble_load_models, load_correlation,
-    load_external_inflow_scenarios, load_external_load_scenarios, load_external_ncs_scenarios,
-    load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
-    load_load_factors, load_load_seasonal_stats, load_noise_openings, load_scenarios,
-    parse_correlation, parse_external_inflow_scenarios, parse_external_load_scenarios,
-    parse_external_ncs_scenarios, parse_inflow_ar_coefficients, parse_inflow_history,
-    parse_inflow_seasonal_stats, parse_load_factors, parse_load_seasonal_stats,
+    assemble_inflow_models, assemble_load_models, load_correlation, load_external_inflow_scenarios,
+    load_external_load_scenarios, load_external_ncs_scenarios, load_inflow_ar_coefficients,
+    load_inflow_history, load_inflow_seasonal_stats, load_load_factors, load_load_seasonal_stats,
+    load_noise_openings, load_scenarios, parse_correlation, parse_external_inflow_scenarios,
+    parse_external_load_scenarios, parse_external_ncs_scenarios, parse_inflow_ar_coefficients,
+    parse_inflow_history, parse_inflow_seasonal_stats, parse_load_factors,
+    parse_load_seasonal_stats, BlockFactor, ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow,
+    InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry,
+    LoadSeasonalStatsRow, NoiseOpeningRow, ScenarioData,
 };
-pub use stages::{StagesData, build_season_stage_map, parse_stages};
+pub use stages::{build_season_stage_map, parse_stages, StagesData};
 pub use system::{
     load_energy_contracts, load_non_controllable_sources, load_pumping_stations, parse_buses,
     parse_energy_contracts, parse_hydros, parse_lines, parse_non_controllable_sources,
     parse_pumping_stations, parse_thermals,
 };
-pub use validation::structural::{FileManifest, validate_structure};
+pub use validation::structural::{validate_structure, FileManifest};
 pub use validation::{ErrorKind, Severity, ValidationContext, ValidationEntry};
 
 use cobre_core::System;
@@ -137,6 +137,9 @@ use std::path::Path;
 /// After all layers pass, three-tier penalty/bound resolution and scenario assembly
 /// are performed before constructing the [`System`].
 ///
+/// Warnings collected during validation are silently discarded. Use [`validate_case`]
+/// when you need to inspect or display warnings alongside the loaded [`System`].
+///
 /// # Errors
 ///
 /// - [`LoadError::IoError`] — a required file is missing or cannot be read.
@@ -147,4 +150,18 @@ use std::path::Path;
 ///   across Layers 1-5, or `SystemBuilder` rejected the assembled data.
 pub fn load_case(path: &Path) -> Result<System, LoadError> {
     pipeline::run_pipeline(path)
+}
+
+/// Load a case directory and return both the fully-validated [`System`] and a
+/// [`ValidationReport`] containing all warnings collected during the pipeline.
+///
+/// This function runs the same five-layer validation pipeline as [`load_case`] but
+/// preserves warnings so that callers can display them to the user. Errors still
+/// cause the function to return `Err`; warnings never block loading.
+///
+/// # Errors
+///
+/// Same error conditions as [`load_case`].
+pub fn validate_case(path: &Path) -> Result<(System, ValidationReport), LoadError> {
+    pipeline::run_pipeline_with_report(path)
 }

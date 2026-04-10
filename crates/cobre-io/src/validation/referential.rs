@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 // ── validate_referential_integrity ───────────────────────────────────────────
 
@@ -983,12 +983,12 @@ fn validate_variable_ref_entity(
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             DiversionChannel, Hydro, HydroGenerationModel, HydroPenalties, Line,
             NonControllableSource, PumpingStation, Thermal, ThermalCostSegment,
         },
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
+        EntityId,
     };
     use std::collections::BTreeMap;
     use std::fs;
@@ -1005,7 +1005,7 @@ mod tests {
             NcsFactorEntry,
         },
         validation::{
-            schema::{ParsedData, validate_schema},
+            schema::{validate_schema, ParsedData},
             structural::validate_structure,
         },
     };
@@ -1594,10 +1594,9 @@ mod tests {
             "expected errors for invalid hydro and unknown entity_type"
         );
         assert!(inv.iter().any(|e| e.message.contains("999")));
-        assert!(
-            inv.iter()
-                .any(|e| e.message.contains("unknown entity_type"))
-        );
+        assert!(inv
+            .iter()
+            .any(|e| e.message.contains("unknown entity_type")));
     }
 
     /// `CorrelationEntity` with `entity_type == "inflow"` and a valid hydro id
@@ -1843,13 +1842,11 @@ mod tests {
         assert_eq!(inv.len(), 1);
         assert!(inv[0].message.contains("999"));
         assert!(inv[0].message.contains("bus_id"));
-        assert!(
-            inv[0]
-                .entity
-                .as_deref()
-                .unwrap_or("")
-                .contains("LoadFactorEntry")
-        );
+        assert!(inv[0]
+            .entity
+            .as_deref()
+            .unwrap_or("")
+            .contains("LoadFactorEntry"));
     }
 
     /// `LoadFactorEntry` with a non-existent `stage_id` produces 1
@@ -1879,13 +1876,11 @@ mod tests {
         assert_eq!(inv.len(), 1);
         assert!(inv[0].message.contains("999"));
         assert!(inv[0].message.contains("stage_id"));
-        assert!(
-            inv[0]
-                .entity
-                .as_deref()
-                .unwrap_or("")
-                .contains("LoadFactorEntry")
-        );
+        assert!(inv[0]
+            .entity
+            .as_deref()
+            .unwrap_or("")
+            .contains("LoadFactorEntry"));
     }
 
     /// `LoadFactorEntry` with valid `bus_id` and `stage_id` produces no

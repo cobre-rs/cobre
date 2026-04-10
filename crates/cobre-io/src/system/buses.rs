@@ -41,9 +41,9 @@
 //! thermals, lines, hydros) is deferred to Layer 3 (Epic 06).
 
 use cobre_core::{
-    EntityId,
     entities::{Bus, DeficitSegment},
-    penalty::{GlobalPenaltyDefaults, resolve_bus_deficit_segments, resolve_bus_excess_cost},
+    penalty::{resolve_bus_deficit_segments, resolve_bus_excess_cost, GlobalPenaltyDefaults},
+    EntityId,
 };
 use serde::Deserialize;
 use std::collections::HashSet;

@@ -492,16 +492,12 @@ mod tests {
 
     #[test]
     fn ac_new_5_stages_pools_len_is_5() {
-        // Given FutureCostFunction::new(5, 9, 10, 100, 0),
-        // when inspecting pools.len(), then it is 5.
         let fcf = FutureCostFunction::new(5, 9, 10, 100, 0);
         assert_eq!(fcf.pools.len(), 5);
     }
 
     #[test]
     fn ac_active_cuts_at_stage_with_cut_yields_it() {
-        // Given an FCF with a cut added at stage 2,
-        // when active_cuts(2) is called, then it yields the added cut.
         let mut fcf = FutureCostFunction::new(5, 3, 1, 10, 0);
         let coeffs = [1.0, 2.0, 3.0];
         fcf.add_cut(2, 0, 0, 99.0, &coeffs);
@@ -512,8 +508,6 @@ mod tests {
 
     #[test]
     fn ac_active_cuts_at_different_stage_yields_none() {
-        // Given an FCF with a cut added at stage 2,
-        // when active_cuts(3) is called, then it yields no cuts.
         let mut fcf = FutureCostFunction::new(5, 3, 1, 10, 0);
         fcf.add_cut(2, 0, 0, 99.0, &[1.0, 2.0, 3.0]);
 
@@ -523,8 +517,6 @@ mod tests {
 
     #[test]
     fn ac_total_active_cuts_is_sum_across_stages() {
-        // Given an FCF with cuts at multiple stages,
-        // when total_active_cuts() is called, then it returns the sum.
         let mut fcf = FutureCostFunction::new(5, 1, 1, 10, 0);
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);
         fcf.add_cut(1, 0, 0, 2.0, &[2.0]);

@@ -756,12 +756,10 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // ensure deterministic FCF insertion order regardless of thread
         // scheduling.
         staged_cuts_buf.sort_by_key(|cut| cut.trial_point_idx);
-        // Belt-and-suspenders: verify the sort produced the expected ordering.
-        debug_assert!(
-            staged_cuts_buf
-                .windows(2)
-                .all(|w| w[0].trial_point_idx <= w[1].trial_point_idx),
-            "backward pass cuts must be sorted by trial_point_idx after explicit sort"
+        debug_assert_eq!(
+            staged_cuts_buf.len(),
+            spec.local_work,
+            "work-stealing must produce exactly one cut per trial point"
         );
 
         for cut in &staged_cuts_buf {

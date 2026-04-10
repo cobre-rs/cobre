@@ -177,7 +177,13 @@ mod tests {
                 "total_active": 980000,
                 "peak_active": 1100000
             },
-            "mpi": { "world_size": 1, "ranks_participated": 1 }
+            "distribution": {
+                "backend": "local",
+                "world_size": 1,
+                "ranks_participated": 1,
+                "num_nodes": 1,
+                "threads_per_rank": 1
+            }
         }"#
     }
 
@@ -191,7 +197,13 @@ mod tests {
             "duration_seconds": 900.0,
             "status": "complete",
             "scenarios": { "total": 100, "completed": 100, "failed": 0 },
-            "mpi": { "world_size": 1, "ranks_participated": 1 }
+            "distribution": {
+                "backend": "local",
+                "world_size": 1,
+                "ranks_participated": 1,
+                "num_nodes": 1,
+                "threads_per_rank": 1
+            }
         }"#
     }
 

@@ -189,8 +189,8 @@ mod tests {
     use std::path::PathBuf;
 
     use cobre_io::{
-        ConvergenceSummary, MetadataConfiguration, MetadataConvergence, MetadataCuts,
-        MetadataIterations, MetadataProblemDimensions, MpiInfo, TrainingMetadata,
+        ConvergenceSummary, DistributionInfo, MetadataConfiguration, MetadataConvergence,
+        MetadataCuts, MetadataIterations, MetadataProblemDimensions, TrainingMetadata,
     };
 
     use super::{SummaryArgs, build_training_summary, convergence_fallback};
@@ -232,9 +232,16 @@ mod tests {
                 total_active: 980_000,
                 peak_active: 1_100_000,
             },
-            mpi: MpiInfo {
+            distribution: DistributionInfo {
+                backend: "local".to_string(),
                 world_size: 1,
                 ranks_participated: 1,
+                num_nodes: 1,
+                threads_per_rank: 1,
+                mpi_library: None,
+                mpi_standard: None,
+                thread_level: None,
+                slurm_job_id: None,
             },
         }
     }

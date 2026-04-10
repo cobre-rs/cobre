@@ -1,6 +1,7 @@
 //! Post-run summary block for the `cobre run` command.
 //!
 //! Provides separate printing functions for each phase of the run:
+//! - [`print_execution_topology`] — execution topology (backend, threads, layout)
 //! - [`print_stochastic_summary`] — stochastic preprocessing statistics
 //! - [`print_training_summary`] — training convergence metrics
 //! - [`print_simulation_summary`] — simulation completion stats
@@ -31,6 +32,159 @@ pub fn print_hydro_model_summary(stderr: &Term, summary: &HydroModelSummary) {
         "  Evaporation:   {}",
         format_evaporation_line(summary)
     ));
+}
+
+/// Format a sorted list of rank indices into a compact range string.
+///
+/// Contiguous sequences use en-dash notation (`0–3`). Non-contiguous ranks are
+/// comma-separated. Mixed sequences interleave both styles: `0–2, 7, 9–11`.
+/// An empty slice returns an empty string.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(format_rank_list(&[0, 1, 2, 3]), "0–3");
+/// assert_eq!(format_rank_list(&[0, 2, 5]),    "0, 2, 5");
+/// assert_eq!(format_rank_list(&[0, 1, 2, 7, 9, 10, 11]), "0–2, 7, 9–11");
+/// ```
+fn format_rank_list(ranks: &[usize]) -> String {
+    if ranks.is_empty() {
+        return String::new();
+    }
+    let mut segments: Vec<String> = Vec::new();
+    let mut start = ranks[0];
+    let mut end = ranks[0];
+
+    for &r in &ranks[1..] {
+        if r == end + 1 {
+            end = r;
+        } else {
+            if end > start {
+                segments.push(format!("{start}\u{2013}{end}"));
+            } else {
+                segments.push(format!("{start}"));
+            }
+            start = r;
+            end = r;
+        }
+    }
+    // Flush final segment.
+    if end > start {
+        segments.push(format!("{start}\u{2013}{end}"));
+    } else {
+        segments.push(format!("{start}"));
+    }
+    segments.join(", ")
+}
+
+/// Print the execution topology summary to `stderr`.
+///
+/// Renders a bold header followed by indented detail lines showing the
+/// communication backend, threading configuration, and process layout.
+/// Called once after the banner, before any phase output.
+///
+/// For a **local** backend the output is:
+///
+/// ```text
+/// Execution
+///   Backend:   local
+///   Host:      hostname
+///   Threads:   5 rayon threads
+/// ```
+///
+/// For **MPI** on a single node:
+///
+/// ```text
+/// Execution
+///   Backend:   MPI (Open MPI v4.1.6, MPI 4.0)
+///   Threads:   Funneled, 5 rayon threads per rank
+///   Layout:    4 ranks on hostname
+/// ```
+///
+/// For **MPI** across multiple nodes, a per-host breakdown is added, and an
+/// optional SLURM line is appended when scheduler metadata is present.
+pub fn print_execution_topology(
+    stderr: &Term,
+    topology: &cobre_comm::ExecutionTopology,
+    n_threads: usize,
+) {
+    use cobre_comm::BackendKind;
+
+    let thread_word = if n_threads == 1 {
+        "rayon thread"
+    } else {
+        "rayon threads"
+    };
+
+    let _ = stderr.write_line(&format!("{}", console::style("Execution").bold()));
+
+    match topology.backend {
+        BackendKind::Local => {
+            let _ = stderr.write_line("  Backend:   local");
+            let _ = stderr.write_line(&format!("  Host:      {}", topology.leader_hostname()));
+            let _ = stderr.write_line(&format!("  Threads:   {n_threads} {thread_word}"));
+        }
+        BackendKind::Mpi => {
+            // Backend line with library and standard version.
+            let backend_detail = if let Some(ref mpi) = topology.mpi {
+                format!("MPI ({}, {})", mpi.library_version, mpi.standard_version)
+            } else {
+                "MPI".to_string()
+            };
+            let _ = stderr.write_line(&format!("  Backend:   {backend_detail}"));
+
+            // Thread level + rayon thread count.
+            let thread_line = if let Some(ref mpi) = topology.mpi {
+                format!("{}, {n_threads} {thread_word} per rank", mpi.thread_level)
+            } else {
+                format!("{n_threads} {thread_word} per rank")
+            };
+            let _ = stderr.write_line(&format!("  Threads:   {thread_line}"));
+
+            // Layout: single-node or multi-node.
+            let world_size = topology.world_size;
+            let rank_word = if world_size == 1 { "rank" } else { "ranks" };
+            let num_hosts = topology.num_hosts();
+            if num_hosts <= 1 {
+                let _ = stderr.write_line(&format!(
+                    "  Layout:    {world_size} {rank_word} on {}",
+                    topology.leader_hostname()
+                ));
+            } else {
+                let node_word = if num_hosts == 1 { "node" } else { "nodes" };
+                let _ = stderr.write_line(&format!(
+                    "  Layout:    {world_size} {rank_word} across {num_hosts} {node_word}"
+                ));
+                for host in &topology.hosts {
+                    let count = host.ranks.len();
+                    let rank_count_word = if count == 1 { "rank" } else { "ranks" };
+                    let range = format_rank_list(&host.ranks);
+                    let _ = stderr.write_line(&format!(
+                        "    {}: ranks {range}  ({count} {rank_count_word})",
+                        host.hostname
+                    ));
+                }
+            }
+
+            // Optional SLURM line.
+            if let Some(ref slurm) = topology.slurm {
+                let mut slurm_parts: Vec<String> = Vec::new();
+                slurm_parts.push(format!("job {}", slurm.job_id));
+                if let Some(ref node_list) = slurm.node_list {
+                    slurm_parts.push(format!("nodes {node_list}"));
+                }
+                if let Some(cpus) = slurm.cpus_per_task {
+                    slurm_parts.push(format!("{cpus} CPUs/task"));
+                }
+                let _ = stderr.write_line(&format!("  SLURM:     {}", slurm_parts.join(", ")));
+            }
+        }
+        // Auto (unresolved) backend: print minimal info.
+        BackendKind::Auto => {
+            let _ = stderr.write_line(&format!("  Backend:   {:?}", topology.backend));
+            let _ = stderr.write_line(&format!("  Threads:   {n_threads} {thread_word}"));
+        }
+    }
 }
 
 /// Classify how FPHA planes were obtained for display purposes.
@@ -1328,6 +1482,38 @@ mod tests {
         assert!(
             !s.contains("max order"),
             "output must NOT contain 'max order' when ar_method is None, got: {s}"
+        );
+    }
+
+    // ── format_rank_list tests ────────────────────────────────────────────────
+
+    use super::format_rank_list;
+
+    #[test]
+    fn test_format_rank_list_empty() {
+        assert_eq!(format_rank_list(&[]), "");
+    }
+
+    #[test]
+    fn test_format_rank_list_single() {
+        assert_eq!(format_rank_list(&[5]), "5");
+    }
+
+    #[test]
+    fn test_format_rank_list_contiguous() {
+        assert_eq!(format_rank_list(&[0, 1, 2, 3]), "0\u{2013}3");
+    }
+
+    #[test]
+    fn test_format_rank_list_non_contiguous() {
+        assert_eq!(format_rank_list(&[0, 2, 5]), "0, 2, 5");
+    }
+
+    #[test]
+    fn test_format_rank_list_mixed() {
+        assert_eq!(
+            format_rank_list(&[0, 1, 2, 7, 9, 10, 11]),
+            "0\u{2013}2, 7, 9\u{2013}11"
         );
     }
 }

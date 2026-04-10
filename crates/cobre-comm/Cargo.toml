@@ -18,6 +18,7 @@ ferrompi = { version = "0.3.0", optional = true }
 
 [features]
 mpi = ["dep:ferrompi"]
+numa = ["mpi", "ferrompi/numa"]
 tcp = []
 shm = []
 

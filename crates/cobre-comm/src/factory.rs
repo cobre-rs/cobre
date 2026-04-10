@@ -216,6 +216,17 @@ impl crate::SharedMemoryProvider for CommBackend {
     }
 }
 
+#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+impl crate::TopologyProvider for CommBackend {
+    fn topology(&self) -> &crate::ExecutionTopology {
+        match self {
+            #[cfg(feature = "mpi")]
+            Self::Mpi(backend) => backend.topology(),
+            Self::Local(backend) => backend.topology(),
+        }
+    }
+}
+
 /// Returns all backend names compiled into this binary.
 ///
 /// Always includes `"local"`. Conditionally includes `"mpi"` (feature `mpi`),

@@ -17,7 +17,7 @@ use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
     MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
-    MetadataProblemDimensions, MetadataScenarios, MpiInfo, OutputContext, SimulationMetadata,
+    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
     TrainingMetadata, write_simulation_metadata, write_training_metadata,
 };
 use super::parquet_config::ParquetWriterConfig;
@@ -99,10 +99,7 @@ pub fn write_training_results(
             total_active: training_output.cut_stats.total_active,
             peak_active: training_output.cut_stats.peak_active,
         },
-        mpi: MpiInfo {
-            world_size: ctx.mpi_world_size,
-            ranks_participated: ctx.mpi_ranks_participated,
-        },
+        distribution: ctx.distribution.clone(),
     };
     write_training_metadata(&output_dir.join("training/metadata.json"), &metadata)?;
 
@@ -140,10 +137,7 @@ pub fn write_simulation_results(
             completed: simulation_output.completed,
             failed: simulation_output.failed,
         },
-        mpi: MpiInfo {
-            world_size: ctx.mpi_world_size,
-            ranks_participated: ctx.mpi_ranks_participated,
-        },
+        distribution: ctx.distribution.clone(),
     };
     write_simulation_metadata(&output_dir.join("simulation/metadata.json"), &metadata)?;
 
@@ -315,13 +309,23 @@ mod tests {
     }
 
     fn make_output_context() -> OutputContext {
+        use super::super::manifest::DistributionInfo;
         OutputContext {
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
-            mpi_world_size: 1,
-            mpi_ranks_participated: 1,
+            distribution: DistributionInfo {
+                backend: "local".to_string(),
+                world_size: 1,
+                ranks_participated: 1,
+                num_nodes: 1,
+                threads_per_rank: 1,
+                mpi_library: None,
+                mpi_standard: None,
+                thread_level: None,
+                slurm_job_id: None,
+            },
         }
     }
 

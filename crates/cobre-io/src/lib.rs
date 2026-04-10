@@ -84,9 +84,9 @@ pub use output::policy::{
     serialize_stage_states, write_policy_checkpoint,
 };
 pub use output::{
-    ConvergenceSummary, CutSelectionRecord, CutStatistics, IterationRecord, MetadataConfiguration,
-    MetadataConvergence, MetadataCuts, MetadataIterations, MetadataProblemDimensions,
-    MetadataScenarios, MpiInfo, OutputContext, OutputError, ParquetWriterConfig,
+    ConvergenceSummary, CutSelectionRecord, CutStatistics, DistributionInfo, IterationRecord,
+    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, OutputContext, OutputError, ParquetWriterConfig,
     SimulationMetadata, SimulationOutput, SolverStatsRow, TrainingMetadata, TrainingOutput,
     TrainingParquetWriter, get_hostname, now_iso8601, read_convergence_summary,
     read_simulation_metadata, read_training_metadata, write_cut_selection_records,

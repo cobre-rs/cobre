@@ -704,6 +704,24 @@ pub trait SharedMemoryProvider: Send + Sync {
     fn is_leader(&self) -> bool;
 }
 
+/// Trait for backends that can report their execution topology.
+///
+/// Implementors provide access to an [`ExecutionTopology`](crate::topology::ExecutionTopology)
+/// gathered at communicator initialization. The topology is queried
+/// non-collectively (no MPI calls) and is allocation-free after construction.
+///
+/// This trait is separate from [`Communicator`] because not all backends expose
+/// topology information. It is implemented by backends that have the data
+/// (`FerrompiBackend`, `CommBackend`) and by `LocalBackend` with a single-host fallback.
+pub trait TopologyProvider: Send + Sync {
+    /// Return a reference to the cached execution topology.
+    ///
+    /// The topology is gathered once during backend initialization.
+    /// This method is non-collective and may be called from any thread.
+    #[must_use]
+    fn topology(&self) -> &crate::topology::ExecutionTopology;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CommData, Communicator, LocalCommunicator, SharedMemoryProvider, SharedRegion};

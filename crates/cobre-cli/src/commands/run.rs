@@ -20,7 +20,9 @@ use std::sync::mpsc;
 use clap::Args;
 use console::Term;
 
-use cobre_comm::{Communicator, ReduceOp, create_communicator};
+use cobre_comm::{
+    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+};
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
     write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
@@ -159,6 +161,8 @@ struct RunContext<C: Communicator> {
     term_width: u16,
     /// Terminal handle for stderr output.
     stderr: Term,
+    /// Execution topology gathered during communicator setup.
+    topology: ExecutionTopology,
 }
 
 /// Result of the load-and-broadcast phase.
@@ -235,8 +239,8 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     )?;
 
     // Shared runtime context for metadata output files.
-    let hostname = cobre_io::get_hostname();
-    let mpi_world_size = u32::try_from(ctx.comm.size()).unwrap_or(u32::MAX);
+    let hostname = ctx.topology.leader_hostname().to_string();
+    let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);
 
     if training_enabled {
         apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
@@ -255,8 +259,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
                 solver: "highs".to_string(),
                 started_at: training_started_at,
                 completed_at: training_completed_at,
-                mpi_world_size,
-                mpi_ranks_participated: mpi_world_size,
+                distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
             };
             write_training_outputs(&WriteTrainingArgs {
                 output_dir: &ctx.output_dir,
@@ -294,27 +297,13 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         }
 
         if setup.n_scenarios() > 0 {
-            run_simulation_phase(
-                &ctx,
-                &system,
-                &mut setup,
-                &training.result,
-                &hostname,
-                mpi_world_size,
-            )?;
+            run_simulation_phase(&ctx, &system, &mut setup, &training.result, &hostname)?;
         }
     } else if setup.n_scenarios() > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(&ctx, &system, &mut setup, root_config.as_ref())?;
-        run_simulation_phase(
-            &ctx,
-            &system,
-            &mut setup,
-            &training_result,
-            &hostname,
-            mpi_world_size,
-        )?;
+        run_simulation_phase(&ctx, &system, &mut setup, &training_result, &hostname)?;
     } else {
         // Both training and simulation disabled — nothing to do.
         if ctx.is_root && !ctx.quiet {
@@ -512,9 +501,9 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
 
     let stderr = Term::stderr();
 
-    if !quiet {
-        crate::banner::print_banner(&stderr);
-    }
+    // Gather topology while the concrete backend type is still in scope.
+    // `comm.topology()` is non-collective and allocation-free after this point.
+    let topology = comm.topology().clone();
 
     let n_threads = resolve_thread_count(args.threads);
     rayon::ThreadPoolBuilder::new()
@@ -523,6 +512,11 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         .unwrap_or_else(|_| {
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
+
+    if !quiet {
+        crate::banner::print_banner(&stderr);
+        crate::summary::print_execution_topology(&stderr, &topology, n_threads);
+    }
 
     let output_dir: PathBuf = args
         .output
@@ -538,6 +532,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         output_dir,
         term_width,
         stderr,
+        topology,
     })
 }
 
@@ -987,7 +982,6 @@ fn run_simulation_phase(
     setup: &mut StudySetup,
     training_result: &cobre_sddp::TrainingResult,
     hostname: &str,
-    mpi_world_size: u32,
 ) -> Result<(), CliError> {
     let solver_factory = HighsSolver::new;
     let n_scenarios = setup.n_scenarios();
@@ -1100,7 +1094,6 @@ fn run_simulation_phase(
         write_sim_outputs_on_root(
             ctx,
             hostname,
-            mpi_world_size,
             sim_started_at,
             &merged_sim_output,
             &global_scenario_stats,
@@ -1114,18 +1107,17 @@ fn run_simulation_phase(
 fn write_sim_outputs_on_root(
     ctx: &RunContext<impl Communicator>,
     hostname: &str,
-    mpi_world_size: u32,
     sim_started_at: String,
     merged_sim_output: &cobre_io::SimulationOutput,
     global_scenario_stats: &[(u32, cobre_sddp::SolverStatsDelta)],
 ) -> Result<(), CliError> {
+    let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);
     let sim_ctx = cobre_io::OutputContext {
         hostname: hostname.to_string(),
         solver: "highs".to_string(),
         started_at: sim_started_at,
         completed_at: cobre_io::now_iso8601(),
-        mpi_world_size,
-        mpi_ranks_participated: mpi_world_size,
+        distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
     };
     write_simulation_outputs(&WriteSimulationArgs {
         output_dir: &ctx.output_dir,
@@ -1135,6 +1127,34 @@ fn write_sim_outputs_on_root(
         quiet: ctx.quiet,
         stderr: &ctx.stderr,
     })
+}
+
+/// Build a [`cobre_io::DistributionInfo`] from the cached execution topology.
+///
+/// `ranks_participated` is the number of MPI ranks that actively contributed
+/// to the computation (may differ from `world_size` if some ranks were idle).
+fn build_distribution_info(
+    topology: &ExecutionTopology,
+    n_threads: usize,
+    ranks_participated: u32,
+) -> cobre_io::DistributionInfo {
+    use cobre_comm::BackendKind;
+    cobre_io::DistributionInfo {
+        backend: match topology.backend {
+            BackendKind::Mpi => "mpi",
+            BackendKind::Local => "local",
+            BackendKind::Auto => "unknown",
+        }
+        .to_string(),
+        world_size: u32::try_from(topology.world_size).unwrap_or(u32::MAX),
+        ranks_participated,
+        num_nodes: u32::try_from(topology.num_hosts()).unwrap_or(u32::MAX),
+        threads_per_rank: u32::try_from(n_threads).unwrap_or(u32::MAX),
+        mpi_library: topology.mpi.as_ref().map(|m| m.library_version.clone()),
+        mpi_standard: topology.mpi.as_ref().map(|m| m.standard_version.clone()),
+        thread_level: topology.mpi.as_ref().map(|m| m.thread_level.clone()),
+        slurm_job_id: topology.slurm.as_ref().map(|s| s.job_id.clone()),
+    }
 }
 
 /// Print the simulation summary from aggregated solver stats and cost statistics.

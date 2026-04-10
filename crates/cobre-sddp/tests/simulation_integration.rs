@@ -789,8 +789,17 @@ fn train_simulate_write_cycle() {
         solver: "highs".to_string(),
         started_at: "2026-01-17T08:00:00Z".to_string(),
         completed_at: "2026-01-17T12:30:00Z".to_string(),
-        mpi_world_size: 1,
-        mpi_ranks_participated: 1,
+        distribution: cobre_io::DistributionInfo {
+            backend: "local".to_string(),
+            world_size: 1,
+            ranks_participated: 1,
+            num_nodes: 1,
+            threads_per_rank: 1,
+            mpi_library: None,
+            mpi_standard: None,
+            thread_level: None,
+            slurm_job_id: None,
+        },
     };
     write_results(
         output_dir,

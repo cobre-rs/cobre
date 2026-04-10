@@ -304,13 +304,23 @@ mod tests {
     }
 
     fn make_output_context() -> OutputContext {
+        use crate::output::DistributionInfo;
         OutputContext {
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
-            mpi_world_size: 1,
-            mpi_ranks_participated: 1,
+            distribution: DistributionInfo {
+                backend: "local".to_string(),
+                world_size: 1,
+                ranks_participated: 1,
+                num_nodes: 1,
+                threads_per_rank: 1,
+                mpi_library: None,
+                mpi_standard: None,
+                thread_level: None,
+                slurm_job_id: None,
+            },
         }
     }
 

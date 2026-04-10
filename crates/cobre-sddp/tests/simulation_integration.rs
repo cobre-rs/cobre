@@ -787,6 +787,7 @@ fn train_simulate_write_cycle() {
     let output_ctx = cobre_io::OutputContext {
         hostname: "test-host".to_string(),
         solver: "highs".to_string(),
+        solver_version: None,
         started_at: "2026-01-17T08:00:00Z".to_string(),
         completed_at: "2026-01-17T12:30:00Z".to_string(),
         distribution: cobre_io::DistributionInfo {

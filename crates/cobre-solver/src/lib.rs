@@ -49,6 +49,8 @@ pub use types::{
 pub mod highs;
 #[cfg(feature = "highs")]
 pub use highs::HighsSolver;
+#[cfg(feature = "highs")]
+pub use highs::highs_version;
 
 #[cfg(feature = "test-support")]
 pub mod test_support {

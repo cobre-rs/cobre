@@ -107,6 +107,8 @@ pub fn print_execution_topology(
     stderr: &Term,
     topology: &cobre_comm::ExecutionTopology,
     n_threads: usize,
+    solver_name: &str,
+    solver_version: Option<&str>,
 ) {
     use cobre_comm::BackendKind;
 
@@ -117,6 +119,13 @@ pub fn print_execution_topology(
     };
 
     let _ = stderr.write_line(&format!("{}", console::style("Execution").bold()));
+
+    // Solver line — always shown regardless of backend.
+    let solver_line = match solver_version {
+        Some(v) => format!("{solver_name} {v}"),
+        None => solver_name.to_string(),
+    };
+    let _ = stderr.write_line(&format!("  Solver:    {solver_line}"));
 
     match topology.backend {
         BackendKind::Local => {

@@ -155,6 +155,13 @@ pub trait SolverInterface: Send {
     ///
     /// See Solver Interface Trait SS2.9.
     fn name(&self) -> &'static str;
+
+    /// Returns the solver name and version as a human-readable string.
+    ///
+    /// Example: `"HiGHS 1.8.0"`
+    ///
+    /// See Solver Interface Trait SS2.9.
+    fn solver_name_version(&self) -> String;
 }
 
 #[cfg(test)]
@@ -202,6 +209,10 @@ mod tests {
 
         fn name(&self) -> &'static str {
             "Noop"
+        }
+
+        fn solver_name_version(&self) -> String {
+            "NoopSolver 0.0.0".to_string()
         }
     }
 

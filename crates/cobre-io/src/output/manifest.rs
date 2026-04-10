@@ -34,6 +34,8 @@ pub struct OutputContext {
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`), if known.
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when the phase started.
     pub started_at: String,
     /// ISO 8601 timestamp when the phase completed.
@@ -183,6 +185,9 @@ pub struct TrainingMetadata {
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when training started.
     pub started_at: String,
     /// ISO 8601 timestamp when training completed.
@@ -218,6 +223,9 @@ pub struct SimulationMetadata {
     pub hostname: String,
     /// LP solver backend name (e.g. `"highs"`).
     pub solver: String,
+    /// LP solver version string (e.g. `"1.8.0"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_version: Option<String>,
     /// ISO 8601 timestamp when simulation started.
     pub started_at: String,
     /// ISO 8601 timestamp when simulation completed.
@@ -344,6 +352,7 @@ mod tests {
             cobre_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: Some("1.8.0".to_string()),
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
             duration_seconds: 16_200.0,
@@ -385,6 +394,7 @@ mod tests {
             cobre_version: env!("CARGO_PKG_VERSION").to_string(),
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: Some("1.8.0".to_string()),
             started_at: "2026-01-17T13:00:00Z".to_string(),
             completed_at: "2026-01-17T13:15:00Z".to_string(),
             duration_seconds: 900.0,

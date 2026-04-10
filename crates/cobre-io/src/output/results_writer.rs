@@ -67,6 +67,7 @@ pub fn write_training_results(
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         hostname: ctx.hostname.clone(),
         solver: ctx.solver.clone(),
+        solver_version: ctx.solver_version.clone(),
         started_at: ctx.started_at.clone(),
         completed_at: ctx.completed_at.clone(),
         duration_seconds: training_output.total_time_ms as f64 / 1_000.0,
@@ -128,6 +129,7 @@ pub fn write_simulation_results(
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         hostname: ctx.hostname.clone(),
         solver: ctx.solver.clone(),
+        solver_version: ctx.solver_version.clone(),
         started_at: ctx.started_at.clone(),
         completed_at: ctx.completed_at.clone(),
         duration_seconds: simulation_output.total_time_ms as f64 / 1_000.0,
@@ -313,6 +315,7 @@ mod tests {
         OutputContext {
             hostname: "test-host".to_string(),
             solver: "highs".to_string(),
+            solver_version: None,
             started_at: "2026-01-17T08:00:00Z".to_string(),
             completed_at: "2026-01-17T12:30:00Z".to_string(),
             distribution: DistributionInfo {

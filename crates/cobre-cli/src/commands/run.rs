@@ -163,6 +163,8 @@ struct RunContext<C: Communicator> {
     stderr: Term,
     /// Execution topology gathered during communicator setup.
     topology: ExecutionTopology,
+    /// Solver version string (e.g. `"1.8.0"`).
+    solver_version: String,
 }
 
 /// Result of the load-and-broadcast phase.
@@ -257,6 +259,7 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
             let training_ctx = cobre_io::OutputContext {
                 hostname: hostname.clone(),
                 solver: "highs".to_string(),
+                solver_version: Some(ctx.solver_version.clone()),
                 started_at: training_started_at,
                 completed_at: training_completed_at,
                 distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
@@ -513,9 +516,17 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
             tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
         });
 
+    let solver_version = cobre_solver::highs_version();
+
     if !quiet {
         crate::banner::print_banner(&stderr);
-        crate::summary::print_execution_topology(&stderr, &topology, n_threads);
+        crate::summary::print_execution_topology(
+            &stderr,
+            &topology,
+            n_threads,
+            "HiGHS",
+            Some(&solver_version),
+        );
     }
 
     let output_dir: PathBuf = args
@@ -533,6 +544,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         term_width,
         stderr,
         topology,
+        solver_version,
     })
 }
 
@@ -1115,6 +1127,7 @@ fn write_sim_outputs_on_root(
     let sim_ctx = cobre_io::OutputContext {
         hostname: hostname.to_string(),
         solver: "highs".to_string(),
+        solver_version: None,
         started_at: sim_started_at,
         completed_at: cobre_io::now_iso8601(),
         distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),

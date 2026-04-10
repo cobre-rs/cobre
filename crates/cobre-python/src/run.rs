@@ -338,6 +338,7 @@ fn write_training_artifacts(
     let training_ctx = cobre_io::OutputContext {
         hostname: cobre_io::get_hostname(),
         solver: "highs".to_string(),
+        solver_version: Some(cobre_solver::highs_version()),
         started_at: training.started_at.clone(),
         completed_at: cobre_io::now_iso8601(),
         distribution: cobre_io::DistributionInfo {
@@ -425,6 +426,7 @@ fn run_simulation_phase_py(
     let sim_ctx = cobre_io::OutputContext {
         hostname: cobre_io::get_hostname(),
         solver: "highs".to_string(),
+        solver_version: Some(cobre_solver::highs_version()),
         started_at: sim_started_at,
         completed_at: cobre_io::now_iso8601(),
         distribution: cobre_io::DistributionInfo {

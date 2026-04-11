@@ -69,19 +69,19 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -602,6 +602,11 @@ pub fn deactivate_cuts_in_lp<S: SolverInterface>(
 pub struct ForwardPassBatch {
     /// Number of forward-pass scenarios assigned to this rank.
     pub local_forward_passes: usize,
+    /// Total forward passes across all MPI ranks. Used for LHS stratification
+    /// in the sampler (`total_scenarios` field of `SampleRequest`) and for
+    /// sizing the LHS permutation scratch buffer. Must equal the study-level
+    /// `forward_passes` parameter, NOT the per-rank local count.
+    pub total_forward_passes: usize,
     /// Current training iteration (0-based; used for seed derivation).
     pub iteration: u64,
     /// Global index of this rank's first forward pass for seed derivation.
@@ -964,6 +969,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     } = training_ctx;
     let ForwardPassBatch {
         local_forward_passes,
+        total_forward_passes,
         iteration,
         fwd_offset,
     } = batch;
@@ -1031,9 +1037,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             // when run_forward_stage borrows ws while raw_noise is still live.
             let mut raw_noise_buf = vec![0.0_f64; noise_dim];
             #[allow(clippy::cast_possible_truncation)]
-            let mut perm_scratch = vec![0_usize; forward_passes.max(1)];
+            let mut perm_scratch = vec![0_usize; (*total_forward_passes).max(1)];
             #[allow(clippy::cast_possible_truncation)]
-            let total_scenarios_u32 = forward_passes as u32;
+            let total_scenarios_u32 = *total_forward_passes as u32;
 
             for t in 0..num_stages {
                 ws.solver.load_model(&ctx.templates[t]);
@@ -1168,20 +1174,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
         context::{StageContext, TrainingContext},
         workspace::{BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
+        TrajectoryRecord,
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1775,6 +1781,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -1876,6 +1883,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -1983,6 +1991,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2381,6 +2390,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2542,6 +2552,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2578,6 +2589,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2677,6 +2689,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2983,6 +2996,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3153,6 +3167,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3390,6 +3405,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3510,6 +3526,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3624,6 +3641,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3715,6 +3733,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },

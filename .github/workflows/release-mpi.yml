@@ -29,7 +29,7 @@ on:
       - "**[0-9]+.[0-9]+.[0-9]+*"
 
 env:
-  MPICH_VERSION: "4.3.2"
+  MPICH_VERSION: "4.2.3"
 
 jobs:
   build-mpi:
@@ -139,6 +139,23 @@ jobs:
 
           For the single-process variant (no MPI dependency), download
           the standard 'cobre' binary from the same GitHub release.
+
+          Troubleshooting
+          ---------------
+
+          srun --mpi=pmi2 fails with "pmijobid missing in fullinit command":
+            This error is caused by an incompatibility between SLURM 24.05's
+            PMI2 plugin and MPICH's PMI2 wire protocol. Use mpiexec as a
+            fallback launcher, which bypasses PMI2 entirely:
+              mpiexec -n <nprocs> ./cobre-mpi run <case-dir>
+            Alternatively, if PMIx is available on the cluster:
+              srun --mpi=pmix -n <nprocs> ./cobre-mpi run <case-dir>
+
+          Multi-node job hangs at MPI_Init (MPICH 4.3.x clusters):
+            MPICH 4.3.0 introduced a PMI2 client regression that causes a
+            multi-proxy KVS barrier deadlock in Hydra during MPI_Init when
+            running across multiple nodes. If your cluster runs MPICH 4.3.x,
+            downgrade to MPICH 4.2.x to avoid this hang.
           EOF
 
           tar czf "$ARCHIVE" -C staging .

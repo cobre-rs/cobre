@@ -1042,11 +1042,6 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             let total_scenarios_u32 = *total_forward_passes as u32;
 
             for t in 0..num_stages {
-                ws.solver.load_model(&ctx.templates[t]);
-                if cut_batches[t].num_rows > 0 {
-                    ws.solver.add_rows(&cut_batches[t]);
-                }
-
                 let cum_d = ctx
                     .cumulative_discount_factors
                     .get(t)
@@ -1054,6 +1049,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     .unwrap_or(1.0);
 
                 for (local_m, m) in (start_m..end_m).enumerate() {
+                    // Reload model per scenario for determinism investigation.
+                    ws.solver.load_model(&ctx.templates[t]);
+                    if cut_batches[t].num_rows > 0 {
+                        ws.solver.add_rows(&cut_batches[t]);
+                    }
                     ws.current_state.clear();
                     let src: &[f64] = if t == 0 {
                         initial_state

@@ -83,16 +83,16 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     cut_sync::CutSyncBuffers,
     forward::build_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
+    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -582,6 +582,9 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 if m >= local_work {
                     break;
                 }
+                // DETERMINISM INVESTIGATION: reload model per trial point to
+                // eliminate HiGHS state carry-over between trial points.
+                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
                 accum.slot_increments.fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
@@ -868,13 +871,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BasisStore, SolverWorkspace},
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1173,7 +1176,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1182,8 +1184,9 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -3040,7 +3043,7 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
 
         let bus0 = Bus {
             id: EntityId(0),

@@ -1,0 +1,126 @@
+name: MPI SLURM Integration
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "crates/cobre-comm/**"
+      - "crates/cobre-cli/src/commands/run.rs"
+      - "crates/cobre-sddp/src/training.rs"
+      - "crates/cobre-sddp/src/forward.rs"
+      - "crates/cobre-sddp/src/backward.rs"
+      - "crates/cobre-sddp/src/simulation/**"
+      - "tests/slurm/**"
+      - ".github/workflows/mpi-slurm.yml"
+  push:
+    branches: [main, develop]
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+    paths:
+      - "crates/cobre-comm/**"
+      - "crates/cobre-cli/src/commands/run.rs"
+      - "crates/cobre-sddp/src/training.rs"
+      - "crates/cobre-sddp/src/forward.rs"
+      - "crates/cobre-sddp/src/backward.rs"
+      - "crates/cobre-sddp/src/simulation/**"
+      - "tests/slurm/**"
+      - ".github/workflows/mpi-slurm.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  MPICH_VERSION: "4.2.3"
+
+jobs:
+  slurm-integration:
+    name: SLURM Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Cache MPICH
+        id: mpich-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/mpich
+          key: mpich-${{ env.MPICH_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build MPICH from source
+        if: steps.mpich-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          wget -q "https://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz"
+          tar xzf "mpich-${MPICH_VERSION}.tar.gz"
+          cd "mpich-${MPICH_VERSION}"
+          ./configure --prefix=/opt/mpich \
+              --disable-fortran \
+              --disable-cxx \
+              --disable-romio \
+              --disable-doc \
+              --with-device=ch3:nemesis
+          make -j"$(nproc)"
+          make install
+
+      - name: Set MPICH environment
+        run: |
+          set -euo pipefail
+          echo "/opt/mpich/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=/opt/mpich/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: mpi-slurm
+
+      - name: Build cobre-mpi
+        run: |
+          set -euo pipefail
+          cargo build --release --features mpi -p cobre-cli
+
+      - name: Prepare test artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p tests/slurm/staging
+          cp target/release/cobre tests/slurm/staging/cobre-mpi
+          cp -r examples/4ree tests/slurm/staging/4ree
+
+      - name: Build and start SLURM cluster
+        run: |
+          set -euo pipefail
+          docker compose -f tests/slurm/docker-compose.yml build
+          docker compose -f tests/slurm/docker-compose.yml up -d --wait
+
+      - name: Copy artifacts to cluster
+        run: |
+          set -euo pipefail
+          docker compose -f tests/slurm/docker-compose.yml cp tests/slurm/staging/cobre-mpi controller:/shared/cobre-mpi
+          docker compose -f tests/slurm/docker-compose.yml cp tests/slurm/staging/4ree controller:/shared/4ree
+          docker compose -f tests/slurm/docker-compose.yml cp tests/slurm/run-tests.sh controller:/shared/run-tests.sh
+          docker compose -f tests/slurm/docker-compose.yml exec controller chmod +x /shared/cobre-mpi
+
+      - name: Run SLURM integration tests
+        run: |
+          set -euo pipefail
+          docker compose -f tests/slurm/docker-compose.yml exec controller bash /shared/run-tests.sh
+
+      - name: Diagnostic output
+        if: failure()
+        run: |
+          set -euo pipefail
+          docker compose -f tests/slurm/docker-compose.yml logs
+          docker compose -f tests/slurm/docker-compose.yml exec controller sinfo -N
+
+      - name: Cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          docker compose -f tests/slurm/docker-compose.yml down -v

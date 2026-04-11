@@ -318,6 +318,8 @@ mod tests {
             backward_ms: 100,
             lp_solves: 240,
             solve_time_ms: 0.0,
+            lower_bound_eval_ms: 0,
+            fwd_rayon_overhead_ms: 0,
         }
     }
 

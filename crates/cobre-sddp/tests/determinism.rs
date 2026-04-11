@@ -886,6 +886,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS.to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &StubComm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -897,6 +898,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..4].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -908,6 +910,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..2].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };

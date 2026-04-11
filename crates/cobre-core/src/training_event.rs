@@ -244,14 +244,18 @@ pub enum TrainingEvent {
         wall_time_ms: u64,
         /// Wall-clock time for this iteration only, in milliseconds.
         iteration_time_ms: u64,
-        /// Forward pass time for this iteration, in milliseconds.
+        /// Forward pass wall-clock time for this iteration, in milliseconds.
         forward_ms: u64,
-        /// Backward pass time for this iteration, in milliseconds.
+        /// Backward pass wall-clock time for this iteration, in milliseconds.
         backward_ms: u64,
         /// Total number of LP solves in this iteration (forward + backward stages).
         lp_solves: u64,
         /// Cumulative LP solve wall-clock time for this iteration, in milliseconds.
         solve_time_ms: f64,
+        /// Wall-clock time for lower bound evaluation, in milliseconds.
+        lower_bound_eval_ms: u64,
+        /// Estimated rayon overhead in the forward pass, in milliseconds.
+        fwd_rayon_overhead_ms: u64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -399,6 +403,8 @@ mod tests {
                 backward_ms: 100,
                 lp_solves: 240,
                 solve_time_ms: 45.2,
+                lower_bound_eval_ms: 10,
+                fwd_rayon_overhead_ms: 5,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),

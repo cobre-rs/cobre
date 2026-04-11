@@ -844,7 +844,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             // and do a full load_model + append_all_cuts.
         }
 
-        // Snapshot solver stats before lower bound evaluation.
+        // Snapshot solver stats and wall-clock before lower bound evaluation.
+        let lb_wall_start = Instant::now();
         let lb_stats_before = solver.statistics();
 
         let lb_spec = LbEvalSpec {
@@ -882,6 +883,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
         let lb_solve_time_ms = lb_delta.solve_time_ms;
         solver_stats_log.push((iteration, "lower_bound", -1, lb_delta));
+        #[allow(clippy::cast_possible_truncation)]
+        let lb_wall_ms = lb_wall_start.elapsed().as_millis() as u64;
 
         let (should_stop, rule_results) = convergence_monitor.update(lb, &sync_result);
 
@@ -920,6 +923,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 backward_ms: backward_elapsed_ms,
                 lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
                 solve_time_ms: fwd_solve_time_ms + bwd_solve_time_ms + lb_solve_time_ms,
+                lower_bound_eval_ms: lb_wall_ms,
+                fwd_rayon_overhead_ms: forward_result.rayon_overhead_ms,
             },
         );
 

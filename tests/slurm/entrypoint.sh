@@ -42,6 +42,32 @@ _verify_munge() {
     fi
 }
 
+_start_dbus() {
+    # dbus is required by slurmd's cgroup/v2 plugin in SLURM 23.11+
+    echo "[entrypoint] Starting dbus..."
+    mkdir -p /run/dbus
+    if [[ ! -S /run/dbus/system_bus_socket ]]; then
+        dbus-daemon --system --fork 2>/dev/null || echo "[entrypoint] WARNING: dbus start failed (may already be running)"
+        sleep 1
+    fi
+}
+
+_prepare_cgroup() {
+    # Docker containers with cgroup v2 don't have system.slice (created by systemd).
+    # slurmd's cgroup/v2 plugin needs the scope directory to exist.
+    # Create it manually so slurmd can initialize.
+    local hostname
+    hostname=$(hostname)
+    local scope_dir="/sys/fs/cgroup/system.slice/${hostname}_slurmstepd.scope"
+    if [[ ! -d /sys/fs/cgroup/system.slice ]]; then
+        echo "[entrypoint] Creating cgroup system.slice for slurmd..."
+        mkdir -p /sys/fs/cgroup/system.slice 2>/dev/null || true
+    fi
+    if [[ ! -d "${scope_dir}" ]]; then
+        mkdir -p "${scope_dir}" 2>/dev/null || true
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # controller role
 # ---------------------------------------------------------------------------
@@ -93,7 +119,11 @@ _run_controller() {
         sleep 1
     done
 
-    # 7. Start slurmd on the controller node as well
+    # 7. Prepare cgroup and dbus (required by slurmd cgroup/v2)
+    _start_dbus
+    _prepare_cgroup
+
+    # 8. Start slurmd on the controller node as well
     echo "[entrypoint] Starting slurmd (controller node)..."
     /usr/sbin/slurmd -D &
     SLURMD_PID=$!
@@ -105,27 +135,41 @@ _run_controller() {
     fi
     echo "[entrypoint] slurmd running (PID ${SLURMD_PID})"
 
-    # 8. Wait for both nodes to appear idle
-    echo "[entrypoint] Waiting for both nodes (controller + node2) to register as idle..."
-    for i in $(seq 1 60); do
-        IDLE_COUNT=$(sinfo -N --state=idle --noheader 2>/dev/null | wc -l || echo 0)
-        if [[ "${IDLE_COUNT}" -ge 2 ]]; then
-            echo "[entrypoint] Both nodes are idle (attempt ${i})"
+    # 9. Wait for controller's own slurmd to register (not node2 — that would deadlock
+    #    because node2 depends_on controller being healthy via docker-compose).
+    echo "[entrypoint] Waiting for controller node to register as idle..."
+    for i in $(seq 1 30); do
+        if sinfo -N --noheader 2>/dev/null | grep -q "controller.*idle"; then
+            echo "[entrypoint] Controller node is idle (attempt ${i})"
             break
         fi
-        if [[ "${i}" -eq 60 ]]; then
-            echo "[entrypoint] ERROR: nodes did not become idle within 120s"
+        if [[ "${i}" -eq 30 ]]; then
+            echo "[entrypoint] ERROR: controller node did not become idle within 30s"
             sinfo -N || true
             scontrol show nodes || true
             exit 1
         fi
-        sleep 2
+        sleep 1
     done
 
-    # 9. Mark container healthy
+    # 10. Mark container healthy — this unblocks node2's depends_on
     touch /tmp/container-healthy
-    echo "[entrypoint] Controller is ready. Cluster status:"
-    sinfo -N
+    echo "[entrypoint] Controller is healthy. Waiting for node2 to join..."
+
+    # 11. Now wait for both nodes to appear idle (node2 is starting in parallel)
+    for i in $(seq 1 60); do
+        IDLE_COUNT=$(sinfo -N --state=idle --noheader 2>/dev/null | wc -l || echo 0)
+        if [[ "${IDLE_COUNT}" -ge 2 ]]; then
+            echo "[entrypoint] Both nodes are idle (attempt ${i}). Cluster status:"
+            sinfo -N
+            break
+        fi
+        if [[ "${i}" -eq 60 ]]; then
+            echo "[entrypoint] WARNING: node2 did not become idle within 120s"
+            sinfo -N || true
+        fi
+        sleep 2
+    done
 
     # 10. Wait for any background service to exit
     wait -n "${MUNGE_PID}" "${SLURMCTLD_PID}" "${SLURMD_PID}"
@@ -165,7 +209,11 @@ _run_compute() {
     # 4. Verify munge
     _verify_munge
 
-    # 5. Start slurmd
+    # 5. Prepare cgroup and dbus (required by slurmd cgroup/v2)
+    _start_dbus
+    _prepare_cgroup
+
+    # 6. Start slurmd
     echo "[entrypoint] Starting slurmd..."
     _fix_slurm_dirs
     /usr/sbin/slurmd -D &

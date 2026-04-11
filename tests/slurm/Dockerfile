@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Build toolchain for MPICH from source
     build-essential \
     wget \
+    # dbus is required by slurmd cgroup/v2 plugin in SLURM 23.11+
+    dbus \
     # Runtime utilities
     curl \
     python3 \

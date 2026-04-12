@@ -1,11 +1,35 @@
 # Temporal Resolution Debts & Design Gaps
 
-**Date:** 2026-04-11 (revised 2026-04-12)
+**Date:** 2026-04-11 (revised 2026-04-12, structural revision 2026-04-12)
 **Status:** Active investigation
 **Context:** Cobre supports variable-length stages, but the stochastic pipeline
 assumes uniform monthly resolution in several places. This document catalogs
 the known debts and design gaps that must be addressed before non-monthly
 studies (weekly, quarterly, mixed-resolution DECOMP-like) can be supported.
+
+---
+
+## Executive summary
+
+This document catalogs 13 debts and 2 opportunities across Cobre's temporal
+resolution handling. The work falls into four layers:
+
+1. **Production DECOMP critical path** (Debts 4→6→9→10→12): lag accumulation,
+   external standardization, mid-season starts, and terminal-stage FCF.
+2. **Mixed-res PAR correctness** (Debts 1, 5, 8): noise sharing, `month0` bug
+   fix, and historical residuals as opening tree noise.
+3. **Defense-in-depth validation** (Debts 2, 4): observation-to-season
+   alignment with multi-resolution aggregation, and season_id consistency
+   enforcement across heterogeneous season spaces.
+4. **Multi-resolution generalization** (Debt 13): monthly→quarterly PAR
+   transition with lag resolution conversion at the boundary.
+
+All proposed hot-path changes are zero-allocation with O(n_hydros) per-stage
+cost. The accumulator design degenerates to current behavior for uniform
+monthly studies with negligible overhead (one multiply by 1.0).
+
+Debt 7 is documentation-only. Opportunity 11 (external initial state
+sampling) eliminates pre-study burn-in for long-term planning.
 
 ---
 
@@ -51,26 +75,48 @@ Key characteristics:
 - Frozen lags + accumulation (Debt 6) maintain monthly lag resolution
 - Backward pass opening tree must share noise consistently with forward pass
 
+### Pattern D: Long-term multi-resolution (monthly→quarterly)
+
+Monthly stages for the near-term horizon (years 1–5) transitioning to
+quarterly stages for the long-term horizon (years 6–10+). Each resolution
+has its own PAR model fitted at the appropriate aggregation level. The
+lag accumulator handles the monthly→quarterly boundary by aggregating
+monthly inflows into quarterly lags at the transition point.
+
+Key characteristics:
+
+- Two PAR models: monthly (12 seasons) and quarterly (4 seasons)
+- Disjoint `season_id` ranges (0–11 monthly, 12–15 quarterly) in a single
+  `Custom` `SeasonMap`
+- Lag resolution transition at the monthly→quarterly boundary (Debt 13)
+- Observation aggregation: monthly history aggregated to quarterly for
+  fitting the quarterly PAR model (Debt 2)
+
 ### Applicability matrix
 
-| Debt                         | A: Monthly uniform    | B: Production DECOMP                 | C: Mixed-res + PAR  |
-| ---------------------------- | --------------------- | ------------------------------------ | ------------------- |
-| 1 (month0 bug)               | N/A (already monthly) | N/A (no Historical sampling)         | **Critical**        |
-| 2 (observation validation)   | **Yes**               | N/A (no PAR estimation from history) | **Yes**             |
-| 3 (past_inflows metadata)    | Low priority          | Low priority                         | Medium              |
-| 4 (season_id validation)     | **Yes**               | **Yes**                              | **Yes**             |
-| 5 (noise sharing)            | N/A (monthly stages)  | N/A (External scenarios)             | **Critical**        |
-| 6 (lag accumulation)         | N/A (monthly stages)  | **Critical**                         | **Critical**        |
-| 7 (PAR behavior doc)         | **Yes**               | N/A                                  | **Yes**             |
-| 8 (historical residuals)     | **Yes**               | N/A                                  | Maybe               |
-| 9 (external standardization) | N/A (no External)     | **Critical**                         | If External used    |
-| 10 (recent_observations)     | N/A                   | **Critical**                         | If mid-season start |
-| 12 (terminal-stage FCF)      | N/A                   | **Critical**                         | If coupling needed  |
+| Debt                          | A: Monthly uniform    | B: Production DECOMP                 | C: Mixed-res + PAR  | D: Multi-res (mo→qtr) |
+| ----------------------------- | --------------------- | ------------------------------------ | ------------------- | --------------------- |
+| 1 (month0 bug)                | N/A (already monthly) | N/A (no Historical sampling)         | **Critical**        | **Critical**          |
+| 2 (observation aggregation)   | **Yes**               | N/A (no PAR estimation from history) | **Yes**             | **Critical**          |
+| 3 (past_inflows metadata)     | Low priority          | Low priority                         | Medium              | Medium                |
+| 4 (season_id validation)      | **Yes**               | **Yes**                              | **Yes**             | **Critical**          |
+| 5 (noise sharing)             | N/A (monthly stages)  | N/A (External scenarios)             | **Critical**        | If sub-season stages  |
+| 6 (lag accumulation)          | N/A (monthly stages)  | **Critical**                         | **Critical**        | **Critical**          |
+| 7 (PAR behavior doc)          | **Yes**               | N/A                                  | **Yes**             | **Yes**               |
+| 8 (historical residuals)      | **Yes**               | N/A                                  | Maybe               | Maybe                 |
+| 9 (external standardization)  | N/A (no External)     | **Critical**                         | If External used    | If External used      |
+| 10 (recent_observations)      | N/A                   | **Critical**                         | If mid-season start | N/A                   |
+| 12 (terminal-stage FCF)       | N/A                   | **Critical**                         | If coupling needed  | If coupling needed    |
+| 13 (multi-res PAR transition) | N/A                   | N/A                                  | N/A                 | **Critical**          |
 
-For production DECOMP support, the critical path is:
-**Debt 4 → Debt 6 → Debt 9 → Debt 10 → Debt 12 (terminal-stage FCF)** +
-the `n_scenarios` uniformity workaround (see Debt 6, "Uniform scenario
-count" subsection).
+**Critical paths by pattern:**
+
+- **Pattern B (production DECOMP):**
+  Debt 4 → Debt 6 → Debt 9 → Debt 10 → Debt 12 (terminal-stage FCF) +
+  the `n_scenarios` uniformity workaround (see Debt 6, "Uniform scenario
+  count" subsection).
+- **Pattern D (multi-resolution):**
+  Debt 2 → Debt 4 → Debt 6 → Debt 13 (lag resolution transition).
 
 ---
 
@@ -112,9 +158,10 @@ coefficients applied to incorrect noise.
 
 ---
 
-## Debt 2: No validation of observation-to-season alignment
+## Debt 2: Observation-to-season alignment and multi-resolution aggregation
 
-**Severity:** Silent data quality issue.
+**Severity:** Silent data quality issue (current); required feature for
+Pattern D (multi-resolution studies).
 
 **Problem:** `inflow_history.parquet` rows are `(hydro_id, date, value_m3s)`.
 The code assumes each observation maps 1:1 to a season — one observation per
@@ -124,14 +171,73 @@ The code assumes each observation maps 1:1 to a season — one observation per
 - No check that each (hydro, season, year) has exactly one observation
 - No check that observation dates fall within defined season boundaries
 
-**Example failure:** User has monthly history but quarterly stages. Each
-quarter contains 3 monthly observations. The code silently maps all three
-to the same season (via SeasonMap) and the last one overwrites the first two
-in the observation table — or all three end up in the PAR estimation as
-separate "observations" for the same season, inflating the sample count.
+**Example failure (silent corruption):** User has monthly history but
+quarterly stages. Each quarter contains 3 monthly observations. The code
+silently maps all three to the same season (via SeasonMap) and the last one
+overwrites the first two in the observation table — or all three end up in
+the PAR estimation as separate "observations" for the same season, inflating
+the sample count.
 
-**Fix:** Add validation in the semantic layer (IO Layer 5) that cross-checks
-observation granularity against `season_definitions` and stage structure.
+**Example use case (multi-resolution):** User has monthly history and a
+study with monthly stages (years 1–5) transitioning to quarterly stages
+(years 6–10). The quarterly PAR model needs quarterly observations derived
+from the monthly history. This is not a validation error — it's a legitimate
+aggregation requirement.
+
+### Fix: two-layer approach
+
+**Layer 1 — Validation (error on ambiguity):**
+
+At IO load time, cross-check observation granularity against
+`season_definitions`:
+
+- If observation resolution is **finer** than season resolution (e.g.,
+  monthly observations, quarterly seasons): this is a valid aggregation
+  case. Proceed to Layer 2.
+- If observation resolution is **coarser** than season resolution (e.g.,
+  quarterly observations, monthly seasons): **error**. Cannot disaggregate
+  without assumptions.
+- If observation resolution **matches** season resolution: current behavior
+  (1:1 mapping). Validate uniqueness per (hydro, season, year).
+
+Resolution comparison uses `SeasonMap` season boundaries: a season spanning
+3 calendar months is quarterly; a season spanning 1 month is monthly.
+
+**Layer 2 — Aggregation (fine→coarse):**
+
+When observations are finer than the season, aggregate them into the
+season's resolution before PAR fitting:
+
+```
+For each (hydro, season, year):
+    obs_in_season = observations whose dates fall within the season's
+                    calendar boundaries (from SeasonMap)
+    aggregated_value = Σ(obs.value × obs.duration_hours) / season_total_hours
+```
+
+This produces one aggregated observation per (hydro, season, year) at the
+PAR model's resolution. The existing PAR fitting pipeline (`fitting.rs`)
+consumes these aggregated values unchanged.
+
+**Concrete example (Pattern D):**
+
+Monthly history with 12 seasons (ids 0–11) and quarterly seasons (ids
+12–15). The quarterly season for Q1 (id 12) spans January through March.
+Aggregation for hydro 0, Q1, 2024:
+
+```
+obs_jan = (2024-01-15, 450.0 m³/s, 744h)
+obs_feb = (2024-02-15, 380.0 m³/s, 696h)
+obs_mar = (2024-03-15, 520.0 m³/s, 744h)
+q1_value = (450×744 + 380×696 + 520×744) / (744+696+744) = 451.8 m³/s
+```
+
+The monthly PAR model uses the raw monthly observations. The quarterly PAR
+model uses the aggregated quarterly values. Both are fitted independently.
+
+**Testing:** Add test cases for (1) monthly obs + quarterly seasons
+(aggregation path), (2) quarterly obs + monthly seasons (error path),
+(3) monthly obs + monthly seasons (identity path, regression).
 
 ---
 
@@ -169,9 +275,9 @@ schemes (Debt 5) are implemented.
 
 ---
 
-## Debt 4: `season_id` is user-supplied with no consistency enforcement
+## Debt 4: `season_id` consistency enforcement across heterogeneous season spaces
 
-**Severity:** Silent misconfiguration risk.
+**Severity:** Silent misconfiguration risk; becomes critical for Pattern D.
 
 **Problem:** Each stage's `season_id` is set directly in `stages.json` by the
 user. The code derives `n_seasons = max(season_id) + 1` and uses modular
@@ -184,8 +290,68 @@ arithmetic throughout. But nothing validates that:
 - Multiple stages sharing a `season_id` is intentional (same-season stages get
   identical stochastic parameters)
 
-**Fix:** Add IO-layer validation that cross-checks stage `season_id` values
-against `season_definitions` when both are present.
+### Multi-resolution season spaces (Pattern D)
+
+For studies that transition between resolutions (e.g., monthly→quarterly),
+the `season_id` space must accommodate both resolutions using disjoint
+ranges within a single `Custom` `SeasonMap`:
+
+```json
+{
+  "cycle_type": "Custom",
+  "seasons": [
+    { "id": 0,  "label": "January",  "month_start": 1,  "month_end": 1  },
+    { "id": 1,  "label": "February", "month_start": 2,  "month_end": 2  },
+    ...
+    { "id": 11, "label": "December", "month_start": 12, "month_end": 12 },
+    { "id": 12, "label": "Q1",       "month_start": 1,  "month_end": 3  },
+    { "id": 13, "label": "Q2",       "month_start": 4,  "month_end": 6  },
+    { "id": 14, "label": "Q3",       "month_start": 7,  "month_end": 9  },
+    { "id": 15, "label": "Q4",       "month_start": 10, "month_end": 12 }
+  ]
+}
+```
+
+Monthly stages use `season_id` 0–11. Quarterly stages use `season_id`
+12–15. The PAR model has 16 parameter sets: 12 fitted on monthly
+observations, 4 fitted on quarterly-aggregated observations (see Debt 2).
+
+This design avoids introducing a "stage group" or "model group" concept.
+The `season_id` is the single key into PAR parameters. The `SeasonMap`
+defines what each season means. The validation layer ensures consistency.
+
+**Note on `season_for_date()` ambiguity:** With overlapping date ranges
+(January matches both season 0 and season 12/Q1), `season_for_date()`
+returns the first match. This is acceptable because `season_for_date()` is
+used for **historical observation mapping**, which always targets a specific
+resolution (Debt 2 handles the aggregation). Stage-to-season mapping uses
+the explicit `stage.season_id` field, not `season_for_date()`.
+
+### Fix: multi-level validation
+
+**V4.1 — Range coverage:** Every `season_id` referenced by a stage must
+exist in `season_definitions`. Error if a stage references an undefined
+season.
+
+**V4.2 — Observation coverage:** For each season with PAR-generated noise,
+at least `max_par_order + 1` observations must exist (after Debt 2
+aggregation). Warn if a season has zero observations — this is valid only
+when all stages using that season use External scenarios exclusively.
+
+**V4.3 — Resolution consistency within season groups:** Stages sharing the
+same `season_id` must have compatible durations. Four weekly stages with
+`season_id = 3` (April) is valid (sub-season stages, Debt 5 applies).
+A monthly stage and a quarterly stage sharing `season_id = 0` is an
+error — they imply different PAR resolutions for the same season.
+
+**V4.4 — Contiguity within resolution bands:** Within each resolution
+band (monthly: 0–11, quarterly: 12–15), season_ids should be contiguous.
+Gaps produce empty seasons with no PAR parameters. Warn (not error) since
+this could be intentional for External-only seasons.
+
+**Testing:** Add test cases for (1) valid monthly-only, (2) valid
+monthly+quarterly with disjoint ranges, (3) invalid: stage references
+undefined season, (4) invalid: mixed resolutions sharing a season_id.
 
 ---
 
@@ -385,25 +551,30 @@ weekly cuts, but **cannot be the only solution** — users who need weekly
 future cost function approximations require weekly SDDP stages with Benders
 cuts at each week boundary.
 
-### The complication: weeks spanning month boundaries
+### The complication: stages spanning season boundaries
 
 A week from Jan 28 to Feb 3 contributes 4 days to January and 3 days to
-February. The monthly lag accumulation requires fractional weights:
+February. The lag accumulation requires fractional weights:
 
 ```
-monthly_inflow_jan = Σ(z_stage × hours_in_jan) / total_jan_hours
-monthly_inflow_feb = Σ(z_stage × hours_in_feb) / total_feb_hours
+inflow_jan = Σ(z_stage × hours_in_jan) / total_jan_hours
+inflow_feb = Σ(z_stage × hours_in_feb) / total_feb_hours
 ```
 
 A single stage can finalize one lag period AND start accumulating into the
 next. These weights are entirely determined by stage dates and lag period
 boundaries — fully pre-computable at setup time.
 
+The same pattern applies to monthly stages spanning quarter boundaries
+(Pattern D): a monthly stage in March finalizes Q1 accumulation, a monthly
+stage in April starts Q2. See Debt 13 for the multi-resolution transition.
+
 ### Proposed solution: precomputed lag accumulation (B+C hybrid)
 
 The lag register's resolution is a property of the **stochastic model**,
-not of individual stages. With monthly history, lags are always monthly,
-regardless of how many weekly stages exist. The design has two parts:
+not of individual stages. The lag period boundaries come from the
+`SeasonMap` — month boundaries for monthly PAR, quarter boundaries for
+quarterly PAR. The design has two parts:
 
 **Part 1: Precomputed per-stage lag configuration (setup time)**
 
@@ -513,6 +684,15 @@ have the same RHS for all weeks in a month. The cut coefficients π_lag
 are meaningful at monthly resolution. This is exactly what's needed for
 DECOMP coupling — the cuts built at weekly boundaries have monthly lag
 semantics, compatible with monthly boundary cuts.
+
+**The backward pass does NOT need its own accumulator.** Standard SDDP
+does a one-step lookahead: for each (trial point, opening), solve the LP
+at stage `t+1` and extract duals. The trial point's lag state comes from
+the forward pass, which already applied the frozen-lag + accumulation
+logic. The backward pass consumes these lag values as-is — no state
+propagation beyond one step, so no accumulation is needed. The future
+cost approximation comes from cuts built in previous iterations, not from
+multi-step state propagation within the backward pass.
 
 ### Opening tree clamping rule
 
@@ -625,43 +805,12 @@ At the W4→M2 boundary, `finalize_period = true`. The lag register shifts:
 M2's LP sees `lag[0] = 502.5` (monthly resolution). Boundary cuts from the
 monthly model evaluate with the correct monthly lag value. ✓
 
-### What needs to change in `standardize_external_inflow`
+### Impact on `standardize_external_inflow` → see Debt 9
 
-The current code at `external.rs:325-358` has a **Debt 9** — it advances
-lags per-stage, not per-lag-period. For mixed-resolution studies, the
-standardization must use the same lag-freezing + accumulation logic as
-the runtime:
-
-1. Within the same `(season_id, year)` group, the lag buffer stays frozen
-   at the previous period's values.
-2. When crossing a period boundary, the lag buffer shifts with the weighted
-   average of the preceding stages' external inflows.
-
-This is the same `StageLagTransition` precomputed config applied during
-setup. The standardization loop becomes:
-
-```
-for scenario in 0..n_scenarios:
-    reset lag_buf to past_inflows
-    reset accum to 0
-    for t in 0..n_stages:
-        target = external_value[t, scenario, h]
-        eta = solve_par_noise(det_base, psi, order, lag_buf, sigma, target)
-        library.eta[t, scenario, h] = eta
-
-        // Accumulate for lag period average
-        accum[h] += target * stage_lag[t].accumulate_weight
-        if stage_lag[t].spillover_weight > 0:
-            next_accum[h] += target * stage_lag[t].spillover_weight
-
-        if stage_lag[t].finalize_period:
-            monthly_avg = accum[h] / weight_sum
-            shift lag_buf with monthly_avg
-            accum = next_accum; next_accum = 0
-```
-
-For uniform monthly studies this degenerates to the current behavior
-(weight=1, finalize every stage, lag advances every stage).
+The external standardization pipeline (`external.rs:325-358`) advances
+lags per-stage, not per-lag-period — the same resolution mismatch as the
+runtime forward pass. The fix uses the same `StageLagTransition` config.
+See Debt 9 for the full specification and corrected pseudocode.
 
 ### Edge case: first stage straddles backward into pre-study month
 
@@ -779,162 +928,24 @@ transition probabilities. This is a deep architectural change that is
 deferred — the padding workaround is sufficient for production DECOMP
 and does not block the future redesign.
 
-### Edge case: study starts mid-season (Debt 10)
+### Mid-season study starts → see Debt 10
 
-**This edge case reveals a fundamental gap in the `past_inflows` design.**
+When a DECOMP study starts mid-season (e.g., January 5 instead of
+January 1), the partial-season observations before the study start must
+seed the lag accumulator. See Debt 10 for the `recent_observations`
+input design and the rolling revision lifecycle.
 
-Suppose the DECOMP study is re-run weekly. Last week it started Dec 29;
-this week it starts Jan 5.
+### Testing strategy for Debt 6
 
-```
-Real world:  ... Dec ... | Jan 1-4 (observed: 480 m³/s) | Jan 5 → study
-                         |←── 4 days happened ──→|
-                         |   not a study stage   |
-```
-
-The `past_inflows` for this run:
-
-- `lag[0]` = December monthly average ✓ (previous complete season)
-- `lag[1]` = November monthly average ✓
-
-But January 1–4 happened in reality. Real inflow was 480 m³/s for 4 days.
-This partial-season observation has **nowhere to go**:
-
-- It's not a complete seasonal lag → doesn't fit in `past_inflows`
-- It's not a study stage → no LP produces a `z_inflow` for it
-- The accumulator starts at zero → January's lag will only average
-  stages from Jan 5 onward, missing 4 days of real data
-
-When January finalizes, the weighted average covers 27 days (Jan 5–31)
-instead of 31 days. The January monthly lag used for February's PAR
-computation is wrong — it ignores 4 observed days.
-
-**Why this matters operationally:** Short-term DECOMP studies are re-run
-frequently (daily or weekly) with rolling horizons. Each run starts at a
-different point within a month. The partial-month observations from before
-the study start are real data that must feed into the monthly lag
-accumulation for consistency between consecutive runs.
-
-**Proposed solution: `recent_observations` input**
-
-Extend `initial_conditions.json` (or a companion file) with observed
-inflow data from the partial current season preceding the study:
-
-```json
-{
-  "past_inflows": [
-    { "hydro_id": 0, "values_m3s": [dec_avg, nov_avg] }
-  ],
-  "recent_observations": [
-    {
-      "hydro_id": 0,
-      "start_date": "2025-01-01",
-      "end_date": "2025-01-05",
-      "value_m3s": 480.0
-    }
-  ]
-}
-```
-
-- `past_inflows` — unchanged. Complete seasonal lags for the PAR model.
-- `recent_observations` — observed average inflow rate for the partial
-  period between the last season boundary and the study start. Carries
-  dates so the system can compute the duration and the accumulation weight.
-
-**At setup time:** the recent observations seed the lag accumulator:
-
-```
-accum_jan[h] = 480.0 × (4 days × 24h)
-weight_jan = 4 × 24h / total_jan_hours
-```
-
-When study stages accumulate their January contributions on top of this
-seed, the final January average correctly includes all 31 days:
-
-```
-jan_avg = (480 × 96h + Σ stage_inflows × stage_hours) / total_jan_hours
-```
-
-**For the PAR model:** the lags are still frozen at `past_inflows` values
-(December). The recent observations don't affect the PAR formula — they
-only seed the accumulator for the current lag period. This is correct:
-the PAR conditions on the _previous complete season_, not on partial
-current-season data.
-
-**For uniform monthly studies starting on the 1st:** `recent_observations`
-is empty. The accumulator starts at zero. Fully backward-compatible.
-
-**For non-DECOMP studies:** `recent_observations` is optional and defaults
-to empty. No impact on existing behavior.
-
-**Consistency across noise sources:** The `recent_observations` seeding
-works identically regardless of whether inflows are generated by the PAR
-model (Pattern C) or provided as External scenarios (Pattern B). The
-accumulator doesn't care where `z_inflow` comes from — it accumulates
-the LP's realized inflow weighted by the precomputed stage weights. The
-`recent_observations` seed adds the pre-study partial-month contribution
-that no study stage covers.
-
-### Production DECOMP revision lifecycle (Debt 10 usage pattern)
-
-In production DECOMP, the PMO for a given month runs multiple revisions
-as weeks pass. Each revision drops one weekly stage (that week is now
-past) and adds its observed inflow to `recent_observations`. Using April
-2026 as the running example:
-
-**PMO_APR_2026_rv0** (study starts 2026-03-28, Saturday):
-
-```
-recent_observations: []  (no April days observed yet)
-Stages: W1(Mar28-Apr03) W2(Apr04-10) W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
-```
-
-**PMO_APR_2026_rv1** (study starts 2026-04-04, Saturday):
-
-```
-recent_observations: [
-  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 }
-]
-Stages: W2(Apr04-10) W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
-```
-
-W1 is gone — its April days (Apr 1–3) are now observed data. The
-accumulator seeds with 3 days × 500.0 m³/s, then W2–W5 accumulate
-on top. Note: the March days (Mar 28–31) from the former W1 are
-irrelevant — March is fully captured by `past_inflows`.
-
-**PMO_APR_2026_rv2** (study starts 2026-04-11):
-
-```
-recent_observations: [
-  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 },
-  { hydro_id: 0, start: "2026-04-04", end: "2026-04-11", value: 480.0 }
-]
-Stages: W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
-```
-
-**PMO_APR_2026_last** (study starts late April, e.g., 2026-04-25):
-
-```
-recent_observations: [
-  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 },
-  { hydro_id: 0, start: "2026-04-04", end: "2026-04-11", value: 480.0 },
-  { hydro_id: 0, start: "2026-04-11", end: "2026-04-18", value: 520.0 },
-  { hydro_id: 0, start: "2026-04-18", end: "2026-04-25", value: 510.0 }
-]
-Stages: W5(Apr25-May01) M2(May)
-```
-
-Each revision:
-
-1. Drops the earliest weekly stage (that week is now history)
-2. Adds that week's observed inflow to `recent_observations`
-3. Keeps the monthly stage with GEVAZP scenarios (possibly re-generated
-   to condition on the updated observations)
-
-The accumulator seeding grows across revisions, and the study stages
-shrink correspondingly, so the total April coverage remains complete:
-`seed_hours + Σ stage_hours = total_april_hours`.
+- **D-accum-01:** PMO_APR_2026_rv0 accumulator trace (the arithmetic from
+  the concrete example above). 5 weekly + 1 monthly stage, External
+  scenarios, verify lag values at each stage boundary match the trace.
+- **D-accum-02:** Uniform monthly study. Verify accumulator degenerates
+  to identity (lag[0] = z_inflow, finalize every stage).
+- **D-accum-03:** Week straddling month boundary (Jan 28 – Feb 3). Verify
+  spillover weight correctly seeds the next period's accumulator.
+- **D-accum-04:** PAR(2) with 4 weekly stages. Verify lag[1] preserves
+  the previous month's value (not overwritten by weekly inflows).
 
 ---
 
@@ -1062,6 +1073,218 @@ finite pool `{ε_{·,m,y} : y ∈ selected_years}` for each season `m`.
 - **Debt 7 (PAR limitations for sub-monthly):** Historical residuals are at
   the resolution of the historical data. For monthly data, sub-monthly
   stages would share the monthly residual — same limitation, same honesty.
+
+---
+
+## Debt 9: `standardize_external_inflow` advances lags per-stage
+
+**Severity:** Setup-time bug — produces incorrect eta values for
+mixed-resolution studies with External scenarios.
+
+**Location:** `cobre-stochastic/src/sampling/external.rs:335-347`
+
+**Problem:** The current `standardize_external_inflow` function builds lag
+values for the reverse PAR formula by looking at the previous **stage's**
+raw external value. For stage 1 (W2), `lag[0] = raw_values[W1]` — a weekly
+value. But the PAR's ψ and μ_lag are monthly. The AR term
+`ψ · (weekly_value - μ_monthly)` mixes resolutions.
+
+**Correct behavior with frozen lags:** The lag values used for eta
+computation should match the PAR model's resolution (monthly for monthly
+PAR, quarterly for quarterly PAR):
+
+- Within the same `(season_id, year)` group, the lag buffer stays frozen
+  at the previous lag period's values.
+- When crossing a lag period boundary, the lag buffer shifts with the
+  weighted average of the preceding stages' external inflows.
+
+This is the same `StageLagTransition` precomputed config from Debt 6
+applied during setup. The standardization loop becomes:
+
+```
+for scenario in 0..n_scenarios:
+    reset lag_buf to past_inflows
+    reset accum to 0
+    for t in 0..n_stages:
+        target = external_value[t, scenario, h]
+        eta = solve_par_noise(det_base, psi, order, lag_buf, sigma, target)
+        library.eta[t, scenario, h] = eta
+
+        // Accumulate for lag period average
+        accum[h] += target * stage_lag[t].accumulate_weight
+        if stage_lag[t].spillover_weight > 0:
+            next_accum[h] += target * stage_lag[t].spillover_weight
+
+        if stage_lag[t].finalize_period:
+            period_avg = accum[h] / weight_sum
+            shift lag_buf with period_avg
+            accum = next_accum; next_accum = 0
+```
+
+For uniform monthly studies this degenerates to the current behavior
+(weight=1, finalize every stage, lag advances every stage).
+
+**Consistency requirement:** The standardization must use the same
+lag-freezing + accumulation logic as the runtime forward pass. If the
+runtime freezes lags during January weeks, the standardization must also
+freeze lags during January weeks. Otherwise the eta values encode noise
+relative to a different AR contribution than what the runtime computes,
+and the realized inflows won't match the external targets.
+
+**Testing:** Add a test with 4 weekly + 1 monthly External stages.
+Standardize, then run a forward pass with the resulting eta values.
+Assert that the LP's realized inflows match the original external targets
+within solver tolerance.
+
+---
+
+## Debt 10: Mid-season study start — `recent_observations`
+
+**Severity:** Missing feature — required for rolling DECOMP revisions
+(Pattern B).
+
+**Problem:** When a DECOMP study starts mid-season (e.g., January 5
+instead of January 1), partial-season observations before the study start
+have nowhere to go:
+
+```
+Real world:  ... Dec ... | Jan 1-4 (observed: 480 m³/s) | Jan 5 → study
+                         |←── 4 days happened ──→|
+                         |   not a study stage   |
+```
+
+- `past_inflows[0]` = December monthly average (previous complete season) ✓
+- January 1–4 is real data but not a study stage → no LP produces a
+  `z_inflow` for it
+- The accumulator starts at zero → January's lag will average only stages
+  from Jan 5 onward, missing 4 days of real data
+
+**Proposed solution: `recent_observations` input**
+
+Extend `initial_conditions.json` (or a companion file) with observed
+inflow data from the partial current season preceding the study:
+
+```json
+{
+  "past_inflows": [
+    { "hydro_id": 0, "values_m3s": [dec_avg, nov_avg] }
+  ],
+  "recent_observations": [
+    {
+      "hydro_id": 0,
+      "start_date": "2025-01-01",
+      "end_date": "2025-01-05",
+      "value_m3s": 480.0
+    }
+  ]
+}
+```
+
+- `past_inflows` — unchanged. Complete seasonal lags for the PAR model.
+- `recent_observations` — observed average inflow rate for the partial
+  period between the last season boundary and the study start. Carries
+  dates so the system can compute the duration and the accumulation weight.
+
+**At setup time:** the recent observations seed the lag accumulator:
+
+```
+accum_jan[h] = 480.0 × (4 days × 24h)
+weight_jan = 4 × 24h / total_jan_hours
+```
+
+When study stages accumulate their January contributions on top of this
+seed, the final January average correctly includes all 31 days:
+
+```
+jan_avg = (480 × 96h + Σ stage_inflows × stage_hours) / total_jan_hours
+```
+
+**For the PAR model:** the lags are still frozen at `past_inflows` values
+(December). The recent observations don't affect the PAR formula — they
+only seed the accumulator for the current lag period. This is correct:
+the PAR conditions on the _previous complete season_, not on partial
+current-season data.
+
+**Backward compatibility:**
+
+- Uniform monthly studies starting on the 1st: `recent_observations` is
+  empty. The accumulator starts at zero. No impact.
+- Non-DECOMP studies: `recent_observations` is optional, defaults to empty.
+
+**Consistency across noise sources:** The `recent_observations` seeding
+works identically for External scenarios (Pattern B) and PAR-generated
+noise (Pattern C). The accumulator is agnostic to the noise source — it
+accumulates the LP's realized inflow weighted by precomputed stage weights.
+
+### Production DECOMP revision lifecycle
+
+In production DECOMP, the PMO for a given month runs multiple revisions
+as weeks pass. Each revision drops one weekly stage (that week is now
+past) and adds its observed inflow to `recent_observations`. Using April
+2026 as the running example:
+
+**PMO_APR_2026_rv0** (study starts 2026-03-28, Saturday):
+
+```
+recent_observations: []  (no April days observed yet)
+Stages: W1(Mar28-Apr03) W2(Apr04-10) W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
+```
+
+**PMO_APR_2026_rv1** (study starts 2026-04-04, Saturday):
+
+```
+recent_observations: [
+  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 }
+]
+Stages: W2(Apr04-10) W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
+```
+
+W1 is gone — its April days (Apr 1–3) are now observed data. The
+accumulator seeds with 3 days × 500.0 m³/s, then W2–W5 accumulate
+on top. March days (Mar 28–31) from the former W1 are irrelevant —
+March is fully captured by `past_inflows`.
+
+**PMO_APR_2026_rv2** (study starts 2026-04-11):
+
+```
+recent_observations: [
+  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 },
+  { hydro_id: 0, start: "2026-04-04", end: "2026-04-11", value: 480.0 }
+]
+Stages: W3(Apr11-17) W4(Apr18-24) W5(Apr25-May01) M2(May)
+```
+
+**PMO_APR_2026_last** (study starts late April, e.g., 2026-04-25):
+
+```
+recent_observations: [
+  { hydro_id: 0, start: "2026-04-01", end: "2026-04-04", value: 500.0 },
+  { hydro_id: 0, start: "2026-04-04", end: "2026-04-11", value: 480.0 },
+  { hydro_id: 0, start: "2026-04-11", end: "2026-04-18", value: 520.0 },
+  { hydro_id: 0, start: "2026-04-18", end: "2026-04-25", value: 510.0 }
+]
+Stages: W5(Apr25-May01) M2(May)
+```
+
+Each revision:
+
+1. Drops the earliest weekly stage (that week is now history)
+2. Adds that week's observed inflow to `recent_observations`
+3. Keeps the monthly stage with GEVAZP scenarios (possibly re-generated
+   to condition on the updated observations)
+
+The accumulator seeding grows across revisions, and the study stages
+shrink correspondingly, so the total April coverage remains complete:
+`seed_hours + Σ stage_hours = total_april_hours`.
+
+**Testing:**
+
+- **D-recent-01:** rv0 (no recent_observations) and rv2 (with seeding).
+  Verify that the January lag at finalization includes all 31 days in
+  rv2 and only study-stage days in rv0.
+- **D-recent-02:** Verify backward compatibility — uniform monthly study
+  with empty recent_observations produces identical results to current
+  behavior.
 
 ---
 
@@ -1420,6 +1643,155 @@ accumulator), so the imported cut coefficients evaluate correctly.
 
 ---
 
+## Debt 13: Multi-resolution PAR transition (monthly→quarterly)
+
+**Severity:** Architectural gap — required for Pattern D (long-term
+multi-resolution studies). Deferred until Debt 6 accumulator is proven
+in production.
+
+**Problem:** Long-term planning studies benefit from monthly stages in the
+near term (years 1–5) transitioning to quarterly stages in the far term
+(years 6–10+). Each resolution requires its own PAR model: 12-season
+monthly PAR fitted on monthly observations, 4-season quarterly PAR fitted
+on quarterly-aggregated observations. The transition boundary requires
+converting the lag state from monthly to quarterly resolution.
+
+### What works without changes
+
+- **Disjoint season_id spaces:** Monthly seasons 0–11 and quarterly
+  seasons 12–15 in a single `Custom` `SeasonMap` (see Debt 4).
+- **Independent PAR models:** The `PrecomputedPar` is indexed by
+  `(season_id, hydro)`. Seasons 0–11 get monthly parameters; seasons
+  12–15 get quarterly parameters. The fitting pipeline (Debt 2) handles
+  aggregation.
+- **The accumulator mechanism:** `StageLagTransition` computes lag period
+  boundaries from the `SeasonMap`. During quarterly stages, the lag period
+  is a quarter: three monthly stages accumulate, the third finalizes.
+  This is the standard accumulator pattern from Debt 6 with different
+  period boundaries.
+
+### What requires new design: lag state resolution transition
+
+At the monthly→quarterly boundary (last monthly stage → first quarterly
+stage), the lag state must convert from monthly to quarterly resolution.
+
+**The specific problem (lag depth at the transition):**
+
+Suppose the quarterly PAR model has order 2. When entering the first
+quarterly stage (Q1 of year 6), the lag state needs:
+
+```
+lag[0] = Q4 average  (Oct+Nov+Dec of year 5)  ← accumulator provides this ✓
+lag[1] = Q3 average  (Jul+Aug+Sep of year 5)  ← where does this come from?
+```
+
+The monthly PAR model with order 2 only retains the last 2 monthly lags
+(Dec, Nov). Q3 = avg(Jul, Aug, Sep) requires lags from 4–6 months back —
+they fell off the shift register long ago. This is the same P2 (lag depth
+overflow) problem from Debt 6, but at a different resolution boundary.
+
+### Proposed solution: multi-period accumulator ring buffer
+
+The accumulator runs throughout the monthly phase, building quarterly
+aggregates in a side buffer even while the monthly PAR model is active:
+
+```rust
+/// Extended accumulator for resolution transitions.
+/// Pre-allocated in ScratchBuffers, consumed on the hot path.
+struct LagAccumulator {
+    /// Current lag period accumulation (length: n_hydros).
+    current: Vec<f64>,
+    current_weight: f64,
+
+    /// Ring buffer of completed lag values at downstream resolution.
+    /// Length: n_hydros × n_completed_slots.
+    /// Only non-empty when a resolution transition is upcoming.
+    completed_lags: Vec<f64>,
+    n_completed: usize,
+    n_completed_slots: usize,  // = downstream PAR order
+}
+```
+
+**During uniform monthly phases (no transition upcoming):**
+`completed_lags` is empty, `n_completed_slots = 0`. The accumulator
+operates exactly as the simple single-period buffer from Debt 6. Zero
+overhead — one multiply-add per hydro per stage.
+
+**During the pre-transition window (last L_q quarters before transition):**
+The accumulator begins building quarterly values. Each monthly stage
+accumulates into the current quarterly period. At quarter boundaries, the
+completed quarterly average is pushed into `completed_lags`. After L_q
+quarters, the ring buffer holds all the quarterly lag values needed at the
+transition point.
+
+**At the transition point:** The lag state is rebuilt from
+`completed_lags`. `lag[0]` = most recent completed quarterly average,
+`lag[1]` = next most recent, etc. The monthly lag state is discarded.
+
+**Setup-time precomputation:** The pre-transition window start is fully
+determinable at setup time: `transition_stage - (L_q × 3)` monthly stages
+back. The `StageLagTransition` for stages in this window gets an
+additional `accumulate_downstream: bool` flag indicating that the stage
+should also accumulate into the downstream ring buffer.
+
+### Concrete example (monthly→quarterly, PAR order 2)
+
+```
+Study: 60 monthly stages (years 1-5) + 20 quarterly stages (years 6-10)
+Quarterly PAR order: 2 → need Q3 and Q4 of year 5 at transition
+
+Pre-transition window: stages 54-59 (Jul-Dec year 5)
+  Stage 54 (Jul): accum Q3, weight += jul_fraction
+  Stage 55 (Aug): accum Q3, weight += aug_fraction
+  Stage 56 (Sep): accum Q3, finalize → completed_lags[0] = Q3_avg
+  Stage 57 (Oct): accum Q4, weight += oct_fraction
+  Stage 58 (Nov): accum Q4, weight += nov_fraction
+  Stage 59 (Dec): accum Q4, finalize → completed_lags[1] = Q4_avg
+
+At stage 60 (Q1 year 6):
+  lag[0] = completed_lags[1] = Q4_avg  ✓
+  lag[1] = completed_lags[0] = Q3_avg  ✓
+  Quarterly PAR formula: z = μ_Q1 + ψ₁·(Q4 - μ_Q4) + ψ₂·(Q3 - μ_Q3) + σ·ε
+```
+
+**During stages 54–59:** the monthly PAR model uses its own monthly lags
+normally (shift register operates at monthly resolution as usual). The
+downstream accumulator runs independently in the scratch buffer. No
+interference between the two.
+
+### Cost analysis
+
+- **Pre-transition window:** `n_hydros` extra multiply-adds per stage for
+  the downstream accumulator. Same order as the primary accumulator.
+- **At quarterly finalization (every 3 stages):** `n_hydros` divisions +
+  ring buffer push. Negligible.
+- **No transition in study:** `completed_lags` is empty. Zero overhead.
+  The `accumulate_downstream` flag is `false` for all stages; the branch
+  is never taken on the hot path.
+
+### Dependencies
+
+- **Debt 2:** Quarterly PAR model requires aggregated observations.
+- **Debt 4:** Season_id validation must understand disjoint ranges.
+- **Debt 6:** The base accumulator mechanism must exist before extending
+  it with the ring buffer.
+- **No impact on Pattern B or C:** The multi-resolution transition is
+  orthogonal to DECOMP and weekly-PAR patterns. The `LagAccumulator`
+  degenerates to the simple Debt 6 buffer when no transition is present.
+
+### Testing
+
+- **D-multires-01:** 12 monthly + 4 quarterly stages with PAR(1).
+  Verify that the quarterly lag at the transition equals the weighted
+  average of the last 3 monthly realized inflows.
+- **D-multires-02:** Same with PAR(2). Verify both quarterly lags (Q4
+  and Q3) are correct at the transition.
+- **D-multires-03:** Uniform monthly study (no transition). Verify zero
+  overhead — `completed_lags` is never allocated, `accumulate_downstream`
+  is false for all stages.
+
+---
+
 ## Note on scenario generation
 
 In production DECOMP, a program called GEVAZP generates the external
@@ -1463,15 +1835,22 @@ Debt 1 (month0 bug)
   └── Fix independently. Required for any non-monthly uniform study.
       Straightforward: thread SeasonMap into Historical pipeline.
 
-Debt 2 (observation alignment)
-  └── Fix independently. Defense-in-depth validation.
+Debt 2 (observation aggregation + validation)
+  ├── Validation: reject coarser-than-season observations (can't disaggregate)
+  ├── Aggregation: finer-than-season observations → weighted average per season
+  ├── Required for Pattern D (monthly obs → quarterly PAR model)
+  └── Prerequisite for Debt 13 (quarterly PAR needs aggregated observations)
 
 Debt 3 (past_inflows metadata)
   └── Low priority. Current positional convention works. Revisit when
       dual-resolution lag support is needed.
 
-Debt 4 (season_id consistency)
-  └── Fix independently. Defense-in-depth validation.
+Debt 4 (season_id consistency across heterogeneous season spaces)
+  ├── V4.1: every stage season_id must exist in season_definitions
+  ├── V4.2: observation coverage per season (after Debt 2 aggregation)
+  ├── V4.3: resolution consistency within season groups
+  ├── V4.4: contiguity within resolution bands (warn on gaps)
+  └── Must support disjoint ranges (0-11 monthly + 12-15 quarterly)
 
 Debt 5 (noise sharing for same-season stages)
   ├── ForwardSampler policy: same (season_id, year) → same ξ
@@ -1482,12 +1861,13 @@ Debt 5 (noise sharing for same-season stages)
   └── No new data structures needed
 
 Debt 6 (lag resolution at coupling boundaries)
-  ├── StageLagTransition precomputed at setup, consumed read-only
+  ├── StageLagTransition precomputed at setup from SeasonMap boundaries
   ├── Accumulator + frozen lags for both External and PAR noise sources
+  ├── Backward pass does NOT need accumulator (one-step lookahead only)
   ├── Opening tree clamping: effective_openings = min(configured, available)
   ├── Uniform n_scenarios workaround: pad weekly stages with identical copies
   │   (interim; long-term: node-based policy graph)
-  └── Critical for both Pattern B and Pattern C
+  └── Critical for Patterns B, C, and D
 
 Debt 7 (PAR behavior documentation)
   └── Document the known limitations, not a code fix.
@@ -1523,9 +1903,19 @@ Debt 12 (terminal-stage external FCF)
   ├── Load Cobre policy checkpoint as terminal-stage boundary cuts
   ├── Fixed cuts, not updated during training
   ├── Enables Cobre→Cobre coupling (monthly study → weekly+monthly study)
-  ├── Lag accumulation (Debt 6) ensures correct monthly lag values at
-  │   terminal stage for boundary cut evaluation
+  ├── Lag accumulation (Debt 6) ensures correct lag values at terminal
+  │   stage for boundary cut evaluation
   └── Critical for Pattern B (production DECOMP)
+
+Debt 13 (multi-resolution PAR transition)
+  ├── Monthly→quarterly lag state conversion at resolution boundary
+  ├── LagAccumulator ring buffer builds downstream-resolution lags
+  │   during pre-transition window (L_q quarters before boundary)
+  ├── Depends on Debt 2 (aggregated observations for quarterly PAR)
+  ├── Depends on Debt 4 (disjoint season_id ranges)
+  ├── Depends on Debt 6 (base accumulator mechanism)
+  ├── Zero overhead when no resolution transition in study
+  └── Critical for Pattern D; orthogonal to Patterns B and C
 ```
 
 ## Recommended study patterns

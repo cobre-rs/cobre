@@ -34,14 +34,14 @@
 
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
-    EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::{
-    StochasticError,
     par::{evaluate::solve_par_noise, fitting::find_season_for_date, precompute::PrecomputedPar},
+    StochasticError,
 };
 
 // ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ impl HistoricalScenarioLibrary {
 /// - `window_years` — valid starting years from window discovery (ticket-018)
 /// - `season_map` — controls how observation dates outside the study range are
 ///   mapped to season IDs (same three-tier fallback as
-///   [`discover_historical_windows`]):
+///   [`discover_historical_windows`](super::window::discover_historical_windows)):
 ///   1. Dates within a study stage's `[start_date, end_date)` range are mapped
 ///      via binary search on the stage index (exact match).
 ///   2. Dates outside the study range are mapped via
@@ -431,7 +431,11 @@ pub fn standardize_historical_windows(
     let lookup = |h: usize, year: i32, season_id: usize| -> f64 {
         table_idx(h, year, season_id).map_or(0.0, |idx| {
             let v = obs_table[idx];
-            if v.is_nan() { 0.0 } else { v }
+            if v.is_nan() {
+                0.0
+            } else {
+                v
+            }
         })
     };
 
@@ -786,15 +790,15 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::{InflowHistoryRow, InflowModel},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
             SeasonMap, StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
-    use super::{Stage, standardize_historical_windows};
+    use super::{standardize_historical_windows, Stage};
     use crate::par::precompute::PrecomputedPar;
 
     /// Build a monthly stage with the given array index and 0-based `season_id` (0=Jan..11=Dec).
@@ -921,8 +925,8 @@ mod tests {
     ///
     /// Uses 12 monthly stages so that the lag season (one step before Jan) is Dec.
     /// With `n_seasons`=12 and `max_order`=1, under the new convention:
-    ///   - Lag season: (0 - 1 + 12) % 12 = 11 (Dec), year_offset = -1
-    ///   - Study seasons: 0..11, year_offset = 0
+    ///   - Lag season: (0 - 1 + 12) % 12 = 11 (Dec), `year_offset` = -1
+    ///   - Study seasons: 0..11, `year_offset` = 0
     ///   - Full sequence: [(-1,11),(0,0),(0,1),...,(0,11)]
     ///   - Lag observation: (`window_year` - 1, season 11) = (1989, Dec) → month0=11
     ///   - Stage 0 observation: (`window_year` + 0, season 0) = (1990, Jan) → month0=0
@@ -1119,9 +1123,9 @@ mod tests {
     /// Single hydro, `max_order`=2 (AR(2) dummy), full 12-stage monthly year.
     ///
     /// With `n_seasons`=12 and `max_order`=2, under the new convention:
-    ///   - lag-2 (oldest, buf index 1): season (0-2+12)%12 = 10 (Nov), year_offset = -1
-    ///   - lag-1 (most recent, buf index 0): season (0-1+12)%12 = 11 (Dec), year_offset = -1
-    ///   - study stages: year_offset = 0
+    ///   - lag-2 (oldest, buf index 1): season (0-2+12)%12 = 10 (Nov), `year_offset` = -1
+    ///   - lag-1 (most recent, buf index 0): season (0-1+12)%12 = 11 (Dec), `year_offset` = -1
+    ///   - study stages: `year_offset` = 0
     ///
     /// Full sequence (after normalization): [(-1,10),(-1,11),(0,0),(0,1),...,(0,11)]
     ///

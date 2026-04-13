@@ -20,7 +20,7 @@
 //! the `None` case with OS entropy — is an application-level concern that
 //! belongs in the calling crate.
 
-use cobre_core::{EntityId, LoadModel, System, scenario::SamplingScheme};
+use cobre_core::{scenario::SamplingScheme, EntityId, LoadModel, System};
 
 /// Per-class sampling scheme selections passed to [`build_stochastic_context`]
 /// for provenance tracking.
@@ -39,7 +39,7 @@ pub struct ClassSchemes {
 /// Groups the two optional caller-provided overrides for the opening scenario
 /// tree: a pre-built `OpeningTree` that bypasses generation entirely, and a
 /// `HistoricalScenarioLibrary` used when any stage is configured with
-/// [`NoiseMethod::HistoricalResiduals`].
+/// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals).
 ///
 /// When both fields are `None` the opening tree is generated from SAA/LHS/QMC
 /// noise depending on each stage's `scenario_config.noise_method`.
@@ -48,23 +48,23 @@ pub struct OpeningTreeInputs<'a> {
     /// A pre-built opening tree that bypasses generation. When `Some`, the
     /// `historical_library` field is ignored.
     pub user_tree: Option<OpeningTree>,
-    /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`]
+    /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals)
     /// stages. Required when any study stage uses that noise method and
     /// `user_tree` is `None`.
     pub historical_library: Option<&'a HistoricalScenarioLibrary>,
 }
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
     sampling::historical::HistoricalScenarioLibrary,
     tree::{
-        generate::{ClassDimensions, generate_opening_tree},
+        generate::{generate_opening_tree, ClassDimensions},
         opening_tree::OpeningTreeView,
     },
+    StochasticError,
 };
 
 pub use crate::tree::opening_tree::OpeningTree;
@@ -546,7 +546,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -556,9 +555,10 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
-    use super::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
+    use super::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use crate::StochasticError;
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {

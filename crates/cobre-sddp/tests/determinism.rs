@@ -94,6 +94,10 @@ impl Communicator for StubComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 // ===========================================================================
@@ -851,6 +855,10 @@ impl Communicator for MultiRankMockComm {
 
     fn size(&self) -> usize {
         self.total_size
+    }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
     }
 }
 

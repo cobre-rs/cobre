@@ -68,6 +68,10 @@ impl Communicator for LocalComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 /// Mock solver that returns configurable objective values in sequence.

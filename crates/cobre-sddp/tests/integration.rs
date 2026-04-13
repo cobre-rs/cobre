@@ -98,6 +98,10 @@ impl Communicator for StubComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 /// Communicator wrapper that sets `flag` to `true` on the first `allgatherv`
@@ -162,6 +166,10 @@ impl Communicator for ShutdownComm {
 
     fn size(&self) -> usize {
         1
+    }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
     }
 }
 

@@ -1004,6 +1004,10 @@ mod tests {
         fn size(&self) -> usize {
             self.size
         }
+
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
+        }
     }
 
     // ── Mock solver ──────────────────────────────────────────────────────────

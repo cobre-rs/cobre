@@ -2298,6 +2298,10 @@ mod tests {
             fn size(&self) -> usize {
                 1
             }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
         }
 
         let local = ForwardResult {

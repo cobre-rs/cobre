@@ -2,11 +2,12 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
+use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
+    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     sampling::historical::HistoricalScenarioLibrary,
@@ -14,9 +15,8 @@ use crate::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
+        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
     },
-    StochasticError,
 };
 
 /// Per-class entity counts for the noise dimension.
@@ -214,19 +214,19 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
-        EntityId, Stage,
     };
 
     use crate::{
-        correlation::resolve::DecomposedCorrelation,
-        sampling::historical::HistoricalScenarioLibrary, StochasticError,
+        StochasticError, correlation::resolve::DecomposedCorrelation,
+        sampling::historical::HistoricalScenarioLibrary,
     };
 
-    use super::{generate_opening_tree, ClassDimensions};
+    use super::{ClassDimensions, generate_opening_tree};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)

@@ -95,6 +95,10 @@ impl Communicator for StubComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 /// Mock solver that returns a fixed objective on every `solve` call.

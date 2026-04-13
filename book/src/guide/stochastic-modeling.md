@@ -578,6 +578,76 @@ approach differs; some integrands favor one over the other.
 
 Configure QMC-Halton by setting `"sampling_method": "qmc_halton"`.
 
+### HistoricalResiduals
+
+HistoricalResiduals uses standardized noise values derived from actual
+historical inflow observations rather than from synthetic distributions. For
+each opening in the stage, Cobre selects a historical year (a "window") from
+the `HistoricalScenarioLibrary` and reads the pre-computed PAR residuals for
+that year and stage directly into the noise vector. No random number generator
+is invoked; the noise is determined entirely by which historical year is
+selected.
+
+This method requires `inflow_history.parquet` in the `scenarios/` directory.
+Cobre inverts the PAR(p) model for every valid (window, stage, hydro) triple
+at case load time, computing:
+
+```text
+eta = (obs - mu - sum(psi[l] * lag[l])) / sigma
+```
+
+where `obs` is the raw historical inflow, `mu` and `sigma` are the seasonal
+mean and standard deviation, and `psi[l] * lag[l]` is the AR contribution
+from the preceding `l` lags. The resulting eta values are stored once and
+reused across training runs.
+
+**Window selection.** For each opening, the window index is chosen
+deterministically using a hash of the base seed, the opening index, and the
+stage ID:
+
+```text
+window_idx = derive_opening_seed(seed, opening, stage) % n_windows
+```
+
+Selection is with replacement, so the same historical year can appear in
+multiple openings of the same stage. When `n_windows < branching_factor`, the
+opening count for that stage is clamped to `n_windows` and Cobre emits a
+warning. Having fewer historical windows than the branching factor is
+acceptable — it means the opening tree samples the same years more than once
+— but the policy quality is limited by the size of the historical record.
+
+**Correlation handling.** HistoricalResiduals skips the spectral correlation
+step that all other noise methods apply after generation. Because each window
+corresponds to a real historical year, the joint distribution of eta values
+across hydro plants already reflects the empirical spatial correlation from
+that year. Applying a synthetic correlation transform on top of real
+residuals would distort rather than improve the representation.
+
+**Non-hydro slots.** Only the hydro segment of the noise vector is filled
+from the historical library. Load and NCS slots are zeroed; those entities
+use their own noise sources as configured by the sampling scheme.
+
+Configure HistoricalResiduals by setting
+`"sampling_method": "historical_residuals"` in the stage entry of
+`stages.json`:
+
+```json
+{
+  "id": 0,
+  "start_date": "2024-01-01",
+  "end_date": "2024-02-01",
+  "blocks": [{ "id": 0, "name": "SINGLE", "hours": 744 }],
+  "num_scenarios": 50,
+  "sampling_method": "historical_residuals"
+}
+```
+
+Use HistoricalResiduals when you want the backward-pass opening tree to be
+grounded in real historical sequences rather than synthetic draws. This is
+particularly useful when the historical record contains unusual events (severe
+droughts, extreme wet years) that are difficult to represent faithfully with a
+parametric distribution.
+
 ### Selective (Reserved)
 
 The `"selective"` method is reserved for future use. It is intended to
@@ -603,7 +673,8 @@ and Halton fill the space with low-discrepancy sequences.
 | LHS        | Better than SAA   | None            | Any (50–200 typical)  | Moderate scenario counts, any dimension   |
 | QMC-Sobol  | O(N^{-1} log^d N) | 21,201          | Powers of 2 preferred | Best convergence, low-to-medium dimension |
 | QMC-Halton | O(N^{-1} log^d N) | None            | Any                   | High-dimension alternative to Sobol       |
-| Selective  | N/A               | N/A             | N/A                   | Not implemented; reserved for future use  |
+| HistoricalResiduals | N/A (empirical) | None            | Limited by history length | Preserving empirical correlation, short history |
+| Selective           | N/A             | N/A             | N/A                       | Not implemented; reserved for future use        |
 
 ### Per-Stage Method Configuration
 
@@ -1071,9 +1142,137 @@ page in the methodology reference, or Oliveira et al. (2022), _Energies_
 
 ---
 
+## Temporal Resolution and PAR
+
+The PAR(p) model is parameterized by `season_id`. Every stage in `stages.json`
+carries a `season_id` that selects its PAR parameters — mean (`mu`), standard
+deviation (`sigma`), and autoregressive coefficients (`psi`) — from the fitted
+model. When multiple stages share the same `season_id`, they receive identical
+stochastic parameters.
+
+This design choice reflects a fundamental data-resolution constraint. If the
+historical observations are at monthly resolution, the fitted PAR parameters
+describe the distribution of monthly inflows. Applying those parameters to
+sub-monthly stages (for example, four weekly stages all assigned
+`season_id = 3` for April) does not create additional information — it
+reproduces the same monthly-scale noise for each week.
+
+**The honest representation principle.** Sub-monthly stages sharing a
+`season_id` receive the same PAR parameters and, for the HistoricalResiduals
+noise method, the same noise realizations. This is not a limitation of the
+implementation — it is an honest representation of what monthly-resolution
+data can tell you. Monthly history cannot support independent weekly noise
+draws; doing so would fabricate variability that does not exist in the record.
+Users who need true sub-monthly variability should supply it through External
+scenarios from a dedicated short-term model.
+
+**Recommended pattern for weekly decision granularity.** When weekly dispatch
+decisions matter but external weekly scenarios are not available, the
+recommended approach is to use a monthly SDDP stage with chronological blocks
+rather than multiple weekly SDDP stages:
+
+```json
+{
+  "id": 0,
+  "start_date": "2024-01-01",
+  "end_date": "2024-02-01",
+  "season_id": 0,
+  "blocks": [
+    { "id": 0, "name": "WEEK1", "hours": 168 },
+    { "id": 1, "name": "WEEK2", "hours": 168 },
+    { "id": 2, "name": "WEEK3", "hours": 168 },
+    { "id": 3, "name": "WEEK4", "hours": 240 }
+  ],
+  "num_scenarios": 50
+}
+```
+
+One monthly stage with four weekly chronological blocks provides weekly
+dispatch granularity in the LP while keeping one noise realization per month
+— consistent with the data resolution. The stage boundary carries a single
+Benders cut at monthly resolution. This avoids both the fabricated weekly
+variability and the lag-accumulation complications that arise with four
+independent weekly SDDP stages.
+
+For the full technical background on temporal resolution design, including
+applicability matrices for different study patterns, see
+[`docs/design/temporal-resolution-debts.md`](../../docs/design/temporal-resolution-debts.md).
+
+### Validation Rules
+
+Cobre validates the consistency of temporal resolution settings at case load
+time. The following rules apply when `season_definitions` is present in
+`stages.json` and `inflow_history.parquet` is the active estimation source.
+
+**Rule 27 (error): `season_id` range coverage.**
+Every stage `season_id` must reference a season defined in
+`season_definitions`. If a stage has `season_id = 5` but the season map only
+defines seasons 0–11, Cobre emits a `BusinessRuleViolation` error and
+refuses to build the stochastic model.
+
+- **Triggers when:** a stage's `season_id` is not present in
+  `season_definitions.seasons[].id`.
+- **Resolution:** Add the missing season to `season_definitions`, or correct
+  the `season_id` in the stage entry.
+
+**Rule 28 (warning): observation coverage.**
+When a season has no inflow observations in `inflow_history.parquet` and the
+inflow sampling scheme is not `external`, PAR estimation for that season will
+have no data. Cobre emits a `ModelQuality` warning. This is not an error
+because External-only seasons legitimately have no history requirement.
+
+- **Triggers when:** a season defined in `season_definitions` has zero
+  observations in `inflow_history.parquet` and the inflow scheme is not
+  `external`.
+- **Resolution:** Provide historical observations for the season, switch the
+  inflow scheme to `external` for that study, or remove the season if it is
+  unused.
+
+**Rule 29 (error): resolution consistency.**
+All stages sharing the same `season_id` must have durations within 7 days of
+each other. A stage group where one member is a monthly stage (28–31 days)
+and another is a quarterly stage (89–92 days) indicates conflicting PAR model
+parameterisations for the same season, and Cobre emits a
+`BusinessRuleViolation` error.
+
+- **Triggers when:** the maximum and minimum durations among stages in the
+  same `season_id` group differ by more than 7 days.
+- **Resolution:** Assign distinct `season_id` values to stages at different
+  temporal resolutions (e.g., monthly stages use IDs 0–11, quarterly stages
+  use IDs 12–15 in a custom `SeasonMap`).
+
+**Rule 30 (warning): contiguity.**
+A season defined in `season_definitions` but not referenced by any stage will
+have no PAR parameters and no observations. Cobre emits a `ModelQuality`
+warning for each such season. This catches accidental gaps in the season ID
+space (e.g., defining seasons 0–11 but stages only using 0–9).
+
+- **Triggers when:** a season defined in `season_definitions` is not
+  referenced by any stage's `season_id`.
+- **Resolution:** Remove the unreferenced season from `season_definitions`,
+  or assign it to at least one stage.
+
+**Rule 31 (error): observation-to-season alignment.**
+If any `(hydro_id, season_id, year)` triple has more than one observation in
+`inflow_history.parquet`, the observation data has finer temporal resolution
+than the season definitions. The PAR estimation pipeline expects exactly one
+observation per `(hydro, season, year)`. Multiple observations distort
+parameter estimates. Cobre emits a `BusinessRuleViolation` error.
+
+- **Triggers when:** a hydro plant has two or more observations in
+  `inflow_history.parquet` that map to the same `(season_id, year)` pair
+  (for example, daily observations paired with monthly seasons, or two
+  monthly entries for the same hydro-season-year).
+- **Resolution:** Aggregate the finer-resolution observations to match the
+  season resolution before providing the file. Provide exactly one row per
+  `(hydro_id, season_id, year)` in `inflow_history.parquet`.
+
+---
+
 ## Related Pages
 
 - [Anatomy of a Case](../tutorial/anatomy-of-a-case.md) — introductory walkthrough of the `scenarios/` directory and Parquet schemas
 - [Configuration](./configuration.md) — full documentation of `config.json` fields including `tree_seed` and `forward_passes`
 - [cobre-stochastic](../crates/stochastic.md) — internal architecture of the stochastic crate: PAR preprocessing, spectral correlation, opening tree, and seed derivation
 - [ADR: Noise Method Dispatch and Forward Sampler](../../docs/design/adr-noise-method-forward-sampler.md) — design decisions behind the noise method enum, per-stage dispatch, and OutOfSample forward sampler
+- [Temporal Resolution Debts](../../docs/design/temporal-resolution-debts.md) — full technical catalog of temporal resolution design constraints and known debts across study patterns

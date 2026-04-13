@@ -34,14 +34,14 @@
 
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
+    EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
 use crate::{
-    par::{evaluate::solve_par_noise, fitting::find_season_for_date, precompute::PrecomputedPar},
     StochasticError,
+    par::{evaluate::solve_par_noise, fitting::find_season_for_date, precompute::PrecomputedPar},
 };
 
 // ---------------------------------------------------------------------------
@@ -431,11 +431,7 @@ pub fn standardize_historical_windows(
     let lookup = |h: usize, year: i32, season_id: usize| -> f64 {
         table_idx(h, year, season_id).map_or(0.0, |idx| {
             let v = obs_table[idx];
-            if v.is_nan() {
-                0.0
-            } else {
-                v
-            }
+            if v.is_nan() { 0.0 } else { v }
         })
     };
 
@@ -790,15 +786,15 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::{InflowHistoryRow, InflowModel},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
             SeasonMap, StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
-    use super::{standardize_historical_windows, Stage};
+    use super::{Stage, standardize_historical_windows};
     use crate::par::precompute::PrecomputedPar;
 
     /// Build a monthly stage with the given array index and 0-based `season_id` (0=Jan..11=Dec).

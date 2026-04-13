@@ -41,10 +41,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    permissions:
+      contents: read
+      packages: read
+
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache MPICH
         id: mpich-cache
@@ -93,9 +103,10 @@ jobs:
           cp target/release/cobre tests/slurm/staging/cobre-mpi
           cp -r examples/4ree tests/slurm/staging/4ree
 
-      - name: Build and start SLURM cluster
+      - name: Pull base image and start SLURM cluster
         run: |
           set -euo pipefail
+          docker pull ghcr.io/cobre-rs/slurm-mpich-base:${MPICH_VERSION}
           docker compose -f tests/slurm/docker-compose.yml build
           docker compose -f tests/slurm/docker-compose.yml up -d --wait
 

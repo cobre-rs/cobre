@@ -1,0 +1,76 @@
+# tests/slurm/Dockerfile.base
+# Base image for SLURM + MPICH cluster testing.
+# Published to ghcr.io/cobre-rs/slurm-mpich-base:<mpich-version>
+#
+# Contains: Ubuntu 24.04, SLURM, MPICH 4.2.3 (ch4:ofi), pyarrow.
+# Does NOT contain: munge keys, SLURM config, entrypoint (added by Dockerfile).
+#
+# Rebuild trigger: changes to this file or MPICH_VERSION in ci env.
+# Workflow: .github/workflows/slurm-base-image.yml
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ---------------------------------------------------------------------------
+# System packages: SLURM, munge, build toolchain, runtime utilities
+# ---------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    slurm-wlm \
+    slurmctld \
+    slurmd \
+    munge \
+    libmunge-dev \
+    build-essential \
+    wget \
+    dbus \
+    curl \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# pyarrow (needed by run-tests.sh for parquet comparison)
+# ---------------------------------------------------------------------------
+RUN python3 -m pip install --no-cache-dir --break-system-packages pyarrow
+
+# ---------------------------------------------------------------------------
+# Build MPICH 4.2.3 from source with ch4:ofi device
+# ch4:ofi falls back to TCP inside Docker containers.
+# ---------------------------------------------------------------------------
+ARG MPICH_VERSION=4.2.3
+ARG MPICH_URL=https://www.mpich.org/static/downloads/${MPICH_VERSION}/mpich-${MPICH_VERSION}.tar.gz
+
+RUN wget -q "${MPICH_URL}" -O /tmp/mpich.tar.gz \
+    && tar -xzf /tmp/mpich.tar.gz -C /tmp \
+    && cd /tmp/mpich-${MPICH_VERSION} \
+    && ./configure \
+        --prefix=/opt/mpich \
+        --disable-fortran \
+        --disable-cxx \
+        --disable-romio \
+        --disable-doc \
+        --with-device=ch4:ofi \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /tmp/mpich.tar.gz /tmp/mpich-${MPICH_VERSION}
+
+ENV PATH="/opt/mpich/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/mpich/lib:${LD_LIBRARY_PATH:-}"
+
+# ---------------------------------------------------------------------------
+# SLURM runtime directories
+# ---------------------------------------------------------------------------
+RUN mkdir -p \
+    /var/spool/slurm/ctld \
+    /var/spool/slurm/d \
+    /var/log/slurm \
+    /var/run/slurm \
+    /var/run/munge \
+    /shared
+
+RUN chown -R slurm:slurm \
+    /var/spool/slurm \
+    /var/log/slurm \
+    /var/run/slurm

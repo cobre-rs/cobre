@@ -22,7 +22,7 @@ use cobre_core::{
         StageStateConfig,
     },
 };
-use cobre_stochastic::{ClassSchemes, build_stochastic_context, sample_forward};
+use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context, sample_forward};
 
 fn make_bus(id: i32) -> Bus {
     Bus {
@@ -201,7 +201,7 @@ fn pipeline_builds_with_correct_dimensions() {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -240,7 +240,7 @@ fn par_lp_coefficients_match_hand_computed() {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -316,7 +316,7 @@ fn opening_tree_structure_correct() {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -355,7 +355,7 @@ fn sample_forward_returns_valid_output() {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -435,7 +435,7 @@ fn opening_tree_marginal_statistics() {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

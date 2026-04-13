@@ -62,7 +62,7 @@ mod tests {
 
     use crate::{
         ComponentProvenance,
-        context::{ClassSchemes, OpeningTree, build_stochastic_context},
+        context::{ClassSchemes, OpeningTree, OpeningTreeInputs, build_stochastic_context},
     };
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
@@ -211,7 +211,10 @@ mod tests {
             None,
             &[],
             &[],
-            Some(user_tree),
+            OpeningTreeInputs {
+                user_tree: Some(user_tree),
+                historical_library: None,
+            },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -248,7 +251,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -279,7 +282,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -316,7 +319,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -346,7 +349,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -383,7 +386,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -413,7 +416,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -443,7 +446,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

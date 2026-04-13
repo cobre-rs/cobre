@@ -648,7 +648,7 @@ mod tests {
     use super::{ClassSampler, ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
     use crate::{
         StochasticError,
-        context::{ClassSchemes, build_stochastic_context},
+        context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context},
         tree::generate::ClassDimensions,
         tree::opening_tree::OpeningTree,
     };
@@ -797,7 +797,7 @@ mod tests {
             forward_seed,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

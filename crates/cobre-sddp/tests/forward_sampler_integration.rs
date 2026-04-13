@@ -52,7 +52,7 @@ use cobre_sddp::{
     hydro_models::PrepareHydroModelsResult, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
-use cobre_stochastic::{ClassSchemes, build_stochastic_context};
+use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure
@@ -480,7 +480,7 @@ fn run_programmatic(
         forward_seed,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -777,8 +777,16 @@ fn run_with_setup(
         ncs: Some(source.ncs_scheme),
     };
 
-    let stochastic = build_stochastic_context(system, 42, forward_seed, &[], &[], None, schemes)
-        .expect("build_stochastic_context must succeed");
+    let stochastic = build_stochastic_context(
+        system,
+        42,
+        forward_seed,
+        &[],
+        &[],
+        OpeningTreeInputs::default(),
+        schemes,
+    )
+    .expect("build_stochastic_context must succeed");
 
     let hydro_models = PrepareHydroModelsResult::default_from_system(system);
     let stopping_rule_set = StoppingRuleSet {

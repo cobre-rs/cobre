@@ -30,12 +30,12 @@ use std::collections::HashSet;
 
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
+    EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
-use crate::{par::fitting::find_season_for_date, StochasticError};
+use crate::{StochasticError, par::fitting::find_season_for_date};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -175,8 +175,7 @@ pub fn discover_historical_windows(
         super::build_observation_sequence(stages, max_par_order, n_seasons);
 
     let candidate_years: Vec<i32> = if let Some(pool) = user_pool {
-        let pool_years: HashSet<i32> = pool.to_years().into_iter().collect();
-        let mut years: Vec<i32> = pool_years.into_iter().collect();
+        let mut years: Vec<i32> = pool.to_years().into_iter().collect();
         years.sort_unstable();
         years
     } else {
@@ -200,13 +199,13 @@ pub fn discover_historical_windows(
         });
     }
 
-    let n_windows = valid_windows.len();
-    if n_windows < forward_passes as usize {
+    if valid_windows.len() < forward_passes as usize {
         tracing::warn!(
-            n_windows,
+            n_windows = valid_windows.len(),
             forward_passes,
-            "fewer windows ({n_windows}) than forward passes ({forward_passes}): \
-             historical sampling will repeat windows across forward passes"
+            "fewer windows ({}) than forward passes ({forward_passes}): \
+             historical sampling will repeat windows across forward passes",
+            valid_windows.len()
         );
     }
 
@@ -248,12 +247,12 @@ fn is_window_complete(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::{HistoricalYears, InflowHistoryRow},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
             SeasonMap, Stage, StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use super::discover_historical_windows;
@@ -483,12 +482,13 @@ mod tests {
     // Test helpers for SeasonMap construction
     // -----------------------------------------------------------------------
 
-    /// Build a standard monthly SeasonMap (12 seasons, IDs 0–11).
+    /// Build a standard monthly `SeasonMap` (12 seasons, IDs 0–11).
     fn monthly_season_map() -> SeasonMap {
         let seasons = (0_usize..12)
             .map(|i| SeasonDefinition {
                 id: i,
                 label: format!("Month{i}"),
+                #[allow(clippy::cast_possible_truncation)]
                 month_start: (i as u32) + 1,
                 day_start: None,
                 month_end: None,
@@ -501,7 +501,7 @@ mod tests {
         }
     }
 
-    /// Build quarterly stages (4 stages, each 3 months, season_ids 0–3).
+    /// Build quarterly stages (4 stages, each 3 months, `season_ids` 0–3).
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn four_quarterly_stages() -> Vec<Stage> {
         // Q1: Jan–Mar (start Jan 1, end Apr 1)
@@ -558,7 +558,7 @@ mod tests {
             .collect()
     }
 
-    /// Build a quarterly SeasonMap (4 seasons, IDs 0–3).
+    /// Build a quarterly `SeasonMap` (4 seasons, IDs 0–3).
     fn quarterly_season_map() -> SeasonMap {
         SeasonMap {
             cycle_type: SeasonCycleType::Custom,

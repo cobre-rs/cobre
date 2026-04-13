@@ -1186,7 +1186,9 @@ mod tests {
                 StageStateConfig,
             },
         };
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -1317,7 +1319,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3043,7 +3045,9 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -3178,7 +3182,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

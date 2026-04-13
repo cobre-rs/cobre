@@ -230,6 +230,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
             n_load_buses: 0,
             n_ncs: 0,
         },
+        None,
     )
     .unwrap()
 }

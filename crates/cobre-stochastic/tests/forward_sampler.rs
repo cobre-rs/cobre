@@ -32,7 +32,7 @@ use cobre_core::{
 };
 use cobre_stochastic::{
     StochasticError,
-    context::{ClassSchemes, StochasticContext, build_stochastic_context},
+    context::{ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context},
     sampling::insample::sample_forward,
     sampling::{ForwardSamplerConfig, SampleRequest, build_forward_sampler},
     tree::generate::ClassDimensions,
@@ -250,7 +250,7 @@ fn build_test_ctx(system: &cobre_core::System, forward_seed: Option<u64>) -> Sto
         forward_seed,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

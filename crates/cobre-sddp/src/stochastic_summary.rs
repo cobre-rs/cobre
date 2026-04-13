@@ -408,7 +408,7 @@ mod tests {
             StageStateConfig,
         },
     };
-    use cobre_stochastic::{ClassSchemes, build_stochastic_context};
+    use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use super::{
         StochasticSource, build_stochastic_summary, estimation_report_to_fitting_report,
@@ -688,7 +688,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -719,7 +719,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -779,7 +779,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -809,7 +809,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -844,7 +844,10 @@ mod tests {
             None,
             &[],
             &[],
-            Some(user_tree),
+            OpeningTreeInputs {
+                user_tree: Some(user_tree),
+                historical_library: None,
+            },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -870,7 +873,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -906,7 +909,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -960,7 +963,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -993,7 +996,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1024,7 +1027,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::OutOfSample),
@@ -1096,7 +1099,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

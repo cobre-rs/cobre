@@ -47,7 +47,9 @@ use cobre_sddp::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+};
 
 // ===========================================================================
 // Shared communicator stub
@@ -336,7 +338,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

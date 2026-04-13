@@ -37,7 +37,8 @@ use cobre_sddp::{
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
+    provenance::ComponentProvenance,
 };
 
 use crate::error::CliError;
@@ -669,7 +670,10 @@ fn broadcast_and_build_setup(
             forward_seed,
             &load_entity_factors,
             &ncs_entity_factors,
-            user_tree,
+            OpeningTreeInputs {
+                user_tree,
+                historical_library: None,
+            },
             cobre_stochastic::ClassSchemes {
                 inflow: Some(training_src.inflow_scheme),
                 load: Some(training_src.load_scheme),

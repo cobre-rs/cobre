@@ -2,20 +2,21 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
+use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
+    sampling::historical::HistoricalScenarioLibrary,
     tree::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
+        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
     },
+    StochasticError,
 };
 
 /// Per-class entity counts for the noise dimension.
@@ -55,19 +56,30 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// Generate a fixed opening tree with correlated noise realisations.
 ///
 /// For each stage, all openings are generated together using the configured noise method.
-/// SAA, LHS, QMC-Sobol, and QMC-Halton are fully implemented.
+/// SAA, LHS, QMC-Sobol, QMC-Halton, and `HistoricalResiduals` are fully implemented.
 /// The `Selective` method returns an error.
 ///
 /// Generation order is stage-major (outer: stages, inner: openings) to support batch methods
-/// like LHS that require all openings for a stage simultaneously. spectral correlation
-/// is applied per class (inflow, load, ncs) in-place after noise generation.
+/// like LHS that require all openings for a stage simultaneously. Spectral correlation
+/// is applied per class (inflow, load, ncs) in-place after noise generation, except for
+/// `HistoricalResiduals` stages where empirical cross-entity correlation is already embedded
+/// in the residuals.
 ///
 /// The `entity_order` slice must have layout `[hydros | load buses | NCS entities]` and
 /// `dims.n_hydros + dims.n_load_buses + dims.n_ncs` must equal `dim`.
 ///
+/// When `HistoricalResiduals` is used and `n_windows < branching_factor`, the stage's
+/// opening count is clamped to `n_windows`. Windows are selected via hash with
+/// replacement, so duplicate selections are possible even after clamping.
+/// A `tracing::warn!` is emitted per stage when clamping occurs.
+///
 /// # Errors
 ///
-/// Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses [`NoiseMethod::Selective`].
+/// - Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses
+///   [`NoiseMethod::Selective`].
+/// - Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses
+///   [`NoiseMethod::HistoricalResiduals`] and `historical_library` is `None`.
+#[allow(clippy::too_many_lines)]
 pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
@@ -75,6 +87,7 @@ pub fn generate_opening_tree(
     correlation: &DecomposedCorrelation,
     entity_order: &[EntityId],
     dims: ClassDimensions,
+    historical_library: Option<&HistoricalScenarioLibrary>,
 ) -> Result<OpeningTree, StochasticError> {
     let n_stages = stages.len();
 
@@ -82,9 +95,21 @@ pub fn generate_opening_tree(
     let load_order = &entity_order[dims.n_hydros..dims.n_hydros + dims.n_load_buses];
     let ncs_order = &entity_order[dims.n_hydros + dims.n_load_buses..];
 
+    // Compute per-stage opening counts. HistoricalResiduals stages are clamped
+    // to n_windows to reduce (but not eliminate) duplicate window selections.
     let openings_per_stage: Vec<usize> = stages
         .iter()
-        .map(|s| s.scenario_config.branching_factor)
+        .map(|s| {
+            if s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals {
+                if let Some(lib) = historical_library {
+                    s.scenario_config.branching_factor.min(lib.n_windows())
+                } else {
+                    s.scenario_config.branching_factor
+                }
+            } else {
+                s.scenario_config.branching_factor
+            }
+        })
         .collect();
 
     let mut stage_offsets = Vec::with_capacity(n_stages);
@@ -132,6 +157,41 @@ pub fn generate_opening_tree(
                     reason: "selective/representative sampling is not supported by the opening tree generator; provide a pre-built tree instead".to_string(),
                 });
             }
+            NoiseMethod::HistoricalResiduals => {
+                let lib =
+                    historical_library.ok_or_else(|| StochasticError::UnsupportedNoiseMethod {
+                        method: "historical_residuals".to_string(),
+                        stage_id: stage.id,
+                        reason:
+                            "HistoricalResiduals noise method requires a HistoricalScenarioLibrary \
+                             but none was provided"
+                                .to_string(),
+                    })?;
+                let n_windows = lib.n_windows();
+
+                if n_windows < stage.scenario_config.branching_factor {
+                    tracing::warn!(
+                        stage_id = stage.id,
+                        "HistoricalResiduals: {} historical windows < branching_factor {}; \
+                         opening tree clamped to {} openings",
+                        n_windows,
+                        stage.scenario_config.branching_factor,
+                        n_windows,
+                    );
+                }
+
+                for opening_idx in 0..n_openings {
+                    let start = opening_idx * dim;
+                    let noise_slice = &mut stage_slice[start..start + dim];
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let window_idx = (seed % (n_windows as u64)) as usize;
+                    let eta = lib.eta_slice(window_idx, stage_idx);
+                    noise_slice[..dims.n_hydros].copy_from_slice(eta);
+                }
+                continue;
+            }
         }
 
         for opening_idx in 0..n_openings {
@@ -154,16 +214,19 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{
+        correlation::resolve::DecomposedCorrelation,
+        sampling::historical::HistoricalScenarioLibrary, StochasticError,
+    };
 
-    use super::{ClassDimensions, generate_opening_tree};
+    use super::{generate_opening_tree, ClassDimensions};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -267,8 +330,10 @@ mod tests {
             n_load_buses: 0,
             n_ncs: 0,
         };
-        let tree1 = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
-        let tree2 = generate_opening_tree(42, &stages, 2, &corr2, &entity_order, dims).unwrap();
+        let tree1 =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree2 =
+            generate_opening_tree(42, &stages, 2, &corr2, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -293,7 +358,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -314,8 +379,10 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree_a = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
-        let tree_b = generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims).unwrap();
+        let tree_a =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree_b =
+            generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims, None).unwrap();
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -341,7 +408,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -365,7 +432,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -387,7 +454,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(12345, &stages, 1, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(12345, &stages, 1, &corr, &entity_order, dims, None).unwrap();
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -425,7 +493,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims, None).unwrap();
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -453,7 +521,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None).unwrap();
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -499,7 +568,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims, None).unwrap();
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];
@@ -533,7 +602,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims).unwrap();
+        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
 
         // Golden values from pre-refactor opening-major implementation.
         assert_eq!(
@@ -584,7 +653,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims);
+        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -617,7 +686,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -655,7 +725,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -723,7 +794,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -751,7 +823,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, dim_over, &corr, &entity_order, dims);
+        let result = generate_opening_tree(42, &stages, dim_over, &corr, &entity_order, dims, None);
 
         match result {
             Err(StochasticError::DimensionExceedsCapacity {
@@ -786,7 +858,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -823,7 +896,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -853,7 +927,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -933,7 +1008,8 @@ mod tests {
 
         // Generate tree via the new per-class path (the only path in generate_opening_tree).
         let tree_per_class =
-            generate_opening_tree(77, &stages, 2, &corr_per_class, &entity_order, dims).unwrap();
+            generate_opening_tree(77, &stages, 2, &corr_per_class, &entity_order, dims, None)
+                .unwrap();
 
         // Reproduce the old full-vector path manually: generate noise then call
         // apply_correlation on the full vector (not per-class).
@@ -1044,7 +1120,8 @@ mod tests {
         let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
 
         let tree_per_class =
-            generate_opening_tree(77, &stages, 3, &corr_per_class, &entity_order, dims).unwrap();
+            generate_opening_tree(77, &stages, 3, &corr_per_class, &entity_order, dims, None)
+                .unwrap();
 
         corr_full.resolve_positions(&entity_order);
 
@@ -1165,6 +1242,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
+            None,
         )
         .unwrap();
 
@@ -1276,6 +1354,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
+            None,
         )
         .unwrap();
 
@@ -1318,6 +1397,276 @@ mod tests {
                 assert_eq!(
                     per_class, full,
                     "QmcHalton: stage={stage_idx} opening={opening_idx}: per-class differs from full-vector"
+                );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // HistoricalResiduals tests (ticket-008)
+    // -------------------------------------------------------------------------
+
+    /// Helper: build a `HistoricalScenarioLibrary` with known, distinct eta values.
+    ///
+    /// Each eta entry is set to `(window * 100 + stage) as f64` for all hydros,
+    /// making it easy to verify which (window, stage) pair was selected.
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
+    fn make_test_library(
+        n_windows: usize,
+        n_stages: usize,
+        n_hydros: usize,
+    ) -> HistoricalScenarioLibrary {
+        let window_years: Vec<i32> = (0..n_windows).map(|w| 1990 + w as i32).collect();
+        let mut lib =
+            HistoricalScenarioLibrary::new(n_windows, n_stages, n_hydros, 1, window_years);
+        for w in 0..n_windows {
+            for s in 0..n_stages {
+                let val = (w * 100 + s) as f64;
+                lib.eta_slice_mut(w, s).fill(val);
+            }
+        }
+        lib
+    }
+
+    /// Calling `generate_opening_tree` with `HistoricalResiduals` and `library = None`
+    /// returns `Err(StochasticError::UnsupportedNoiseMethod)` with `method ==
+    /// "historical_residuals"`.
+    #[test]
+    fn test_historical_residuals_none_library_returns_error() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage_with_method(1, 9, 3, NoiseMethod::HistoricalResiduals),
+        ];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None);
+
+        match result {
+            Err(StochasticError::UnsupportedNoiseMethod {
+                method,
+                stage_id,
+                reason: _,
+            }) => {
+                assert_eq!(method, "historical_residuals");
+                assert_eq!(stage_id, 9);
+            }
+            Ok(_) => panic!("expected Err but got Ok"),
+            Err(other) => panic!("expected UnsupportedNoiseMethod, got {other:?}"),
+        }
+    }
+
+    /// With a library of 5 windows and `branching_factor = 4`, the tree has 4 openings
+    /// per stage. The hydro segment of each opening matches
+    /// `library.eta_slice(hash(seed, opening, stage) % 5, stage_idx)`.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_historical_residuals_copies_eta_from_library() {
+        use crate::noise::seed::derive_opening_seed;
+
+        let n_hydros = 3_usize;
+        let n_stages = 2_usize;
+        let n_windows = 5_usize;
+        let branching_factor = 4_usize;
+        let base_seed = 77_u64;
+
+        let lib = make_test_library(n_windows, n_stages, n_hydros);
+
+        let stages = vec![
+            make_stage_with_method(0, 10, branching_factor, NoiseMethod::HistoricalResiduals),
+            make_stage_with_method(1, 20, branching_factor, NoiseMethod::HistoricalResiduals),
+        ];
+        let corr = identity_correlation(&[1, 2, 3]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3)];
+        let dims = ClassDimensions {
+            n_hydros,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let tree = generate_opening_tree(
+            base_seed,
+            &stages,
+            n_hydros,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+        )
+        .unwrap();
+
+        assert_eq!(tree.n_stages(), 2);
+        assert_eq!(tree.n_openings(0), branching_factor);
+        assert_eq!(tree.n_openings(1), branching_factor);
+
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            for opening_idx in 0..branching_factor {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_possible_truncation
+                )]
+                let seed = derive_opening_seed(base_seed, opening_idx as u32, stage.id as u32);
+                #[allow(clippy::cast_possible_truncation)]
+                let expected_window = (seed % (n_windows as u64)) as usize;
+                let expected_eta = lib.eta_slice(expected_window, stage_idx);
+                let actual = tree.opening(stage_idx, opening_idx);
+                assert_eq!(
+                    actual, expected_eta,
+                    "stage={stage_idx} opening={opening_idx}: hydro segment mismatch"
+                );
+            }
+        }
+    }
+
+    /// With `dim = n_hydros + n_load + n_ncs`, indices `[n_hydros..dim]` of every
+    /// opening produced by `HistoricalResiduals` must be `0.0`.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_historical_residuals_zeros_non_hydro_slots() {
+        let n_hydros = 2_usize;
+        let n_load = 1_usize;
+        let n_ncs = 1_usize;
+        let dim = n_hydros + n_load + n_ncs;
+        let n_windows = 3_usize;
+        let n_stages = 1_usize;
+        let branching_factor = 3_usize;
+
+        let lib = make_test_library(n_windows, n_stages, n_hydros);
+
+        let stages = vec![make_stage_with_method(
+            0,
+            0,
+            branching_factor,
+            NoiseMethod::HistoricalResiduals,
+        )];
+        // Use 4 entity ids: 2 hydros + 1 load + 1 ncs.
+        let corr = identity_correlation(&[1, 2, 3, 4]);
+        let entity_order = vec![EntityId(1), EntityId(2), EntityId(3), EntityId(4)];
+        let dims = ClassDimensions {
+            n_hydros,
+            n_load_buses: n_load,
+            n_ncs,
+        };
+
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, Some(&lib))
+            .unwrap();
+
+        for opening_idx in 0..branching_factor {
+            let slice = tree.opening(0, opening_idx);
+            assert_eq!(slice.len(), dim);
+            for (i, &val) in slice.iter().enumerate().skip(n_hydros) {
+                assert_eq!(
+                    val, 0.0,
+                    "opening={opening_idx} index={i}: expected 0.0 for non-hydro slot"
+                );
+            }
+        }
+    }
+
+    /// When `n_windows < branching_factor`, the opening tree's opening count for
+    /// that stage is clamped to `n_windows`.
+    #[test]
+    fn test_historical_residuals_clamps_openings_when_windows_lt_branching() {
+        let n_windows = 2_usize;
+        let branching_factor = 5_usize;
+        let n_hydros = 2_usize;
+        let n_stages = 1_usize;
+
+        let lib = make_test_library(n_windows, n_stages, n_hydros);
+
+        let stages = vec![make_stage_with_method(
+            0,
+            0,
+            branching_factor,
+            NoiseMethod::HistoricalResiduals,
+        )];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            n_hydros,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+        )
+        .unwrap();
+
+        assert_eq!(
+            tree.n_openings(0),
+            n_windows,
+            "opening count must be clamped to n_windows when n_windows < branching_factor"
+        );
+    }
+
+    /// Two calls with the same seed and library produce bit-identical output.
+    #[test]
+    fn test_historical_residuals_deterministic_window_selection() {
+        let n_windows = 4_usize;
+        let n_stages = 2_usize;
+        let n_hydros = 2_usize;
+        let branching_factor = 3_usize;
+        let base_seed = 12_345_u64;
+
+        let lib = make_test_library(n_windows, n_stages, n_hydros);
+
+        let stages = vec![
+            make_stage_with_method(0, 1, branching_factor, NoiseMethod::HistoricalResiduals),
+            make_stage_with_method(1, 2, branching_factor, NoiseMethod::HistoricalResiduals),
+        ];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let tree1 = generate_opening_tree(
+            base_seed,
+            &stages,
+            n_hydros,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+        )
+        .unwrap();
+        let tree2 = generate_opening_tree(
+            base_seed,
+            &stages,
+            n_hydros,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+        )
+        .unwrap();
+
+        for s in 0..n_stages {
+            for o in 0..branching_factor {
+                assert_eq!(
+                    tree1.opening(s, o),
+                    tree2.opening(s, o),
+                    "non-deterministic output at stage={s} opening={o}"
                 );
             }
         }

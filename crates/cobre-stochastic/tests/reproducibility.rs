@@ -34,7 +34,7 @@ use cobre_core::{
         StageStateConfig,
     },
 };
-use cobre_stochastic::{ClassSchemes, build_stochastic_context, sample_forward};
+use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context, sample_forward};
 
 fn make_bus(id: i32) -> Bus {
     Bus {
@@ -190,7 +190,7 @@ fn build_fixture(hydros: Vec<Hydro>, base_seed: u64) -> cobre_stochastic::Stocha
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

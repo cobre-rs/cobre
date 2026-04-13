@@ -57,7 +57,9 @@ use cobre_sddp::{
     hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
-use cobre_stochastic::{ClassSchemes, PrecomputedPar, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{
+    ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext, build_stochastic_context,
+};
 
 // ===========================================================================
 // Communicator stub
@@ -366,7 +368,7 @@ fn build_stochastic() -> StochasticContext {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

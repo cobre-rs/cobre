@@ -1015,7 +1015,9 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+    use cobre_stochastic::{
+        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    };
 
     use super::train;
     use crate::{
@@ -1339,7 +1341,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

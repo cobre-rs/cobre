@@ -1404,12 +1404,13 @@ mod tests {
     // Helpers for SeasonMap-aware standardize tests
     // -----------------------------------------------------------------------
 
-    /// Build a standard monthly SeasonMap (12 seasons, IDs 0–11).
+    /// Build a standard monthly `SeasonMap` (12 seasons, IDs 0–11).
     fn monthly_season_map() -> SeasonMap {
         let seasons = (0_usize..12)
             .map(|i| SeasonDefinition {
                 id: i,
                 label: format!("Month{i}"),
+                #[allow(clippy::cast_possible_truncation)]
                 month_start: (i as u32) + 1,
                 day_start: None,
                 month_end: None,
@@ -1501,6 +1502,7 @@ mod tests {
     // Test 7: quarterly SeasonMap maps observations to correct season IDs
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     fn make_quarterly_stage(index: usize, season_id: usize) -> Stage {
         let month = (season_id as u32) * 3 + 1; // 1, 4, 7, 10
         Stage {
@@ -1576,11 +1578,11 @@ mod tests {
     fn test_standardize_quarterly_season_map_correct() {
         let hydro = EntityId(1);
         let stages: Vec<Stage> = (0..4).map(|i| make_quarterly_stage(i, i)).collect();
-        let models: Vec<InflowModel> = (0..4)
+        let models: Vec<InflowModel> = (0_i32..4)
             .map(|i| InflowModel {
                 hydro_id: hydro,
-                stage_id: i as i32,
-                mean_m3s: 100.0 + (i as f64) * 10.0,
+                stage_id: i,
+                mean_m3s: 100.0 + f64::from(i) * 10.0,
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,

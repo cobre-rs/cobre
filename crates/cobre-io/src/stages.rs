@@ -783,11 +783,12 @@ fn convert_noise_method(s: &str, field: &str, path: &Path) -> Result<NoiseMethod
         "qmc_sobol" => Ok(NoiseMethod::QmcSobol),
         "qmc_halton" => Ok(NoiseMethod::QmcHalton),
         "selective" => Ok(NoiseMethod::Selective),
+        "historical_residuals" => Ok(NoiseMethod::HistoricalResiduals),
         other => Err(LoadError::SchemaError {
             path: path.to_path_buf(),
             field: field.to_string(),
             message: format!(
-                "unknown sampling_method '{other}', expected one of: saa, lhs, qmc_sobol, qmc_halton, selective"
+                "unknown sampling_method '{other}', expected one of: saa, lhs, qmc_sobol, qmc_halton, selective, historical_residuals"
             ),
         }),
     }
@@ -1673,5 +1674,18 @@ mod tests {
             map.is_empty(),
             "stages without season_id should yield an empty map"
         );
+    }
+
+    /// `convert_noise_method("historical_residuals", ...)` returns
+    /// `Ok(NoiseMethod::HistoricalResiduals)`.
+    #[test]
+    fn test_convert_noise_method_historical_residuals() {
+        let f = write_json(VALID_JSON);
+        let result = convert_noise_method(
+            "historical_residuals",
+            "stages[0].sampling_method",
+            f.path(),
+        );
+        assert_eq!(result.unwrap(), NoiseMethod::HistoricalResiduals);
     }
 }

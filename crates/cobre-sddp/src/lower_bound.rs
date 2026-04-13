@@ -487,6 +487,7 @@ mod tests {
                 n_load_buses: 0,
                 n_ncs: 0,
             },
+            None,
         )
         .unwrap()
     }

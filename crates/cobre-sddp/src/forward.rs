@@ -1175,7 +1175,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
@@ -1532,7 +1532,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2873,7 +2873,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3314,7 +3314,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

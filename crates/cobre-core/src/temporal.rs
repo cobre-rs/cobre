@@ -60,7 +60,7 @@ pub enum SeasonCycleType {
 /// `SamplingScheme`, which selects the forward-pass noise *source*
 /// (in-sample, external, historical). `NoiseMethod` governs *how*
 /// the noise vectors are produced (SAA, LHS, QMC-Sobol, QMC-Halton,
-/// Selective).
+/// Selective, or `HistoricalResiduals`).
 ///
 /// See [Input Scenarios §1.8](input-scenarios.md) for the
 /// full method catalog and use cases.
@@ -77,6 +77,14 @@ pub enum NoiseMethod {
     QmcHalton,
     /// Selective/Representative Sampling. Clustering on historical data.
     Selective,
+    /// Historical residuals from the `HistoricalScenarioLibrary`.
+    /// Copies pre-computed eta (residual) vectors from actual historical
+    /// observations. Skips the parametric Cholesky correlation step since
+    /// empirical cross-entity correlation is embedded in the residuals.
+    /// Year pool configuration is sourced from the system-level
+    /// `HistoricalYears` config (same as the Historical forward sampling
+    /// scheme).
+    HistoricalResiduals,
 }
 
 /// Horizon type tag for the policy graph.

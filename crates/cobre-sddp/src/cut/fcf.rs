@@ -35,7 +35,7 @@
 //! ```rust
 //! use cobre_sddp::cut::fcf::FutureCostFunction;
 //!
-//! let mut fcf = FutureCostFunction::new(3, 4, 10, 50, 0);
+//! let mut fcf = FutureCostFunction::new(3, 4, 10, 50, &[0; 3]);
 //! assert_eq!(fcf.pools.len(), 3);
 //!
 //! let coeffs = vec![1.0, 0.0, 0.0, 0.0];
@@ -75,10 +75,11 @@ pub struct FutureCostFunction {
 impl FutureCostFunction {
     /// Construct a new `FutureCostFunction` with pre-allocated pools.
     ///
-    /// Creates `num_stages` [`CutPool`]s, each with capacity:
+    /// Creates `num_stages` [`CutPool`]s. Each stage `i` is allocated with
+    /// its own capacity:
     ///
     /// ```text
-    /// capacity = warm_start_count + max_iterations * forward_passes
+    /// capacity[i] = warm_start_counts[i] + max_iterations * forward_passes
     /// ```
     ///
     /// The capacity arithmetic uses `u64` to avoid overflow for large
@@ -92,15 +93,16 @@ impl FutureCostFunction {
     ///   per Benders cut).
     /// - `forward_passes`: number of forward passes per training iteration.
     /// - `max_iterations`: maximum number of training iterations.
-    /// - `warm_start_count`: number of warm-start cuts pre-loaded before
-    ///   training begins.
+    /// - `warm_start_counts`: per-stage number of warm-start cuts pre-loaded
+    ///   before training begins. Length must equal `num_stages`. For the
+    ///   uniform case (no warm-start), pass `&vec![0; num_stages]`.
     ///
     /// # Example
     ///
     /// ```rust
     /// use cobre_sddp::cut::fcf::FutureCostFunction;
     ///
-    /// let fcf = FutureCostFunction::new(5, 9, 10, 100, 0);
+    /// let fcf = FutureCostFunction::new(5, 9, 10, 100, &[0; 5]);
     /// assert_eq!(fcf.pools.len(), 5);
     /// // capacity = 0 + 100 * 10 = 1000
     /// assert_eq!(fcf.pools[0].capacity, 1000);
@@ -111,8 +113,16 @@ impl FutureCostFunction {
         state_dimension: usize,
         forward_passes: u32,
         max_iterations: u64,
-        warm_start_count: u32,
+        warm_start_counts: &[u32],
     ) -> Self {
+        debug_assert_eq!(
+            warm_start_counts.len(),
+            num_stages,
+            "warm_start_counts.len() ({}) != num_stages ({})",
+            warm_start_counts.len(),
+            num_stages
+        );
+
         // Use u64 arithmetic to prevent overflow before converting to usize.
         // The cast cannot realistically truncate on any 64-bit platform:
         // pool capacity is bounded by available memory, which fits in usize on
@@ -121,11 +131,13 @@ impl FutureCostFunction {
         // pool.rs slot_index), and both are guarded by debug_assert at
         // insertion time.
         #[allow(clippy::cast_possible_truncation)]
-        let capacity: usize =
-            (u64::from(warm_start_count) + max_iterations * u64::from(forward_passes)) as usize;
-
-        let pools = (0..num_stages)
-            .map(|_| CutPool::new(capacity, state_dimension, forward_passes, warm_start_count))
+        let pools = warm_start_counts
+            .iter()
+            .map(|&wsc| {
+                let capacity =
+                    (u64::from(wsc) + max_iterations * u64::from(forward_passes)) as usize;
+                CutPool::new(capacity, state_dimension, forward_passes, wsc)
+            })
             .collect();
 
         Self {
@@ -361,14 +373,14 @@ mod tests {
 
     #[test]
     fn new_creates_correct_number_of_pools() {
-        let fcf = FutureCostFunction::new(5, 9, 10, 100, 0);
+        let fcf = FutureCostFunction::new(5, 9, 10, 100, &[0; 5]);
         assert_eq!(fcf.pools.len(), 5);
     }
 
     #[test]
     fn new_each_pool_has_correct_capacity_no_warmstart() {
         // capacity = 0 + 100 * 10 = 1000
-        let fcf = FutureCostFunction::new(5, 9, 10, 100, 0);
+        let fcf = FutureCostFunction::new(5, 9, 10, 100, &[0; 5]);
         for pool in &fcf.pools {
             assert_eq!(pool.capacity, 1000);
             assert_eq!(pool.state_dimension, 9);
@@ -380,7 +392,7 @@ mod tests {
     #[test]
     fn new_each_pool_has_correct_capacity_with_warmstart() {
         // capacity = 5 + 100 * 10 = 1005
-        let fcf = FutureCostFunction::new(3, 4, 10, 100, 5);
+        let fcf = FutureCostFunction::new(3, 4, 10, 100, &[5; 3]);
         for pool in &fcf.pools {
             assert_eq!(pool.capacity, 1005);
             assert_eq!(pool.warm_start_count, 5);
@@ -389,20 +401,54 @@ mod tests {
 
     #[test]
     fn new_all_pools_start_with_zero_active_cuts() {
-        let fcf = FutureCostFunction::new(4, 3, 5, 20, 0);
+        let fcf = FutureCostFunction::new(4, 3, 5, 20, &[0; 4]);
         assert_eq!(fcf.total_active_cuts(), 0);
     }
 
     #[test]
     fn new_zero_stages_is_valid() {
-        let fcf = FutureCostFunction::new(0, 4, 5, 10, 0);
+        let fcf = FutureCostFunction::new(0, 4, 5, 10, &[]);
         assert_eq!(fcf.pools.len(), 0);
         assert_eq!(fcf.total_active_cuts(), 0);
     }
 
     #[test]
+    fn new_non_uniform_warm_start_counts_per_stage_capacity() {
+        // warm_start_counts = [5, 3, 0], max_iterations = 10, forward_passes = 2
+        // capacity[0] = 5 + 10*2 = 25
+        // capacity[1] = 3 + 10*2 = 23
+        // capacity[2] = 0 + 10*2 = 20
+        let fcf = FutureCostFunction::new(3, 4, 2, 10, &[5, 3, 0]);
+        assert_eq!(fcf.pools[0].capacity, 25);
+        assert_eq!(fcf.pools[0].warm_start_count, 5);
+        assert_eq!(fcf.pools[1].capacity, 23);
+        assert_eq!(fcf.pools[1].warm_start_count, 3);
+        assert_eq!(fcf.pools[2].capacity, 20);
+        assert_eq!(fcf.pools[2].warm_start_count, 0);
+    }
+
+    #[test]
+    fn new_uniform_zero_counts_matches_old_scalar_zero_behavior() {
+        // Verifies that &[0, 0, 0] gives identical behavior to old warm_start_count = 0
+        let fcf = FutureCostFunction::new(3, 4, 2, 10, &[0, 0, 0]);
+        for pool in &fcf.pools {
+            // capacity = 0 + 10*2 = 20
+            assert_eq!(pool.capacity, 20);
+            assert_eq!(pool.warm_start_count, 0);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "warm_start_counts.len()")]
+    fn new_mismatched_length_panics_in_debug() {
+        // Length 2 != num_stages 3: should trigger debug_assert_eq!
+        let _ = FutureCostFunction::new(3, 4, 2, 10, &[0, 0]);
+    }
+
+    #[test]
     fn add_cut_and_active_cuts_round_trip_at_specific_stage() {
-        let mut fcf = FutureCostFunction::new(5, 2, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(5, 2, 1, 10, &[0; 5]);
         let coeffs = [3.0, 7.0];
         fcf.add_cut(2, 0, 0, 42.0, &coeffs);
 
@@ -415,7 +461,7 @@ mod tests {
 
     #[test]
     fn active_cuts_at_other_stage_returns_empty() {
-        let mut fcf = FutureCostFunction::new(5, 2, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(5, 2, 1, 10, &[0; 5]);
         fcf.add_cut(2, 0, 0, 42.0, &[1.0, 2.0]);
 
         let active: Vec<_> = fcf.active_cuts(3).collect();
@@ -424,7 +470,7 @@ mod tests {
 
     #[test]
     fn add_cut_multiple_stages_are_independent() {
-        let mut fcf = FutureCostFunction::new(4, 1, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(4, 1, 1, 10, &[0; 4]);
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);
         fcf.add_cut(1, 0, 0, 2.0, &[2.0]);
         fcf.add_cut(3, 0, 0, 4.0, &[4.0]);
@@ -437,7 +483,7 @@ mod tests {
 
     #[test]
     fn evaluate_at_state_delegates_to_correct_pool() {
-        let mut fcf = FutureCostFunction::new(3, 2, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(3, 2, 1, 10, &[0; 3]);
         // stage 1: cut with intercept=10, coeffs=[1,0]
         fcf.add_cut(1, 0, 0, 10.0, &[1.0, 0.0]);
         // stage 2: cut with intercept=5, coeffs=[0,2]
@@ -453,7 +499,7 @@ mod tests {
 
     #[test]
     fn total_active_cuts_sums_across_stages() {
-        let mut fcf = FutureCostFunction::new(4, 1, 1, 20, 0);
+        let mut fcf = FutureCostFunction::new(4, 1, 1, 20, &[0; 4]);
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);
         fcf.add_cut(1, 0, 0, 2.0, &[2.0]);
         fcf.add_cut(1, 1, 0, 3.0, &[3.0]);
@@ -465,7 +511,7 @@ mod tests {
 
     #[test]
     fn total_active_cuts_reflects_deactivation() {
-        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 2.0, &[2.0]); // slot 1
         fcf.add_cut(1, 0, 0, 3.0, &[3.0]); // slot 0
@@ -477,7 +523,7 @@ mod tests {
 
     #[test]
     fn deactivate_delegates_to_correct_pool() {
-        let mut fcf = FutureCostFunction::new(3, 1, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(3, 1, 1, 10, &[0; 3]);
         fcf.add_cut(1, 0, 0, 10.0, &[1.0]); // slot 0 of pool[1]
         fcf.add_cut(1, 1, 0, 20.0, &[2.0]); // slot 1 of pool[1]
         fcf.add_cut(2, 0, 0, 30.0, &[3.0]); // slot 0 of pool[2]
@@ -492,13 +538,13 @@ mod tests {
 
     #[test]
     fn ac_new_5_stages_pools_len_is_5() {
-        let fcf = FutureCostFunction::new(5, 9, 10, 100, 0);
+        let fcf = FutureCostFunction::new(5, 9, 10, 100, &[0; 5]);
         assert_eq!(fcf.pools.len(), 5);
     }
 
     #[test]
     fn ac_active_cuts_at_stage_with_cut_yields_it() {
-        let mut fcf = FutureCostFunction::new(5, 3, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(5, 3, 1, 10, &[0; 5]);
         let coeffs = [1.0, 2.0, 3.0];
         fcf.add_cut(2, 0, 0, 99.0, &coeffs);
 
@@ -508,7 +554,7 @@ mod tests {
 
     #[test]
     fn ac_active_cuts_at_different_stage_yields_none() {
-        let mut fcf = FutureCostFunction::new(5, 3, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(5, 3, 1, 10, &[0; 5]);
         fcf.add_cut(2, 0, 0, 99.0, &[1.0, 2.0, 3.0]);
 
         let active: Vec<_> = fcf.active_cuts(3).collect();
@@ -517,7 +563,7 @@ mod tests {
 
     #[test]
     fn ac_total_active_cuts_is_sum_across_stages() {
-        let mut fcf = FutureCostFunction::new(5, 1, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(5, 1, 1, 10, &[0; 5]);
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);
         fcf.add_cut(1, 0, 0, 2.0, &[2.0]);
         fcf.add_cut(1, 1, 0, 3.0, &[3.0]);
@@ -528,7 +574,7 @@ mod tests {
 
     #[test]
     fn fcf_derives_debug_and_clone() {
-        let mut fcf = FutureCostFunction::new(2, 2, 1, 5, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 1, 5, &[0; 2]);
         fcf.add_cut(0, 0, 0, 7.0, &[1.0, 2.0]);
 
         let cloned = fcf.clone();
@@ -615,7 +661,7 @@ mod tests {
     #[test]
     fn from_deserialized_evaluate_at_state_matches_original() {
         // Build original FCF with known cuts, then reconstruct via deserialized.
-        let mut original = FutureCostFunction::new(2, 2, 1, 10, 0);
+        let mut original = FutureCostFunction::new(2, 2, 1, 10, &[0; 2]);
         original.add_cut(0, 0, 0, 10.0, &[1.0, 0.0]);
         original.add_cut(0, 1, 0, 5.0, &[0.0, 2.0]);
         original.add_cut(1, 0, 0, 3.0, &[1.0, 1.0]);

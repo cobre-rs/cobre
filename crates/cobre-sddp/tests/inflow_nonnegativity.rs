@@ -491,7 +491,7 @@ fn train_fixture(
     iterations: u64,
 ) -> Result<cobre_sddp::TrainingOutcome, cobre_sddp::SddpError> {
     let n_stages = fx.stage_templates.templates.len();
-    let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
     let comm = StubComm;
 
@@ -681,7 +681,7 @@ fn test_penalty_method_prevents_infeasibility() {
 fn test_penalty_slack_value_matches_negative_inflow() {
     let fx = build_fixture();
     let n_stages = fx.stage_templates.templates.len();
-    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
 
     train_fixture(&fx, 3).expect("training must succeed before simulation");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");
@@ -714,7 +714,7 @@ fn test_penalty_slack_value_matches_negative_inflow() {
 fn test_simulation_slack_output_populated() {
     let fx = build_fixture();
     let n_stages = fx.stage_templates.templates.len();
-    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
 
     train_fixture(&fx, 3).expect("training must succeed");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");

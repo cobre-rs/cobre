@@ -43,6 +43,7 @@
 //! assert_eq!(pool.active_count(), 1);
 //! ```
 
+use crate::cut::WARM_START_ITERATION;
 use crate::cut_selection::CutMetadata;
 
 /// Pre-allocated per-stage cut pool for the Future Cost Function (FCF).
@@ -601,12 +602,12 @@ impl CutPool {
             if record.is_active {
                 cached_active_count += 1;
             }
-            // Use u64::MAX as iteration_generated sentinel so warm-start cuts
-            // are never matched by pack_local_cuts (which filters on the
-            // current training iteration). This prevents double-counting
-            // warm-start cuts as new training cuts in cut sync.
+            // Use WARM_START_ITERATION as the iteration_generated sentinel so
+            // warm-start cuts are never matched by pack_local_cuts (which
+            // filters on the current training iteration).  This prevents
+            // double-counting warm-start cuts as new training cuts in cut sync.
             metadata[i] = CutMetadata {
-                iteration_generated: u64::MAX,
+                iteration_generated: WARM_START_ITERATION,
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
@@ -1029,5 +1030,71 @@ mod tests {
         assert_eq!(report.total_coefficients, 12);
         assert_eq!(report.exact_zero_count, 4);
         assert_eq!(report.per_dimension_zeros, vec![2, 0, 1, 1]);
+    }
+
+    #[test]
+    fn warm_start_cuts_have_sentinel_iteration() {
+        use crate::cut::WARM_START_ITERATION;
+        use cobre_io::OwnedPolicyCutRecord;
+
+        let records = vec![
+            OwnedPolicyCutRecord {
+                cut_id: 0,
+                slot_index: 0,
+                coefficients: vec![1.0, 2.0],
+                intercept: 10.0,
+                is_active: true,
+                iteration: 5,
+                forward_pass_index: 0,
+                domination_count: 0,
+            },
+            OwnedPolicyCutRecord {
+                cut_id: 1,
+                slot_index: 1,
+                coefficients: vec![3.0, 4.0],
+                intercept: 20.0,
+                is_active: true,
+                iteration: 7,
+                forward_pass_index: 1,
+                domination_count: 0,
+            },
+        ];
+
+        let pool = CutPool::new_with_warm_start(2, 4, 100, &records);
+        assert_eq!(pool.warm_start_count, 2);
+        assert_eq!(pool.populated_count, 2);
+        // Both warm-start cuts must use the sentinel value.
+        assert_eq!(pool.metadata[0].iteration_generated, WARM_START_ITERATION);
+        assert_eq!(pool.metadata[1].iteration_generated, WARM_START_ITERATION);
+        // The original iteration is preserved in last_active_iter for
+        // informational purposes (checkpoint round-trip).
+        assert_eq!(pool.metadata[0].last_active_iter, 5);
+        assert_eq!(pool.metadata[1].last_active_iter, 7);
+    }
+
+    #[test]
+    fn terminal_has_boundary_cuts_when_warm_start_count_positive() {
+        // A pool with warm_start_count > 0 signals boundary cuts at the
+        // terminal stage.
+        use cobre_io::OwnedPolicyCutRecord;
+
+        let records = vec![OwnedPolicyCutRecord {
+            cut_id: 0,
+            slot_index: 0,
+            coefficients: vec![1.0],
+            intercept: 5.0,
+            is_active: true,
+            iteration: 0,
+            forward_pass_index: 0,
+            domination_count: 0,
+        }];
+        let pool = CutPool::new_with_warm_start(1, 4, 100, &records);
+        assert!(pool.warm_start_count > 0, "terminal pool has boundary cuts");
+    }
+
+    #[test]
+    fn no_boundary_cuts_when_warm_start_count_zero() {
+        let pool = CutPool::new(100, 2, 10, 0);
+        assert_eq!(pool.warm_start_count, 0, "no boundary cuts");
     }
 }

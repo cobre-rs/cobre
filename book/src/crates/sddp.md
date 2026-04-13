@@ -85,26 +85,26 @@ near zero.
 
 ## Module overview
 
-| Module           | Responsibility                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| `training`       | `train`: the top-level loop orchestrator; wires all steps together                                             |
-| `forward`        | `run_forward_pass`, `sync_forward`: step 1 and step 2                                                          |
-| `state_exchange` | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                                              |
-| `backward`       | `run_backward_pass`: step 4 Benders cut generation across all trial points                                     |
-| `cut_sync`       | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                    |
-| `cut_selection`  | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a pool pruning                                 |
-| `lower_bound`    | `evaluate_lower_bound`: step 5b risk-adjusted LB computation                                                   |
-| `convergence`    | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                       |
-| `cut`            | `CutPool`, `FutureCostFunction`, `CutWireHeader`: cut data structures and wire format                          |
-| `config`         | `TrainingConfig`: algorithm parameters                                                                         |
-| `stopping_rule`  | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                        |
-| `risk_measure`   | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                                            |
-| `horizon_mode`   | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` in MVP)                                        |
-| `indexer`        | `StageIndexer`: LP column and row offset arithmetic for stage subproblems                                      |
-| `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves                                  |
-| `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                |
-| `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                           |
-| `fpha_fitting`   | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry |
+| Module           | Responsibility                                                                                                                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `training`       | `train`: the top-level loop orchestrator; wires all steps together                                                                                                                                                                                                                            |
+| `forward`        | `run_forward_pass`, `sync_forward`: step 1 and step 2                                                                                                                                                                                                                                         |
+| `state_exchange` | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                                                                                                                                                                                                                             |
+| `backward`       | `run_backward_pass`: step 4 Benders cut generation across all trial points                                                                                                                                                                                                                    |
+| `cut_sync`       | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                                                                                                                                                                                                   |
+| `cut_selection`  | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a pool pruning                                                                                                                                                                                                                |
+| `lower_bound`    | `evaluate_lower_bound`: step 5b risk-adjusted LB computation                                                                                                                                                                                                                                  |
+| `convergence`    | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                                                                                                                                                                                                      |
+| `cut`            | `CutPool`, `FutureCostFunction`, `CutWireHeader`: cut data structures and wire format                                                                                                                                                                                                         |
+| `config`         | `TrainingConfig`: algorithm parameters                                                                                                                                                                                                                                                        |
+| `stopping_rule`  | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                                                                                                                                                                                                       |
+| `risk_measure`   | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                                                                                                                                                                                                                           |
+| `horizon_mode`   | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` in MVP)                                                                                                                                                                                                                       |
+| `indexer`        | `StageIndexer`: LP column and row offset arithmetic for stage subproblems                                                                                                                                                                                                                     |
+| `lp_builder`     | `PatchBuffer`, `ar_dynamics_row_offset`: row-bound patch arrays for LP solves                                                                                                                                                                                                                 |
+| `trajectory`     | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                                                                                                                                                                                               |
+| `error`          | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                                                                                                                                                                                                          |
+| `fpha_fitting`   | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry                                                                                                                                                                                |
 | `setup`          | `StudySetup`: pre-built study state constructed once before training and simulation; holds four optional scenario libraries (`historical_library`, `external_inflow_library`, `external_load_library`, `external_ncs_library`) built conditionally from per-class `SamplingScheme` selections |
 
 ## Configuration
@@ -205,12 +205,12 @@ iterations that are multiples of `check_frequency` and never at iteration 0.
 
 Four optional library fields are built conditionally based on per-class `SamplingScheme` selections:
 
-| Field | Type | Built when |
-| ----- | ---- | ---------- |
-| `historical_library` | `Option<HistoricalScenarioLibrary>` | `inflow_scheme == SamplingScheme::Historical` |
-| `external_inflow_library` | `Option<ExternalScenarioLibrary>` | `inflow_scheme == SamplingScheme::External` |
-| `external_load_library` | `Option<ExternalScenarioLibrary>` | `load_scheme == SamplingScheme::External` |
-| `external_ncs_library` | `Option<ExternalScenarioLibrary>` | `ncs_scheme == SamplingScheme::External` |
+| Field                     | Type                                | Built when                                    |
+| ------------------------- | ----------------------------------- | --------------------------------------------- |
+| `historical_library`      | `Option<HistoricalScenarioLibrary>` | `inflow_scheme == SamplingScheme::Historical` |
+| `external_inflow_library` | `Option<ExternalScenarioLibrary>`   | `inflow_scheme == SamplingScheme::External`   |
+| `external_load_library`   | `Option<ExternalScenarioLibrary>`   | `load_scheme == SamplingScheme::External`     |
+| `external_ncs_library`    | `Option<ExternalScenarioLibrary>`   | `ncs_scheme == SamplingScheme::External`      |
 
 Callers borrow `StudySetup` to construct `TrainingContext` and `StageContext`; the public accessor methods (`historical_library()`, `external_inflow_library()`, etc.) return `Option<&T>` and are `None` for sampling schemes that do not use those libraries.
 
@@ -381,7 +381,7 @@ use cobre_sddp::{
 
 // Build the FCF for num_stages stages, n_state state dimensions,
 // forward_passes scenarios per rank, max_iterations iterations.
-let mut fcf = FutureCostFunction::new(num_stages, n_state, forward_passes, max_iterations, 0);
+let mut fcf = FutureCostFunction::new(num_stages, n_state, forward_passes, max_iterations, &vec![0; num_stages]);
 
 let config = TrainingConfig {
     forward_passes: 10,

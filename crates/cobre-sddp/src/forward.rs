@@ -656,6 +656,13 @@ struct StageKey<'a> {
     /// Total LP row count (template + active cuts) for pre-allocating basis
     /// storage and avoiding per-scenario heap reallocation.
     basis_row_capacity: usize,
+    /// True when the last study stage (`T-1`) has at least one warm-start
+    /// (boundary) cut.  When true, the theta column at the terminal stage is
+    /// NOT zeroed out so that the boundary cuts can contribute to the LP
+    /// objective.  Computed once per forward pass from
+    /// `fcf.pools[num_stages - 1].warm_start_count > 0` and reused for every
+    /// (scenario, stage) pair in the pass.
+    terminal_has_boundary_cuts: bool,
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -686,6 +693,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         iteration,
         raw_noise,
         basis_row_capacity,
+        terminal_has_boundary_cuts,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -776,7 +784,13 @@ fn run_forward_stage<S: SolverInterface + Send>(
             &ws.scratch.ncs_col_upper_buf,
         );
     }
-    if horizon.is_terminal(t + 1) {
+    // Zero out the theta column at the terminal stage (the last study stage,
+    // `T-1`) so that the LP does not penalise future cost when there is no
+    // successor.  The zeroing is skipped when boundary (warm-start) cuts have
+    // been loaded for the terminal stage: in that case the cuts constrain
+    // theta from below and their contribution to the objective must remain
+    // visible to the solver.
+    if horizon.is_terminal(t + 1) && !terminal_has_boundary_cuts {
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
 
@@ -1015,6 +1029,13 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     // Noise dimension for worker-local sampling buffers (OutOfSample path).
     let noise_dim = stochastic.dim();
 
+    // True when the last study stage has warm-start (boundary) cuts.
+    // Computed once here so it can be captured cheaply by the parallel closure.
+    // When true, the theta column at the terminal stage is not zeroed out,
+    // allowing boundary cuts to contribute to the LP objective.
+    let terminal_has_boundary_cuts =
+        num_stages > 0 && fcf.pools[num_stages - 1].warm_start_count > 0;
+
     // Snapshot solve time across all workers before the parallel region.
     let solve_seconds_before: f64 = workspaces
         .iter()
@@ -1098,6 +1119,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         iteration: *iteration,
                         raw_noise,
                         basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
+                        terminal_has_boundary_cuts,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(
@@ -1576,7 +1598,7 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_empty_cuts_returns_empty_batch() {
-        let fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         let indexer = StageIndexer::new(1, 0);
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
 
@@ -1590,7 +1612,7 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_one_cut_correct_structure() {
-        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         fcf.add_cut(0, 0, 0, 5.0, &[2.0]);
         let indexer = StageIndexer::new(1, 0);
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
@@ -1605,7 +1627,7 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_two_cuts_correct_row_starts() {
-        let mut fcf = FutureCostFunction::new(2, 2, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 1, 10, &vec![0; 2]);
         fcf.add_cut(1, 0, 0, 10.0, &[1.0, 3.0]);
         fcf.add_cut(1, 1, 0, 20.0, &[2.0, 4.0]);
         let indexer = StageIndexer::new(1, 1);
@@ -1632,7 +1654,7 @@ mod tests {
 
     #[test]
     fn build_cut_row_batch_zero_coefficient_state_variable() {
-        let mut fcf = FutureCostFunction::new(1, 2, 1, 5, 0);
+        let mut fcf = FutureCostFunction::new(1, 2, 1, 5, &vec![0; 1]);
         fcf.add_cut(0, 0, 0, 3.0, &[0.0, 7.0]);
         let indexer = StageIndexer::new(1, 1);
         let batch = build_cut_row_batch(&fcf, 0, &indexer, &[]);
@@ -1714,7 +1736,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let config = TrainingConfig {
             forward_passes: 2,
             max_iterations: 100,
@@ -1816,7 +1838,7 @@ mod tests {
         // (s0,t0), (s1,t0), (s0,t1), (s1,t1), ... — the 3rd call (index 2)
         // is stage 1 of scenario 0.
         let solver = MockSolver::infeasible_on(solution, 2);
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let config = TrainingConfig {
             forward_passes: 2,
             max_iterations: 100,
@@ -1924,7 +1946,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let config = TrainingConfig {
             forward_passes: 2,
             max_iterations: 100,
@@ -2329,7 +2351,7 @@ mod tests {
         basis_store: &mut BasisStore,
     ) -> Result<(), crate::SddpError> {
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 100, &vec![0; 3]);
         let config = TrainingConfig {
             forward_passes: 1,
             max_iterations: 100,
@@ -2504,7 +2526,7 @@ mod tests {
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let templates = vec![
             minimal_template_1_0(),
@@ -2638,7 +2660,7 @@ mod tests {
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let num_stages = 3usize;
         let templates = vec![
@@ -2930,7 +2952,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 0.0, indexer.theta, 0.0);
         let solver = MockSolver::always_ok(solution);
-        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, &vec![0; 1]);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let template = minimal_template_1_0_with_base(base_rhs);
         let templates = vec![template];
@@ -3105,7 +3127,7 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let solver = MockSolver::always_ok(solution);
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let config = TrainingConfig {
             forward_passes: 2,
             max_iterations: 100,
@@ -3343,7 +3365,7 @@ mod tests {
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &vec![0; 3]);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let num_stages = 3usize;
         let templates = vec![
@@ -3487,7 +3509,7 @@ mod tests {
         let base_rows = vec![2usize];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(1);
-        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, &vec![0; 1]);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let mut basis_store = BasisStore::new(1, 1);
         let load_balance_row_starts = vec![10usize];
@@ -3602,7 +3624,7 @@ mod tests {
         let base_rows = vec![2usize];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(1);
-        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(1, indexer.n_state, 1, 10, &vec![0; 1]);
         let horizon = HorizonMode::Finite { num_stages: 1 };
         let mut basis_store = BasisStore::new(1, 1);
         let load_balance_row_starts = vec![10usize];
@@ -3697,7 +3719,7 @@ mod tests {
         let base_rows = vec![2usize, 2, 2];
         let initial_state = vec![0.0_f64; indexer.n_state];
         let mut records = empty_records(3); // 1 scenario * 3 stages
-        let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 10, &vec![0; 3]);
         let horizon = HorizonMode::Finite { num_stages: 3 };
         let mut basis_store = BasisStore::new(1, 3);
 
@@ -3850,7 +3872,7 @@ mod tests {
     fn append_new_cuts_returns_zero_when_no_new_cuts() {
         use crate::cut::CutRowMap;
 
-        let fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         let indexer = crate::StageIndexer::new(1, 0);
         let mut row_map = CutRowMap::new(10, 5);
         let mut batch_buf = empty_row_batch();
@@ -3874,7 +3896,7 @@ mod tests {
     fn append_new_cuts_appends_all_on_empty_row_map() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
@@ -3905,7 +3927,7 @@ mod tests {
     fn append_new_cuts_skips_already_mapped_cuts() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
@@ -3938,7 +3960,7 @@ mod tests {
     fn append_new_cuts_matches_build_cut_row_batch_into() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
@@ -3975,7 +3997,7 @@ mod tests {
     fn append_new_cuts_with_scaling_matches_build() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, 0);
+        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &vec![0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]);
 
         let indexer = crate::StageIndexer::new(1, 0);

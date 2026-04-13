@@ -1021,6 +1021,7 @@ fn d12_checkpoint_round_trip() {
         .collect();
 
     let n_stages = fcf.pools.len();
+    let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
     let policy_metadata = PolicyCheckpointMetadata {
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-16T00:00:00Z".to_string(),
@@ -1031,7 +1032,8 @@ fn d12_checkpoint_round_trip() {
         num_stages: n_stages as u32,
         max_iterations: 100,
         forward_passes: 1,
-        warm_start_cuts: 0,
+        warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
+        warm_start_counts,
         rng_seed: 42,
         total_visited_states: 0,
     };

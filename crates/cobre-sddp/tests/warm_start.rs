@@ -99,6 +99,7 @@ fn write_test_checkpoint(
     let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
     let (basis_col, basis_row) = convert_basis_cache(result);
     let stage_bases = build_stage_basis_records(fcf, result, &basis_col, &basis_row);
+    let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
     let metadata = cobre_io::PolicyCheckpointMetadata {
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-29T00:00:00Z".to_string(),
@@ -109,7 +110,8 @@ fn write_test_checkpoint(
         num_stages: fcf.pools.len() as u32,
         max_iterations: setup.max_iterations() as u32,
         forward_passes: setup.forward_passes(),
-        warm_start_cuts: 0,
+        warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
+        warm_start_counts,
         rng_seed: seed,
         total_visited_states: 0,
     };

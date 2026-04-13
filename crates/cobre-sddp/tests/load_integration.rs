@@ -349,7 +349,7 @@ fn minimal_template() -> StageTemplate {
 
 fn make_fcf(n_stages: usize) -> FutureCostFunction {
     // capacity=50 iterations, state_dimension=1, 1 stage cut pool
-    FutureCostFunction::new(n_stages, 1, 1, 50, 0)
+    FutureCostFunction::new(n_stages, 1, 1, 50, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {

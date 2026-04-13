@@ -12,45 +12,44 @@ use cobre_solver::Basis;
 
 use crate::SddpError;
 
-/// Validate that a loaded policy checkpoint is compatible with the current
-/// system configuration.
+/// Resolve the per-stage warm-start cut counts from a loaded policy checkpoint.
 ///
-/// Returns [`SddpError::Validation`] if either of these conditions hold:
-/// - `metadata.state_dimension != current_state_dimension`
-/// - `metadata.num_stages != current_num_stages`
+/// Returns a `Vec<u32>` of length `num_stages` for [`FutureCostFunction::new`].
 ///
-/// # Examples
-///
-/// ```
-/// use cobre_io::PolicyCheckpointMetadata;
-/// use cobre_sddp::validate_policy_compatibility;
-///
-/// let meta = PolicyCheckpointMetadata {
-///     cobre_version: "0.2.2".to_string(),
-///     created_at: "2026-03-29T00:00:00Z".to_string(),
-///     completed_iterations: 50,
-///     final_lower_bound: 1234.56,
-///     best_upper_bound: Some(1300.0),
-///     state_dimension: 10,
-///     num_stages: 12,
-///     max_iterations: 200,
-///     forward_passes: 4,
-///     warm_start_cuts: 0,
-///     rng_seed: 42,
-///     total_visited_states: 0,
-/// };
-///
-/// // Compatible metadata passes validation.
-/// assert!(validate_policy_compatibility(&meta, 10, 12).is_ok());
-///
-/// // Mismatched state_dimension returns an error.
-/// assert!(validate_policy_compatibility(&meta, 8, 12).is_err());
-/// ```
+/// - If `metadata.warm_start_counts` is non-empty, it is returned after length validation.
+/// - If `metadata.warm_start_counts` is empty (old checkpoint format), the scalar
+///   `warm_start_cuts` is broadcast to all stages.
 ///
 /// # Errors
 ///
-/// Returns `SddpError::Validation` if `state_dimension` or `num_stages`
-/// do not match.
+/// Returns [`SddpError::Validation`] if `warm_start_counts.len() != num_stages`.
+///
+/// [`FutureCostFunction::new`]: crate::FutureCostFunction::new
+pub fn resolve_warm_start_counts(
+    metadata: &PolicyCheckpointMetadata,
+    num_stages: usize,
+) -> Result<Vec<u32>, SddpError> {
+    if metadata.warm_start_counts.is_empty() {
+        // Old checkpoint: broadcast scalar to all stages.
+        Ok(vec![metadata.warm_start_cuts; num_stages])
+    } else if metadata.warm_start_counts.len() != num_stages {
+        Err(SddpError::Validation(format!(
+            "warm_start_counts length mismatch: checkpoint has {}, current system has {} stages",
+            metadata.warm_start_counts.len(),
+            num_stages,
+        )))
+    } else {
+        Ok(metadata.warm_start_counts.clone())
+    }
+}
+
+/// Validate that a loaded policy checkpoint is compatible with the current
+/// system configuration.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] if `state_dimension` or `num_stages`
+/// do not match the current system configuration.
 pub fn validate_policy_compatibility(
     metadata: &PolicyCheckpointMetadata,
     current_state_dimension: u32,
@@ -75,14 +74,9 @@ pub fn validate_policy_compatibility(
 
 /// Build a basis cache from deserialized checkpoint basis records.
 ///
-/// Returns a `Vec<Option<Basis>>` with one entry per stage (0-based). Stages
-/// that have a matching record in `stage_bases` get `Some(Basis)` with the
-/// `u8` status codes widened to `i32`. Stages without a record get `None`.
-///
-/// # Parameters
-///
-/// - `num_stages`: total number of stages in the study.
-/// - `stage_bases`: deserialized basis records from the policy checkpoint.
+/// Returns a `Vec<Option<Basis>>` with one entry per stage. Stages with a
+/// matching record get `Some(Basis)` (with `u8` status codes widened to `i32`);
+/// stages without a record get `None`.
 #[must_use]
 pub fn build_basis_cache_from_checkpoint(
     num_stages: usize,
@@ -108,7 +102,7 @@ pub fn build_basis_cache_from_checkpoint(
 mod tests {
     use cobre_io::PolicyCheckpointMetadata;
 
-    use super::validate_policy_compatibility;
+    use super::{resolve_warm_start_counts, validate_policy_compatibility};
 
     fn sample_metadata() -> PolicyCheckpointMetadata {
         PolicyCheckpointMetadata {
@@ -122,6 +116,7 @@ mod tests {
             max_iterations: 200,
             forward_passes: 4,
             warm_start_cuts: 0,
+            warm_start_counts: vec![],
             rng_seed: 42,
             total_visited_states: 0,
         }
@@ -167,5 +162,85 @@ mod tests {
             msg.contains("state_dimension"),
             "should report state_dimension mismatch first: {msg}"
         );
+    }
+
+    // ── resolve_warm_start_counts tests ───────────────────────────────────────
+
+    fn meta_with_counts(
+        warm_start_cuts: u32,
+        warm_start_counts: Vec<u32>,
+    ) -> PolicyCheckpointMetadata {
+        #[allow(clippy::cast_possible_truncation)]
+        let num_stages: u32 = if warm_start_counts.is_empty() {
+            3
+        } else {
+            warm_start_counts.len() as u32
+        };
+        PolicyCheckpointMetadata {
+            cobre_version: "0.4.0".to_string(),
+            created_at: "2026-04-01T00:00:00Z".to_string(),
+            completed_iterations: 10,
+            final_lower_bound: 0.0,
+            best_upper_bound: None,
+            state_dimension: 2,
+            num_stages,
+            max_iterations: 50,
+            forward_passes: 1,
+            warm_start_cuts,
+            warm_start_counts,
+            rng_seed: 0,
+            total_visited_states: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_new_format_returns_per_stage_counts() {
+        let meta = meta_with_counts(10, vec![10, 8, 6]);
+        let counts = resolve_warm_start_counts(&meta, 3).unwrap();
+        assert_eq!(counts, vec![10u32, 8, 6]);
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_old_format_broadcasts_scalar() {
+        // Empty warm_start_counts: fall back to warm_start_cuts broadcast.
+        let meta = meta_with_counts(5, vec![]);
+        let counts = resolve_warm_start_counts(&meta, 3).unwrap();
+        assert_eq!(counts, vec![5u32, 5, 5]);
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_old_format_zero_scalar_broadcasts_zeros() {
+        let meta = meta_with_counts(0, vec![]);
+        let counts = resolve_warm_start_counts(&meta, 3).unwrap();
+        assert_eq!(counts, vec![0u32, 0, 0]);
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_wrong_length_returns_validation_error() {
+        // warm_start_counts has 2 entries but num_stages is 3 — corrupted checkpoint.
+        let meta = meta_with_counts(5, vec![5, 5]);
+        let result = resolve_warm_start_counts(&meta, 3);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("warm_start_counts length mismatch"),
+            "error message should mention length mismatch: {msg}"
+        );
+        assert!(msg.contains('2'), "should include vector length: {msg}");
+        assert!(msg.contains('3'), "should include num_stages: {msg}");
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_single_stage_new_format() {
+        let meta = meta_with_counts(7, vec![7]);
+        let counts = resolve_warm_start_counts(&meta, 1).unwrap();
+        assert_eq!(counts, vec![7u32]);
+    }
+
+    #[test]
+    fn resolve_warm_start_counts_zero_stages_old_format_returns_empty() {
+        let meta = meta_with_counts(5, vec![]);
+        let counts = resolve_warm_start_counts(&meta, 0).unwrap();
+        assert!(counts.is_empty());
     }
 }

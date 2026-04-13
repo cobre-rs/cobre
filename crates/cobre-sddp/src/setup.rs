@@ -654,7 +654,7 @@ impl StudySetup {
             indexer.n_state,
             forward_passes,
             fcf_capacity_iterations,
-            0,
+            &vec![0; n_stages],
         );
 
         let horizon = HorizonMode::Finite {

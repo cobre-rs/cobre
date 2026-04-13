@@ -271,7 +271,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     fwd_rayon_overhead_ms: 0,
 /// }];
 ///
-/// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
+/// let fcf = FutureCostFunction::new(2, 1, 4, 1, &[0; 2]);
 /// let output = build_training_output(&result, &events, &fcf);
 ///
 /// assert_eq!(output.convergence_records.len(), 1);
@@ -402,7 +402,7 @@ mod tests {
     }
 
     fn make_empty_fcf() -> FutureCostFunction {
-        FutureCostFunction::new(2, 1, 4, 10, 0)
+        FutureCostFunction::new(2, 1, 4, 10, &[0; 2])
     }
 
     #[test]
@@ -458,7 +458,7 @@ mod tests {
         let result = make_result("iteration_limit", 80.0, 100.0, 0.2, 1);
         let events = vec![make_iteration_summary(1, 80.0, 100.0, 0.2)];
 
-        let mut fcf = FutureCostFunction::new(2, 1, 4, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 1, 4, 10, &[0; 2]);
 
         // Add 3 cuts to pool[0] and 2 cuts to pool[1].
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);

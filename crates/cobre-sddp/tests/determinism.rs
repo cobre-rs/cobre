@@ -420,7 +420,7 @@ fn template_3h() -> StageTemplate {
 
 fn make_fcf_3h(n_stages: usize) -> FutureCostFunction {
     // state_dimension = 3, forward_passes = 1, capacity = 50 iterations, 0 warm-start cuts
-    FutureCostFunction::new(n_stages, 3, 1, 50, 0)
+    FutureCostFunction::new(n_stages, 3, 1, 50, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {

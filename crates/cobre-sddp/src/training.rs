@@ -1392,7 +1392,13 @@ mod tests {
         forward_passes: u32,
         max_iter: u64,
     ) -> FutureCostFunction {
-        FutureCostFunction::new(n_stages, n_state, forward_passes, max_iter, 0)
+        FutureCostFunction::new(
+            n_stages,
+            n_state,
+            forward_passes,
+            max_iter,
+            &vec![0; n_stages],
+        )
     }
 
     fn iteration_limit_rules(limit: u64) -> StoppingRuleSet {

@@ -720,12 +720,8 @@ impl StudySetup {
             .cloned()
             .collect();
 
-        // Build libraries only for the scheme variants that require them.
-        // InSample and OutOfSample do not need pre-built libraries.
-
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
-        // Historical inflow library (built when inflow_scheme == Historical).
         let historical_library: Option<HistoricalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::Historical {
                 let user_pool = training_source.historical_years.as_ref();
@@ -736,16 +732,14 @@ impl StudySetup {
                     &stages,
                     max_order,
                     user_pool,
+                    system.policy_graph().season_map.as_ref(),
                     forward_passes,
                 )
                 .map_err(SddpError::Stochastic)?;
-                let n_windows = window_years.len();
-                let n_hydros = hydro_ids.len();
-                let n_stages = stages.len();
                 let mut library = HistoricalScenarioLibrary::new(
-                    n_windows,
-                    n_stages,
-                    n_hydros,
+                    window_years.len(),
+                    stages.len(),
+                    hydro_ids.len(),
                     max_order,
                     window_years.clone(),
                 );
@@ -756,6 +750,7 @@ impl StudySetup {
                     &stages,
                     stochastic.par(),
                     &window_years,
+                    system.policy_graph().season_map.as_ref(),
                 );
                 validate_historical_library(
                     &library,
@@ -772,13 +767,11 @@ impl StudySetup {
                 None
             };
 
-        // External inflow library (built when inflow_scheme == External).
         let external_inflow_library: Option<ExternalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::External {
                 let external_rows = system.external_scenarios();
                 let n_stages = stages.len();
                 let n_hydros = hydro_ids.len();
-                // Collect row metadata required by validate_external_library.
                 let row_entity_ids: std::collections::HashSet<EntityId> =
                     external_rows.iter().map(|r| r.hydro_id).collect();
                 let mut rows_per_stage = vec![0usize; n_stages];
@@ -789,7 +782,6 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                // Determine uniform scenario count from stage 0 (or 0 if no rows).
                 let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
                     if rows_per_stage[0] % n_hydros != 0 {
                         return Err(SddpError::Stochastic(
@@ -976,16 +968,14 @@ impl StudySetup {
                 &stages,
                 max_order,
                 user_pool,
+                system.policy_graph().season_map.as_ref(),
                 forward_passes,
             )
             .map_err(SddpError::Stochastic)?;
-            let n_windows = window_years.len();
-            let n_hydros_sim = hydro_ids.len();
-            let n_stages_sim = stages.len();
             let mut library = HistoricalScenarioLibrary::new(
-                n_windows,
-                n_stages_sim,
-                n_hydros_sim,
+                window_years.len(),
+                stages.len(),
+                hydro_ids.len(),
                 max_order,
                 window_years.clone(),
             );
@@ -996,6 +986,7 @@ impl StudySetup {
                 &stages,
                 stochastic.par(),
                 &window_years,
+                system.policy_graph().season_map.as_ref(),
             );
             validate_historical_library(
                 &library,
@@ -1012,7 +1003,6 @@ impl StudySetup {
             None
         };
 
-        // Simulation external inflow library.
         let sim_external_inflow_library: Option<ExternalScenarioLibrary> = if sim_inflow_scheme
             == SamplingScheme::External
             && sim_inflow_scheme != inflow_scheme

@@ -32,16 +32,16 @@
 //!
 //! [`PrecomputedPar`]: crate::par::precompute::PrecomputedPar
 
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use cobre_core::{
     EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
-    temporal::Stage,
+    temporal::{SeasonMap, Stage},
 };
 
 use crate::{
     StochasticError,
-    par::{evaluate::solve_par_noise, precompute::PrecomputedPar},
+    par::{evaluate::solve_par_noise, fitting::find_season_for_date, precompute::PrecomputedPar},
 };
 
 // ---------------------------------------------------------------------------
@@ -303,11 +303,20 @@ impl HistoricalScenarioLibrary {
 /// # Inputs
 ///
 /// - `library` — pre-allocated library (from [`HistoricalScenarioLibrary::new`])
-/// - `inflow_history` — raw observations; keyed by date's `month0()` season
+/// - `inflow_history` — raw observations mapped to seasons via `season_map`
 /// - `hydro_ids` — canonical-order hydro entity IDs (must match `par`)
 /// - `stages` — study stages (non-negative IDs) with `season_id`
 /// - `par` — precomputed PAR coefficient cache
 /// - `window_years` — valid starting years from window discovery (ticket-018)
+/// - `season_map` — controls how observation dates outside the study range are
+///   mapped to season IDs (same three-tier fallback as
+///   [`discover_historical_windows`]):
+///   1. Dates within a study stage's `[start_date, end_date)` range are mapped
+///      via binary search on the stage index (exact match).
+///   2. Dates outside the study range are mapped via
+///      `season_map.season_for_date(date)` when `season_map` is `Some`.
+///   3. When `season_map` is `None`, falls back to `month0()` for backward
+///      compatibility. Observations that cannot be mapped are skipped.
 ///
 /// # Panics
 ///
@@ -322,6 +331,7 @@ pub fn standardize_historical_windows(
     stages: &[Stage],
     par: &PrecomputedPar,
     window_years: &[i32],
+    season_map: Option<&SeasonMap>,
 ) {
     debug_assert_eq!(
         library.n_windows(),
@@ -360,52 +370,30 @@ pub fn standardize_historical_windows(
         return;
     }
 
-    // -----------------------------------------------------------------------
-    // Compute n_seasons from the stage season_ids (consistent with window.rs).
-    // -----------------------------------------------------------------------
     let n_seasons = stages
         .iter()
         .filter_map(|s| s.season_id)
         .max()
         .map_or(1, |m| m + 1);
 
-    // -----------------------------------------------------------------------
-    // Build flat 3D observation table indexed by (hydro_idx, year_offset, season_id).
-    //
-    // Layout: table[hydro_idx * n_years * n_seasons + year_offset * n_seasons + season_id]
-    //
-    // Missing entries are represented by f64::NAN.  Valid inflow values are
-    // always finite, so NAN is a safe sentinel for "not present".
-    //
-    // This replaces the previous HashMap<(EntityId,i32,usize),f64> and
-    // reduces lookup cost from O(1) amortised with hash overhead to O(1)
-    // with a single multiply-add index computation.
-    // -----------------------------------------------------------------------
-
-    // Build hydro_id -> hydro_idx map (used only during table construction).
     let hydro_id_to_idx: std::collections::HashMap<EntityId, usize> = hydro_ids
         .iter()
         .enumerate()
         .map(|(i, &id)| (id, i))
         .collect();
 
-    // Year range from the inflow history.
     let (Some(min_year), Some(max_year)) = (
         inflow_history.iter().map(|r| r.date.year()).min(),
         inflow_history.iter().map(|r| r.date.year()).max(),
     ) else {
-        // Empty history — nothing to do (early-exit guard above already
-        // covers the n_hydros/n_stages/window_years checks).
         return;
     };
     #[allow(clippy::cast_sign_loss)]
     let n_years = (max_year - min_year + 1) as usize;
 
-    // Allocate flat table initialised to NAN (= missing).
     let table_size = n_hydros * n_years * n_seasons;
     let mut obs_table = vec![f64::NAN; table_size];
 
-    // Helper: compute flat index for (hydro_idx, year, season_id).
     let table_idx = |h: usize, year: i32, s: usize| -> Option<usize> {
         if year < min_year || year > max_year || s >= n_seasons {
             return None;
@@ -415,19 +403,31 @@ pub fn standardize_historical_windows(
         Some(h * n_years * n_seasons + y * n_seasons + s)
     };
 
-    // Populate the table from inflow history.
+    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
     for r in inflow_history {
-        let season_id = r.date.month0() as usize;
-        if let Some(&h) = hydro_id_to_idx.get(&r.hydro_id) {
-            if let Some(idx) = table_idx(h, r.date.year(), season_id) {
-                obs_table[idx] = r.value_m3s;
+        let season_id = find_season_for_date(&stage_index, r.date)
+            .or_else(|| season_map.and_then(|sm| sm.season_for_date(r.date)))
+            .or_else(|| {
+                if season_map.is_none() {
+                    Some(r.date.month0() as usize)
+                } else {
+                    None
+                }
+            });
+        if let Some(sid) = season_id {
+            if let Some(&h) = hydro_id_to_idx.get(&r.hydro_id) {
+                if let Some(idx) = table_idx(h, r.date.year(), sid) {
+                    obs_table[idx] = r.value_m3s;
+                }
             }
         }
     }
 
-    // Inline lookup: returns the table value for (hydro_idx, year, season_id).
-    // Preserves the debug_assert contract: NAN in the table indicates a missing
-    // observation that window discovery should have excluded.
     let lookup = |h: usize, year: i32, season_id: usize| -> f64 {
         table_idx(h, year, season_id).map_or(0.0, |idx| {
             let v = obs_table[idx];
@@ -435,41 +435,16 @@ pub fn standardize_historical_windows(
         })
     };
 
-    // -----------------------------------------------------------------------
-    // Build the full observation sequence template as (year_offset, season_id).
-    //
-    // Indices 0..max_order   : pre-study lag seasons (oldest first)
-    // Indices max_order..end : study seasons
-    // -----------------------------------------------------------------------
     let full_sequence: Vec<(i32, usize)> =
         super::build_observation_sequence(stages, max_order, n_seasons);
 
-    // -----------------------------------------------------------------------
-    // Pre-allocate a reusable lag buffer for solve_par_noise calls.
-    // Size: max_order. Reused across all (window, stage, hydro) iterations.
-    // -----------------------------------------------------------------------
     let mut lag_buf = vec![0.0_f64; max_order.max(1)];
 
-    // -----------------------------------------------------------------------
-    // Process each window.
-    // -----------------------------------------------------------------------
     for (w, &window_year) in window_years.iter().enumerate() {
-        // -------------------------------------------------------------------
-        // Write pre-study lag values into library.lag_slice_mut(w).
-        //
-        // The lag seasons are the first max_order elements of full_sequence.
-        // They are in chronological order (index 0 = oldest lag = lag-max_order).
-        // The lag buffer layout is [lag * n_hydros + hydro] where lag 0 = most
-        // recent (lag-1). Therefore we reverse the chronological order when
-        // writing: buffer[0] = full_sequence[max_order - 1] (most recent),
-        //                       buffer[max_order - 1] = full_sequence[0] (oldest).
-        // -------------------------------------------------------------------
         if max_order > 0 {
             let lag_slice = library.lag_slice_mut(w);
             for h in 0..n_hydros {
                 for lag_buf_idx in 0..max_order {
-                    // lag_buf_idx 0 = most recent pre-study lag.
-                    // Corresponds to full_sequence[max_order - 1 - lag_buf_idx].
                     let seq_idx = max_order - 1 - lag_buf_idx;
                     let (year_offset, season_id) = full_sequence[seq_idx];
                     let obs_year = window_year + year_offset;
@@ -484,20 +459,9 @@ pub fn standardize_historical_windows(
             }
         }
 
-        // -------------------------------------------------------------------
-        // Compute eta for each (stage, hydro).
-        //
-        // Study seasons start at index max_order in full_sequence.
-        // For stage t, its season is full_sequence[max_order + t].
-        // The lags for stage t are the raw observations at stages t-1, t-2, ...,
-        // t-order(h). These are in full_sequence at indices
-        // (max_order + t - 1), (max_order + t - 2), ..., (max_order + t - order(h)).
-        // When the index < max_order we use the pre-study lag sequence.
-        // -------------------------------------------------------------------
         for t in 0..n_stages {
             let eta_slice = library.eta_slice_mut(w, t);
             for h in 0..n_hydros {
-                // Look up the target raw observation for this (window, stage, hydro).
                 let (year_offset, season_id) = full_sequence[max_order + t];
                 let obs_year = window_year + year_offset;
                 debug_assert!(
@@ -508,13 +472,8 @@ pub fn standardize_historical_windows(
                 );
                 let target = lookup(h, obs_year, season_id);
 
-                // Build the lag vector from raw historical observations (BR6).
-                // lag_buf[0] = raw inflow at t-1, lag_buf[1] = raw at t-2, etc.
                 let order_h = par.order(h);
                 for (l, slot) in lag_buf.iter_mut().enumerate().take(order_h) {
-                    // Sequence index for lag l+1: position (max_order + t) - (l+1).
-                    // max_order + t >= l + 1 holds because l < order_h <= max_order,
-                    // so the subtraction is always non-negative in usize.
                     debug_assert!(
                         max_order + t >= l + 1,
                         "lag index underflow: t={t}, l={l}, max_order={max_order}",
@@ -830,7 +789,8 @@ mod tests {
         EntityId,
         scenario::{InflowHistoryRow, InflowModel},
         temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
+            SeasonMap, StageRiskConfig, StageStateConfig,
         },
     };
 
@@ -936,7 +896,7 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![1990]);
-        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990]);
+        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990], None);
 
         let expected_0 = (120.0 - 100.0) / 30.0;
         let expected_1 = (90.0 - 100.0) / 30.0;
@@ -1024,7 +984,7 @@ mod tests {
         }
 
         let mut lib = HistoricalScenarioLibrary::new(1, 12, 1, 1, vec![1990]);
-        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990]);
+        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990], None);
 
         // Pre-study lag buffer: lag 0 = most recent = Dec 1990 = 110.0.
         let lag_slice = lib.lag_slice(0);
@@ -1120,7 +1080,15 @@ mod tests {
         ];
 
         let mut lib = HistoricalScenarioLibrary::new(2, 2, 2, 0, vec![1990, 1991]);
-        standardize_historical_windows(&mut lib, &history, &[h1, h2], &stages, &par, &[1990, 1991]);
+        standardize_historical_windows(
+            &mut lib,
+            &history,
+            &[h1, h2],
+            &stages,
+            &par,
+            &[1990, 1991],
+            None,
+        );
 
         // All 4 (window, stage) slices have length 2 (n_hydros).
         for w in 0..2 {
@@ -1216,7 +1184,7 @@ mod tests {
         }
 
         let mut lib = HistoricalScenarioLibrary::new(1, 12, 1, 2, vec![1990]);
-        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990]);
+        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990], None);
 
         let lag = lib.lag_slice(0);
         // lag[0] = most recent (lag-1) = Dec 1990 = 66.0
@@ -1261,7 +1229,7 @@ mod tests {
         let history = vec![make_row(hydro, 2000, 0, 50.0)];
 
         let mut lib = HistoricalScenarioLibrary::new(1, 1, 1, 0, vec![2000]);
-        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[2000]);
+        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[2000], None);
 
         let eta = lib.eta_slice(0, 0)[0];
         assert!(
@@ -1429,6 +1397,284 @@ mod tests {
         assert!(
             result.is_ok(),
             "warning path must return Ok(()), got: {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers for SeasonMap-aware standardize tests
+    // -----------------------------------------------------------------------
+
+    /// Build a standard monthly SeasonMap (12 seasons, IDs 0–11).
+    fn monthly_season_map() -> SeasonMap {
+        let seasons = (0_usize..12)
+            .map(|i| SeasonDefinition {
+                id: i,
+                label: format!("Month{i}"),
+                month_start: (i as u32) + 1,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: monthly SeasonMap produces bit-for-bit identical eta values
+    // -----------------------------------------------------------------------
+
+    /// Given a monthly `SeasonMap` with IDs 0–11, calling
+    /// `standardize_historical_windows` with `Some(&sm)` must produce
+    /// bit-for-bit identical eta values to calling with `None` (month0 fallback).
+    ///
+    /// Uses 1 hydro, AR(0), 2 monthly stages (seasons 0 and 1).
+    #[test]
+    fn test_standardize_monthly_season_map_identical() {
+        let hydro = EntityId(1);
+        let stages = vec![make_monthly_stage(0, 0), make_monthly_stage(1, 1)];
+        let models = vec![
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+            InflowModel {
+                hydro_id: hydro,
+                stage_id: 1,
+                mean_m3s: 60.0,
+                std_m3s: 15.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            },
+        ];
+        let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
+
+        // Observations at window_year=2000, seasons 0 (Jan) and 1 (Feb).
+        let history = vec![
+            make_row(hydro, 2000, 0, 100.0),
+            make_row(hydro, 2000, 1, 45.0),
+        ];
+
+        let sm = monthly_season_map();
+
+        // Run with None (month0 fallback).
+        let mut lib_none = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![2000]);
+        standardize_historical_windows(
+            &mut lib_none,
+            &history,
+            &[hydro],
+            &stages,
+            &par,
+            &[2000],
+            None,
+        );
+
+        // Run with monthly SeasonMap.
+        let mut lib_sm = HistoricalScenarioLibrary::new(1, 2, 1, 0, vec![2000]);
+        standardize_historical_windows(
+            &mut lib_sm,
+            &history,
+            &[hydro],
+            &stages,
+            &par,
+            &[2000],
+            Some(&sm),
+        );
+
+        // Bit-for-bit identical for all (window, stage) slices.
+        for t in 0..2 {
+            assert_eq!(
+                lib_none.eta_slice(0, t),
+                lib_sm.eta_slice(0, t),
+                "eta values at stage {t} must be identical between None and monthly SeasonMap"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 7: quarterly SeasonMap maps observations to correct season IDs
+    // -----------------------------------------------------------------------
+
+    fn make_quarterly_stage(index: usize, season_id: usize) -> Stage {
+        let month = (season_id as u32) * 3 + 1; // 1, 4, 7, 10
+        Stage {
+            index,
+            id: index as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, month, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(
+                2024,
+                if month + 2 <= 12 { month + 2 } else { 12 },
+                28,
+            )
+            .unwrap(),
+            season_id: Some(season_id),
+            blocks: vec![Block {
+                index: 0,
+                name: "SINGLE".to_string(),
+                duration_hours: 2160.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }
+    }
+
+    fn quarterly_season_map() -> SeasonMap {
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                SeasonDefinition {
+                    id: 0,
+                    label: "Q1".to_string(),
+                    month_start: 1,
+                    day_start: Some(1),
+                    month_end: Some(3),
+                    day_end: Some(31),
+                },
+                SeasonDefinition {
+                    id: 1,
+                    label: "Q2".to_string(),
+                    month_start: 4,
+                    day_start: Some(1),
+                    month_end: Some(6),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 2,
+                    label: "Q3".to_string(),
+                    month_start: 7,
+                    day_start: Some(1),
+                    month_end: Some(9),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 3,
+                    label: "Q4".to_string(),
+                    month_start: 10,
+                    day_start: Some(1),
+                    month_end: Some(12),
+                    day_end: Some(31),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_standardize_quarterly_season_map_correct() {
+        let hydro = EntityId(1);
+        let stages: Vec<Stage> = (0..4).map(|i| make_quarterly_stage(i, i)).collect();
+        let models: Vec<InflowModel> = (0..4)
+            .map(|i| InflowModel {
+                hydro_id: hydro,
+                stage_id: i as i32,
+                mean_m3s: 100.0 + (i as f64) * 10.0,
+                std_m3s: 10.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+        let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
+
+        let sm = quarterly_season_map();
+
+        // Quarterly observations: one per quarter for year 2000.
+        // Jan 1 -> Q1 (season 0), Apr 1 -> Q2 (season 1),
+        // Jul 1 -> Q3 (season 2), Oct 1 -> Q4 (season 3).
+        let history = vec![
+            InflowHistoryRow {
+                hydro_id: hydro,
+                date: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+                value_m3s: 120.0,
+            },
+            InflowHistoryRow {
+                hydro_id: hydro,
+                date: NaiveDate::from_ymd_opt(2000, 4, 1).unwrap(),
+                value_m3s: 130.0,
+            },
+            InflowHistoryRow {
+                hydro_id: hydro,
+                date: NaiveDate::from_ymd_opt(2000, 7, 1).unwrap(),
+                value_m3s: 140.0,
+            },
+            InflowHistoryRow {
+                hydro_id: hydro,
+                date: NaiveDate::from_ymd_opt(2000, 10, 1).unwrap(),
+                value_m3s: 150.0,
+            },
+        ];
+
+        let mut lib = HistoricalScenarioLibrary::new(1, 4, 1, 0, vec![2000]);
+        standardize_historical_windows(
+            &mut lib,
+            &history,
+            &[hydro],
+            &stages,
+            &par,
+            &[2000],
+            Some(&sm),
+        );
+
+        // eta = (obs - mean) / std for each season (AR(0)):
+        // Q1: (120 - 100) / 10 = 2.0
+        // Q2: (130 - 110) / 10 = 2.0
+        // Q3: (140 - 120) / 10 = 2.0
+        // Q4: (150 - 130) / 10 = 2.0
+        for t in 0..4 {
+            let eta = lib.eta_slice(0, t)[0];
+            assert!(
+                (eta - 2.0).abs() < 1e-10,
+                "stage {t}: expected eta=2.0, got {eta}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 8: None season_map backward compatibility
+    // -----------------------------------------------------------------------
+
+    /// Given `season_map = None`, calling `standardize_historical_windows`
+    /// falls back to `month0()` and produces the expected eta values.
+    ///
+    /// Uses 1 hydro, AR(0), 1 monthly stage (season 0, Jan).
+    /// Expected: eta = (obs - mean) / std = (110 - 90) / 10 = 2.0.
+    #[test]
+    fn test_standardize_none_season_map_backward_compat() {
+        let hydro = EntityId(1);
+        let stages = vec![make_monthly_stage(0, 0)];
+        let models = vec![InflowModel {
+            hydro_id: hydro,
+            stage_id: 0,
+            mean_m3s: 90.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+        }];
+        let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
+
+        // Observation at (window_year=1995, season 0 = Jan) via month0() = 0.
+        let history = vec![make_row(hydro, 1995, 0, 110.0)];
+
+        let mut lib = HistoricalScenarioLibrary::new(1, 1, 1, 0, vec![1995]);
+        standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1995], None);
+
+        let eta = lib.eta_slice(0, 0)[0];
+        let expected = (110.0 - 90.0) / 10.0; // = 2.0
+        assert!(
+            (eta - expected).abs() < 1e-10,
+            "None season_map backward compat: expected eta={expected}, got {eta}"
         );
     }
 }

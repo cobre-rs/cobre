@@ -56,6 +56,7 @@
 //! |28  | Season with zero observations when inflow scheme is not External         | `stages.json`                                  | `ModelQuality` (warning) |
 //! |29  | All stages sharing a `season_id` must have compatible durations (within 7d) | `stages.json`                        | `BusinessRuleViolation`  |
 //! |30  | Season defined in `season_definitions` but not referenced by any stage   | `stages.json`                                  | `ModelQuality` (warning) |
+//! |31  | Observation resolution must not be finer than season resolution          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
 
 use std::collections::{HashMap, HashSet};
 
@@ -490,6 +491,7 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_estimation_prerequisites(data, ctx);
     check_past_inflows_coverage(data, ctx);
     check_season_id_consistency(data, ctx);
+    check_observation_season_alignment(data, ctx);
 }
 
 // ── Tolerances ────────────────────────────────────────────────────────────────
@@ -1564,6 +1566,87 @@ fn check_season_id_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
 
     check_season_observation_coverage(data, season_map, ctx);
     check_season_contiguity(data, season_map, ctx);
+}
+
+// ── Rule 31: Observation-to-season alignment ──────────────────────────────────
+
+/// Rule 31: Observation resolution must not be finer than season resolution.
+///
+/// If any `(hydro_id, season_id, year)` triple has more than one observation,
+/// the observation data has finer temporal resolution than the season
+/// definitions (e.g., daily observations paired with monthly seasons).
+/// This causes the PAR estimation pipeline to silently receive multiple values
+/// where exactly one is expected, distorting parameter estimates.
+///
+/// Only runs when estimation is active (history present, not both stats and AR
+/// coefficients pre-computed) and `season_map` is `Some`.
+///
+/// Note: Layer 2 (aggregation of finer-than-season observations) is deferred
+/// to Pattern D and is not implemented here.
+fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationContext) {
+    use chrono::Datelike;
+
+    let has_history = !data.inflow_history.is_empty();
+    let has_stats = !data.inflow_seasonal_stats.is_empty();
+    let has_ar_coefficients = !data.inflow_ar_coefficients.is_empty();
+    let estimation_active = has_history && !(has_stats && has_ar_coefficients);
+
+    if !estimation_active {
+        return;
+    }
+
+    let Some(season_map) = &data.stages.policy_graph.season_map else {
+        return;
+    };
+
+    // Stages are sorted by id (canonical order), which matches date order.
+    let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data
+        .stages
+        .stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, sid)))
+        .collect();
+
+    let mut counts: HashMap<(i32, usize, i32), usize> = HashMap::new();
+    for row in &data.inflow_history {
+        let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
+        let season_id = if pos > 0 {
+            let (_, end_date, sid) = stage_index[pos - 1];
+            if row.date < end_date {
+                Some(sid)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        .or_else(|| season_map.season_for_date(row.date));
+
+        if let Some(sid) = season_id {
+            let year = row.date.year();
+            *counts.entry((row.hydro_id.0, sid, year)).or_insert(0) += 1;
+        }
+    }
+
+    let mut violations: Vec<(i32, usize, i32, usize)> = counts
+        .iter()
+        .filter(|&(_, &n)| n > 1)
+        .map(|(&(hid, sid, yr), &n)| (hid, sid, yr, n))
+        .collect();
+    violations.sort_unstable();
+    for (hid, sid, yr, count) in violations {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "scenarios/inflow_history.parquet",
+            Some(format!("Hydro {hid}")),
+            format!(
+                "hydro {hid} has {count} observations for season {sid} year {yr} \
+                 in inflow_history.parquet; expected exactly 1 observation per \
+                 (hydro, season, year); finer-than-season observation resolution is not \
+                 yet supported (aggregation will be added in a future release)",
+            ),
+        );
+    }
 }
 
 /// V4.2 — Observation coverage (Rule 28).
@@ -5600,6 +5683,164 @@ mod tests {
         assert!(
             msg.contains("season 3"),
             "warning message must mention season 3; got: {msg}"
+        );
+    }
+
+    // ── Rule 31: Observation-to-season alignment tests ────────────────────────
+
+    /// Given a monthly study with one observation per hydro per month per year
+    /// (one obs per (hydro, season, year)), no errors are emitted by rule 31.
+    #[test]
+    fn test_observation_alignment_valid_monthly() {
+        // 36 stages = 3 years × 12 months, season_map present.
+        let stages = make_stages_with_seasons(36, /*with_season_map=*/ true);
+        // Exactly one obs per (hydro 1, season, year): 36 observations total.
+        let history = make_history_rows(1, 36);
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        let rule31_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message
+                        .contains("finer-than-season observation resolution")
+            })
+            .collect();
+        assert!(
+            rule31_errors.is_empty(),
+            "valid monthly observations should produce no rule-31 errors; got: {rule31_errors:?}"
+        );
+    }
+
+    /// Given a monthly study where hydro 1 has 2 observations for season 0
+    /// (January) year 2020, a `BusinessRuleViolation` error is emitted
+    /// mentioning hydro 1, season 0, year 2020, and count 2.
+    #[test]
+    fn test_observation_alignment_duplicate_obs() {
+        // Two observations for hydro 1, season 0 (January), year 2020.
+        let history = vec![
+            // Two observations for hydro 1, season 0 (January), year 2020.
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 1, 5).unwrap(),
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 1, 20).unwrap(),
+                value_m3s: 200.0,
+            },
+        ];
+        // Build 12 stages covering January 2020 – December 2020, season_map present.
+        let mut stages_2020 = make_stages_with_seasons(12, /*with_season_map=*/ true);
+        // Override stage dates to cover year 2020.
+        for (i, stage) in stages_2020.stages.iter_mut().enumerate() {
+            let month = (i % 12) as u32 + 1;
+            stage.start_date = chrono::NaiveDate::from_ymd_opt(2020, month, 1).unwrap();
+            let (end_year, end_month) = if month == 12 {
+                (2021, 1u32)
+            } else {
+                (2020, month + 1)
+            };
+            stage.end_date = chrono::NaiveDate::from_ymd_opt(end_year, end_month, 1).unwrap();
+        }
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages_2020, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        let rule31_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message
+                        .contains("finer-than-season observation resolution")
+            })
+            .collect();
+        assert_eq!(
+            rule31_errors.len(),
+            1,
+            "expected exactly one rule-31 error; got: {rule31_errors:?}"
+        );
+        let msg = &rule31_errors[0].message;
+        assert!(
+            msg.contains("hydro 1"),
+            "error must mention hydro 1; got: {msg}"
+        );
+        assert!(
+            msg.contains("season 0"),
+            "error must mention season 0; got: {msg}"
+        );
+        assert!(
+            msg.contains("year 2020"),
+            "error must mention year 2020; got: {msg}"
+        );
+        assert!(
+            msg.contains(" 2 ") || msg.contains("has 2 observations"),
+            "error must mention count 2; got: {msg}"
+        );
+        // Verify entity context mentions hydro 1.
+        assert_eq!(
+            rule31_errors[0].entity,
+            Some("Hydro 1".to_string()),
+            "entity context must be 'Hydro 1'; got: {:?}",
+            rule31_errors[0].entity
+        );
+    }
+
+    /// Given a study where `season_map` is `None`, rule 31 is skipped entirely
+    /// (no errors produced even with observations present).
+    #[test]
+    fn test_observation_alignment_no_season_map() {
+        // No season_map → rule 31 must not run.
+        let stages = make_stages_with_seasons(12, /*with_season_map=*/ false);
+        let history = make_history_rows(1, 12);
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        assert!(
+            ctx.errors().is_empty(),
+            "rule 31 must be skipped when season_map is None; got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Given a study where estimation is not active (both `inflow_seasonal_stats`
+    /// and `inflow_ar_coefficients` are present), rule 31 is skipped.
+    #[test]
+    fn test_observation_alignment_estimation_inactive() {
+        let stages = make_stages_with_seasons(12, /*with_season_map=*/ true);
+        let history = make_history_rows(1, 12);
+        let mut data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+        // Supply both stats and AR coefficients to deactivate estimation.
+        data.inflow_seasonal_stats = vec![crate::scenarios::InflowSeasonalStatsRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+        }];
+        data.inflow_ar_coefficients = vec![crate::scenarios::InflowArCoefficientRow {
+            hydro_id: EntityId::from(1),
+            stage_id: 0,
+            lag: 1,
+            coefficient: 0.5,
+            residual_std_ratio: 0.9,
+        }];
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        assert!(
+            ctx.errors().is_empty(),
+            "rule 31 must be skipped when estimation is inactive; got errors: {:?}",
+            ctx.errors()
         );
     }
 }

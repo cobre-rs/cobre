@@ -52,10 +52,14 @@
 //! |24  | All hydro IDs in `past_inflows` must exist in the hydro registry        | `initial_conditions.json`                      | `BusinessRuleViolation`  |
 //! |25  | Sobol stages: `branching_factor` should be a power of 2                 | `stages.json`                                  | `ModelQuality` (warning) |
 //! |26  | `simulation.sampling_scheme.type` must be a known scheme string          | `config.json`                                  | `InvalidValue`           |
+//! |27  | Every stage `season_id` must reference a season defined in `season_definitions` | `stages.json`                        | `BusinessRuleViolation`  |
+//! |28  | Season with zero observations when inflow scheme is not External         | `stages.json`                                  | `ModelQuality` (warning) |
+//! |29  | All stages sharing a `season_id` must have compatible durations (within 7d) | `stages.json`                        | `BusinessRuleViolation`  |
+//! |30  | Season defined in `season_definitions` but not referenced by any stage   | `stages.json`                                  | `ModelQuality` (warning) |
 
 use std::collections::{HashMap, HashSet};
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
@@ -485,6 +489,7 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_load_factor_consistency(data, ctx);
     check_estimation_prerequisites(data, ctx);
     check_past_inflows_coverage(data, ctx);
+    check_season_id_consistency(data, ctx);
 }
 
 // ── Tolerances ────────────────────────────────────────────────────────────────
@@ -1308,7 +1313,11 @@ fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext
             let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
             let season_id = if pos > 0 {
                 let (_, end_date, sid) = stage_index[pos - 1];
-                if row.date < end_date { Some(sid) } else { None }
+                if row.date < end_date {
+                    Some(sid)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -1468,6 +1477,204 @@ fn check_past_inflows_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
     }
 }
 
+// ── Rules 27+29: Season ID range coverage and resolution consistency ──────────
+
+/// Validates that every stage `season_id` references a season defined in
+/// `season_definitions` (Rule 27), and that all stages sharing a `season_id`
+/// have compatible temporal durations (Rule 29).
+///
+/// Skips the check entirely when `season_map` is `None` — Rule 19 already
+/// handles the missing `season_definitions` case.
+///
+/// Rule 27: Each stage with a `season_id` must reference a season ID that
+/// exists in `season_definitions.seasons[].id`.
+///
+/// Rule 29: All stages in the same `season_id` group must have durations
+/// within 7 days of each other.  A spread greater than 7 days indicates
+/// mixed temporal resolutions (e.g., monthly 30d alongside quarterly 91d)
+/// which leads to conflicting PAR model parameterisations.
+fn check_season_id_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
+    let Some(season_map) = &data.stages.policy_graph.season_map else {
+        return;
+    };
+
+    let valid_ids: HashSet<usize> = season_map.seasons.iter().map(|s| s.id).collect();
+    let mut sorted_valid_ids: Vec<usize> = valid_ids.iter().copied().collect();
+    sorted_valid_ids.sort_unstable();
+
+    for stage in &data.stages.stages {
+        let Some(sid) = stage.season_id else {
+            continue;
+        };
+        if !valid_ids.contains(&sid) {
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "stages.json",
+                Some(format!("Stage {}", stage.id)),
+                format!(
+                    "stage {} has season_id {} which is not defined in \
+                     season_definitions; valid season IDs are {:?}",
+                    stage.id, sid, sorted_valid_ids,
+                ),
+            );
+        }
+    }
+
+    let mut season_groups: HashMap<usize, Vec<(i32, i64)>> = HashMap::new();
+    for stage in &data.stages.stages {
+        if let Some(sid) = stage.season_id {
+            let duration_days = (stage.end_date - stage.start_date).num_days();
+            season_groups
+                .entry(sid)
+                .or_default()
+                .push((stage.id, duration_days));
+        }
+    }
+
+    let mut sorted_season_ids: Vec<usize> = season_groups.keys().copied().collect();
+    sorted_season_ids.sort_unstable();
+
+    for sid in sorted_season_ids {
+        let members = &season_groups[&sid];
+        if members.len() < 2 {
+            continue;
+        }
+        debug_assert!(!members.is_empty(), "guarded by len() >= 2 above");
+        let min_d = members.iter().map(|&(_, d)| d).min().unwrap_or(0);
+        let max_d = members.iter().map(|&(_, d)| d).max().unwrap_or(0);
+        if max_d - min_d > 7 {
+            let mut details_parts: Vec<String> = members
+                .iter()
+                .map(|&(id, d)| format!("stage {id} ({d}d)"))
+                .collect();
+            details_parts.sort_unstable();
+            let details = details_parts.join(", ");
+            ctx.add_error(
+                ErrorKind::BusinessRuleViolation,
+                "stages.json",
+                Some(format!("Season {sid}")),
+                format!(
+                    "stages sharing season_id {sid} have incompatible durations: {details}; \
+                     stages within the same season must have the same temporal resolution \
+                     (e.g., all monthly or all weekly)",
+                ),
+            );
+        }
+    }
+
+    check_season_observation_coverage(data, season_map, ctx);
+    check_season_contiguity(data, season_map, ctx);
+}
+
+/// V4.2 — Observation coverage (Rule 28).
+///
+/// Warns when a season has zero inflow observations across all hydros and
+/// the training inflow scheme is not External (External scenarios do not need
+/// PAR fitting so missing observations are expected).
+///
+/// Only runs when estimation is active (history present, not both stats and AR
+/// coefficients pre-computed).
+fn check_season_observation_coverage(
+    data: &ParsedData,
+    season_map: &cobre_core::temporal::SeasonMap,
+    ctx: &mut ValidationContext,
+) {
+    use cobre_core::scenario::SamplingScheme;
+    use std::path::Path;
+
+    let has_history = !data.inflow_history.is_empty();
+    let has_stats = !data.inflow_seasonal_stats.is_empty();
+    let has_ar = !data.inflow_ar_coefficients.is_empty();
+    if !has_history || (has_stats && has_ar) {
+        return;
+    }
+
+    let Ok(training_source) = data
+        .config
+        .training_scenario_source(Path::new("config.json"))
+    else {
+        return;
+    };
+    if training_source.inflow_scheme == SamplingScheme::External {
+        return;
+    }
+
+    // Stages are sorted by id (canonical order), which matches date order.
+    let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data
+        .stages
+        .stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, sid)))
+        .collect();
+
+    let mut season_obs_count: HashMap<usize, usize> = HashMap::new();
+    for row in &data.inflow_history {
+        let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
+        let season_id = if pos > 0 {
+            let (_, end_date, sid) = stage_index[pos - 1];
+            if row.date < end_date {
+                Some(sid)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(sid) = season_id {
+            *season_obs_count.entry(sid).or_insert(0) += 1;
+        }
+    }
+
+    for season in season_map
+        .seasons
+        .iter()
+        .filter(|s| season_obs_count.get(&s.id).copied().unwrap_or(0) == 0)
+    {
+        ctx.add_warning(
+            ErrorKind::ModelQuality,
+            "stages.json",
+            Some(format!("Season {}", season.id)),
+            format!(
+                "season {} ('{}') has no inflow observations in \
+                 inflow_history.parquet; PAR estimation for this season will have \
+                 no data unless all stages use External scenarios",
+                season.id, season.label,
+            ),
+        );
+    }
+}
+
+/// V4.4 — Contiguity within resolution bands (Rule 30).
+///
+/// Warns when seasons defined in `season_definitions` are not referenced by
+/// any stage, helping users detect accidental gaps.
+fn check_season_contiguity(
+    data: &ParsedData,
+    season_map: &cobre_core::temporal::SeasonMap,
+    ctx: &mut ValidationContext,
+) {
+    let referenced_ids: HashSet<usize> = data
+        .stages
+        .stages
+        .iter()
+        .filter_map(|s| s.season_id)
+        .collect();
+    let defined_ids: HashSet<usize> = season_map.seasons.iter().map(|s| s.id).collect();
+    let mut unreferenced: Vec<usize> = defined_ids.difference(&referenced_ids).copied().collect();
+    unreferenced.sort_unstable();
+    for sid in unreferenced {
+        ctx.add_warning(
+            ErrorKind::ModelQuality,
+            "stages.json",
+            Some(format!("Season {sid}")),
+            format!(
+                "season {sid} is defined in season_definitions but not referenced by any \
+                 stage; this season will have no PAR parameters",
+            ),
+        );
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1483,7 +1690,6 @@ fn check_past_inflows_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{
             Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
         },
@@ -1493,13 +1699,14 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+        validation::{schema::ParsedData, ErrorKind, ValidationContext},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -4536,6 +4743,863 @@ mod tests {
         assert!(
             external_errors.is_empty(),
             "no external-file errors expected when file is present, got: {external_errors:?}"
+        );
+    }
+
+    // ── Rule 27: Season ID range coverage tests ───────────────────────────────
+
+    /// Build a `StagesData` where each stage has `season_id = Some(i % num_seasons)`.
+    /// The policy graph contains a `SeasonMap` with `num_seasons` seasons (IDs 0..num_seasons).
+    fn make_stages_with_explicit_season_map(num_stages: usize, num_seasons: usize) -> StagesData {
+        let seasons = (0..num_seasons)
+            .map(|i| SeasonDefinition {
+                id: i,
+                label: format!("Season{i}"),
+                month_start: (i % 12 + 1) as u32,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        };
+        let stages = (0..num_stages)
+            .map(|i| Stage {
+                id: i as i32,
+                index: i,
+                start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: Some(i % num_seasons),
+                blocks: vec![],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+        StagesData {
+            stages,
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: Some(season_map),
+            },
+        }
+    }
+
+    /// Given a monthly study with 12 seasons (IDs 0-11) and 12 stages each
+    /// referencing seasons 0-11, no errors are emitted by rule 27.
+    #[test]
+    fn test_season_id_range_coverage_valid_monthly() {
+        let stages = make_stages_with_explicit_season_map(12, 12);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let rule27_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file == std::path::Path::new("stages.json")
+                    && e.message.contains("season_definitions")
+            })
+            .collect();
+        assert!(
+            rule27_errors.is_empty(),
+            "all valid season_ids should produce no rule-27 errors; got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Given a study where stage 5 has `season_id = 15` but `season_definitions`
+    /// only defines seasons 0-11, one `BusinessRuleViolation` is emitted
+    /// mentioning stage 5, season_id 15, and the valid range.
+    #[test]
+    fn test_season_id_range_coverage_undefined_season() {
+        let mut stages = make_stages_with_explicit_season_map(12, 12);
+        // Overwrite stage 5's season_id with an invalid value.
+        stages.stages[5].season_id = Some(15);
+
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        validate_semantic_stages_penalties_scenarios(&data, &mut ctx);
+
+        let rule27_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("stage 5")
+                    && e.message.contains("season_id 15")
+            })
+            .collect();
+        assert_eq!(
+            rule27_errors.len(),
+            1,
+            "expected exactly one rule-27 error for stage 5 / season_id 15; got: {:?}",
+            ctx.errors()
+        );
+        // The error message must include the valid range.
+        assert!(
+            rule27_errors[0].message.contains("season_definitions"),
+            "error message should mention season_definitions; got: {}",
+            rule27_errors[0].message
+        );
+    }
+
+    /// Given a study with `season_map = None` (no `season_definitions`),
+    /// the season_id consistency check is skipped — no errors from rule 27.
+    #[test]
+    fn test_season_id_range_coverage_no_season_map() {
+        // Build stages with season_ids but no SeasonMap.
+        let mut stages = make_stages_5b(vec![0, 1, 2]);
+        stages.stages[0].season_id = Some(0);
+        stages.stages[1].season_id = Some(1);
+        stages.stages[2].season_id = Some(99); // would be invalid if season_map were present
+
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        // Call the function directly to isolate rule 27 from other rules.
+        check_season_id_consistency(&data, &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "no season_map means rule 27 should be skipped entirely; got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Given a study where two stages reference undefined season IDs, two
+    /// `BusinessRuleViolation` errors are emitted — one per offending stage.
+    #[test]
+    fn test_season_id_range_coverage_multiple_violations() {
+        let mut stages = make_stages_with_explicit_season_map(12, 12);
+        // Stages 3 and 7 both reference invalid season IDs.
+        stages.stages[3].season_id = Some(20);
+        stages.stages[7].season_id = Some(55);
+
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule27_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("season_definitions")
+            })
+            .collect();
+        assert_eq!(
+            rule27_errors.len(),
+            2,
+            "expected two rule-27 errors (one per offending stage); got: {:?}",
+            ctx.errors()
+        );
+        let has_stage3 = rule27_errors
+            .iter()
+            .any(|e| e.message.contains("stage 3") && e.message.contains("season_id 20"));
+        let has_stage7 = rule27_errors
+            .iter()
+            .any(|e| e.message.contains("stage 7") && e.message.contains("season_id 55"));
+        assert!(has_stage3, "expected an error for stage 3 / season_id 20");
+        assert!(has_stage7, "expected an error for stage 7 / season_id 55");
+    }
+
+    // ── Rule 29: Resolution consistency tests ─────────────────────────────────
+
+    /// Build a `StagesData` for Rule 29 tests.  Each `Stage` is given an
+    /// explicit `start_date`, `end_date`, and `season_id`.  The `SeasonMap`
+    /// is constructed from the union of all supplied `season_id` values.
+    fn make_stages_for_resolution_check(
+        stage_specs: Vec<(i32, chrono::NaiveDate, chrono::NaiveDate, usize)>,
+    ) -> StagesData {
+        let season_ids: std::collections::BTreeSet<usize> =
+            stage_specs.iter().map(|&(_, _, _, sid)| sid).collect();
+        let seasons: Vec<SeasonDefinition> = season_ids
+            .iter()
+            .enumerate()
+            .map(|(pos, &id)| SeasonDefinition {
+                id,
+                label: format!("Season{id}"),
+                month_start: (pos % 12 + 1) as u32,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        };
+        let stages = stage_specs
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, start_date, end_date, season_id))| Stage {
+                id,
+                index,
+                start_date,
+                end_date,
+                season_id: Some(season_id),
+                blocks: vec![],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+        StagesData {
+            stages,
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: Some(season_map),
+            },
+        }
+    }
+
+    /// Given a monthly study where all stages for each season_id have
+    /// durations between 28 and 31 days, no errors are emitted by rule 29.
+    #[test]
+    fn test_resolution_consistency_monthly_valid() {
+        use chrono::NaiveDate;
+        // 12 monthly stages; each stage's season_id matches its month index.
+        // Durations vary between 28 and 31 days — well within the 7-day band.
+        let specs = vec![
+            (
+                0,
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                0,
+            ), // 31d
+            (
+                1,
+                NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+                1,
+            ), // 29d (leap)
+            (
+                2,
+                NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                2,
+            ), // 31d
+            (
+                3,
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 5, 1).unwrap(),
+                3,
+            ), // 30d
+            (
+                4,
+                NaiveDate::from_ymd_opt(2024, 5, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 6, 1).unwrap(),
+                4,
+            ), // 31d
+            (
+                5,
+                NaiveDate::from_ymd_opt(2024, 6, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                5,
+            ), // 30d
+            (
+                6,
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+                6,
+            ), // 31d
+            (
+                7,
+                NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 9, 1).unwrap(),
+                7,
+            ), // 31d
+            (
+                8,
+                NaiveDate::from_ymd_opt(2024, 9, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                8,
+            ), // 30d
+            (
+                9,
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 11, 1).unwrap(),
+                9,
+            ), // 31d
+            (
+                10,
+                NaiveDate::from_ymd_opt(2024, 11, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 12, 1).unwrap(),
+                10,
+            ), // 30d
+            (
+                11,
+                NaiveDate::from_ymd_opt(2024, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                11,
+            ), // 31d
+        ];
+        let stages = make_stages_for_resolution_check(specs);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule29_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("incompatible durations")
+            })
+            .collect();
+        assert!(
+            rule29_errors.is_empty(),
+            "monthly study with 28-31d stages should produce no rule-29 errors; got: {rule29_errors:?}"
+        );
+    }
+
+    /// Given a study where season_id 0 is shared by a 30-day stage (monthly)
+    /// and a 91-day stage (quarterly), one `BusinessRuleViolation` is emitted
+    /// mentioning season_id 0 and listing both stages with their durations.
+    #[test]
+    fn test_resolution_consistency_mixed_monthly_quarterly() {
+        use chrono::NaiveDate;
+        // season_id 0: one monthly stage (30d) and one quarterly stage (91d).
+        let specs = vec![
+            (
+                0,
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
+                0,
+            ), // 30d monthly
+            (
+                1,
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                0,
+            ), // 91d quarterly
+        ];
+        let stages = make_stages_for_resolution_check(specs);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule29_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("incompatible durations")
+            })
+            .collect();
+        assert_eq!(
+            rule29_errors.len(),
+            1,
+            "expected exactly one rule-29 error for season_id 0; got: {rule29_errors:?}"
+        );
+        let msg = &rule29_errors[0].message;
+        assert!(
+            msg.contains("season_id 0"),
+            "error message must mention season_id 0; got: {msg}"
+        );
+        assert!(
+            msg.contains("stage 0") && msg.contains("stage 1"),
+            "error message must list both conflicting stage IDs; got: {msg}"
+        );
+        assert!(
+            msg.contains("30d") && msg.contains("91d"),
+            "error message must include durations; got: {msg}"
+        );
+    }
+
+    /// Given a Custom SeasonMap study with monthly stages (season_ids 0-11,
+    /// durations 28-31d) and quarterly stages (season_ids 12-15, durations
+    /// 89-92d), where all stages reference disjoint season_id ranges, no
+    /// errors are emitted by rule 29.
+    #[test]
+    fn test_resolution_consistency_disjoint_resolutions() {
+        use chrono::NaiveDate;
+        // Monthly stages: season_ids 0-11, one stage each.
+        let monthly: Vec<(i32, chrono::NaiveDate, chrono::NaiveDate, usize)> = vec![
+            (
+                0,
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                0,
+            ),
+            (
+                1,
+                NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+                1,
+            ),
+            (
+                2,
+                NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                2,
+            ),
+            (
+                3,
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 5, 1).unwrap(),
+                3,
+            ),
+            (
+                4,
+                NaiveDate::from_ymd_opt(2024, 5, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 6, 1).unwrap(),
+                4,
+            ),
+            (
+                5,
+                NaiveDate::from_ymd_opt(2024, 6, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                5,
+            ),
+            (
+                6,
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+                6,
+            ),
+            (
+                7,
+                NaiveDate::from_ymd_opt(2024, 8, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 9, 1).unwrap(),
+                7,
+            ),
+            (
+                8,
+                NaiveDate::from_ymd_opt(2024, 9, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                8,
+            ),
+            (
+                9,
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 11, 1).unwrap(),
+                9,
+            ),
+            (
+                10,
+                NaiveDate::from_ymd_opt(2024, 11, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 12, 1).unwrap(),
+                10,
+            ),
+            (
+                11,
+                NaiveDate::from_ymd_opt(2024, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                11,
+            ),
+        ];
+        // Quarterly stages: season_ids 12-15, one stage each.
+        let quarterly: Vec<(i32, chrono::NaiveDate, chrono::NaiveDate, usize)> = vec![
+            (
+                12,
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                12,
+            ), // 91d
+            (
+                13,
+                NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                13,
+            ), // 91d
+            (
+                14,
+                NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                14,
+            ), // 92d
+            (
+                15,
+                NaiveDate::from_ymd_opt(2024, 10, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+                15,
+            ), // 92d
+        ];
+        let specs: Vec<_> = monthly.into_iter().chain(quarterly).collect();
+        let stages = make_stages_for_resolution_check(specs);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule29_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("incompatible durations")
+            })
+            .collect();
+        assert!(
+            rule29_errors.is_empty(),
+            "disjoint monthly (0-11) and quarterly (12-15) season_ids should produce no rule-29 errors; got: {rule29_errors:?}"
+        );
+    }
+
+    /// Given a study where season_id 3 is shared by a 7-day stage (weekly)
+    /// and a 30-day stage (monthly), one `BusinessRuleViolation` is emitted
+    /// for season_id 3.
+    #[test]
+    fn test_resolution_consistency_weekly_vs_monthly() {
+        use chrono::NaiveDate;
+        // season_id 3: one weekly stage (7d) and one monthly stage (30d).
+        let specs = vec![
+            (
+                0,
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(),
+                3,
+            ), // 7d weekly
+            (
+                1,
+                NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2024, 3, 2).unwrap(),
+                3,
+            ), // 30d monthly
+        ];
+        let stages = make_stages_for_resolution_check(specs);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule29_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("incompatible durations")
+            })
+            .collect();
+        assert_eq!(
+            rule29_errors.len(),
+            1,
+            "expected exactly one rule-29 error for season_id 3; got: {rule29_errors:?}"
+        );
+        let msg = &rule29_errors[0].message;
+        assert!(
+            msg.contains("season_id 3"),
+            "error message must mention season_id 3; got: {msg}"
+        );
+        assert!(
+            msg.contains("7d") && msg.contains("30d"),
+            "error message must include both stage durations; got: {msg}"
+        );
+    }
+
+    // ── Rule 28: Observation coverage tests ───────────────────────────────────
+
+    /// Given a monthly study with 12 seasons and observations present for all
+    /// 12 seasons (one per month over 3 years), no warnings are emitted by
+    /// rule 28.
+    #[test]
+    fn test_observation_coverage_all_seasons_have_obs() {
+        // 3 years × 12 months = 36 stages; 3 observations per season (one per year).
+        let stages = make_stages_with_seasons(36, /*with_season_map=*/ true);
+        let history = make_history_rows(1, 36);
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule28_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality
+                    && w.message.contains("has no inflow observations")
+            })
+            .collect();
+        assert!(
+            rule28_warnings.is_empty(),
+            "all seasons with observations should produce no rule-28 warnings; got: {rule28_warnings:?}"
+        );
+    }
+
+    /// Given a study where season 5 has zero observations in inflow_history and
+    /// the inflow scheme is InSample (not External), a `ModelQuality` warning is
+    /// emitted for season 5 mentioning zero observations.
+    #[test]
+    fn test_observation_coverage_season_missing_obs_non_external() {
+        // Build 3 years of monthly stages with season_map (seasons 0..11).
+        let stages = make_stages_with_seasons(36, /*with_season_map=*/ true);
+        // Provide observations for all seasons EXCEPT season 5 (month index 5 = June).
+        // make_history_rows produces one row per month starting January 2000.
+        // Season 5 corresponds to months where month_index % 12 == 5, i.e., June.
+        // We build rows manually, skipping every June.
+        let mut history = Vec::new();
+        for i in 0..36usize {
+            let month_index = i % 12;
+            if month_index == 5 {
+                continue; // skip June — season 5 gets no observations
+            }
+            let year = 2000 + (i / 12) as i32;
+            let month = month_index as u32 + 1;
+            history.push(InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
+                value_m3s: 100.0,
+            });
+        }
+        // config defaults to InSample (minimal_config has no scenario_source).
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule28_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality
+                    && w.message.contains("has no inflow observations")
+            })
+            .collect();
+        assert_eq!(
+            rule28_warnings.len(),
+            1,
+            "expected exactly one rule-28 warning for season 5; got: {rule28_warnings:?}"
+        );
+        let msg = &rule28_warnings[0].message;
+        assert!(
+            msg.contains("season 5"),
+            "warning message must mention season 5; got: {msg}"
+        );
+    }
+
+    /// Given a study where season 5 has zero observations but the inflow scheme
+    /// is External, no warning is emitted by rule 28.
+    #[test]
+    fn test_observation_coverage_season_missing_obs_external() {
+        let stages = make_stages_with_seasons(36, /*with_season_map=*/ true);
+        // Same history as above: no observations for season 5 (June).
+        let mut history = Vec::new();
+        for i in 0..36usize {
+            let month_index = i % 12;
+            if month_index == 5 {
+                continue;
+            }
+            let year = 2000 + (i / 12) as i32;
+            let month = month_index as u32 + 1;
+            history.push(InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
+                value_m3s: 100.0,
+            });
+        }
+        let mut data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+        // Override config to use External inflow scheme.
+        data.config = config_with_training_external_inflow();
+
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule28_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality
+                    && w.message.contains("has no inflow observations")
+            })
+            .collect();
+        assert!(
+            rule28_warnings.is_empty(),
+            "External inflow scheme should suppress rule-28 warnings; got: {rule28_warnings:?}"
+        );
+    }
+
+    // ── Rule 30: Contiguity within resolution bands tests ─────────────────────
+
+    /// Given a study where all defined seasons (0-11) are referenced by at
+    /// least one stage, no warnings are emitted by rule 30.
+    #[test]
+    fn test_contiguity_no_gaps() {
+        // 12 stages each referencing a distinct season 0..11.
+        let stages = make_stages_with_explicit_season_map(12, 12);
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule30_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality
+                    && w.message.contains("not referenced by any stage")
+            })
+            .collect();
+        assert!(
+            rule30_warnings.is_empty(),
+            "no gaps should produce no rule-30 warnings; got: {rule30_warnings:?}"
+        );
+    }
+
+    /// Given a study where stages reference season_ids {0, 1, 2, 4, 5} and
+    /// season 3 is defined in `season_definitions` but unreferenced, a
+    /// `ModelQuality` warning is emitted for season 3.
+    #[test]
+    fn test_contiguity_gap_detected() {
+        // Build a SeasonMap with 6 seasons (0..5) and 5 stages referencing
+        // seasons {0, 1, 2, 4, 5} — leaving season 3 unreferenced.
+        let seasons: Vec<SeasonDefinition> = (0..6)
+            .map(|i| SeasonDefinition {
+                id: i,
+                label: format!("Season{i}"),
+                month_start: (i % 12 + 1) as u32,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        };
+        // 5 stages: reference seasons 0, 1, 2, 4, 5 (skipping 3).
+        let referenced = [0usize, 1, 2, 4, 5];
+        let stages_vec: Vec<Stage> = referenced
+            .iter()
+            .enumerate()
+            .map(|(idx, &sid)| Stage {
+                id: idx as i32,
+                index: idx,
+                start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+                end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+                season_id: Some(sid),
+                blocks: vec![],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 1,
+                    noise_method: NoiseMethod::Saa,
+                },
+            })
+            .collect();
+        let stages = StagesData {
+            stages: stages_vec,
+            policy_graph: PolicyGraph {
+                graph_type: PolicyGraphType::FiniteHorizon,
+                annual_discount_rate: 0.06,
+                transitions: vec![],
+                season_map: Some(season_map),
+            },
+        };
+        let data = make_data_5b(
+            vec![make_hydro_ordered_penalties(1)],
+            stages,
+            vec![make_bus_with_deficit(1, 10.0)],
+            vec![],
+            vec![],
+            None,
+        );
+        let mut ctx = ValidationContext::new();
+        check_season_id_consistency(&data, &mut ctx);
+
+        let rule30_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::ModelQuality
+                    && w.message.contains("not referenced by any stage")
+            })
+            .collect();
+        assert_eq!(
+            rule30_warnings.len(),
+            1,
+            "expected exactly one rule-30 warning for season 3; got: {rule30_warnings:?}"
+        );
+        let msg = &rule30_warnings[0].message;
+        assert!(
+            msg.contains("season 3"),
+            "warning message must mention season 3; got: {msg}"
         );
     }
 }

@@ -69,19 +69,19 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
-    ForwardSamplerConfig, SampleRequest,
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -1174,20 +1174,20 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes};
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
-        ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
-        context::{StageContext, TrainingContext},
-        workspace::{BasisStore, SolverWorkspace},
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
+        context::{StageContext, TrainingContext},
+        workspace::{BasisStore, SolverWorkspace},
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.

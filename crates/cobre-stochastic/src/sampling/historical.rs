@@ -920,16 +920,16 @@ mod tests {
     /// Single hydro, AR(1), `psi_orig`=0.5 in original units, base=80, sigma=25.
     ///
     /// Uses 12 monthly stages so that the lag season (one step before Jan) is Dec.
-    /// With `n_seasons`=12 and `max_order`=1:
-    ///   - Lag season: (0 - 1 + 12) % 12 = 11 (Dec)
-    ///   - Full sequence: [(0,11),(1,0),(1,1),...,(1,11)]
-    ///     * season 11→0 wraps → `year_offset` becomes 1
-    ///   - Lag observation: (`window_year` + 0, season 11) = (1990, Dec) → month0=11
-    ///   - Stage 0 observation: (1990 + 1, season 0) = (1991, Jan) → month0=0
-    ///   - Stage 1 observation: (1991, Feb) → month0=1
+    /// With `n_seasons`=12 and `max_order`=1, under the new convention:
+    ///   - Lag season: (0 - 1 + 12) % 12 = 11 (Dec), year_offset = -1
+    ///   - Study seasons: 0..11, year_offset = 0
+    ///   - Full sequence: [(-1,11),(0,0),(0,1),...,(0,11)]
+    ///   - Lag observation: (`window_year` - 1, season 11) = (1989, Dec) → month0=11
+    ///   - Stage 0 observation: (`window_year` + 0, season 0) = (1990, Jan) → month0=0
+    ///   - Stage 1 observation: (1990, Feb) → month0=1
     ///
     /// For stage 0: eta = (130 - 80 - 0.5*110) / 25 = -5/25 = -0.2
-    /// For stage 1: lags are RAW → lag[0] = 130.0 (Jan 1991 raw observation)
+    /// For stage 1: lags are RAW → lag[0] = 130.0 (Jan 1990 raw observation)
     ///              eta = (95 - 80 - 0.5*130) / 25 = -50/25 = -2.0
     ///
     /// PAR parametrisation: mean=160, std=25, `psi_star`=0.5 (when stds equal,
@@ -969,24 +969,24 @@ mod tests {
             par.sigma(0, 0)
         );
 
-        // Window year 1990, max_order=1:
-        //   lag: (1990, season 11 = Dec) → 110.0
-        //   stage 0: (1991, season 0 = Jan) → 130.0
-        //   stage 1: (1991, season 1 = Feb) → 95.0
+        // Window year 1990, max_order=1 (new convention: study at window_year):
+        //   lag: (1989, season 11 = Dec) → 110.0
+        //   stage 0: (1990, season 0 = Jan) → 130.0
+        //   stage 1: (1990, season 1 = Feb) → 95.0
         //   (remaining study stages: use 100.0, not used in assertions)
         let mut history = vec![
-            make_row(hydro, 1990, 11, 110.0), // Dec 1990 = pre-study lag
-            make_row(hydro, 1991, 0, 130.0),  // Jan 1991 = stage 0
-            make_row(hydro, 1991, 1, 95.0),   // Feb 1991 = stage 1
+            make_row(hydro, 1989, 11, 110.0), // Dec 1989 = pre-study lag
+            make_row(hydro, 1990, 0, 130.0),  // Jan 1990 = stage 0
+            make_row(hydro, 1990, 1, 95.0),   // Feb 1990 = stage 1
         ];
         for m in 2..12_u32 {
-            history.push(make_row(hydro, 1991, m, 100.0));
+            history.push(make_row(hydro, 1990, m, 100.0));
         }
 
         let mut lib = HistoricalScenarioLibrary::new(1, 12, 1, 1, vec![1990]);
         standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990], None);
 
-        // Pre-study lag buffer: lag 0 = most recent = Dec 1990 = 110.0.
+        // Pre-study lag buffer: lag 0 = most recent = Dec 1989 = 110.0.
         let lag_slice = lib.lag_slice(0);
         assert!(
             (lag_slice[0] - 110.0).abs() < 1e-10,
@@ -1002,7 +1002,7 @@ mod tests {
             "eta stage 0: expected {expected_0}, got {eta_0}"
         );
 
-        // Stage 1: raw lag = 130.0 (Jan 1991, NOT reconstructed).
+        // Stage 1: raw lag = 130.0 (Jan 1990, NOT reconstructed).
         // eta = (95 - 80 - 0.5*130) / 25 = (95 - 145) / 25 = -2.0
         let eta_1 = lib.eta_slice(0, 1)[0];
         let expected_1 = (95.0 - 80.0 - 0.5 * 130.0) / 25.0;
@@ -1118,16 +1118,16 @@ mod tests {
 
     /// Single hydro, `max_order`=2 (AR(2) dummy), full 12-stage monthly year.
     ///
-    /// With `n_seasons`=12 and `max_order`=2, the lag seasons for stage 0 (Jan) are:
-    ///   - lag-2 (oldest, buf index 1): season (0-2+12)%12 = 10 (Nov) at year+0
-    ///   - lag-1 (most recent, buf index 0): season (0-1+12)%12 = 11 (Dec) at year+0
+    /// With `n_seasons`=12 and `max_order`=2, under the new convention:
+    ///   - lag-2 (oldest, buf index 1): season (0-2+12)%12 = 10 (Nov), year_offset = -1
+    ///   - lag-1 (most recent, buf index 0): season (0-1+12)%12 = 11 (Dec), year_offset = -1
+    ///   - study stages: year_offset = 0
     ///
-    /// Full sequence: [(0,10),(0,11),(1,0),(1,1),...,(1,11)]
-    ///   Wrap at 11→0 increments `year_offset` to 1 for study stages.
+    /// Full sequence (after normalization): [(-1,10),(-1,11),(0,0),(0,1),...,(0,11)]
     ///
     /// The lag buffer layout is [`lag*n_hydros + h`] where lag=0 = most recent:
-    ///   `lag_slice`[0] = Dec 1990 = 66.0
-    ///   `lag_slice`[1] = Nov 1990 = 55.0
+    ///   `lag_slice`[0] = Dec 1989 = 66.0  (window_year-1 = 1989)
+    ///   `lag_slice`[1] = Nov 1989 = 55.0
     #[test]
     fn test_pre_study_lags_populated() {
         let hydro = EntityId(1);
@@ -1171,29 +1171,29 @@ mod tests {
         let par = PrecomputedPar::build(&all_models, &stages, &[hydro]).unwrap();
         assert_eq!(par.max_order(), 2, "expected par.max_order()=2");
 
-        // Window year 1990:
-        //   lag-2 (seq_idx=0): (1990+0, season 10 = Nov) → 55.0
-        //   lag-1 (seq_idx=1): (1990+0, season 11 = Dec) → 66.0
-        //   study stages at year_offset=1 (1991): months 0-11 → all 100.0
+        // Window year 1990 (new convention: study starts at window_year):
+        //   lag-2 (seq_idx=0): (1990-1, season 10 = Nov) = (1989, Nov) → 55.0
+        //   lag-1 (seq_idx=1): (1990-1, season 11 = Dec) = (1989, Dec) → 66.0
+        //   study stages at year_offset=0 (1990): months 0-11 → all 100.0
         let mut history = vec![
-            make_row(hydro, 1990, 10, 55.0), // Nov 1990 = lag-2
-            make_row(hydro, 1990, 11, 66.0), // Dec 1990 = lag-1
+            make_row(hydro, 1989, 10, 55.0), // Nov 1989 = lag-2
+            make_row(hydro, 1989, 11, 66.0), // Dec 1989 = lag-1
         ];
         for m in 0..12_u32 {
-            history.push(make_row(hydro, 1991, m, 100.0));
+            history.push(make_row(hydro, 1990, m, 100.0));
         }
 
         let mut lib = HistoricalScenarioLibrary::new(1, 12, 1, 2, vec![1990]);
         standardize_historical_windows(&mut lib, &history, &[hydro], &stages, &par, &[1990], None);
 
         let lag = lib.lag_slice(0);
-        // lag[0] = most recent (lag-1) = Dec 1990 = 66.0
+        // lag[0] = most recent (lag-1) = Dec 1989 = 66.0
         assert!(
             (lag[0] - 66.0).abs() < 1e-10,
             "lag[0] (most recent) expected 66.0, got {}",
             lag[0]
         );
-        // lag[1] = lag-2 = Nov 1990 = 55.0
+        // lag[1] = lag-2 = Nov 1989 = 55.0
         assert!(
             (lag[1] - 55.0).abs() < 1e-10,
             "lag[1] (lag-2) expected 55.0, got {}",

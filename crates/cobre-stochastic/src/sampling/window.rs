@@ -10,19 +10,20 @@
 //!
 //! ## Season-to-year mapping
 //!
-//! The window starting year `y` is the year of the **first lag observation**.
+//! The window starting year `y` is the year of the **first study observation**.
 //! Lag seasons are derived by stepping backwards `max_par_order` steps from
 //! the first study stage's `season_id` using modular arithmetic on
-//! `n_seasons`. The year increments whenever the season sequence wraps from
-//! `n_seasons - 1` back to `0`.
+//! `n_seasons`. Lag entries receive negative year offsets relative to `y`,
+//! and the year decrements whenever the season sequence wraps from `0` back
+//! to `n_seasons - 1` going backwards.
 //!
 //! ### Example (monthly, `max_par_order` = 2, `season_ids` 0–11)
 //!
-//! Full season sequence: `[10, 11, 0, 1, …, 11]` (14 elements).
+//! Full season sequence (offsets after normalization): `[(-1,10), (-1,11), (0,0), (0,1), …, (0,11)]`.
 //!
 //! For window year `y = 1990`:
-//! - Lag observations: `(1990, season 10)`, `(1990, season 11)`
-//! - Study observations: `(1991, season 0)` … `(1991, season 11)`
+//! - Lag observations: `(1989, season 10)`, `(1989, season 11)`
+//! - Study observations: `(1990, season 0)` … `(1990, season 11)`
 //!
 //! [`HistoricalYears`]: cobre_core::scenario::HistoricalYears
 
@@ -130,7 +131,9 @@ use crate::{StochasticError, par::fitting::find_season_for_date};
 /// )
 /// .unwrap();
 ///
-/// assert_eq!(windows, vec![1990]);
+/// // window_year=1991: study at 1991, lags at 1990 (season 10/11) — all present.
+/// // window_year=1990: lags would be at 1989 — not in history.
+/// assert_eq!(windows, vec![1991]);
 /// ```
 pub fn discover_historical_windows(
     inflow_history: &[InflowHistoryRow],
@@ -311,15 +314,17 @@ mod tests {
     #[test]
     fn test_auto_discovery_all_valid() {
         // 2 hydros, monthly history 1990–2010 (252 rows each), 12 study stages,
-        // max_par_order = 2. Expected: years 1990–2009 (20 windows).
+        // max_par_order = 2. Expected: years 1991–2010 (20 windows).
         //
+        // Under the new convention, window_year Y means study starts at year Y.
         // For window y, the algorithm needs:
-        //   lags  → (y, season 10), (y, season 11)
-        //   study → (y+1, season 0) … (y+1, season 11)
+        //   lags  → (y-1, season 10), (y-1, season 11)
+        //   study → (y,   season 0) … (y,   season 11)
         //
-        // y = 1990: needs (1990, 10/11) + (1991, 0..11) → all in [1990, 2010] ✓
-        // y = 2009: needs (2009, 10/11) + (2010, 0..11) → all in [1990, 2010] ✓
-        // y = 2010: needs (2010, 10/11) + (2011, 0..11) → 2011 not in data ✗
+        // y = 1991: needs (1990, 10/11) + (1991, 0..11) → all in [1990, 2010] ✓
+        // y = 2010: needs (2009, 10/11) + (2010, 0..11) → all in [1990, 2010] ✓
+        // y = 1990: needs (1989, 10/11) → 1989 not in data ✗
+        // y = 2011: needs (2010, 10/11) + (2011, 0..11) → 2011 not in data ✗
         let hydro1 = EntityId(1);
         let hydro2 = EntityId(2);
         let mut history = monthly_history(hydro1, 1990, 2010);
@@ -330,8 +335,8 @@ mod tests {
             discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, None, 10)
                 .unwrap();
 
-        let expected: Vec<i32> = (1990..=2009).collect();
-        assert_eq!(windows, expected, "expected exactly years 1990–2009");
+        let expected: Vec<i32> = (1991..=2010).collect();
+        assert_eq!(windows, expected, "expected exactly years 1991–2010");
     }
 
     // -----------------------------------------------------------------------
@@ -430,9 +435,11 @@ mod tests {
     #[test]
     fn test_incomplete_hydro_excludes_window() {
         // hydro1 has full data 1990–2010.
-        // hydro2 is missing all of 2006 (year_offset+1 for window y=2005).
-        // Window y=2005 requires (2005, seasons 10/11) and (2006, seasons 0..11).
-        // hydro2 has no 2006 data → window 2005 must be excluded.
+        // hydro2 is missing all of 2006.
+        //
+        // Under the new convention, window_year Y means study starts at year Y.
+        // Window y=2006 requires (2005, seasons 10/11) and (2006, seasons 0..11).
+        // hydro2 has no 2006 data → window 2006 must be excluded.
         let hydro1 = EntityId(1);
         let hydro2 = EntityId(2);
         let mut history = monthly_history(hydro1, 1990, 2010);
@@ -447,12 +454,12 @@ mod tests {
                 .unwrap();
 
         assert!(
-            !windows.contains(&2005),
-            "window 2005 should be excluded because hydro2 lacks 2006 data"
+            !windows.contains(&2006),
+            "window 2006 should be excluded because hydro2 lacks 2006 data"
         );
-        // 2004 should still be valid: needs (2004, 10/11) + (2005, 0..11).
-        // hydro2 has data through 2005 → 2004 is valid.
-        assert!(windows.contains(&2004), "window 2004 should still be valid");
+        // 2005 should still be valid: needs (2004, 10/11) + (2005, 0..11).
+        // hydro2 has data through 2005 → 2005 is valid.
+        assert!(windows.contains(&2005), "window 2005 should still be valid");
     }
 
     // -----------------------------------------------------------------------
@@ -644,13 +651,15 @@ mod tests {
         // One hydro, quarterly data from 1990-2010, 4 quarterly stages,
         // max_par_order = 1.
         //
-        // Window sequence for y=1990 (1 lag + 4 study quarters):
-        //   lag  → (1990, season 3) [Q4=Oct]
-        //   study → (1991, season 0..3) [Q1-Q4]
+        // Under the new convention, window_year Y means study starts at year Y.
+        // Window sequence for y (1 lag + 4 study quarters):
+        //   lag  → (y-1, season 3) [Q4=Oct]
+        //   study → (y,   season 0..3) [Q1-Q4]
         //
-        // y = 1990: needs (1990, Q4) and (1991, Q1–Q4) → all present ✓
-        // y = 2009: needs (2009, Q4) and (2010, Q1–Q4) → all present ✓
-        // y = 2010: needs (2010, Q4) and (2011, Q1–Q4) → 2011 missing ✗
+        // y = 1991: needs (1990, Q4) and (1991, Q1–Q4) → all present ✓
+        // y = 2010: needs (2009, Q4) and (2010, Q1–Q4) → all present ✓
+        // y = 1990: needs (1989, Q4) → 1989 missing ✗
+        // y = 2011: needs (2010, Q4) + (2011, Q1–Q4) → 2011 missing ✗
         let hydro1 = EntityId(1);
         let history = quarterly_history(hydro1, 1990, 2010);
         let stages = four_quarterly_stages();
@@ -660,10 +669,10 @@ mod tests {
             discover_historical_windows(&history, &[hydro1], &stages, 1, None, Some(&sm), 10)
                 .unwrap();
 
-        let expected: Vec<i32> = (1990..=2009).collect();
+        let expected: Vec<i32> = (1991..=2010).collect();
         assert_eq!(
             windows, expected,
-            "expected windows 1990–2009 for quarterly study"
+            "expected windows 1991–2010 for quarterly study"
         );
     }
 
@@ -673,8 +682,9 @@ mod tests {
 
     #[test]
     fn test_none_season_map_backward_compat() {
-        // Passing None must produce the same result as the pre-ticket behavior
-        // (month0() used unconditionally).
+        // Passing None must fall back to month0() for season ID resolution.
+        // Under the new convention, window_year Y means study starts at year Y,
+        // so lags are sought at year Y-1.
         let hydro1 = EntityId(1);
         let mut history = monthly_history(hydro1, 1990, 2010);
         history.extend(monthly_history(EntityId(2), 1990, 2010));
@@ -691,10 +701,10 @@ mod tests {
         )
         .unwrap();
 
-        let expected: Vec<i32> = (1990..=2009).collect();
+        let expected: Vec<i32> = (1991..=2010).collect();
         assert_eq!(
             windows, expected,
-            "None season_map must reproduce the original month0()-based result"
+            "None season_map must reproduce the month0()-based result (1991–2010)"
         );
     }
 }

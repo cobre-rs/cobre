@@ -47,7 +47,9 @@ use cobre_sddp::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+};
 
 // ===========================================================================
 // Shared communicator stub
@@ -91,6 +93,10 @@ impl Communicator for StubComm {
 
     fn size(&self) -> usize {
         1
+    }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
     }
 }
 
@@ -336,7 +342,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -850,6 +856,10 @@ impl Communicator for MultiRankMockComm {
     fn size(&self) -> usize {
         self.total_size
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 // ===========================================================================
@@ -886,6 +896,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS.to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &StubComm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -897,6 +908,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..4].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -908,6 +920,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..2].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };

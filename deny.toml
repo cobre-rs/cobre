@@ -13,6 +13,9 @@ ignore = [
     "RUSTSEC-2023-0089",
     # paste via parquet (dev-dep); transitive, no upgrade available
     "RUSTSEC-2024-0436",
+    # rand 0.10.0 unsoundness with custom logger + thread_rng reseed; not exploitable
+    # in cobre (we don't use a custom logger that calls rand::rng())
+    "RUSTSEC-2026-0097",
 ]
 
 # ------------------------------------------------------------------ licenses

@@ -34,12 +34,33 @@ pub struct ClassSchemes {
     pub ncs: Option<SamplingScheme>,
 }
 
+/// Opening-tree inputs passed to [`build_stochastic_context`].
+///
+/// Groups the two optional caller-provided overrides for the opening scenario
+/// tree: a pre-built `OpeningTree` that bypasses generation entirely, and a
+/// `HistoricalScenarioLibrary` used when any stage is configured with
+/// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals).
+///
+/// When both fields are `None` the opening tree is generated from SAA/LHS/QMC
+/// noise depending on each stage's `scenario_config.noise_method`.
+#[derive(Debug, Default)]
+pub struct OpeningTreeInputs<'a> {
+    /// A pre-built opening tree that bypasses generation. When `Some`, the
+    /// `historical_library` field is ignored.
+    pub user_tree: Option<OpeningTree>,
+    /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals)
+    /// stages. Required when any study stage uses that noise method and
+    /// `user_tree` is `None`.
+    pub historical_library: Option<&'a HistoricalScenarioLibrary>,
+}
+
 use crate::{
     StochasticError,
     correlation::resolve::DecomposedCorrelation,
     normal::precompute::{EntityFactorEntry, PrecomputedNormal},
     par::{precompute::PrecomputedPar, validation::validate_par_parameters},
     provenance::{ComponentProvenance, StochasticProvenance},
+    sampling::historical::HistoricalScenarioLibrary,
     tree::{
         generate::{ClassDimensions, generate_opening_tree},
         opening_tree::OpeningTreeView,
@@ -70,7 +91,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     },
 ///     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
 /// };
-/// use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+/// use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 /// use chrono::NaiveDate;
 ///
 /// # fn make_bus(id: i32) -> Bus {
@@ -170,7 +191,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 ///     .build()
 ///     .unwrap();
 ///
-/// let ctx = build_stochastic_context(&system, 42, None, &[], &[], None, ClassSchemes { inflow: None, load: None, ncs: None }).unwrap();
+/// let ctx = build_stochastic_context(&system, 42, None, &[], &[], OpeningTreeInputs::default(), ClassSchemes { inflow: None, load: None, ncs: None }).unwrap();
 /// assert_eq!(ctx.dim(), 2);
 /// assert_eq!(ctx.n_stages(), 3);
 /// assert_eq!(ctx.base_seed(), 42);
@@ -353,9 +374,13 @@ pub fn build_stochastic_context(
     forward_seed: Option<u64>,
     load_factors: &[EntityFactorEntry<'_>],
     ncs_factors: &[EntityFactorEntry<'_>],
-    user_opening_tree: Option<OpeningTree>,
+    opening_tree_inputs: OpeningTreeInputs<'_>,
     schemes: ClassSchemes,
 ) -> Result<StochasticContext, StochasticError> {
+    let OpeningTreeInputs {
+        user_tree: user_opening_tree,
+        historical_library,
+    } = opening_tree_inputs;
     let _report = validate_par_parameters(system.inflow_models())?;
 
     let study_stages: Vec<_> = system
@@ -454,6 +479,7 @@ pub fn build_stochastic_context(
                 n_load_buses,
                 n_ncs: n_stochastic_ncs,
             },
+            historical_library,
         )?
     };
 
@@ -532,7 +558,7 @@ mod tests {
         },
     };
 
-    use super::{ClassSchemes, build_stochastic_context};
+    use super::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
     use crate::StochasticError;
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
@@ -698,7 +724,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -745,7 +771,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -791,7 +817,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -831,7 +857,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -870,7 +896,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -941,7 +967,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -988,7 +1014,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1032,7 +1058,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1097,7 +1123,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1147,7 +1173,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1195,7 +1221,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1248,7 +1274,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1304,7 +1330,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1372,7 +1398,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1443,7 +1469,10 @@ mod tests {
             None,
             &[],
             &[],
-            Some(user_tree),
+            OpeningTreeInputs {
+                user_tree: Some(user_tree),
+                historical_library: None,
+            },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1524,7 +1553,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1582,7 +1611,10 @@ mod tests {
             None,
             &[],
             &[],
-            Some(user_tree),
+            OpeningTreeInputs {
+                user_tree: Some(user_tree),
+                historical_library: None,
+            },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1635,7 +1667,7 @@ mod tests {
             Some(123),
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1684,7 +1716,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

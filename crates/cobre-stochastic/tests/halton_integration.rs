@@ -31,7 +31,7 @@ use cobre_core::{
     },
 };
 use cobre_stochastic::{
-    ClassDimensions, ClassSchemes, build_stochastic_context,
+    ClassDimensions, ClassSchemes, OpeningTreeInputs, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
     generate_opening_tree,
     tree::qmc_halton::{HaltonPointSpec, scrambled_halton_point},
@@ -307,7 +307,7 @@ fn build_halton_context(
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),
@@ -347,7 +347,7 @@ fn halton_2d_star_discrepancy() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims)
+    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None)
         .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
@@ -404,7 +404,7 @@ fn halton_normal_statistics() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims)
+    let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None)
         .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
@@ -445,7 +445,7 @@ fn halton_correlation_applied() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims)
+    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None)
         .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)

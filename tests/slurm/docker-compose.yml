@@ -1,0 +1,62 @@
+# tests/slurm/docker-compose.yml
+# 2-node SLURM + MPICH cluster for MPI integration testing.
+#
+# Usage:
+#   docker compose -f tests/slurm/docker-compose.yml build
+#   docker compose -f tests/slurm/docker-compose.yml up -d --wait
+#   docker compose -f tests/slurm/docker-compose.yml exec controller sinfo -N
+#   docker compose -f tests/slurm/docker-compose.yml down -v
+
+name: slurm-mpi-test
+
+services:
+  # -------------------------------------------------------------------------
+  # SLURM controller: runs slurmctld + slurmd, generates the munge key
+  # -------------------------------------------------------------------------
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: controller
+    environment:
+      - ROLE=controller
+    volumes:
+      - slurm-shared:/shared
+    privileged: true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        ["CMD-SHELL", "sinfo -N | grep idle && test -f /tmp/container-healthy"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 6
+
+  # -------------------------------------------------------------------------
+  # Compute node: waits for munge key from controller, then runs slurmd
+  # -------------------------------------------------------------------------
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    hostname: node2
+    environment:
+      - ROLE=compute
+    volumes:
+      - slurm-shared:/shared
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      controller:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "sinfo -N | grep idle && test -f /tmp/container-healthy"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 6
+
+volumes:
+  slurm-shared:
+    driver: local

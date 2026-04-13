@@ -10,32 +10,33 @@
 //!
 //! ## Season-to-year mapping
 //!
-//! The window starting year `y` is the year of the **first lag observation**.
+//! The window starting year `y` is the year of the **first study observation**.
 //! Lag seasons are derived by stepping backwards `max_par_order` steps from
 //! the first study stage's `season_id` using modular arithmetic on
-//! `n_seasons`. The year increments whenever the season sequence wraps from
-//! `n_seasons - 1` back to `0`.
+//! `n_seasons`. Lag entries receive negative year offsets relative to `y`,
+//! and the year decrements whenever the season sequence wraps from `0` back
+//! to `n_seasons - 1` going backwards.
 //!
 //! ### Example (monthly, `max_par_order` = 2, `season_ids` 0–11)
 //!
-//! Full season sequence: `[10, 11, 0, 1, …, 11]` (14 elements).
+//! Full season sequence (offsets after normalization): `[(-1,10), (-1,11), (0,0), (0,1), …, (0,11)]`.
 //!
 //! For window year `y = 1990`:
-//! - Lag observations: `(1990, season 10)`, `(1990, season 11)`
-//! - Study observations: `(1991, season 0)` … `(1991, season 11)`
+//! - Lag observations: `(1989, season 10)`, `(1989, season 11)`
+//! - Study observations: `(1990, season 0)` … `(1990, season 11)`
 //!
 //! [`HistoricalYears`]: cobre_core::scenario::HistoricalYears
 
 use std::collections::HashSet;
 
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use cobre_core::{
     EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
-    temporal::Stage,
+    temporal::{SeasonMap, Stage},
 };
 
-use crate::StochasticError;
+use crate::{StochasticError, par::fitting::find_season_for_date};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -57,6 +58,16 @@ use crate::StochasticError;
 /// When `user_pool` is `Some`, only windows whose starting year appears in
 /// the expanded pool are returned. When `None`, all valid auto-discovered
 /// windows are returned.
+///
+/// The `season_map` parameter controls how observation dates are mapped to
+/// season IDs when building the observation lookup:
+///
+/// 1. Dates that fall within a study stage's `[start_date, end_date)` range
+///    are mapped via binary search on the stage index (exact match).
+/// 2. Dates outside the study range are mapped via
+///    `season_map.season_for_date(date)` when `season_map` is `Some`.
+/// 3. When `season_map` is `None`, dates outside the study range fall back
+///    to `month0()` (0 = January … 11 = December) for backward compatibility.
 ///
 /// # Errors
 ///
@@ -115,11 +126,14 @@ use crate::StochasticError;
 ///     &stages,
 ///     2,
 ///     None,
+///     None,
 ///     10,
 /// )
 /// .unwrap();
 ///
-/// assert_eq!(windows, vec![1990]);
+/// // window_year=1991: study at 1991, lags at 1990 (season 10/11) — all present.
+/// // window_year=1990: lags would be at 1989 — not in history.
+/// assert_eq!(windows, vec![1991]);
 /// ```
 pub fn discover_historical_windows(
     inflow_history: &[InflowHistoryRow],
@@ -127,66 +141,44 @@ pub fn discover_historical_windows(
     stages: &[Stage],
     max_par_order: usize,
     user_pool: Option<&HistoricalYears>,
+    season_map: Option<&SeasonMap>,
     forward_passes: u32,
 ) -> Result<Vec<i32>, StochasticError> {
-    // -----------------------------------------------------------------------
-    // BR1: collect all unique years present in the history (candidate years)
-    // -----------------------------------------------------------------------
     let all_years: HashSet<i32> = inflow_history.iter().map(|r| r.date.year()).collect();
 
-    // -----------------------------------------------------------------------
-    // Build observation lookup: (hydro_id, year, season_id) -> present
-    //
-    // Season is derived from the observation date via month0() (0 = January),
-    // matching the resolve_season_id convention used by PrecomputedPar.
-    // -----------------------------------------------------------------------
+    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
     let lookup: HashSet<(EntityId, i32, usize)> = inflow_history
         .iter()
-        .map(|r| {
-            let season_id = r.date.month0() as usize;
-            (r.hydro_id, r.date.year(), season_id)
+        .filter_map(|r| {
+            let season_id = find_season_for_date(&stage_index, r.date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(r.date)))
+                .or_else(|| {
+                    if season_map.is_none() {
+                        Some(r.date.month0() as usize)
+                    } else {
+                        None
+                    }
+                })?;
+            Some((r.hydro_id, r.date.year(), season_id))
         })
         .collect();
 
-    // -----------------------------------------------------------------------
-    // Determine n_seasons from the stage season_ids.
-    // n_seasons = max(season_id) + 1 across all study stages.
-    // For a 12-month cycle with ids 0–11, n_seasons = 12.
-    // -----------------------------------------------------------------------
     let n_seasons = stages
         .iter()
         .filter_map(|s| s.season_id)
         .max()
         .map_or(1, |m| m + 1);
 
-    // -----------------------------------------------------------------------
-    // Build the full observation-sequence template as a Vec<(year_offset, season_id)>.
-    //
-    // The template describes, for each required observation, the year offset
-    // relative to the window starting year y and the required season_id.
-    //
-    // 1. Study seasons come from stages in order.
-    // 2. Lag seasons are prepended: step backwards max_par_order times from
-    //    study_seasons[0] using modular arithmetic.
-    //
-    // Year offset increments whenever the season_id sequence wraps from
-    // (n_seasons - 1) to 0, indicating a calendar year boundary.
-    // -----------------------------------------------------------------------
     let required_sequence: Vec<(i32, usize)> =
         super::build_observation_sequence(stages, max_par_order, n_seasons);
 
-    // -----------------------------------------------------------------------
-    // Determine the candidate year set to evaluate.
-    //
-    // When a user pool is provided (BR4), expand it and intersect with
-    // years present in the history. When absent (BR5), use all years found
-    // in the history.
-    // -----------------------------------------------------------------------
     let candidate_years: Vec<i32> = if let Some(pool) = user_pool {
-        let pool_years: HashSet<i32> = pool.to_years().into_iter().collect();
-        // Keep only years that appear in the pool (they may or may not be
-        // present in the history — validity is checked below).
-        let mut years: Vec<i32> = pool_years.into_iter().collect();
+        let mut years: Vec<i32> = pool.to_years().into_iter().collect();
         years.sort_unstable();
         years
     } else {
@@ -195,23 +187,13 @@ pub fn discover_historical_windows(
         years
     };
 
-    // -----------------------------------------------------------------------
-    // BR2/BR3: for each candidate year, check that every required
-    // (hydro_id, y + year_offset, season_id) triple is in the lookup.
-    // -----------------------------------------------------------------------
     let mut valid_windows: Vec<i32> = candidate_years
         .into_iter()
         .filter(|&y| is_window_complete(y, &required_sequence, hydro_ids, &lookup))
         .collect();
 
-    // -----------------------------------------------------------------------
-    // BR6: sort ascending for deterministic output
-    // -----------------------------------------------------------------------
     valid_windows.sort_unstable();
 
-    // -----------------------------------------------------------------------
-    // BR7: error when no valid windows remain
-    // -----------------------------------------------------------------------
     if valid_windows.is_empty() {
         return Err(StochasticError::InsufficientData {
             context: "no valid historical windows found: ensure that inflow history covers \
@@ -220,16 +202,13 @@ pub fn discover_historical_windows(
         });
     }
 
-    // -----------------------------------------------------------------------
-    // BR8: warn when the pool is smaller than forward_passes
-    // -----------------------------------------------------------------------
-    let n_windows = valid_windows.len();
-    if n_windows < forward_passes as usize {
+    if valid_windows.len() < forward_passes as usize {
         tracing::warn!(
-            n_windows,
+            n_windows = valid_windows.len(),
             forward_passes,
-            "fewer windows ({n_windows}) than forward passes ({forward_passes}): \
-             historical sampling will repeat windows across forward passes"
+            "fewer windows ({}) than forward passes ({forward_passes}): \
+             historical sampling will repeat windows across forward passes",
+            valid_windows.len()
         );
     }
 
@@ -274,8 +253,8 @@ mod tests {
         EntityId,
         scenario::{HistoricalYears, InflowHistoryRow},
         temporal::{
-            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-            StageStateConfig,
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
+            SeasonMap, Stage, StageRiskConfig, StageStateConfig,
         },
     };
 
@@ -335,15 +314,17 @@ mod tests {
     #[test]
     fn test_auto_discovery_all_valid() {
         // 2 hydros, monthly history 1990–2010 (252 rows each), 12 study stages,
-        // max_par_order = 2. Expected: years 1990–2009 (20 windows).
+        // max_par_order = 2. Expected: years 1991–2010 (20 windows).
         //
+        // Under the new convention, window_year Y means study starts at year Y.
         // For window y, the algorithm needs:
-        //   lags  → (y, season 10), (y, season 11)
-        //   study → (y+1, season 0) … (y+1, season 11)
+        //   lags  → (y-1, season 10), (y-1, season 11)
+        //   study → (y,   season 0) … (y,   season 11)
         //
-        // y = 1990: needs (1990, 10/11) + (1991, 0..11) → all in [1990, 2010] ✓
-        // y = 2009: needs (2009, 10/11) + (2010, 0..11) → all in [1990, 2010] ✓
-        // y = 2010: needs (2010, 10/11) + (2011, 0..11) → 2011 not in data ✗
+        // y = 1991: needs (1990, 10/11) + (1991, 0..11) → all in [1990, 2010] ✓
+        // y = 2010: needs (2009, 10/11) + (2010, 0..11) → all in [1990, 2010] ✓
+        // y = 1990: needs (1989, 10/11) → 1989 not in data ✗
+        // y = 2011: needs (2010, 10/11) + (2011, 0..11) → 2011 not in data ✗
         let hydro1 = EntityId(1);
         let hydro2 = EntityId(2);
         let mut history = monthly_history(hydro1, 1990, 2010);
@@ -351,10 +332,11 @@ mod tests {
 
         let stages = twelve_monthly_stages();
         let windows =
-            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, 10).unwrap();
+            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, None, 10)
+                .unwrap();
 
-        let expected: Vec<i32> = (1990..=2009).collect();
-        assert_eq!(windows, expected, "expected exactly years 1990–2009");
+        let expected: Vec<i32> = (1991..=2010).collect();
+        assert_eq!(windows, expected, "expected exactly years 1991–2010");
     }
 
     // -----------------------------------------------------------------------
@@ -370,9 +352,16 @@ mod tests {
 
         let stages = twelve_monthly_stages();
         let pool = HistoricalYears::List(vec![1995, 2000]);
-        let windows =
-            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, Some(&pool), 5)
-                .unwrap();
+        let windows = discover_historical_windows(
+            &history,
+            &[hydro1, hydro2],
+            &stages,
+            2,
+            Some(&pool),
+            None,
+            5,
+        )
+        .unwrap();
 
         assert_eq!(windows, vec![1995, 2000]);
     }
@@ -393,9 +382,16 @@ mod tests {
             from: 2000,
             to: 2002,
         };
-        let windows =
-            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, Some(&pool), 5)
-                .unwrap();
+        let windows = discover_historical_windows(
+            &history,
+            &[hydro1, hydro2],
+            &stages,
+            2,
+            Some(&pool),
+            None,
+            5,
+        )
+        .unwrap();
 
         assert_eq!(windows, vec![2000, 2001, 2002]);
     }
@@ -414,8 +410,15 @@ mod tests {
         let stages = twelve_monthly_stages();
         // Year 2020 has no data → no valid windows
         let pool = HistoricalYears::List(vec![2020]);
-        let result =
-            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, Some(&pool), 1);
+        let result = discover_historical_windows(
+            &history,
+            &[hydro1, hydro2],
+            &stages,
+            2,
+            Some(&pool),
+            None,
+            1,
+        );
 
         assert!(result.is_err(), "expected Err when no valid windows found");
         let msg = result.unwrap_err().to_string();
@@ -432,9 +435,11 @@ mod tests {
     #[test]
     fn test_incomplete_hydro_excludes_window() {
         // hydro1 has full data 1990–2010.
-        // hydro2 is missing all of 2006 (year_offset+1 for window y=2005).
-        // Window y=2005 requires (2005, seasons 10/11) and (2006, seasons 0..11).
-        // hydro2 has no 2006 data → window 2005 must be excluded.
+        // hydro2 is missing all of 2006.
+        //
+        // Under the new convention, window_year Y means study starts at year Y.
+        // Window y=2006 requires (2005, seasons 10/11) and (2006, seasons 0..11).
+        // hydro2 has no 2006 data → window 2006 must be excluded.
         let hydro1 = EntityId(1);
         let hydro2 = EntityId(2);
         let mut history = monthly_history(hydro1, 1990, 2010);
@@ -445,15 +450,16 @@ mod tests {
 
         let stages = twelve_monthly_stages();
         let windows =
-            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, 5).unwrap();
+            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, None, 5)
+                .unwrap();
 
         assert!(
-            !windows.contains(&2005),
-            "window 2005 should be excluded because hydro2 lacks 2006 data"
+            !windows.contains(&2006),
+            "window 2006 should be excluded because hydro2 lacks 2006 data"
         );
-        // 2004 should still be valid: needs (2004, 10/11) + (2005, 0..11).
-        // hydro2 has data through 2005 → 2004 is valid.
-        assert!(windows.contains(&2004), "window 2004 should still be valid");
+        // 2005 should still be valid: needs (2004, 10/11) + (2005, 0..11).
+        // hydro2 has data through 2005 → 2005 is valid.
+        assert!(windows.contains(&2005), "window 2005 should still be valid");
     }
 
     // -----------------------------------------------------------------------
@@ -477,5 +483,228 @@ mod tests {
             to: 2003,
         };
         assert_eq!(years.to_years(), vec![2000, 2001, 2002, 2003]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test helpers for SeasonMap construction
+    // -----------------------------------------------------------------------
+
+    /// Build a standard monthly `SeasonMap` (12 seasons, IDs 0–11).
+    fn monthly_season_map() -> SeasonMap {
+        let seasons = (0_usize..12)
+            .map(|i| SeasonDefinition {
+                id: i,
+                label: format!("Month{i}"),
+                #[allow(clippy::cast_possible_truncation)]
+                month_start: (i as u32) + 1,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        }
+    }
+
+    /// Build quarterly stages (4 stages, each 3 months, `season_ids` 0–3).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    fn four_quarterly_stages() -> Vec<Stage> {
+        // Q1: Jan–Mar (start Jan 1, end Apr 1)
+        // Q2: Apr–Jun (start Apr 1, end Jul 1)
+        // Q3: Jul–Sep (start Jul 1, end Oct 1)
+        // Q4: Oct–Dec (start Oct 1, end Jan 1 next year)
+        let quarter_starts = [(1u32, 1u32), (4, 1), (7, 1), (10, 1)];
+        let quarter_ends = [(4u32, 1u32), (7, 1), (10, 1), (12, 31)];
+        (0_usize..4)
+            .map(|i| {
+                let (sm, sd) = quarter_starts[i];
+                let (em, ed) = quarter_ends[i];
+                Stage {
+                    index: i,
+                    id: i as i32,
+                    start_date: NaiveDate::from_ymd_opt(2024, sm, sd).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2024, em, ed).unwrap(),
+                    season_id: Some(i),
+                    blocks: vec![Block {
+                        index: 0,
+                        name: "SINGLE".to_string(),
+                        duration_hours: 2160.0,
+                    }],
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 5,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Build a quarterly history: one row per quarter per year for `hydro_id`.
+    fn quarterly_history(
+        hydro_id: EntityId,
+        from_year: i32,
+        to_year: i32,
+    ) -> Vec<InflowHistoryRow> {
+        let quarter_months = [1u32, 4, 7, 10];
+        (from_year..=to_year)
+            .flat_map(|y| {
+                quarter_months.iter().map(move |&m| InflowHistoryRow {
+                    hydro_id,
+                    date: NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
+                    value_m3s: 100.0,
+                })
+            })
+            .collect()
+    }
+
+    /// Build a quarterly `SeasonMap` (4 seasons, IDs 0–3).
+    fn quarterly_season_map() -> SeasonMap {
+        SeasonMap {
+            cycle_type: SeasonCycleType::Custom,
+            seasons: vec![
+                SeasonDefinition {
+                    id: 0,
+                    label: "Q1".to_string(),
+                    month_start: 1,
+                    day_start: Some(1),
+                    month_end: Some(3),
+                    day_end: Some(31),
+                },
+                SeasonDefinition {
+                    id: 1,
+                    label: "Q2".to_string(),
+                    month_start: 4,
+                    day_start: Some(1),
+                    month_end: Some(6),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 2,
+                    label: "Q3".to_string(),
+                    month_start: 7,
+                    day_start: Some(1),
+                    month_end: Some(9),
+                    day_end: Some(30),
+                },
+                SeasonDefinition {
+                    id: 3,
+                    label: "Q4".to_string(),
+                    month_start: 10,
+                    day_start: Some(1),
+                    month_end: Some(12),
+                    day_end: Some(31),
+                },
+            ],
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 8: monthly SeasonMap produces identical results to month0() (None)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_monthly_season_map_identical_to_month0() {
+        // A standard Monthly SeasonMap with IDs 0-11 must produce the same
+        // window set as passing None (which falls back to month0()).
+        let hydro1 = EntityId(1);
+        let hydro2 = EntityId(2);
+        let mut history = monthly_history(hydro1, 1990, 2010);
+        history.extend(monthly_history(hydro2, 1990, 2010));
+        let stages = twelve_monthly_stages();
+
+        let sm = monthly_season_map();
+
+        let windows_none =
+            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, None, 10)
+                .unwrap();
+        let windows_with_sm = discover_historical_windows(
+            &history,
+            &[hydro1, hydro2],
+            &stages,
+            2,
+            None,
+            Some(&sm),
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(
+            windows_none, windows_with_sm,
+            "monthly SeasonMap must produce identical results to month0() fallback"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 9: quarterly SeasonMap discovers correct windows
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_quarterly_season_map_window_discovery() {
+        // One hydro, quarterly data from 1990-2010, 4 quarterly stages,
+        // max_par_order = 1.
+        //
+        // Under the new convention, window_year Y means study starts at year Y.
+        // Window sequence for y (1 lag + 4 study quarters):
+        //   lag  → (y-1, season 3) [Q4=Oct]
+        //   study → (y,   season 0..3) [Q1-Q4]
+        //
+        // y = 1991: needs (1990, Q4) and (1991, Q1–Q4) → all present ✓
+        // y = 2010: needs (2009, Q4) and (2010, Q1–Q4) → all present ✓
+        // y = 1990: needs (1989, Q4) → 1989 missing ✗
+        // y = 2011: needs (2010, Q4) + (2011, Q1–Q4) → 2011 missing ✗
+        let hydro1 = EntityId(1);
+        let history = quarterly_history(hydro1, 1990, 2010);
+        let stages = four_quarterly_stages();
+        let sm = quarterly_season_map();
+
+        let windows =
+            discover_historical_windows(&history, &[hydro1], &stages, 1, None, Some(&sm), 10)
+                .unwrap();
+
+        let expected: Vec<i32> = (1991..=2010).collect();
+        assert_eq!(
+            windows, expected,
+            "expected windows 1991–2010 for quarterly study"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 10: None season_map backward compatibility
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_none_season_map_backward_compat() {
+        // Passing None must fall back to month0() for season ID resolution.
+        // Under the new convention, window_year Y means study starts at year Y,
+        // so lags are sought at year Y-1.
+        let hydro1 = EntityId(1);
+        let mut history = monthly_history(hydro1, 1990, 2010);
+        history.extend(monthly_history(EntityId(2), 1990, 2010));
+        let stages = twelve_monthly_stages();
+
+        let windows = discover_historical_windows(
+            &history,
+            &[hydro1, EntityId(2)],
+            &stages,
+            2,
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+
+        let expected: Vec<i32> = (1991..=2010).collect();
+        assert_eq!(
+            windows, expected,
+            "None season_map must reproduce the month0()-based result (1991–2010)"
+        );
     }
 }

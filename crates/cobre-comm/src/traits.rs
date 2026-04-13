@@ -348,6 +348,18 @@ pub trait Communicator: Send + Sync {
     /// Safe to call concurrently from multiple threads. The cached value is
     /// read-only after initialization.
     fn size(&self) -> usize;
+
+    /// Abort all ranks in the communicator.
+    ///
+    /// Terminates every process in the communicator with the given
+    /// `error_code`. On MPI backends this calls `MPI_Abort`; on the local
+    /// backend it calls [`std::process::exit`].
+    ///
+    /// This method **never returns**. It should be called only when a
+    /// non-recoverable error makes continued execution impossible, and the
+    /// error cannot be coordinated through normal collective operations
+    /// (e.g., an asymmetric failure where some ranks succeed and others fail).
+    fn abort(&self, error_code: i32) -> !;
 }
 
 /// Object-safe sub-trait of [`Communicator`] for intra-node initialization
@@ -801,6 +813,10 @@ mod tests {
 
         fn size(&self) -> usize {
             1
+        }
+
+        fn abort(&self, _error_code: i32) -> ! {
+            unreachable!("NeverImpl is only used for compile-time trait shape tests")
         }
     }
 

@@ -107,6 +107,11 @@ pub struct ForwardResult {
 
     /// Number of LP solves performed during this forward pass.
     pub lp_solves: u64,
+
+    /// Estimated rayon barrier + scheduling overhead for the forward pass
+    /// parallel region, in milliseconds. Computed as
+    /// `parallel_wall_ms - (total_solve_time_ms / n_workers)`.
+    pub rayon_overhead_ms: u64,
 }
 
 /// Global upper bound statistics from forward synchronisation step.
@@ -597,6 +602,11 @@ pub fn deactivate_cuts_in_lp<S: SolverInterface>(
 pub struct ForwardPassBatch {
     /// Number of forward-pass scenarios assigned to this rank.
     pub local_forward_passes: usize,
+    /// Total forward passes across all MPI ranks. Used for LHS stratification
+    /// in the sampler (`total_scenarios` field of `SampleRequest`) and for
+    /// sizing the LHS permutation scratch buffer. Must equal the study-level
+    /// `forward_passes` parameter, NOT the per-rank local count.
+    pub total_forward_passes: usize,
     /// Current training iteration (0-based; used for seed derivation).
     pub iteration: u64,
     /// Global index of this rank's first forward pass for seed derivation.
@@ -959,6 +969,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     } = training_ctx;
     let ForwardPassBatch {
         local_forward_passes,
+        total_forward_passes,
         iteration,
         fwd_offset,
     } = batch;
@@ -1004,7 +1015,14 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     // Noise dimension for worker-local sampling buffers (OutOfSample path).
     let noise_dim = stochastic.dim();
 
+    // Snapshot solve time across all workers before the parallel region.
+    let solve_seconds_before: f64 = workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().total_solve_time_seconds)
+        .sum();
+
     // Each worker collects per-scenario costs in local scenario index order.
+    let parallel_start = Instant::now();
     let worker_results: Vec<Result<(Vec<f64>, u64), SddpError>> = workspaces
         .par_iter_mut()
         .zip(record_slices.par_iter_mut())
@@ -1019,16 +1037,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
             // when run_forward_stage borrows ws while raw_noise is still live.
             let mut raw_noise_buf = vec![0.0_f64; noise_dim];
             #[allow(clippy::cast_possible_truncation)]
-            let mut perm_scratch = vec![0_usize; forward_passes.max(1)];
+            let mut perm_scratch = vec![0_usize; (*total_forward_passes).max(1)];
             #[allow(clippy::cast_possible_truncation)]
-            let total_scenarios_u32 = forward_passes as u32;
+            let total_scenarios_u32 = *total_forward_passes as u32;
 
             for t in 0..num_stages {
-                ws.solver.load_model(&ctx.templates[t]);
-                if cut_batches[t].num_rows > 0 {
-                    ws.solver.add_rows(&cut_batches[t]);
-                }
-
                 let cum_d = ctx
                     .cumulative_discount_factors
                     .get(t)
@@ -1036,6 +1049,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     .unwrap_or(1.0);
 
                 for (local_m, m) in (start_m..end_m).enumerate() {
+                    // Reload model per scenario for determinism investigation.
+                    ws.solver.load_model(&ctx.templates[t]);
+                    if cut_batches[t].num_rows > 0 {
+                        ws.solver.add_rows(&cut_batches[t]);
+                    }
                     ws.current_state.clear();
                     let src: &[f64] = if t == 0 {
                         initial_state
@@ -1098,6 +1116,25 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         })
         .collect();
 
+    // Capture parallel region wall-clock before sequential post-processing.
+    #[allow(clippy::cast_possible_truncation)]
+    let parallel_wall_ms = parallel_start.elapsed().as_millis() as u64;
+
+    // Compute rayon overhead: parallel wall-clock minus average per-worker
+    // LP solve time. This upper-bounds barrier wait + non-solve parallel work.
+    let solve_seconds_after: f64 = workspaces
+        .iter()
+        .map(|ws| ws.solver.statistics().total_solve_time_seconds)
+        .sum();
+    #[allow(clippy::cast_precision_loss)]
+    let n_workers_f = n_workers as f64;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let rayon_overhead_ms = {
+        let total_solve_ms = (solve_seconds_after - solve_seconds_before) * 1000.0;
+        let avg_solve_ms = (total_solve_ms / n_workers_f) as u64;
+        parallel_wall_ms.saturating_sub(avg_solve_ms)
+    };
+
     // Merge per-worker cost vectors in global scenario index order (canonical).
     let mut scenario_costs = Vec::with_capacity(forward_passes);
     let mut lp_solves = 0u64;
@@ -1114,6 +1151,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         scenario_costs,
         elapsed_ms,
         lp_solves,
+        rayon_overhead_ms,
     })
 }
 
@@ -1137,7 +1175,7 @@ mod tests {
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
@@ -1494,7 +1532,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -1512,6 +1550,7 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 123,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         assert_eq!(r.scenario_costs.len(), 4);
         assert_eq!(r.scenario_costs[0], 60.0);
@@ -1524,6 +1563,7 @@ mod tests {
             scenario_costs: vec![1.0, 2.0],
             elapsed_ms: 5,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let c = r.clone();
         assert_eq!(c.scenario_costs.len(), r.scenario_costs.len());
@@ -1741,6 +1781,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -1842,6 +1883,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -1949,6 +1991,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2014,6 +2057,7 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2052,6 +2096,7 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2078,6 +2123,7 @@ mod tests {
             scenario_costs: vec![1.0, 2.0, 3.0, 4.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result_single = sync_forward(&single_rank, &comm, 4).unwrap();
@@ -2116,6 +2162,7 @@ mod tests {
             scenario_costs: vec![500.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 1).unwrap();
@@ -2149,6 +2196,7 @@ mod tests {
             scenario_costs: vec![v, v],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2175,6 +2223,7 @@ mod tests {
             scenario_costs: vec![420.0, 420.0],
             elapsed_ms: 5,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2193,6 +2242,7 @@ mod tests {
             scenario_costs: vec![50.0, 50.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2248,12 +2298,17 @@ mod tests {
             fn size(&self) -> usize {
                 1
             }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
         }
 
         let local = ForwardResult {
             scenario_costs: vec![100.0],
             elapsed_ms: 0,
             lp_solves: 0,
+            rayon_overhead_ms: 0,
         };
         let comm = FailingComm;
         let err = sync_forward(&local, &comm, 1).unwrap_err();
@@ -2339,6 +2394,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2500,6 +2556,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2536,6 +2593,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2635,6 +2693,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2818,7 +2877,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2941,6 +3000,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3111,6 +3171,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
+                total_forward_passes: config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3257,7 +3318,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3348,6 +3409,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
+                total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3468,6 +3530,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3582,6 +3645,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3673,6 +3737,7 @@ mod tests {
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
+                total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
             },

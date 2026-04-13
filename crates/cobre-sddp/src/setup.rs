@@ -27,11 +27,11 @@
 //! ```rust,no_run
 //! use cobre_sddp::setup::StudySetup;
 //! use cobre_sddp::hydro_models::PrepareHydroModelsResult;
-//! use cobre_stochastic::{ClassSchemes, build_stochastic_context};
+//! use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 //!
 //! # fn example(system: &cobre_core::System, config: &cobre_io::Config)
 //! #     -> Result<(), cobre_sddp::SddpError> {
-//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], None, ClassSchemes { inflow: None, load: None, ncs: None })?;
+//! let stochastic = build_stochastic_context(system, 42, None, &[], &[], OpeningTreeInputs::default(), ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
 //! assert!(!setup.stage_templates().is_empty());
@@ -54,10 +54,10 @@ use cobre_core::{
 };
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{
-    ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext, context::OpeningTree,
-    discover_historical_windows, standardize_external_inflow, standardize_external_load,
-    standardize_external_ncs, standardize_historical_windows, validate_external_library,
-    validate_historical_library,
+    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
+    context::OpeningTree, discover_historical_windows, standardize_external_inflow,
+    standardize_external_load, standardize_external_ncs, standardize_historical_windows,
+    validate_external_library, validate_historical_library,
 };
 
 use crate::{
@@ -720,12 +720,8 @@ impl StudySetup {
             .cloned()
             .collect();
 
-        // Build libraries only for the scheme variants that require them.
-        // InSample and OutOfSample do not need pre-built libraries.
-
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
-        // Historical inflow library (built when inflow_scheme == Historical).
         let historical_library: Option<HistoricalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::Historical {
                 let user_pool = training_source.historical_years.as_ref();
@@ -736,16 +732,14 @@ impl StudySetup {
                     &stages,
                     max_order,
                     user_pool,
+                    system.policy_graph().season_map.as_ref(),
                     forward_passes,
                 )
                 .map_err(SddpError::Stochastic)?;
-                let n_windows = window_years.len();
-                let n_hydros = hydro_ids.len();
-                let n_stages = stages.len();
                 let mut library = HistoricalScenarioLibrary::new(
-                    n_windows,
-                    n_stages,
-                    n_hydros,
+                    window_years.len(),
+                    stages.len(),
+                    hydro_ids.len(),
                     max_order,
                     window_years.clone(),
                 );
@@ -756,6 +750,7 @@ impl StudySetup {
                     &stages,
                     stochastic.par(),
                     &window_years,
+                    system.policy_graph().season_map.as_ref(),
                 );
                 validate_historical_library(
                     &library,
@@ -772,13 +767,11 @@ impl StudySetup {
                 None
             };
 
-        // External inflow library (built when inflow_scheme == External).
         let external_inflow_library: Option<ExternalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::External {
                 let external_rows = system.external_scenarios();
                 let n_stages = stages.len();
                 let n_hydros = hydro_ids.len();
-                // Collect row metadata required by validate_external_library.
                 let row_entity_ids: std::collections::HashSet<EntityId> =
                     external_rows.iter().map(|r| r.hydro_id).collect();
                 let mut rows_per_stage = vec![0usize; n_stages];
@@ -789,7 +782,6 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                // Determine uniform scenario count from stage 0 (or 0 if no rows).
                 let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
                     if rows_per_stage[0] % n_hydros != 0 {
                         return Err(SddpError::Stochastic(
@@ -976,16 +968,14 @@ impl StudySetup {
                 &stages,
                 max_order,
                 user_pool,
+                system.policy_graph().season_map.as_ref(),
                 forward_passes,
             )
             .map_err(SddpError::Stochastic)?;
-            let n_windows = window_years.len();
-            let n_hydros_sim = hydro_ids.len();
-            let n_stages_sim = stages.len();
             let mut library = HistoricalScenarioLibrary::new(
-                n_windows,
-                n_stages_sim,
-                n_hydros_sim,
+                window_years.len(),
+                stages.len(),
+                hydro_ids.len(),
                 max_order,
                 window_years.clone(),
             );
@@ -996,6 +986,7 @@ impl StudySetup {
                 &stages,
                 stochastic.par(),
                 &window_years,
+                system.policy_graph().season_map.as_ref(),
             );
             validate_historical_library(
                 &library,
@@ -1012,49 +1003,48 @@ impl StudySetup {
             None
         };
 
-        // Simulation external inflow library.
         let sim_external_inflow_library: Option<ExternalScenarioLibrary> = if sim_inflow_scheme
             == SamplingScheme::External
             && sim_inflow_scheme != inflow_scheme
         {
             let external_rows = system.external_scenarios();
-            let n_stages_sim = stages.len();
-            let n_hydros_sim = hydro_ids.len();
+            let n_stages = stages.len();
+            let n_hydros = hydro_ids.len();
             let row_entity_ids: std::collections::HashSet<EntityId> =
                 external_rows.iter().map(|r| r.hydro_id).collect();
-            let mut rows_per_stage = vec![0usize; n_stages_sim];
+            let mut rows_per_stage = vec![0usize; n_stages];
             #[allow(clippy::cast_sign_loss)]
             for row in external_rows {
                 let s = row.stage_id as usize;
-                if s < n_stages_sim {
+                if s < n_stages {
                     rows_per_stage[s] += 1;
                 }
             }
-            let n_scenarios_ext = if n_hydros_sim > 0 && !rows_per_stage.is_empty() {
-                if rows_per_stage[0] % n_hydros_sim != 0 {
+            let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
+                if rows_per_stage[0] % n_hydros != 0 {
                     return Err(SddpError::Stochastic(
                         cobre_stochastic::StochasticError::InsufficientData {
                             context: format!(
                                 "external inflow rows at stage 0 ({}) is not divisible by \
-                                     hydro count ({n_hydros_sim}); each stage must have exactly \
+                                     hydro count ({n_hydros}); each stage must have exactly \
                                      n_scenarios * n_entities rows",
                                 rows_per_stage[0],
                             ),
                         },
                     ));
                 }
-                rows_per_stage[0] / n_hydros_sim
+                rows_per_stage[0] / n_hydros
             } else {
                 0
             };
             let mut library =
-                ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_hydros_sim, "inflow");
+                ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_hydros, "inflow");
             validate_external_library(
                 &library,
                 &hydro_ids,
                 &row_entity_ids,
                 &rows_per_stage,
-                n_stages_sim,
+                n_stages,
                 forward_passes,
             )
             .map_err(SddpError::Stochastic)?;
@@ -2108,6 +2098,65 @@ pub fn prepare_stochastic(
         .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
         .collect();
 
+    // Build a HistoricalScenarioLibrary for the opening tree when any study
+    // stage uses NoiseMethod::HistoricalResiduals. This must be done before
+    // build_stochastic_context because generate_opening_tree consumes the
+    // library reference. The forward-pass Historical library (built in
+    // StudySetup::new) is separate and remains unchanged.
+    let opening_tree_library = {
+        use cobre_core::temporal::NoiseMethod;
+
+        let needs_historical_tree = system.stages().iter().any(|s| {
+            s.id >= 0 && s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals
+        });
+
+        if needs_historical_tree {
+            let study_stages: Vec<_> = system
+                .stages()
+                .iter()
+                .filter(|s| s.id >= 0)
+                .cloned()
+                .collect();
+            let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+            // Build PAR cache directly — before the stochastic context exists.
+            let par = cobre_stochastic::PrecomputedPar::build(
+                system.inflow_models(),
+                &study_stages,
+                &hydro_ids,
+            )?;
+            let max_order = par.max_order();
+            let user_pool = training_source.historical_years.as_ref();
+            let window_years = cobre_stochastic::discover_historical_windows(
+                system.inflow_history(),
+                &hydro_ids,
+                &study_stages,
+                max_order,
+                user_pool,
+                system.policy_graph().season_map.as_ref(),
+                1, // forward_passes not relevant for opening tree windows
+            )?;
+            let mut lib = cobre_stochastic::HistoricalScenarioLibrary::new(
+                window_years.len(),
+                study_stages.len(),
+                hydro_ids.len(),
+                max_order,
+                window_years.clone(),
+            );
+            cobre_stochastic::standardize_historical_windows(
+                &mut lib,
+                system.inflow_history(),
+                &hydro_ids,
+                &study_stages,
+                &par,
+                &window_years,
+                system.policy_graph().season_map.as_ref(),
+            );
+            Some(lib)
+        } else {
+            None
+        }
+    };
+
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
     let stochastic = cobre_stochastic::build_stochastic_context(
         &system,
@@ -2115,7 +2164,10 @@ pub fn prepare_stochastic(
         forward_seed,
         &entity_factor_entries,
         &ncs_entity_factor_entries,
-        user_opening_tree,
+        OpeningTreeInputs {
+            user_tree: user_opening_tree,
+            historical_library: opening_tree_library.as_ref(),
+        },
         cobre_stochastic::ClassSchemes {
             inflow: Some(training_source.inflow_scheme),
             load: Some(training_source.load_scheme),
@@ -2166,7 +2218,7 @@ mod tests {
         SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig,
         TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
-    use cobre_stochastic::{ClassSchemes, build_stochastic_context};
+    use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     /// Build a minimal system with 1 bus, 1 thermal, 1 hydro, and `n_stages`
     /// study stages (each with 1 block). All bounds and penalties are set to
@@ -2484,7 +2536,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2516,7 +2568,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2552,7 +2604,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2609,7 +2661,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2645,7 +2697,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2680,7 +2732,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2714,7 +2766,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2770,7 +2822,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2821,7 +2873,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2871,7 +2923,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2922,7 +2974,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2958,7 +3010,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -2998,7 +3050,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3062,7 +3114,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3445,6 +3497,269 @@ mod tests {
         );
     }
 
+    /// Given a system with `NoiseMethod::HistoricalResiduals` on all stages and
+    /// sufficient inflow history, when `prepare_stochastic` is called, then it
+    /// returns `Ok` and the resulting stochastic context has
+    /// `opening_tree().n_stages()` equal to the number of study stages.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    fn test_prepare_stochastic_historical_residuals_noise_method() {
+        use super::prepare_stochastic;
+        use chrono::NaiveDate;
+        use cobre_core::{
+            scenario::{InflowHistoryRow, ScenarioSource},
+            system::SystemBuilder,
+        };
+        use tempfile::TempDir;
+
+        // Build a system with HistoricalResiduals noise method on all stages.
+        // Reuses the same structure as system_with_historical_inflow but sets
+        // noise_method to HistoricalResiduals instead of the default Saa.
+        let n_stages = 2usize;
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let thermal = Thermal {
+            id: EntityId(2),
+            name: "T1".to_string(),
+            bus_id: EntityId(1),
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            cost_segments: vec![ThermalCostSegment {
+                capacity_mw: 100.0,
+                cost_per_mwh: 50.0,
+            }],
+            gnl_config: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+        };
+        let hydro = Hydro {
+            id: EntityId(3),
+            name: "H1".to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        // Stages with HistoricalResiduals noise method; branching_factor=2 so
+        // each stage selects 2 historical windows as openings.
+        let stages: Vec<Stage> = (0..n_stages)
+            .map(|i| Stage {
+                index: i,
+                id: i as i32,
+                start_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2024, (i as u32 % 12) + 1, 28).unwrap(),
+                season_id: Some(i % 12),
+                blocks: vec![Block {
+                    index: 0,
+                    name: "S".to_string(),
+                    duration_hours: 720.0,
+                }],
+                block_mode: BlockMode::Parallel,
+                state_config: StageStateConfig {
+                    storage: true,
+                    inflow_lags: false,
+                },
+                risk_config: StageRiskConfig::Expectation,
+                scenario_config: ScenarioSourceConfig {
+                    branching_factor: 2,
+                    noise_method: NoiseMethod::HistoricalResiduals,
+                },
+            })
+            .collect();
+
+        let inflow_models: Vec<InflowModel> = (0..n_stages)
+            .map(|i| InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: i as i32,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: vec![],
+                residual_std_ratio: 1.0,
+            })
+            .collect();
+
+        let load_models: Vec<LoadModel> = (0..n_stages)
+            .map(|i| LoadModel {
+                bus_id: EntityId(1),
+                stage_id: i as i32,
+                mean_mw: 100.0,
+                std_mw: 0.0,
+            })
+            .collect();
+
+        // Historical inflow data: 1990 and 1991 cover 12 months each — 2 valid windows.
+        let inflow_history: Vec<InflowHistoryRow> = (1990_i32..=1991)
+            .flat_map(|year| {
+                (1u32..=12).map(move |month| InflowHistoryRow {
+                    hydro_id: EntityId(3),
+                    date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
+                    value_m3s: 80.0 + f64::from(year - 1990) * 5.0,
+                })
+            })
+            .collect();
+
+        let n_st = n_stages.max(1);
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 1,
+                n_thermals: 1,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: n_st,
+            },
+            &BoundsDefaults {
+                hydro: HydroStageBounds {
+                    min_storage_hm3: 0.0,
+                    max_storage_hm3: 200.0,
+                    min_turbined_m3s: 0.0,
+                    max_turbined_m3s: 100.0,
+                    min_outflow_m3s: 0.0,
+                    max_outflow_m3s: None,
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 250.0,
+                    max_diversion_m3s: None,
+                    filling_inflow_m3s: 0.0,
+                    water_withdrawal_m3s: 0.0,
+                },
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 100.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 1,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: n_st,
+            },
+            &PenaltiesDefaults {
+                hydro: HydroStagePenalties {
+                    spillage_cost: 0.01,
+                    diversion_cost: 0.0,
+                    fpha_turbined_cost: 0.0,
+                    storage_violation_below_cost: 500.0,
+                    filling_target_violation_cost: 0.0,
+                    turbined_violation_below_cost: 0.0,
+                    outflow_violation_below_cost: 0.0,
+                    outflow_violation_above_cost: 0.0,
+                    generation_violation_below_cost: 0.0,
+                    evaporation_violation_cost: 0.0,
+                    water_withdrawal_violation_cost: 0.0,
+                    water_withdrawal_violation_pos_cost: 0.0,
+                    water_withdrawal_violation_neg_cost: 0.0,
+                    evaporation_violation_pos_cost: 0.0,
+                    evaporation_violation_neg_cost: 0.0,
+                    inflow_nonnegativity_cost: 1000.0,
+                },
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .thermals(vec![thermal])
+            .hydros(vec![hydro])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .inflow_history(inflow_history)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("test system: valid");
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_minimal_case_dir(root);
+
+        let config = minimal_prepare_config();
+        let source = ScenarioSource {
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            seed: None,
+            historical_years: None,
+        };
+        let result = prepare_stochastic(system, root, &config, 42, &source)
+            .expect("prepare_stochastic must succeed with HistoricalResiduals noise method");
+
+        assert_eq!(
+            result.stochastic.opening_tree().n_stages(),
+            n_stages,
+            "opening_tree must have n_stages == {n_stages}"
+        );
+    }
+
     /// Given a system with no FPHA and no evaporation data, `default_from_system`
     /// returns a result where all hydros use constant productivity and no evaporation.
     #[test]
@@ -3507,7 +3822,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3892,7 +4207,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3971,7 +4286,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -4185,7 +4500,7 @@ mod tests {
                 (1u32..=12).map(move |month| InflowHistoryRow {
                     hydro_id: EntityId(3),
                     date: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
-                    value_m3s: 80.0 + (year - 1990) as f64 * 5.0,
+                    value_m3s: 80.0 + f64::from(year - 1990) * 5.0,
                 })
             })
             .collect();
@@ -4268,7 +4583,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::Historical),
                 load: Some(SamplingScheme::InSample),
@@ -4544,7 +4859,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::External),
                 load: Some(SamplingScheme::InSample),
@@ -4812,7 +5127,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::External),
@@ -5108,7 +5423,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -5370,7 +5685,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::Historical),
                 load: Some(SamplingScheme::InSample),
@@ -5420,7 +5735,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -5479,7 +5794,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

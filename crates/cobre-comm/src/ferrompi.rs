@@ -580,6 +580,10 @@ impl crate::Communicator for FerrompiBackend {
     fn size(&self) -> usize {
         self.size
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        self.world.abort(error_code)
+    }
 }
 
 #[cfg(test)]

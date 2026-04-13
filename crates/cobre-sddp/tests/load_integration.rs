@@ -45,7 +45,9 @@ use cobre_sddp::{
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
-use cobre_stochastic::{ClassSchemes, StochasticContext, build_stochastic_context};
+use cobre_stochastic::{
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+};
 
 // ===========================================================================
 // Shared helpers
@@ -92,6 +94,10 @@ impl Communicator for StubComm {
 
     fn size(&self) -> usize {
         1
+    }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
     }
 }
 
@@ -302,7 +308,7 @@ fn build_context_with_load(
         None,
         &[],
         &[],
-        None,
+        OpeningTreeInputs::default(),
         ClassSchemes {
             inflow: Some(SamplingScheme::InSample),
             load: Some(SamplingScheme::InSample),

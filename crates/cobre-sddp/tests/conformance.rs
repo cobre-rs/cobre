@@ -68,6 +68,10 @@ impl Communicator for LocalComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 /// Mock solver that returns configurable objective values in sequence.
@@ -230,6 +234,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
             n_load_buses: 0,
             n_ncs: 0,
         },
+        None,
     )
     .unwrap()
 }

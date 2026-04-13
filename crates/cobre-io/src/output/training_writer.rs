@@ -199,41 +199,37 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
 /// Build a `RecordBatch` for `training/timing/iterations.parquet`.
 ///
 /// Reads per-phase timing fields from each [`IterationRecord`] and writes them
-/// as `i64` millisecond columns.  Fields without a data source
-/// (`forward_sample_ms`, `backward_cut_ms`, `io_write_ms`) remain zero until
-/// finer-grained instrumentation is added.
+/// as `i64` millisecond columns.
 #[allow(clippy::cast_possible_wrap)]
 fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(iteration_timing_schema());
     let n = records.len();
 
     let mut iteration = Int32Builder::with_capacity(n);
-    let mut forward_solve_ms = Int64Builder::with_capacity(n);
-    let mut forward_sample_ms = Int64Builder::with_capacity(n);
-    let mut backward_solve_ms = Int64Builder::with_capacity(n);
-    let mut backward_cut_ms = Int64Builder::with_capacity(n);
+    let mut forward_wall_ms = Int64Builder::with_capacity(n);
+    let mut backward_wall_ms = Int64Builder::with_capacity(n);
     let mut cut_selection_ms = Int64Builder::with_capacity(n);
     let mut mpi_allreduce_ms = Int64Builder::with_capacity(n);
-    let mut mpi_broadcast_ms = Int64Builder::with_capacity(n);
-    let mut io_write_ms = Int64Builder::with_capacity(n);
+    let mut cut_sync_ms = Int64Builder::with_capacity(n);
+    let mut lower_bound_ms = Int64Builder::with_capacity(n);
     let mut state_exchange_ms = Int64Builder::with_capacity(n);
     let mut cut_batch_build_ms = Int64Builder::with_capacity(n);
-    let mut rayon_overhead_ms = Int64Builder::with_capacity(n);
+    let mut bwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
+    let mut fwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
     let mut overhead_ms = Int64Builder::with_capacity(n);
 
     for rec in records {
         iteration.append_value(rec.iteration as i32);
-        forward_solve_ms.append_value(rec.time_forward_solve_ms as i64);
-        forward_sample_ms.append_value(rec.time_forward_sample_ms as i64);
-        backward_solve_ms.append_value(rec.time_backward_solve_ms as i64);
-        backward_cut_ms.append_value(rec.time_backward_cut_ms as i64);
+        forward_wall_ms.append_value(rec.time_forward_wall_ms as i64);
+        backward_wall_ms.append_value(rec.time_backward_wall_ms as i64);
         cut_selection_ms.append_value(rec.time_cut_selection_ms as i64);
         mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
-        mpi_broadcast_ms.append_value(rec.time_mpi_broadcast_ms as i64);
-        io_write_ms.append_value(rec.time_io_write_ms as i64);
+        cut_sync_ms.append_value(rec.time_cut_sync_ms as i64);
+        lower_bound_ms.append_value(rec.time_lower_bound_ms as i64);
         state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
         cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
-        rayon_overhead_ms.append_value(rec.time_rayon_overhead_ms as i64);
+        bwd_rayon_overhead_ms.append_value(rec.time_bwd_rayon_overhead_ms as i64);
+        fwd_rayon_overhead_ms.append_value(rec.time_fwd_rayon_overhead_ms as i64);
         overhead_ms.append_value(rec.time_overhead_ms as i64);
     }
 
@@ -241,17 +237,16 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
         schema,
         vec![
             Arc::new(iteration.finish()),
-            Arc::new(forward_solve_ms.finish()),
-            Arc::new(forward_sample_ms.finish()),
-            Arc::new(backward_solve_ms.finish()),
-            Arc::new(backward_cut_ms.finish()),
+            Arc::new(forward_wall_ms.finish()),
+            Arc::new(backward_wall_ms.finish()),
             Arc::new(cut_selection_ms.finish()),
             Arc::new(mpi_allreduce_ms.finish()),
-            Arc::new(mpi_broadcast_ms.finish()),
-            Arc::new(io_write_ms.finish()),
+            Arc::new(cut_sync_ms.finish()),
+            Arc::new(lower_bound_ms.finish()),
             Arc::new(state_exchange_ms.finish()),
             Arc::new(cut_batch_build_ms.finish()),
-            Arc::new(rayon_overhead_ms.finish()),
+            Arc::new(bwd_rayon_overhead_ms.finish()),
+            Arc::new(fwd_rayon_overhead_ms.finish()),
             Arc::new(overhead_ms.finish()),
         ],
     )
@@ -380,17 +375,16 @@ mod tests {
             time_forward_ms: 100,
             time_backward_ms: 200,
             time_total_ms: 300,
-            time_forward_solve_ms: 100,
-            time_forward_sample_ms: 0,
-            time_backward_solve_ms: 200,
-            time_backward_cut_ms: 0,
+            time_forward_wall_ms: 100,
+            time_backward_wall_ms: 200,
             time_cut_selection_ms: 0,
             time_mpi_allreduce_ms: 0,
-            time_mpi_broadcast_ms: 0,
-            time_io_write_ms: 0,
+            time_cut_sync_ms: 0,
+            time_lower_bound_ms: 0,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_rayon_overhead_ms: 0,
+            time_bwd_rayon_overhead_ms: 0,
+            time_fwd_rayon_overhead_ms: 0,
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
@@ -473,8 +467,8 @@ mod tests {
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            13,
-            "iteration_timing schema has 13 columns"
+            12,
+            "iteration_timing schema has 12 columns"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -669,7 +663,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 13);
+        assert_eq!(batch.num_columns(), 12);
     }
 
     #[test]

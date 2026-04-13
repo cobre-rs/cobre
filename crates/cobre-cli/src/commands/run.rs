@@ -37,7 +37,8 @@ use cobre_sddp::{
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
+    provenance::ComponentProvenance,
 };
 
 use crate::error::CliError;
@@ -218,7 +219,16 @@ struct TrainingPhaseResult {
 /// The exit code indicates the category of failure.
 pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     let ctx = setup_communicator(args)?;
+    let result = execute_inner(&ctx, args);
+    if let Err(ref e) = result {
+        if ctx.comm.size() > 1 {
+            ctx.comm.abort(e.exit_code());
+        }
+    }
+    result
+}
 
+fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result<(), CliError> {
     let LoadBroadcastResult {
         system,
         mut setup,
@@ -227,12 +237,12 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         root_estimation_path,
         training_enabled,
         policy_mode,
-    } = broadcast_and_build_setup(&ctx, args)?;
+    } = broadcast_and_build_setup(ctx, args)?;
 
     // Pre-training outputs (estimation artifacts, scaling report) run
     // regardless of training_enabled — they are data preparation outputs.
     run_pre_training(
-        &ctx,
+        ctx,
         &system,
         &setup,
         root_config.as_ref(),
@@ -245,9 +255,9 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
     let mpi_world_size = u32::try_from(ctx.topology.world_size).unwrap_or(u32::MAX);
 
     if training_enabled {
-        apply_training_policy(&ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
+        apply_training_policy(ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
         let training_started_at = cobre_io::now_iso8601();
-        let training = run_training_phase(&ctx, &mut setup)?;
+        let training = run_training_phase(ctx, &mut setup)?;
         let training_completed_at = cobre_io::now_iso8601();
 
         // Write training outputs immediately (before simulation), so training
@@ -300,13 +310,13 @@ pub fn execute(args: &RunArgs) -> Result<(), CliError> {
         }
 
         if setup.n_scenarios() > 0 {
-            run_simulation_phase(&ctx, &system, &mut setup, &training.result, &hostname)?;
+            run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
         }
     } else if setup.n_scenarios() > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
-            load_policy_for_simulation(&ctx, &system, &mut setup, root_config.as_ref())?;
-        run_simulation_phase(&ctx, &system, &mut setup, &training_result, &hostname)?;
+            load_policy_for_simulation(ctx, &system, &mut setup, root_config.as_ref())?;
+        run_simulation_phase(ctx, &system, &mut setup, &training_result, &hostname)?;
     } else {
         // Both training and simulation disabled — nothing to do.
         if ctx.is_root && !ctx.quiet {
@@ -663,13 +673,78 @@ fn broadcast_and_build_setup(
                 .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
                 .collect();
 
+        // Build HistoricalScenarioLibrary on non-root ranks when any stage
+        // uses HistoricalResiduals (mirrors prepare_stochastic on rank 0).
+        let opening_tree_library = {
+            use cobre_core::temporal::NoiseMethod;
+
+            let needs_historical_tree = system.stages().iter().any(|s| {
+                s.id >= 0 && s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals
+            });
+
+            if needs_historical_tree {
+                let study_stages: Vec<_> = system
+                    .stages()
+                    .iter()
+                    .filter(|s| s.id >= 0)
+                    .cloned()
+                    .collect();
+                let hydro_ids: Vec<cobre_core::EntityId> =
+                    system.hydros().iter().map(|h| h.id).collect();
+                let par = cobre_stochastic::PrecomputedPar::build(
+                    system.inflow_models(),
+                    &study_stages,
+                    &hydro_ids,
+                )
+                .map_err(|e| CliError::Internal {
+                    message: format!("PAR build error on non-root rank: {e}"),
+                })?;
+                let max_order = par.max_order();
+                let user_pool = training_src.historical_years.as_ref();
+                let window_years = cobre_stochastic::discover_historical_windows(
+                    system.inflow_history(),
+                    &hydro_ids,
+                    &study_stages,
+                    max_order,
+                    user_pool,
+                    system.policy_graph().season_map.as_ref(),
+                    1,
+                )
+                .map_err(|e| CliError::Internal {
+                    message: format!("historical window discovery error on non-root rank: {e}"),
+                })?;
+                let mut lib = cobre_stochastic::HistoricalScenarioLibrary::new(
+                    window_years.len(),
+                    study_stages.len(),
+                    hydro_ids.len(),
+                    max_order,
+                    window_years.clone(),
+                );
+                cobre_stochastic::standardize_historical_windows(
+                    &mut lib,
+                    system.inflow_history(),
+                    &hydro_ids,
+                    &study_stages,
+                    &par,
+                    &window_years,
+                    system.policy_graph().season_map.as_ref(),
+                );
+                Some(lib)
+            } else {
+                None
+            }
+        };
+
         build_stochastic_context(
             &system,
             seed,
             forward_seed,
             &load_entity_factors,
             &ncs_entity_factors,
-            user_tree,
+            OpeningTreeInputs {
+                user_tree,
+                historical_library: opening_tree_library.as_ref(),
+            },
             cobre_stochastic::ClassSchemes {
                 inflow: Some(training_src.inflow_scheme),
                 load: Some(training_src.load_scheme),

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.3] - 2026-04-13
+
+### Added
+
+- **HistoricalResiduals noise method** — new `NoiseMethod::HistoricalResiduals`
+  variant that copies pre-computed eta vectors from `HistoricalScenarioLibrary`
+  into the backward-pass opening tree, preserving empirical cross-entity
+  correlation from actual inflow observations. Uses hash-based deterministic
+  window selection and skips Cholesky decorrelation.
+- **Season ID consistency validation** (rules 27–30) — four new semantic
+  validation sub-rules: season range coverage, observation coverage per season,
+  resolution consistency across seasons, and contiguity of defined seasons.
+- **Observation alignment validation** (rule 31) — validates observation-to-season
+  alignment with a three-tier season mapping fallback chain. Replaces hardcoded
+  `month0()` in historical window discovery and standardization with
+  `SeasonMap`-aware logic.
+- **SLURM MPI test infrastructure** — replaced `mpi_smoke.sh` with
+  `mpi_slurm.sh` for Dockerized SLURM cluster testing.
+
+### Changed
+
+- **Timing instrumentation columns** — renamed for accuracy:
+  `forward_solve_ms` → `forward_wall_ms`, `backward_solve_ms` →
+  `backward_wall_ms`, `mpi_broadcast_ms` → `cut_sync_ms`,
+  `rayon_overhead_ms` → `bwd_rayon_overhead_ms`. Added `lower_bound_ms`
+  and `fwd_rayon_overhead_ms`. Removed stub columns `forward_sample_ms`,
+  `backward_cut_ms`, `io_write_ms`.
+
+### Fixed
+
+- **LP determinism across MPI configurations** — reload LP model per
+  scenario/trial-point to prevent HiGHS internal state carry-over (basis, RNG
+  position) from making results depend on rank/thread count. Verified
+  bit-identical lower bounds across 1r/1t, 1r/2t, 2r/1t, and 1r/4t.
+- **Forward pass sampler count** — pass global `total_forward_passes` to the
+  sampler instead of the per-rank local count, fixing LHS/QMC determinism
+  across MPI configurations.
+- **Timing overhead double-counting** — fix `overhead_ms` always being zero
+  due to `cut_sync_ms` included in both `backward_ms` and the attributed sum.
+- **Historical window year normalization** — `build_observation_sequence` now
+  normalizes year offsets so the first study stage gets `year_offset=0`,
+  fixing incorrect window matching for studies not starting in January.
+- **MPI handling** — fix MPI communication edge cases.
+
 ## [0.4.2] - 2026-04-10
 
 ### Added

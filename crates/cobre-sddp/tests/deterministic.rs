@@ -80,6 +80,10 @@ impl Communicator for StubComm {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code)
+    }
 }
 
 /// Execute the full training pipeline for a case directory and return both the

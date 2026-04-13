@@ -87,27 +87,15 @@ pub struct IterationRecord {
     /// Total wall-clock time for this iteration (ms).
     pub time_total_ms: u64,
 
-    /// Wall-clock time for the forward solve phase (ms).
+    /// Forward pass wall-clock time (ms).
     ///
-    /// Maps to `forward_solve_ms` in `training/timing/iterations.parquet`.
-    pub time_forward_solve_ms: u64,
+    /// Maps to `forward_wall_ms` in `training/timing/iterations.parquet`.
+    pub time_forward_wall_ms: u64,
 
-    /// Wall-clock time for forward scenario sampling (ms).
+    /// Backward pass wall-clock time (ms).
     ///
-    /// Currently 0 — not measured separately from the forward solve.
-    /// Maps to `forward_sample_ms` in `training/timing/iterations.parquet`.
-    pub time_forward_sample_ms: u64,
-
-    /// Wall-clock time for the backward solve phase (ms).
-    ///
-    /// Maps to `backward_solve_ms` in `training/timing/iterations.parquet`.
-    pub time_backward_solve_ms: u64,
-
-    /// Wall-clock time for cut generation within the backward pass (ms).
-    ///
-    /// Currently 0 — not separated from backward solve time.
-    /// Maps to `backward_cut_ms` in `training/timing/iterations.parquet`.
-    pub time_backward_cut_ms: u64,
+    /// Maps to `backward_wall_ms` in `training/timing/iterations.parquet`.
+    pub time_backward_wall_ms: u64,
 
     /// Wall-clock time for the cut selection phase (ms).
     ///
@@ -119,35 +107,47 @@ pub struct IterationRecord {
     /// Maps to `mpi_allreduce_ms` in `training/timing/iterations.parquet`.
     pub time_mpi_allreduce_ms: u64,
 
-    /// Wall-clock time for MPI broadcast (cut synchronization) (ms).
+    /// Wall-clock time for per-stage cut sync allgatherv (ms).
     ///
-    /// Maps to `mpi_broadcast_ms` in `training/timing/iterations.parquet`.
-    pub time_mpi_broadcast_ms: u64,
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `cut_sync_ms` in `training/timing/iterations.parquet`.
+    pub time_cut_sync_ms: u64,
 
-    /// Wall-clock time for I/O writes in this iteration (ms).
+    /// Wall-clock time for lower bound evaluation (ms).
     ///
-    /// Currently 0 — I/O timing is not tracked at the iteration level.
-    /// Maps to `io_write_ms` in `training/timing/iterations.parquet`.
-    pub time_io_write_ms: u64,
+    /// Maps to `lower_bound_ms` in `training/timing/iterations.parquet`.
+    pub time_lower_bound_ms: u64,
 
     /// Wall-clock time for state exchange (`allgatherv`) in the backward pass (ms).
     ///
+    /// Sub-component of the backward pass wall-clock.
     /// Maps to `state_exchange_ms` in `training/timing/iterations.parquet`.
     pub time_state_exchange_ms: u64,
 
     /// Wall-clock time for cut batch assembly in the backward pass (ms).
     ///
+    /// Sub-component of the backward pass wall-clock.
     /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
     pub time_cut_batch_build_ms: u64,
 
-    /// Estimated rayon barrier + scheduling overhead in the backward pass (ms).
+    /// Estimated rayon overhead in the backward pass (ms).
     ///
-    /// Maps to `rayon_overhead_ms` in `training/timing/iterations.parquet`.
-    pub time_rayon_overhead_ms: u64,
+    /// Computed as `parallel_wall - (solve_cpu / n_workers)`. Captures load
+    /// imbalance, non-solve parallel work, and scheduling overhead.
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `bwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_rayon_overhead_ms: u64,
+
+    /// Estimated rayon overhead in the forward pass (ms).
+    ///
+    /// Same formula as backward. Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_rayon_overhead_ms: u64,
 
     /// Residual wall-clock time not attributed to any specific phase (ms).
     ///
-    /// Computed as `time_total_ms - sum(all other time_* fields)`.
+    /// Computed as `time_total_ms - (forward + backward + cut_selection +
+    /// mpi_allreduce + lower_bound)`.
     /// Maps to `overhead_ms` in `training/timing/iterations.parquet`.
     pub time_overhead_ms: u64,
 
@@ -422,17 +422,16 @@ mod tests {
                 time_total_ms: 300,
                 forward_passes: 4,
                 lp_solves: 40,
-                time_forward_solve_ms: 100,
-                time_forward_sample_ms: 0,
-                time_backward_solve_ms: 200,
-                time_backward_cut_ms: 0,
+                time_forward_wall_ms: 100,
+                time_backward_wall_ms: 200,
                 time_cut_selection_ms: 0,
                 time_mpi_allreduce_ms: 0,
-                time_mpi_broadcast_ms: 0,
-                time_io_write_ms: 0,
+                time_cut_sync_ms: 0,
+                time_lower_bound_ms: 0,
                 time_state_exchange_ms: 0,
                 time_cut_batch_build_ms: 0,
-                time_rayon_overhead_ms: 0,
+                time_bwd_rayon_overhead_ms: 0,
+                time_fwd_rayon_overhead_ms: 0,
                 time_overhead_ms: 0,
                 solve_time_ms: 0.0,
             })
@@ -483,18 +482,18 @@ mod tests {
             time_total_ms: 400,
             forward_passes: 8,
             lp_solves: 80,
-            time_forward_solve_ms: 150,
-            time_forward_sample_ms: 0,
-            time_backward_solve_ms: 250,
-            time_backward_cut_ms: 0,
+            time_forward_wall_ms: 150,
+            time_backward_wall_ms: 250,
             time_cut_selection_ms: 5,
             time_mpi_allreduce_ms: 3,
-            time_mpi_broadcast_ms: 2,
-            time_io_write_ms: 0,
+            time_cut_sync_ms: 2,
+            time_lower_bound_ms: 4,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_rayon_overhead_ms: 0,
-            time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 2),
+            time_bwd_rayon_overhead_ms: 0,
+            time_fwd_rayon_overhead_ms: 0,
+            // overhead = 400 - (150 + 250 + 5 + 3 + 4) = 0 (saturating)
+            time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 4),
             solve_time_ms: 0.0,
         };
 
@@ -511,14 +510,12 @@ mod tests {
         assert_eq!(record.time_total_ms, 400);
         assert_eq!(record.forward_passes, 8);
         assert_eq!(record.lp_solves, 80);
-        assert_eq!(record.time_forward_solve_ms, 150);
-        assert_eq!(record.time_forward_sample_ms, 0);
-        assert_eq!(record.time_backward_solve_ms, 250);
-        assert_eq!(record.time_backward_cut_ms, 0);
+        assert_eq!(record.time_forward_wall_ms, 150);
+        assert_eq!(record.time_backward_wall_ms, 250);
         assert_eq!(record.time_cut_selection_ms, 5);
         assert_eq!(record.time_mpi_allreduce_ms, 3);
-        assert_eq!(record.time_mpi_broadcast_ms, 2);
-        assert_eq!(record.time_io_write_ms, 0);
+        assert_eq!(record.time_cut_sync_ms, 2);
+        assert_eq!(record.time_lower_bound_ms, 4);
     }
 
     #[test]

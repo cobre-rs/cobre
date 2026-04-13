@@ -50,3 +50,4 @@ __pycache__/
 .venv.claude/
 .claude/
 doc/
+tests/slurm/staging/

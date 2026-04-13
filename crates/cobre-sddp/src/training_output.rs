@@ -43,7 +43,7 @@ struct PartialRecord {
     /// Note: the forward-pass scenario exchange uses `allgatherv`, not
     /// `allreduce`. This field tracks only the scalar bound reduction.
     forward_sync_ms: u64,
-    /// MPI broadcast time from [`TrainingEvent::CutSyncComplete`] (ms).
+    /// Cut sync allgatherv time from [`TrainingEvent::CutSyncComplete`] (ms).
     cut_sync_ms: u64,
     /// Local cut selection time from [`TrainingEvent::CutSelectionComplete`] (ms).
     cut_selection_ms: u64,
@@ -57,6 +57,10 @@ struct PartialRecord {
     cut_batch_build_ms: u64,
     /// Rayon overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
     rayon_overhead_ms: u64,
+    /// Lower bound evaluation wall-clock from [`TrainingEvent::IterationSummary`] (ms).
+    lower_bound_eval_ms: u64,
+    /// Forward pass rayon overhead from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_rayon_overhead_ms: u64,
 }
 
 /// Accumulate per-iteration partial records from the event log.
@@ -82,6 +86,8 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 backward_ms,
                 lp_solves,
                 solve_time_ms,
+                lower_bound_eval_ms,
+                fwd_rayon_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
@@ -93,6 +99,8 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.backward_ms = *backward_ms;
                 record.lp_solves = *lp_solves;
                 record.solve_time_ms = *solve_time_ms;
+                record.lower_bound_eval_ms = *lower_bound_eval_ms;
+                record.fwd_rayon_overhead_ms = *fwd_rayon_overhead_ms;
             }
 
             TrainingEvent::ForwardSyncComplete {
@@ -181,16 +189,16 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
     #[allow(clippy::cast_possible_truncation)]
     let lp_solves_u32 = partial.lp_solves as u32;
 
-    // Compute overhead as total minus the sum of all attributed phases.
-    // Saturating subtraction guards against floating-point or measurement
-    // inconsistencies that could cause the sum to exceed total.
+    // Compute overhead as total minus the sum of all TOP-LEVEL non-overlapping
+    // phases. Note: cut_sync_ms is a sub-component of backward_ms and must NOT
+    // be included here (that was a double-counting bug in the previous version).
     let attributed_ms = partial
         .forward_ms
         .saturating_add(partial.backward_ms)
         .saturating_add(partial.cut_selection_ms)
         .saturating_add(partial.cut_selection_allgatherv_ms)
         .saturating_add(partial.forward_sync_ms)
-        .saturating_add(partial.cut_sync_ms);
+        .saturating_add(partial.lower_bound_eval_ms);
     let overhead_ms = partial.iteration_time_ms.saturating_sub(attributed_ms);
 
     IterationRecord {
@@ -207,17 +215,16 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
         time_total_ms: partial.iteration_time_ms,
         forward_passes: partial.forward_passes,
         lp_solves: lp_solves_u32,
-        time_forward_solve_ms: partial.forward_ms,
-        time_forward_sample_ms: 0,
-        time_backward_solve_ms: partial.backward_ms,
-        time_backward_cut_ms: 0,
+        time_forward_wall_ms: partial.forward_ms,
+        time_backward_wall_ms: partial.backward_ms,
         time_cut_selection_ms: partial.cut_selection_ms,
         time_mpi_allreduce_ms: partial.forward_sync_ms,
-        time_mpi_broadcast_ms: partial.cut_sync_ms,
-        time_io_write_ms: 0,
+        time_cut_sync_ms: partial.cut_sync_ms,
+        time_lower_bound_ms: partial.lower_bound_eval_ms,
         time_state_exchange_ms: partial.state_exchange_ms,
         time_cut_batch_build_ms: partial.cut_batch_build_ms,
-        time_rayon_overhead_ms: partial.rayon_overhead_ms,
+        time_bwd_rayon_overhead_ms: partial.rayon_overhead_ms,
+        time_fwd_rayon_overhead_ms: partial.fwd_rayon_overhead_ms,
         time_overhead_ms: overhead_ms,
         solve_time_ms: partial.solve_time_ms,
     }
@@ -260,6 +267,8 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     backward_ms: 250,
 ///     lp_solves: 60,
 ///     solve_time_ms: 0.0,
+///     lower_bound_eval_ms: 0,
+///     fwd_rayon_overhead_ms: 0,
 /// }];
 ///
 /// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
@@ -387,6 +396,8 @@ mod tests {
             backward_ms: 50,
             lp_solves: 60,
             solve_time_ms: 0.0,
+            lower_bound_eval_ms: 0,
+            fwd_rayon_overhead_ms: 0,
         }
     }
 
@@ -666,10 +677,6 @@ mod tests {
     #[test]
     fn per_phase_timing_captured_from_sync_and_selection_events() {
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 1);
-        // IterationSummary: forward=40ms, backward=50ms, total=120ms
-        // ForwardSyncComplete: sync_time_ms=7
-        // CutSyncComplete: sync_time_ms=5
-        // CutSelectionComplete: selection_time_ms=8, allgatherv_time_ms=2
         let events = vec![
             TrainingEvent::IterationSummary {
                 iteration: 1,
@@ -682,6 +689,8 @@ mod tests {
                 backward_ms: 50,
                 lp_solves: 60,
                 solve_time_ms: 0.0,
+                lower_bound_eval_ms: 0,
+                fwd_rayon_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -711,41 +720,38 @@ mod tests {
         let rec = &output.convergence_records[0];
 
         assert_eq!(
-            rec.time_forward_solve_ms, 40,
-            "forward solve must equal forward_ms"
+            rec.time_forward_wall_ms, 40,
+            "forward wall must equal forward_ms"
         );
         assert_eq!(
-            rec.time_backward_solve_ms, 50,
-            "backward solve must equal backward_ms"
+            rec.time_backward_wall_ms, 50,
+            "backward wall must equal backward_ms"
         );
         assert_eq!(
             rec.time_mpi_allreduce_ms, 7,
             "allreduce must come from ForwardSyncComplete"
         );
         assert_eq!(
-            rec.time_mpi_broadcast_ms, 5,
-            "broadcast must come from CutSyncComplete"
+            rec.time_cut_sync_ms, 5,
+            "cut_sync must come from CutSyncComplete"
         );
         assert_eq!(
             rec.time_cut_selection_ms, 8,
             "selection must come from CutSelectionComplete"
         );
-        assert_eq!(
-            rec.time_forward_sample_ms, 0,
-            "sample must be 0 (not measured)"
-        );
-        assert_eq!(
-            rec.time_backward_cut_ms, 0,
-            "backward_cut must be 0 (not measured)"
-        );
-        assert_eq!(rec.time_io_write_ms, 0, "io_write must be 0 (not measured)");
     }
 
     #[test]
     fn overhead_ms_is_total_minus_attributed_phases() {
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 1);
-        // forward=40, backward=50, allreduce=7, broadcast=5, selection=8 → attributed=110
+        // Top-level non-overlapping phases:
+        //   forward=40, backward=50, allreduce=7, selection=8,
+        //   allgatherv=2, lower_bound=3 → attributed=110
         // total=120 → overhead=10
+        //
+        // Note: cut_sync(5) is a sub-component of backward(50) and is NOT
+        // included in the attributed sum. This was a double-counting bug
+        // in the previous version.
         let events = vec![
             TrainingEvent::IterationSummary {
                 iteration: 1,
@@ -758,6 +764,8 @@ mod tests {
                 backward_ms: 50,
                 lp_solves: 60,
                 solve_time_ms: 0.0,
+                lower_bound_eval_ms: 3,
+                fwd_rayon_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -787,15 +795,11 @@ mod tests {
         let rec = &output.convergence_records[0];
 
         // attributed = forward(40) + backward(50) + selection(8) + allgatherv(2)
-        //            + allreduce(7) + broadcast(5) = 112
-        // overhead = total(120) - attributed(112) = 8
-        //
-        // Note: cut_selection_allgatherv_ms(2) is included in the implementation's
-        // attributed sum even though it is not surfaced as a separate IterationRecord
-        // field. The expected value here accounts for this.
+        //            + allreduce(7) + lower_bound(3) = 110
+        // overhead = total(120) - attributed(110) = 10
         assert_eq!(
-            rec.time_overhead_ms, 8,
-            "overhead_ms must equal total(120) - attributed(112) = 8"
+            rec.time_overhead_ms, 10,
+            "overhead_ms must equal total(120) - attributed(110) = 10"
         );
     }
 
@@ -815,6 +819,8 @@ mod tests {
             backward_ms: 50,
             lp_solves: 5,
             solve_time_ms: 0.0,
+            lower_bound_eval_ms: 0,
+            fwd_rayon_overhead_ms: 0,
         }];
         let fcf = make_empty_fcf();
 

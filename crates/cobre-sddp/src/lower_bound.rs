@@ -487,6 +487,7 @@ mod tests {
                 n_load_buses: 0,
                 n_ncs: 0,
             },
+            None,
         )
         .unwrap()
     }
@@ -532,6 +533,10 @@ mod tests {
         fn size(&self) -> usize {
             1
         }
+
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
+        }
     }
 
     /// Communicator that fails on `broadcast` with `CommError::CollectiveFailed`.
@@ -575,6 +580,10 @@ mod tests {
 
         fn size(&self) -> usize {
             1
+        }
+
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
         }
     }
 

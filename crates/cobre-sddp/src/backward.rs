@@ -582,6 +582,9 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 if m >= local_work {
                     break;
                 }
+                // DETERMINISM INVESTIGATION: reload model per trial point to
+                // eliminate HiGHS state carry-over between trial points.
+                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
                 accum.slot_increments.fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
@@ -931,6 +934,10 @@ mod tests {
         fn size(&self) -> usize {
             1
         }
+
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
+        }
     }
 
     /// Mock solver for testing: returns fixed solution or infeasible error on demand.
@@ -1183,7 +1190,9 @@ mod tests {
                 StageStateConfig,
             },
         };
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
         use std::collections::BTreeMap;
 
         let bus = Bus {
@@ -1314,7 +1323,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),
@@ -3040,7 +3049,9 @@ mod tests {
             StageStateConfig,
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
-        use cobre_stochastic::context::{ClassSchemes, build_stochastic_context};
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
 
         let bus0 = Bus {
             id: EntityId(0),
@@ -3175,7 +3186,7 @@ mod tests {
             None,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

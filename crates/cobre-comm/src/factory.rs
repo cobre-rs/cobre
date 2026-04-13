@@ -177,6 +177,14 @@ impl crate::Communicator for CommBackend {
             Self::Local(backend) => backend.size(),
         }
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        match self {
+            #[cfg(feature = "mpi")]
+            Self::Mpi(backend) => backend.abort(error_code),
+            Self::Local(backend) => backend.abort(error_code),
+        }
+    }
 }
 
 #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]

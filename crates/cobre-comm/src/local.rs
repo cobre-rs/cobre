@@ -153,6 +153,10 @@ impl Communicator for LocalBackend {
     fn size(&self) -> usize {
         1
     }
+
+    fn abort(&self, error_code: i32) -> ! {
+        std::process::exit(error_code);
+    }
 }
 
 /// Shared memory region backed by a heap-allocated [`Vec<T>`].

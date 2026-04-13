@@ -603,6 +603,7 @@ pub(crate) fn build_observation_sequence(
             result.push((i as i32, season));
         }
     } else {
+        // Build raw year offsets by detecting season wraps (Dec→Jan).
         let mut year_offset: i32 = 0;
         let mut prev_season = full_seasons[0];
         for (i, &season) in full_seasons.iter().enumerate() {
@@ -611,6 +612,15 @@ pub(crate) fn build_observation_sequence(
             }
             result.push((year_offset, season));
             prev_season = season;
+        }
+        // Normalize: the first STUDY stage (at index max_order) must have
+        // year_offset=0 so that `window_year` corresponds to the year of
+        // the first study observation. Lag entries get negative offsets.
+        let study_base = result[max_order].0;
+        if study_base != 0 {
+            for entry in &mut result {
+                entry.0 -= study_base;
+            }
         }
     }
 
@@ -648,7 +658,7 @@ mod tests {
     use super::{ClassSampler, ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
     use crate::{
         StochasticError,
-        context::{ClassSchemes, build_stochastic_context},
+        context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context},
         tree::generate::ClassDimensions,
         tree::opening_tree::OpeningTree,
     };
@@ -797,7 +807,7 @@ mod tests {
             forward_seed,
             &[],
             &[],
-            None,
+            OpeningTreeInputs::default(),
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
                 load: Some(SamplingScheme::InSample),

@@ -269,6 +269,7 @@ fn build_resolved_bounds(n_hydros: usize, n_stages: usize) -> ResolvedBounds {
             thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
             line: LineStageBounds {
                 direct_mw: 0.0,

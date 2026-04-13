@@ -15,19 +15,19 @@ conditions, generic constraints, and pre-resolved penalty/bound tables.
 
 ## Module overview
 
-| Module               | Purpose                                                      |
-| -------------------- | ------------------------------------------------------------ |
-| `entities`           | Entity types: Bus, Line, Hydro, Thermal, and stub types      |
-| `entity_id`          | `EntityId` newtype wrapper                                   |
-| `error`              | `ValidationError` enum                                       |
-| `generic_constraint` | User-defined linear constraints over LP variables            |
-| `initial_conditions` | Reservoir storage levels at study start                      |
-| `penalty`            | Global defaults, entity overrides, and resolution functions  |
-| `resolved`           | Pre-resolved penalty/bound tables with O(1) lookup           |
+| Module               | Purpose                                                                                                                                                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entities`           | Entity types: Bus, Line, Hydro, Thermal, and stub types                                                                                                                                                                                                                                                                                    |
+| `entity_id`          | `EntityId` newtype wrapper                                                                                                                                                                                                                                                                                                                 |
+| `error`              | `ValidationError` enum                                                                                                                                                                                                                                                                                                                     |
+| `generic_constraint` | User-defined linear constraints over LP variables                                                                                                                                                                                                                                                                                          |
+| `initial_conditions` | Reservoir storage levels at study start                                                                                                                                                                                                                                                                                                    |
+| `penalty`            | Global defaults, entity overrides, and resolution functions                                                                                                                                                                                                                                                                                |
+| `resolved`           | Pre-resolved penalty/bound tables with O(1) lookup                                                                                                                                                                                                                                                                                         |
 | `scenario`           | PAR model parameters, load and NCS statistics, correlation model, sampling scheme enum (`SamplingScheme` with InSample, OutOfSample, Historical, External variants), per-class scenario source config (`ScenarioSource`), historical years pool (`HistoricalYears`), and external scenario row types (`ExternalLoadRow`, `ExternalNcsRow`) |
-| `system`             | `System` container and `SystemBuilder`                       |
-| `temporal`           | Stages, blocks, seasons, and the policy graph                |
-| `topology`           | `CascadeTopology` and `NetworkTopology` derived structures   |
+| `system`             | `System` container and `SystemBuilder`                                                                                                                                                                                                                                                                                                     |
+| `temporal`           | Stages, blocks, seasons, and the policy graph                                                                                                                                                                                                                                                                                              |
+| `topology`           | `CascadeTopology` and `NetworkTopology` derived structures                                                                                                                                                                                                                                                                                 |
 
 ## Design principles
 
@@ -97,21 +97,20 @@ not a violation penalty.
 
 #### Thermal
 
-A thermal power plant with a piecewise-linear generation cost curve.
+A thermal power plant with a scalar marginal cost.
 
-| Field               | Type                      | Description                                       |
-| ------------------- | ------------------------- | ------------------------------------------------- |
-| `id`                | `EntityId`                | Unique thermal plant identifier                   |
-| `name`              | `String`                  | Human-readable name                               |
-| `bus_id`            | `EntityId`                | Bus receiving this plant's generation             |
-| `entry_stage_id`    | `Option<i32>`             | Stage when plant enters service; `None` = always  |
-| `exit_stage_id`     | `Option<i32>`             | Stage when plant is retired; `None` = never       |
-| `cost_segments`     | `Vec<ThermalCostSegment>` | Piecewise-linear cost curve, ascending cost order |
-| `min_generation_mw` | `f64`                     | Minimum stable load                               |
-| `max_generation_mw` | `f64`                     | Installed capacity                                |
-| `gnl_config`        | `Option<GnlConfig>`       | GNL dispatch anticipation; `None` = no lag        |
+| Field               | Type                | Description                                      |
+| ------------------- | ------------------- | ------------------------------------------------ |
+| `id`                | `EntityId`          | Unique thermal plant identifier                  |
+| `name`              | `String`            | Human-readable name                              |
+| `bus_id`            | `EntityId`          | Bus receiving this plant's generation            |
+| `entry_stage_id`    | `Option<i32>`       | Stage when plant enters service; `None` = always |
+| `exit_stage_id`     | `Option<i32>`       | Stage when plant is retired; `None` = never      |
+| `cost_per_mwh`      | `f64`               | Marginal cost of generation [$/MWh]              |
+| `min_generation_mw` | `f64`               | Minimum stable load                              |
+| `max_generation_mw` | `f64`               | Installed capacity                               |
+| `gnl_config`        | `Option<GnlConfig>` | GNL dispatch anticipation; `None` = no lag       |
 
-`ThermalCostSegment` holds `capacity_mw: f64` and `cost_per_mwh: f64`.
 `GnlConfig` holds `lag_stages: i32` (number of stages of dispatch anticipation
 for liquefied natural gas units that require advance scheduling).
 
@@ -212,15 +211,14 @@ Fields: `id`, `name`, `bus_id`, `entry_stage_id`, `exit_stage_id`,
 
 ### Structs
 
-| Struct               | Fields                                           | Purpose                                                |
-| -------------------- | ------------------------------------------------ | ------------------------------------------------------ |
-| `TailracePoint`      | `outflow_m3s: f64`, `height_m: f64`              | One breakpoint on a piecewise tailrace curve           |
-| `DeficitSegment`     | `depth_mw: Option<f64>`, `cost_per_mwh: f64`     | One segment of a piecewise deficit cost curve          |
-| `ThermalCostSegment` | `capacity_mw: f64`, `cost_per_mwh: f64`          | One segment of a thermal generation cost curve         |
-| `GnlConfig`          | `lag_stages: i32`                                | Dispatch anticipation lag for GNL thermal units        |
-| `DiversionChannel`   | `downstream_id: EntityId`, `max_flow_m3s: f64`   | Water diversion bypassing turbines and spillways       |
-| `FillingConfig`      | `start_stage_id: i32`, `filling_inflow_m3s: f64` | Reservoir filling operation from a fixed inflow source |
-| `HydroPenalties`     | 16 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
+| Struct             | Fields                                           | Purpose                                                |
+| ------------------ | ------------------------------------------------ | ------------------------------------------------------ |
+| `TailracePoint`    | `outflow_m3s: f64`, `height_m: f64`              | One breakpoint on a piecewise tailrace curve           |
+| `DeficitSegment`   | `depth_mw: Option<f64>`, `cost_per_mwh: f64`     | One segment of a piecewise deficit cost curve          |
+| `GnlConfig`        | `lag_stages: i32`                                | Dispatch anticipation lag for GNL thermal units        |
+| `DiversionChannel` | `downstream_id: EntityId`, `max_flow_m3s: f64`   | Water diversion bypassing turbines and spillways       |
+| `FillingConfig`    | `start_stage_id: i32`, `filling_inflow_m3s: f64` | Reservoir filling operation from a fixed inflow source |
+| `HydroPenalties`   | 16 `f64` fields (see Penalty resolution section) | Pre-resolved penalty costs for one hydro plant         |
 
 ## EntityId
 
@@ -409,24 +407,24 @@ let hydro_p = resolve_hydro_penalties(&entity_overrides, &global);
 
 `HydroPenalties` holds 16 pre-resolved `f64` fields:
 
-| Field                             | Unit   | Description                                        |
-| --------------------------------- | ------ | -------------------------------------------------- |
-| `spillage_cost`                   | $/m³/s | Penalty per m³/s of spillage                       |
-| `diversion_cost`                  | $/m³/s | Penalty per m³/s exceeding diversion channel limit |
-| `fpha_turbined_cost`              | $/MWh  | Regularization cost for FPHA turbined flow         |
-| `storage_violation_below_cost`    | $/hm³  | Penalty per hm³ of storage below minimum           |
-| `filling_target_violation_cost`   | $/hm³  | Penalty per hm³ below filling target               |
-| `turbined_violation_below_cost`   | $/m³/s | Penalty per m³/s of turbined flow below minimum    |
-| `outflow_violation_below_cost`    | $/m³/s | Penalty per m³/s of total outflow below minimum    |
-| `outflow_violation_above_cost`    | $/m³/s | Penalty per m³/s of total outflow above maximum    |
-| `generation_violation_below_cost` | $/MW   | Penalty per MW of generation below minimum         |
-| `evaporation_violation_cost`      | $/mm   | Penalty per mm of evaporation constraint violation |
-| `water_withdrawal_violation_cost` | $/m³/s | Penalty per m³/s of water withdrawal violation     |
-| `water_withdrawal_violation_pos_cost` | $/m³/s | Penalty per m³/s of over-withdrawal              |
-| `water_withdrawal_violation_neg_cost` | $/m³/s | Penalty per m³/s of under-withdrawal             |
-| `evaporation_violation_pos_cost`      | $/mm   | Penalty per mm of over-evaporation               |
-| `evaporation_violation_neg_cost`      | $/mm   | Penalty per mm of under-evaporation              |
-| `inflow_nonnegativity_cost`           | $/m³/s | Penalty per m³/s of inflow non-negativity slack  |
+| Field                                 | Unit   | Description                                        |
+| ------------------------------------- | ------ | -------------------------------------------------- |
+| `spillage_cost`                       | $/m³/s | Penalty per m³/s of spillage                       |
+| `diversion_cost`                      | $/m³/s | Penalty per m³/s exceeding diversion channel limit |
+| `fpha_turbined_cost`                  | $/MWh  | Regularization cost for FPHA turbined flow         |
+| `storage_violation_below_cost`        | $/hm³  | Penalty per hm³ of storage below minimum           |
+| `filling_target_violation_cost`       | $/hm³  | Penalty per hm³ below filling target               |
+| `turbined_violation_below_cost`       | $/m³/s | Penalty per m³/s of turbined flow below minimum    |
+| `outflow_violation_below_cost`        | $/m³/s | Penalty per m³/s of total outflow below minimum    |
+| `outflow_violation_above_cost`        | $/m³/s | Penalty per m³/s of total outflow above maximum    |
+| `generation_violation_below_cost`     | $/MW   | Penalty per MW of generation below minimum         |
+| `evaporation_violation_cost`          | $/mm   | Penalty per mm of evaporation constraint violation |
+| `water_withdrawal_violation_cost`     | $/m³/s | Penalty per m³/s of water withdrawal violation     |
+| `water_withdrawal_violation_pos_cost` | $/m³/s | Penalty per m³/s of over-withdrawal                |
+| `water_withdrawal_violation_neg_cost` | $/m³/s | Penalty per m³/s of under-withdrawal               |
+| `evaporation_violation_pos_cost`      | $/mm   | Penalty per mm of over-evaporation                 |
+| `evaporation_violation_neg_cost`      | $/mm   | Penalty per mm of under-evaporation                |
+| `inflow_nonnegativity_cost`           | $/m³/s | Penalty per m³/s of inflow non-negativity slack    |
 
 The optional `HydroPenaltyOverrides` struct mirrors `HydroPenalties` with all
 fields as `Option<f64>`. It is an intermediate type used during case loading;

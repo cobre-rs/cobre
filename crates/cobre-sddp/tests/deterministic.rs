@@ -2650,3 +2650,72 @@ fn d26_estimated_par2_order_selection() {
         entry.selected_order
     );
 }
+
+// ---------------------------------------------------------------------------
+// D27: Per-stage thermal cost override
+// ---------------------------------------------------------------------------
+
+/// Expected cost for D27 (2-thermal system, stage-varying costs).
+///
+/// ## Case setup
+///
+/// - 1 bus (B0), 2 thermals, no hydro, deterministic load 100 MW.
+/// - T1 (id=0): base cost 50 $/MWh, capacity 0-60 MW.
+/// - T2 (id=1): base cost 80 $/MWh, capacity 0-80 MW.
+/// - `thermal_bounds.parquet` overrides T1 cost at stage 1 to 120 $/MWh.
+/// - 2 stages × 730 h each.
+///
+/// ## Expected cost derivation
+///
+/// Stage 0 (T1 at 50 $/MWh, T2 at 80 $/MWh — T1 dispatched first):
+/// - T1 at full capacity: 60 MW × 50 $/MWh × 730 h = 2 190 000 $
+/// - T2 covers residual: 40 MW × 80 $/MWh × 730 h = 2 336 000 $
+/// - Stage 0 cost = 4 526 000 $
+///
+/// Stage 1 (T1 at 120 $/MWh via override, T2 at 80 $/MWh — T2 dispatched first):
+/// - T2 at full capacity: 80 MW × 80 $/MWh × 730 h = 4 672 000 $
+/// - T1 covers residual: 20 MW × 120 $/MWh × 730 h = 1 752 000 $
+/// - Stage 1 cost = 6 424 000 $
+///
+/// Total = 4 526 000 + 6 424 000 = **10 950 000 $**
+///
+/// Compared to the uniform-cost baseline (T1 at 50 $/MWh in both stages):
+/// - Uniform total = 2 × 4 526 000 = 9 052 000 $
+/// - D27 total must be strictly greater, confirming the override is applied.
+pub const D27_EXPECTED_COST: f64 = 10_950_000.0;
+
+/// D27: Per-stage thermal cost override via `constraints/thermal_bounds.parquet`.
+///
+/// Uses pre-committed parquet fixtures (scenarios + constraints) to verify that
+/// the LP objective coefficients use the resolved per-stage cost rather than the
+/// entity base cost.
+#[test]
+fn d27_per_stage_thermal_cost() {
+    let case_dir = Path::new("../../examples/deterministic/d27-per-stage-thermal-cost");
+
+    let result = run_deterministic(case_dir);
+
+    assert_cost(result.final_lb, D27_EXPECTED_COST, 1e-4, "D27");
+    assert!(
+        result.iterations <= 10,
+        "D27: iterations={}",
+        result.iterations
+    );
+    assert!(
+        result.final_gap.abs() < 1e-6,
+        "D27: gap={:.2e}",
+        result.final_gap
+    );
+
+    // The per-stage cost override must produce a strictly higher total cost
+    // than the uniform-cost baseline (T1 at 50 $/MWh in both stages = 9_052_000 $).
+    // This confirms the override is applied and changes dispatch ordering at stage 1.
+    let uniform_baseline = 9_052_000.0_f64;
+    assert!(
+        result.final_lb > uniform_baseline,
+        "D27: per-stage cost override must increase total cost vs uniform baseline \
+         ({} > {})",
+        result.final_lb,
+        uniform_baseline
+    );
+}

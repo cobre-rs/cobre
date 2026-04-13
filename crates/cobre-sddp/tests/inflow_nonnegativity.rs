@@ -294,6 +294,7 @@ fn build_system() -> cobre_core::System {
             thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
             line: LineStageBounds {
                 direct_mw: 0.0,

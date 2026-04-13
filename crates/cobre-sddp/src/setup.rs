@@ -2204,7 +2204,7 @@ mod tests {
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
-            thermal::{Thermal, ThermalCostSegment},
+            thermal::Thermal,
         },
         scenario::{InflowModel, LoadModel, SamplingScheme},
         temporal::{
@@ -2248,10 +2248,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -2405,6 +2402,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -3536,10 +3534,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -3674,6 +3669,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4031,6 +4027,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4392,10 +4389,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -4521,6 +4515,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4665,10 +4660,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -4788,6 +4780,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4919,10 +4912,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5056,6 +5046,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5191,10 +5182,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5350,6 +5338,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5490,10 +5479,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5614,6 +5600,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,

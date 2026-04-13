@@ -1762,9 +1762,7 @@ mod tests {
     use super::*;
     use cobre_core::{
         EntityId,
-        entities::{
-            Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal, ThermalCostSegment,
-        },
+        entities::{Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal},
         initial_conditions::InitialConditions,
         penalty::GlobalPenaltyDefaults,
         temporal::{
@@ -1843,10 +1841,7 @@ mod tests {
             bus_id: EntityId::from(1),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: max_mw,
-                cost_per_mwh: 100.0,
-            }],
+            cost_per_mwh: 100.0,
             min_generation_mw: min_mw,
             max_generation_mw: max_mw,
             gnl_config: None,

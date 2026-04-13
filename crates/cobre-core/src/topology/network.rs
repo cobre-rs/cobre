@@ -230,7 +230,7 @@ impl NetworkTopology {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entities::{ContractType, HydroGenerationModel, HydroPenalties, ThermalCostSegment};
+    use crate::entities::{ContractType, HydroGenerationModel, HydroPenalties};
 
     fn make_bus(id: i32) -> Bus {
         Bus {
@@ -311,10 +311,7 @@ mod tests {
             bus_id: EntityId(bus_id),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
             gnl_config: None,

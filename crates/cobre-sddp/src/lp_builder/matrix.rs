@@ -100,12 +100,9 @@ pub(super) fn fill_stage_columns(
     }
 
     // Thermal columns per thermal per block.
-    for (t_idx, thermal) in ctx.thermals.iter().enumerate() {
+    for (t_idx, _thermal) in ctx.thermals.iter().enumerate() {
         let tb = ctx.bounds.thermal_bounds(t_idx, stage_idx);
-        let marginal_cost_per_mwh = thermal
-            .cost_segments
-            .first()
-            .map_or(0.0, |seg| seg.cost_per_mwh);
+        let marginal_cost_per_mwh = tb.cost_per_mwh;
         for blk in 0..layout.n_blks {
             let col = layout.col_thermal_start + t_idx * layout.n_blks + blk;
             col_lower[col] = tb.min_generation_mw;

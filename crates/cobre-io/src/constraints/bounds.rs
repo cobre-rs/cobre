@@ -8,12 +8,14 @@
 //!
 //! ### `thermal_bounds`
 //!
-//! | Column             | Type   | Required | Description                    |
-//! | ------------------ | ------ | -------- | ------------------------------ |
-//! | `thermal_id`       | INT32  | Yes      | Thermal plant ID               |
-//! | `stage_id`         | INT32  | Yes      | Stage ID                       |
-//! | `min_generation_mw`| DOUBLE | No       | Minimum generation (MW)        |
-//! | `max_generation_mw`| DOUBLE | No       | Maximum generation (MW)        |
+//! | Column             | Type   | Required | Description                                          |
+//! | ------------------ | ------ | -------- | ---------------------------------------------------- |
+//! | `thermal_id`       | INT32  | Yes      | Thermal plant ID                                     |
+//! | `stage_id`         | INT32  | Yes      | Stage ID                                             |
+//! | `min_generation_mw`| DOUBLE | No       | Minimum generation (MW)                              |
+//! | `max_generation_mw`| DOUBLE | No       | Maximum generation (MW)                              |
+//! | `cost_per_mwh`     | DOUBLE | No       | Dispatch cost override (`$/MWh`); ignored if `block_id` is non-null |
+//! | `block_id`         | INT32  | No       | Reserved for future per-block costs; rows with non-null value are silently ignored |
 //!
 //! ### `hydro_bounds`
 //!
@@ -85,7 +87,9 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::LoadError;
-use crate::parquet_helpers::{extract_optional_float64, extract_required_int32};
+use crate::parquet_helpers::{
+    extract_optional_float64, extract_optional_int32, extract_required_int32,
+};
 
 // ── Row types ─────────────────────────────────────────────────────────────────
 
@@ -106,10 +110,14 @@ use crate::parquet_helpers::{extract_optional_float64, extract_required_int32};
 ///     stage_id: 5,
 ///     min_generation_mw: Some(10.0),
 ///     max_generation_mw: None,
+///     cost_per_mwh: Some(75.0),
+///     block_id: None,
 /// };
 /// assert_eq!(row.thermal_id, EntityId::from(2));
 /// assert_eq!(row.min_generation_mw, Some(10.0));
 /// assert!(row.max_generation_mw.is_none());
+/// assert_eq!(row.cost_per_mwh, Some(75.0));
+/// assert!(row.block_id.is_none());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThermalBoundsRow {
@@ -121,6 +129,12 @@ pub struct ThermalBoundsRow {
     pub min_generation_mw: Option<f64>,
     /// Maximum generation override (MW).
     pub max_generation_mw: Option<f64>,
+    /// Dispatch cost override (`$/MWh`). Overrides `Thermal.cost_per_mwh` when `Some` and
+    /// `block_id` is `None`. Ignored when `block_id` is `Some`.
+    pub cost_per_mwh: Option<f64>,
+    /// Reserved for future per-block cost support (DECOMP). Rows with non-null `block_id`
+    /// are parsed but silently ignored during bounds resolution.
+    pub block_id: Option<i32>,
 }
 
 /// A single row from `constraints/hydro_bounds.parquet`.
@@ -353,6 +367,8 @@ pub fn parse_thermal_bounds(path: &Path) -> Result<Vec<ThermalBoundsRow>, LoadEr
         // ── Optional bound columns ────────────────────────────────────────────
         let min_gen_col = extract_optional_float64(&batch, "min_generation_mw", path)?;
         let max_gen_col = extract_optional_float64(&batch, "max_generation_mw", path)?;
+        let cost_col = extract_optional_float64(&batch, "cost_per_mwh", path)?;
+        let block_id_col = extract_optional_int32(&batch, "block_id", path)?;
 
         let n = batch.num_rows();
         let base_idx = rows.len();
@@ -370,6 +386,12 @@ pub fn parse_thermal_bounds(path: &Path) -> Result<Vec<ThermalBoundsRow>, LoadEr
             let max_generation_mw = max_gen_col
                 .filter(|col| !col.is_null(i))
                 .map(|col| col.value(i));
+            let cost_per_mwh = cost_col
+                .filter(|col| !col.is_null(i))
+                .map(|col| col.value(i));
+            let block_id = block_id_col
+                .filter(|col| !col.is_null(i))
+                .map(|col| col.value(i));
 
             validate_optional_finite(
                 min_generation_mw,
@@ -385,12 +407,30 @@ pub fn parse_thermal_bounds(path: &Path) -> Result<Vec<ThermalBoundsRow>, LoadEr
                 "max_generation_mw",
                 path,
             )?;
+            validate_optional_finite(
+                cost_per_mwh,
+                "thermal_bounds",
+                row_idx,
+                "cost_per_mwh",
+                path,
+            )?;
+            if let Some(v) = cost_per_mwh {
+                if v < 0.0 {
+                    return Err(LoadError::SchemaError {
+                        path: path.to_path_buf(),
+                        field: format!("thermal_bounds[{row_idx}].cost_per_mwh"),
+                        message: format!("value must be >= 0.0, got {v}"),
+                    });
+                }
+            }
 
             rows.push(ThermalBoundsRow {
                 thermal_id,
                 stage_id,
                 min_generation_mw,
                 max_generation_mw,
+                cost_per_mwh,
+                block_id,
             });
         }
     }
@@ -1067,6 +1107,177 @@ mod tests {
     fn test_load_thermal_bounds_none() {
         let rows = super::super::load_thermal_bounds(None).unwrap();
         assert!(rows.is_empty());
+    }
+
+    /// AC1 (ticket-002): parquet with cost_per_mwh and block_id columns — values read correctly.
+    #[test]
+    fn test_thermal_cost_and_block_id_columns_read() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("thermal_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("min_generation_mw", DataType::Float64, true),
+            Field::new("max_generation_mw", DataType::Float64, true),
+            Field::new("cost_per_mwh", DataType::Float64, true),
+            Field::new("block_id", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1_i32, 1_i32])),
+                Arc::new(Int32Array::from(vec![0_i32, 1_i32])),
+                Arc::new(Float64Array::from(vec![None::<f64>, None::<f64>])),
+                Arc::new(Float64Array::from(vec![None::<f64>, None::<f64>])),
+                Arc::new(Float64Array::from(vec![Some(50.0_f64), Some(100.0_f64)])),
+                Arc::new(Int32Array::from(vec![None::<i32>, None::<i32>])),
+            ],
+        )
+        .unwrap();
+        let tmp = write_parquet(&batch);
+        let rows = parse_thermal_bounds(tmp.path()).unwrap();
+
+        assert_eq!(rows.len(), 2);
+        // Sorted by (thermal_id, stage_id): (1,0) then (1,1)
+        assert_eq!(rows[0].thermal_id, EntityId::from(1));
+        assert_eq!(rows[0].stage_id, 0);
+        assert_eq!(rows[0].cost_per_mwh, Some(50.0));
+        assert!(rows[0].block_id.is_none());
+        assert_eq!(rows[1].thermal_id, EntityId::from(1));
+        assert_eq!(rows[1].stage_id, 1);
+        assert_eq!(rows[1].cost_per_mwh, Some(100.0));
+        assert!(rows[1].block_id.is_none());
+    }
+
+    /// AC2 (ticket-002): parquet without cost_per_mwh and block_id columns — all rows have None.
+    #[test]
+    fn test_thermal_missing_cost_and_block_id_columns_are_none() {
+        // Use the existing make_thermal_batch which builds the old schema (no cost/block_id).
+        let batch = make_thermal_batch(
+            &[1, 2],
+            &[0, 0],
+            vec![Some(10.0), Some(20.0)],
+            vec![Some(100.0), Some(200.0)],
+        );
+        let tmp = write_parquet(&batch);
+        let rows = parse_thermal_bounds(tmp.path()).unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].cost_per_mwh.is_none());
+        assert!(rows[0].block_id.is_none());
+        assert!(rows[1].cost_per_mwh.is_none());
+        assert!(rows[1].block_id.is_none());
+    }
+
+    /// AC3 (ticket-002): parquet row with non-null block_id is parsed with block_id = Some(_).
+    #[test]
+    fn test_thermal_non_null_block_id_is_parsed() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("thermal_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("min_generation_mw", DataType::Float64, true),
+            Field::new("max_generation_mw", DataType::Float64, true),
+            Field::new("cost_per_mwh", DataType::Float64, true),
+            Field::new("block_id", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1_i32])),
+                Arc::new(Int32Array::from(vec![0_i32])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![Some(75.0_f64)])),
+                Arc::new(Int32Array::from(vec![Some(2_i32)])),
+            ],
+        )
+        .unwrap();
+        let tmp = write_parquet(&batch);
+        let rows = parse_thermal_bounds(tmp.path()).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].block_id, Some(2));
+        assert_eq!(rows[0].cost_per_mwh, Some(75.0));
+    }
+
+    /// AC4 (ticket-002): NaN in cost_per_mwh -> SchemaError mentioning "cost_per_mwh" and "finite".
+    #[test]
+    fn test_thermal_nan_cost_per_mwh() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("thermal_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("min_generation_mw", DataType::Float64, true),
+            Field::new("max_generation_mw", DataType::Float64, true),
+            Field::new("cost_per_mwh", DataType::Float64, true),
+            Field::new("block_id", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1_i32])),
+                Arc::new(Int32Array::from(vec![0_i32])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![Some(f64::NAN)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+            ],
+        )
+        .unwrap();
+        let tmp = write_parquet(&batch);
+        let err = parse_thermal_bounds(tmp.path()).unwrap_err();
+
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("cost_per_mwh"),
+                    "field should contain 'cost_per_mwh', got: {field}"
+                );
+                assert!(
+                    message.contains("finite"),
+                    "message should contain 'finite', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Negative `cost_per_mwh` in thermal_bounds.parquet → `SchemaError`.
+    #[test]
+    fn test_thermal_negative_cost_per_mwh() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("thermal_id", DataType::Int32, false),
+            Field::new("stage_id", DataType::Int32, false),
+            Field::new("min_generation_mw", DataType::Float64, true),
+            Field::new("max_generation_mw", DataType::Float64, true),
+            Field::new("cost_per_mwh", DataType::Float64, true),
+            Field::new("block_id", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1_i32])),
+                Arc::new(Int32Array::from(vec![0_i32])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![None::<f64>])),
+                Arc::new(Float64Array::from(vec![Some(-10.0_f64)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+            ],
+        )
+        .unwrap();
+        let tmp = write_parquet(&batch);
+        let err = parse_thermal_bounds(tmp.path()).unwrap_err();
+
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("cost_per_mwh"),
+                    "field should contain 'cost_per_mwh', got: {field}"
+                );
+                assert!(
+                    message.contains(">= 0.0"),
+                    "message should contain '>= 0.0', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError for negative cost, got: {other:?}"),
+        }
     }
 
     // ── HydroBoundsRow tests ──────────────────────────────────────────────────

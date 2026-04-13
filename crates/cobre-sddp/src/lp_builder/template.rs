@@ -723,6 +723,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -901,6 +902,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -1459,6 +1461,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -1914,6 +1917,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -2546,6 +2550,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -2845,6 +2850,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -3056,6 +3062,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4591,6 +4598,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4865,6 +4873,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5350,6 +5359,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5493,6 +5503,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5935,6 +5946,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -6384,6 +6396,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -6643,6 +6656,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -6826,6 +6840,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -7186,6 +7201,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -7752,6 +7768,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
                 line: LineStageBounds {
                 direct_mw: 0.0,
@@ -7871,7 +7888,7 @@ mod tests {
         bounds: cobre_core::ResolvedGenericConstraintBounds,
     ) -> cobre_core::System {
         use chrono::NaiveDate;
-        use cobre_core::entities::thermal::{Thermal, ThermalCostSegment};
+        use cobre_core::entities::thermal::Thermal;
         use cobre_core::scenario::LoadModel;
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
@@ -7894,10 +7911,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -7948,6 +7962,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -8150,6 +8165,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,

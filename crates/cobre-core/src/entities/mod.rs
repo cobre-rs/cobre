@@ -20,4 +20,4 @@ pub use hydro::{
 pub use line::Line;
 pub use non_controllable::NonControllableSource;
 pub use pumping_station::PumpingStation;
-pub use thermal::{GnlConfig, Thermal, ThermalCostSegment};
+pub use thermal::{GnlConfig, Thermal};

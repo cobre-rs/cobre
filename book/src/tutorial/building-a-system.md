@@ -311,12 +311,7 @@ Create `my_study/system/thermals.json`:
       "id": 0,
       "name": "UTE1",
       "bus_id": 0,
-      "cost_segments": [
-        {
-          "capacity_mw": 15.0,
-          "cost_per_mwh": 5.0
-        }
-      ],
+      "cost_per_mwh": 5.0,
       "generation": {
         "min_mw": 0.0,
         "max_mw": 15.0
@@ -326,12 +321,7 @@ Create `my_study/system/thermals.json`:
       "id": 1,
       "name": "UTE2",
       "bus_id": 0,
-      "cost_segments": [
-        {
-          "capacity_mw": 15.0,
-          "cost_per_mwh": 10.0
-        }
-      ],
+      "cost_per_mwh": 10.0,
       "generation": {
         "min_mw": 0.0,
         "max_mw": 15.0
@@ -341,15 +331,14 @@ Create `my_study/system/thermals.json`:
 }
 ```
 
-`bus_id: 0` connects both plants to the SIN bus. The `cost_segments` array
-defines a piecewise-linear cost curve. Each segment has a `capacity_mw` and a
-`cost_per_mwh`. With a single segment, the entire capacity is available at the
-same cost. The segment capacities should sum to `generation.max_mw`.
+`bus_id: 0` connects both plants to the SIN bus. `cost_per_mwh` is the
+scalar marginal cost of generation [$/MWh]. The LP dispatches the plant at any
+level between `min_mw` and `max_mw`, with cost equal to
+`dispatched_mw * hours_in_block * cost_per_mwh`.
 
 `generation.min_mw: 0.0` means the plant can be turned off completely. A
 non-zero minimum would represent a must-run commitment constraint. `max_mw`
-caps the generation level and should equal the sum of all `cost_segments`
-capacities.
+caps the generation level.
 
 The `bus_id` must reference a bus `id` defined in `buses.json`. The validator
 will catch any broken reference and report it as a reference integrity error.

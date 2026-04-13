@@ -986,7 +986,7 @@ mod tests {
         EntityId,
         entities::{
             DiversionChannel, Hydro, HydroGenerationModel, HydroPenalties, Line,
-            NonControllableSource, PumpingStation, Thermal, ThermalCostSegment,
+            NonControllableSource, PumpingStation, Thermal,
         },
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     };
@@ -1330,10 +1330,7 @@ mod tests {
             bus_id: EntityId::from(777), // bad
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
             gnl_config: None,
@@ -1648,6 +1645,8 @@ mod tests {
             stage_id: 0,
             min_generation_mw: None,
             max_generation_mw: None,
+            cost_per_mwh: None,
+            block_id: None,
         }];
         let mut ctx = ValidationContext::new();
         validate_referential_integrity(&data, &mut ctx);

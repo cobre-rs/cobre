@@ -9,9 +9,7 @@
           "type": "integer"
         }
       },
-      "required": [
-        "lag_stages"
-      ],
+      "required": ["lag_stages"],
       "type": "object"
     },
     "RawThermal": {
@@ -22,30 +20,22 @@
           "format": "int32",
           "type": "integer"
         },
-        "cost_segments": {
-          "description": "Piecewise-linear cost segments. Must be non-empty.",
-          "items": {
-            "$ref": "#/$defs/RawThermalCostSegment"
-          },
-          "type": "array"
+        "cost_per_mwh": {
+          "description": "Marginal cost of generation [$/MWh]. Must be >= 0.0.",
+          "format": "double",
+          "type": "number"
         },
         "entry_stage_id": {
           "default": null,
           "description": "Stage index when the plant enters service. Absent or null = always exists.",
           "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "exit_stage_id": {
           "default": null,
           "description": "Stage index when the plant is decommissioned. Absent or null = never.",
           "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": ["integer", "null"]
         },
         "generation": {
           "$ref": "#/$defs/RawThermalGeneration",
@@ -72,33 +62,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "id",
-        "name",
-        "bus_id",
-        "cost_segments",
-        "generation"
-      ],
-      "type": "object"
-    },
-    "RawThermalCostSegment": {
-      "description": "Intermediate type for a single cost segment.",
-      "properties": {
-        "capacity_mw": {
-          "description": "Generation capacity of this segment [MW].",
-          "format": "double",
-          "type": "number"
-        },
-        "cost_per_mwh": {
-          "description": "Marginal cost in this segment [$/`MWh`].",
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "capacity_mw",
-        "cost_per_mwh"
-      ],
+      "required": ["id", "name", "bus_id", "cost_per_mwh", "generation"],
       "type": "object"
     },
     "RawThermalGeneration": {
@@ -115,10 +79,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "min_mw",
-        "max_mw"
-      ],
+      "required": ["min_mw", "max_mw"],
       "type": "object"
     }
   },
@@ -127,10 +88,7 @@
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "thermals": {
       "description": "Array of thermal plant entries.",
@@ -140,9 +98,7 @@
       "type": "array"
     }
   },
-  "required": [
-    "thermals"
-  ],
+  "required": ["thermals"],
   "title": "RawThermalFile",
   "type": "object"
 }

@@ -256,9 +256,7 @@ pub fn make_multi_entity_case(dir: &TempDir) {
             "id": 1,
             "name": "THERMAL_1",
             "bus_id": 2,
-            "cost_segments": [
-                { "capacity_mw": 300.0, "cost_per_mwh": 80.0 }
-            ],
+            "cost_per_mwh": 80.0,
             "generation": { "min_mw": 0.0, "max_mw": 300.0 }
         }
     ]

@@ -1,24 +1,10 @@
 //! Thermal plant entity — generation with MW bounds and cost.
 //!
 //! A `Thermal` represents a thermal (combustion, nuclear, etc.) power plant.
-//! Thermal plants have MW generation bounds and a cost curve used to compute
-//! the objective contribution in each stage LP.
+//! Thermal plants have MW generation bounds and a scalar marginal cost used to
+//! compute the objective contribution in each stage LP.
 
 use crate::EntityId;
-
-/// A single segment of the piecewise-linear generation cost curve.
-///
-/// Segments are applied in order: the first `capacity_mw` of generation costs
-/// `cost_per_mwh`, the next segment's `capacity_mw` costs that segment's
-/// `cost_per_mwh`, and so on.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ThermalCostSegment {
-    /// Generation capacity of this segment \[MW\].
-    pub capacity_mw: f64,
-    /// Marginal cost in this segment \[$/`MWh`\].
-    pub cost_per_mwh: f64,
-}
 
 /// Gás Natural Liquefeito (GNL) configuration for staged dispatch anticipation.
 ///
@@ -31,11 +17,12 @@ pub struct GnlConfig {
     pub lag_stages: i32,
 }
 
-/// Thermal power plant with piecewise-linear generation cost curve.
+/// Thermal power plant with a scalar marginal cost.
 ///
 /// A `Thermal` contributes generation variables and cost objective terms to each
 /// stage LP. Generation is bounded between `min_generation_mw` and
-/// `max_generation_mw`. The cost is computed from `cost_segments`.
+/// `max_generation_mw`. The cost is `cost_per_mwh` multiplied by the block
+/// duration in hours.
 ///
 /// Source: system/thermals.json. See Input System Entities SS1.9.5.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,10 +38,8 @@ pub struct Thermal {
     pub entry_stage_id: Option<i32>,
     /// Stage index when the plant is decommissioned. None = never decommissioned.
     pub exit_stage_id: Option<i32>,
-    /// Piecewise-linear cost segments ordered by ascending cost.
-    ///
-    /// The sum of all `capacity_mw` values must equal `max_generation_mw`.
-    pub cost_segments: Vec<ThermalCostSegment>,
+    /// Marginal cost of generation \[$/`MWh`\].
+    pub cost_per_mwh: f64,
     /// Minimum electrical generation (minimum stable load) \[MW\].
     pub min_generation_mw: f64,
     /// Maximum electrical generation (installed capacity) \[MW\].
@@ -68,17 +53,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_thermal_cost_segment() {
-        let segment = ThermalCostSegment {
-            capacity_mw: 200.0,
-            cost_per_mwh: 75.0,
-        };
-
-        assert!((segment.capacity_mw - 200.0).abs() < f64::EPSILON);
-        assert!((segment.cost_per_mwh - 75.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
     fn test_thermal_construction() {
         let thermal = Thermal {
             id: EntityId::from(1),
@@ -86,16 +60,7 @@ mod tests {
             bus_id: EntityId::from(10),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![
-                ThermalCostSegment {
-                    capacity_mw: 300.0,
-                    cost_per_mwh: 50.0,
-                },
-                ThermalCostSegment {
-                    capacity_mw: 357.0,
-                    cost_per_mwh: 80.0,
-                },
-            ],
+            cost_per_mwh: 50.0,
             min_generation_mw: 0.0,
             max_generation_mw: 657.0,
             gnl_config: None,
@@ -106,7 +71,7 @@ mod tests {
         assert_eq!(thermal.bus_id, EntityId::from(10));
         assert_eq!(thermal.entry_stage_id, None);
         assert_eq!(thermal.exit_stage_id, None);
-        assert_eq!(thermal.cost_segments.len(), 2);
+        assert!((thermal.cost_per_mwh - 50.0).abs() < f64::EPSILON);
         assert!((thermal.min_generation_mw - 0.0).abs() < f64::EPSILON);
         assert!((thermal.max_generation_mw - 657.0).abs() < f64::EPSILON);
         assert_eq!(thermal.gnl_config, None);
@@ -120,10 +85,7 @@ mod tests {
             bus_id: EntityId::from(20),
             entry_stage_id: Some(1),
             exit_stage_id: Some(120),
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 360.0,
-                cost_per_mwh: 120.0,
-            }],
+            cost_per_mwh: 120.0,
             min_generation_mw: 100.0,
             max_generation_mw: 360.0,
             gnl_config: Some(GnlConfig { lag_stages: 2 }),
@@ -142,10 +104,7 @@ mod tests {
             bus_id: EntityId::from(5),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 446.0,
-                cost_per_mwh: 60.0,
-            }],
+            cost_per_mwh: 60.0,
             min_generation_mw: 0.0,
             max_generation_mw: 446.0,
             gnl_config: None,
@@ -163,16 +122,7 @@ mod tests {
             bus_id: EntityId::from(20),
             entry_stage_id: Some(1),
             exit_stage_id: Some(120),
-            cost_segments: vec![
-                ThermalCostSegment {
-                    capacity_mw: 200.0,
-                    cost_per_mwh: 80.0,
-                },
-                ThermalCostSegment {
-                    capacity_mw: 160.0,
-                    cost_per_mwh: 120.0,
-                },
-            ],
+            cost_per_mwh: 80.0,
             min_generation_mw: 100.0,
             max_generation_mw: 360.0,
             gnl_config: Some(GnlConfig { lag_stages: 2 }),

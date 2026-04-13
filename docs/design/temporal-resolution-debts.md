@@ -1,11 +1,33 @@
 # Temporal Resolution Debts & Design Gaps
 
-**Date:** 2026-04-11 (revised 2026-04-12, structural revision 2026-04-12)
-**Status:** Active investigation
+**Date:** 2026-04-11 (revised 2026-04-12, structural revision 2026-04-12,
+status update 2026-04-13)
+**Status:** Pattern A complete (v0.4.3); Patterns B/C/D open
 **Context:** Cobre supports variable-length stages, but the stochastic pipeline
 assumes uniform monthly resolution in several places. This document catalogs
 the known debts and design gaps that must be addressed before non-monthly
 studies (weekly, quarterly, mixed-resolution DECOMP-like) can be supported.
+
+### Resolution history
+
+| Debt                          | Status                 | Version | Commit    | Notes                                                                               |
+| ----------------------------- | ---------------------- | ------- | --------- | ----------------------------------------------------------------------------------- |
+| 1 (month0 bug)                | **Resolved**           | v0.4.3  | `316feab` | SeasonMap three-tier fallback replaces month0()                                     |
+| 2 (observation alignment)     | **Partially resolved** | v0.4.3  | `316feab` | Layer 1 validation (rule 31) implemented; Layer 2 aggregation deferred to Pattern D |
+| 3 (past_inflows metadata)     | Open                   | —       | —         | Low priority                                                                        |
+| 4 (season_id validation)      | **Resolved**           | v0.4.3  | `9c37529` | Rules 27–30 (range, coverage, consistency, contiguity)                              |
+| 5 (noise sharing)             | Open                   | —       | —         | Pattern C only                                                                      |
+| 6 (lag accumulation)          | Open                   | —       | —         | Patterns B/C/D                                                                      |
+| 7 (PAR behavior doc)          | **Resolved**           | v0.4.3  | `ae4403a` | mdBook page documents behavior and validation rules                                 |
+| 8 (historical residuals)      | **Resolved**           | v0.4.3  | `d4a604d` | NoiseMethod::HistoricalResiduals with hash-based window selection                   |
+| 9 (external standardization)  | Open                   | —       | —         | Pattern B                                                                           |
+| 10 (recent_observations)      | Open                   | —       | —         | Pattern B                                                                           |
+| 12 (terminal-stage FCF)       | Open                   | —       | —         | Pattern B                                                                           |
+| 13 (multi-res PAR transition) | Open                   | —       | —         | Pattern D                                                                           |
+
+Additionally, a latent bug was discovered and fixed during implementation:
+window year normalization (`1aa6ed6`) — `build_observation_sequence` now
+normalizes year offsets so the first study stage gets `year_offset=0`.
 
 ---
 
@@ -16,20 +38,29 @@ resolution handling. The work falls into four layers:
 
 1. **Production DECOMP critical path** (Debts 4→6→9→10→12): lag accumulation,
    external standardization, mid-season starts, and terminal-stage FCF.
-2. **Mixed-res PAR correctness** (Debts 1, 5, 8): noise sharing, `month0` bug
-   fix, and historical residuals as opening tree noise.
-3. **Defense-in-depth validation** (Debts 2, 4): observation-to-season
-   alignment with multi-resolution aggregation, and season_id consistency
-   enforcement across heterogeneous season spaces.
+2. **Mixed-res PAR correctness** (Debts ~~1~~, 5, ~~8~~): noise sharing,
+   ~~`month0` bug fix~~, and ~~historical residuals as opening tree noise~~.
+3. **Defense-in-depth validation** (Debts ~~2~~, ~~4~~): ~~observation-to-season
+   alignment~~ with multi-resolution aggregation, and ~~season_id consistency
+   enforcement~~ across heterogeneous season spaces.
 4. **Multi-resolution generalization** (Debt 13): monthly→quarterly PAR
    transition with lag resolution conversion at the boundary.
+
+**Pattern A (monthly uniform) is fully resolved as of v0.4.3.** Debts 1, 4,
+7, and 8 are closed. Debt 2 Layer 1 validation is implemented (Layer 2
+aggregation deferred to Pattern D). A latent window-year normalization bug
+was discovered and fixed during implementation.
+
+Remaining open debts (Patterns B/C/D): 3, 5, 6, 9, 10, 12, 13, plus
+Debt 2 Layer 2.
 
 All proposed hot-path changes are zero-allocation with O(n_hydros) per-stage
 cost. The accumulator design degenerates to current behavior for uniform
 monthly studies with negligible overhead (one multiply by 1.0).
 
-Debt 7 is documentation-only. Opportunity 11 (external initial state
-sampling) eliminates pre-study burn-in for long-term planning.
+~~Debt 7 is documentation-only.~~ Resolved in v0.4.3. Opportunity 11
+(external initial state sampling) eliminates pre-study burn-in for long-term
+planning.
 
 ---
 
@@ -94,20 +125,20 @@ Key characteristics:
 
 ### Applicability matrix
 
-| Debt                          | A: Monthly uniform    | B: Production DECOMP                 | C: Mixed-res + PAR  | D: Multi-res (mo→qtr) |
-| ----------------------------- | --------------------- | ------------------------------------ | ------------------- | --------------------- |
-| 1 (month0 bug)                | N/A (already monthly) | N/A (no Historical sampling)         | **Critical**        | **Critical**          |
-| 2 (observation aggregation)   | **Yes**               | N/A (no PAR estimation from history) | **Yes**             | **Critical**          |
-| 3 (past_inflows metadata)     | Low priority          | Low priority                         | Medium              | Medium                |
-| 4 (season_id validation)      | **Yes**               | **Yes**                              | **Yes**             | **Critical**          |
-| 5 (noise sharing)             | N/A (monthly stages)  | N/A (External scenarios)             | **Critical**        | If sub-season stages  |
-| 6 (lag accumulation)          | N/A (monthly stages)  | **Critical**                         | **Critical**        | **Critical**          |
-| 7 (PAR behavior doc)          | **Yes**               | N/A                                  | **Yes**             | **Yes**               |
-| 8 (historical residuals)      | **Yes**               | N/A                                  | Maybe               | Maybe                 |
-| 9 (external standardization)  | N/A (no External)     | **Critical**                         | If External used    | If External used      |
-| 10 (recent_observations)      | N/A                   | **Critical**                         | If mid-season start | N/A                   |
-| 12 (terminal-stage FCF)       | N/A                   | **Critical**                         | If coupling needed  | If coupling needed    |
-| 13 (multi-res PAR transition) | N/A                   | N/A                                  | N/A                 | **Critical**          |
+| Debt                          | A: Monthly uniform         | B: Production DECOMP                 | C: Mixed-res + PAR  | D: Multi-res (mo→qtr) |
+| ----------------------------- | -------------------------- | ------------------------------------ | ------------------- | --------------------- |
+| 1 (month0 bug)                | ~~N/A~~ ✅ v0.4.3          | N/A (no Historical sampling)         | **Critical**        | **Critical**          |
+| 2 (observation aggregation)   | ✅ L1 v0.4.3 (L2 deferred) | N/A (no PAR estimation from history) | **Yes**             | **Critical**          |
+| 3 (past_inflows metadata)     | Low priority               | Low priority                         | Medium              | Medium                |
+| 4 (season_id validation)      | ✅ v0.4.3                  | **Yes**                              | **Yes**             | **Critical**          |
+| 5 (noise sharing)             | N/A (monthly stages)       | N/A (External scenarios)             | **Critical**        | If sub-season stages  |
+| 6 (lag accumulation)          | N/A (monthly stages)       | **Critical**                         | **Critical**        | **Critical**          |
+| 7 (PAR behavior doc)          | ✅ v0.4.3                  | N/A                                  | **Yes**             | **Yes**               |
+| 8 (historical residuals)      | ✅ v0.4.3                  | N/A                                  | Maybe               | Maybe                 |
+| 9 (external standardization)  | N/A (no External)          | **Critical**                         | If External used    | If External used      |
+| 10 (recent_observations)      | N/A                        | **Critical**                         | If mid-season start | N/A                   |
+| 12 (terminal-stage FCF)       | N/A                        | **Critical**                         | If coupling needed  | If coupling needed    |
+| 13 (multi-res PAR transition) | N/A                        | N/A                                  | N/A                 | **Critical**          |
 
 **Critical paths by pattern:**
 
@@ -121,6 +152,13 @@ Key characteristics:
 ---
 
 ## Debt 1: `month0()` hardcoding in Historical sampling pipeline
+
+> **Status: RESOLVED** in v0.4.3 (`316feab`). Both `discover_historical_windows`
+> and `standardize_historical_windows` now use a three-tier SeasonMap fallback
+> chain instead of `month0()`. The `season_map` parameter is threaded from
+> `setup.rs` through both training and simulation call sites. Monthly studies
+> produce bit-identical results; non-monthly SeasonMap configurations now map
+> observations correctly.
 
 **Severity:** Code defect — produces wrong results for any non-monthly study.
 
@@ -159,6 +197,12 @@ coefficients applied to incorrect noise.
 ---
 
 ## Debt 2: Observation-to-season alignment and multi-resolution aggregation
+
+> **Status: PARTIALLY RESOLVED** in v0.4.3 (`316feab`). Layer 1 validation
+> implemented as rule 31: observation-to-season alignment with the same
+> three-tier SeasonMap fallback chain used in Debt 1. Errors on mismatches
+> between observation granularity and season resolution. Layer 2 (fine-to-coarse
+> aggregation for Pattern D multi-resolution studies) remains deferred.
 
 **Severity:** Silent data quality issue (current); required feature for
 Pattern D (multi-resolution studies).
@@ -276,6 +320,14 @@ schemes (Debt 5) are implemented.
 ---
 
 ## Debt 4: `season_id` consistency enforcement across heterogeneous season spaces
+
+> **Status: RESOLVED** in v0.4.3 (`9c37529`). Four validation sub-rules
+> added to the semantic validation layer:
+>
+> - Rule 27 (V4.1): season_id range coverage — errors for undefined seasons
+> - Rule 28 (V4.2): observation coverage — warns for seasons with zero observations
+> - Rule 29 (V4.3): resolution consistency — errors for incompatible durations
+> - Rule 30 (V4.4): contiguity — warns for defined but unreferenced seasons
 
 **Severity:** Silent misconfiguration risk; becomes critical for Pattern D.
 
@@ -951,6 +1003,11 @@ input design and the rolling revision lifecycle.
 
 ## Debt 7: Mixed-resolution PAR model behavior
 
+> **Status: RESOLVED** in v0.4.3 (`ae4403a`). The mdBook page
+> `book/src/guide/stochastic-modeling.md` now documents PAR temporal resolution
+> behavior, validation rules, and the recommended chronological-blocks pattern
+> for sub-monthly decision granularity.
+
 **Severity:** Design constraint — not a code bug, but important to document.
 
 **Problem:** When multiple stages share `season_id`, with the noise-sharing
@@ -985,6 +1042,16 @@ is 1 monthly SDDP stage with 4 weekly chronological blocks:
 ---
 
 ## Debt 8: Historical residuals as opening tree noise source
+
+> **Status: RESOLVED** in v0.4.3 (`d4a604d`). New `NoiseMethod::HistoricalResiduals`
+> variant copies pre-computed eta vectors from `HistoricalScenarioLibrary` into the
+> backward-pass opening tree. Uses hash-based deterministic window selection via
+> `derive_opening_seed`. Cholesky correlation skipped (empirical cross-entity
+> correlation preserved from actual observations). Openings clamped to `n_windows`
+> when fewer than `branching_factor`. The library is pre-built in
+> `prepare_stochastic` via standalone `PrecomputedPar::build` to resolve a
+> circular dependency. `OpeningTreeInputs` struct bundles `user_tree` and
+> `historical_library`.
 
 **Severity:** Missing feature (user-requested).
 

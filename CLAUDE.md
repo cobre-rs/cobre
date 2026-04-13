@@ -20,7 +20,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,400+ tests, including 24 deterministic regression cases (D01–D16, D19–D26)
+3,450+ tests, including 24 deterministic regression cases (D01–D16, D19–D26)
 and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,

@@ -583,6 +583,7 @@ fn train_simulate_write_cycle() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -745,6 +746,7 @@ fn train_simulate_write_cycle() {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         },
         &fcf,
         &TrainingContext {
@@ -1298,6 +1300,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
 
     let training_config = TrainingConfig {

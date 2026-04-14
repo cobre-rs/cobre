@@ -1598,6 +1598,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -1686,6 +1687,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -1792,6 +1794,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -1932,6 +1935,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -2018,6 +2022,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -2101,6 +2106,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -2192,6 +2198,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -2293,6 +2300,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -2404,6 +2412,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -2526,6 +2535,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,
@@ -2622,6 +2632,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let outcome = train(
             &mut solver,
@@ -2727,6 +2738,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let outcome = train(
             &mut solver,
@@ -2813,6 +2825,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let outcome = train(
             &mut solver,
@@ -2986,6 +2999,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -3087,6 +3101,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,
@@ -3206,6 +3221,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         train(
             &mut solver,

@@ -433,12 +433,23 @@ fn solve_simulation_stage<S: SolverInterface>(
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
 
-    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
-    crate::noise::shift_lag_state(
+    // Accumulate and shift lag state using stage-level transition weights.
+    // For monthly-only studies this degenerates to the previous direct shift.
+    let stage_lag = ctx.stage_lag_transitions.get(ids.t).copied().unwrap_or(
+        cobre_core::temporal::StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+        },
+    );
+    crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         &unscaled_primal,
         indexer,
+        &stage_lag,
+        &mut ws.scratch.lag_accumulator,
+        &mut ws.scratch.lag_weight_accum,
     );
 
     // Put the buffers back so they are reused on the next stage.
@@ -593,6 +604,10 @@ fn process_scenario_stages<S: SolverInterface>(
         total_scenarios: ids.total_scenarios,
     };
     sampler.apply_initial_state(&class_req, &mut ws.current_state, indexer.inflow_lags.start);
+    // Reset lag accumulator at trajectory start so it does not carry state
+    // across simulation scenarios.
+    ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+    ws.scratch.lag_weight_accum = 0.0;
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
@@ -1360,6 +1375,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         }]
     }
@@ -1409,6 +1426,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1514,6 +1532,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1609,6 +1628,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1702,6 +1722,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1797,6 +1818,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1889,6 +1911,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -1981,6 +2004,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2070,6 +2094,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2130,6 +2155,8 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
                 },
             })
             .collect();
@@ -2147,6 +2174,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2266,6 +2294,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2379,6 +2408,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2477,6 +2507,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2586,6 +2617,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2694,6 +2726,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -2817,6 +2850,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3094,6 +3128,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         }];
 
@@ -3119,6 +3155,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3262,6 +3299,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3386,6 +3424,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         }];
 
@@ -3409,6 +3449,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3674,6 +3715,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         }]
     }
@@ -3740,6 +3783,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {
@@ -3847,6 +3891,7 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
             },
             &fcf,
             &TrainingContext {

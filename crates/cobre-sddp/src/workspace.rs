@@ -29,6 +29,11 @@ pub(crate) struct ScratchBuffers {
     pub(crate) effective_eta_buf: Vec<f64>,
     pub(crate) unscaled_primal: Vec<f64>,
     pub(crate) unscaled_dual: Vec<f64>,
+    // Used by accumulate_and_shift_lag_state (ticket-004).
+    #[allow(dead_code)]
+    pub(crate) lag_accumulator: Vec<f64>,
+    #[allow(dead_code)]
+    pub(crate) lag_weight_accum: f64,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -100,6 +105,8 @@ impl ScratchBuffers {
             effective_eta_buf: Vec::with_capacity(hydro_count),
             unscaled_primal: Vec::new(),
             unscaled_dual: Vec::new(),
+            lag_accumulator: vec![0.0_f64; hydro_count],
+            lag_weight_accum: 0.0,
         }
     }
 }
@@ -370,8 +377,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, SolverWorkspace, WorkspacePool};
     use cobre_solver::{
-        types::{RowBatch, StageTemplate},
         Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
+        types::{RowBatch, StageTemplate},
     };
 
     /// Minimal no-op solver for workspace tests.

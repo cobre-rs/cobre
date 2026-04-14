@@ -496,6 +496,7 @@ fn run_one_deterministic_pass(
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     train(
         &mut solver,
@@ -582,6 +583,7 @@ fn train_converges_with_mock_solver() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -682,6 +684,7 @@ fn train_lb_monotonically_nondecreasing() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     train(
         &mut solver,
@@ -770,6 +773,7 @@ fn train_emits_correct_event_sequence() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     train(
         &mut solver,
@@ -844,6 +848,7 @@ fn train_stops_at_iteration_limit() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -924,6 +929,7 @@ fn train_stops_on_graceful_shutdown() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -994,6 +1000,7 @@ fn train_propagates_infeasible_error() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -1107,6 +1114,7 @@ fn d17_level1_cut_selection_convergence() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -1263,6 +1271,7 @@ fn d18_lml1_cut_selection_convergence() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,

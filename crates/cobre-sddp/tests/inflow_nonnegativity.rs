@@ -516,6 +516,7 @@ fn train_fixture(
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     train(
         &mut solver,
@@ -610,6 +611,7 @@ fn simulate_fixture(
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         },
         fcf,
         &TrainingContext {

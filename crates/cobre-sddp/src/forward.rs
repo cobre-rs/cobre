@@ -871,11 +871,21 @@ fn run_forward_stage<S: SolverInterface + Send>(
     ws.current_state.clear();
     ws.current_state
         .extend_from_slice(&unscaled_primal[..indexer.n_state]);
-    crate::noise::shift_lag_state(
+    let stage_lag = ctx.stage_lag_transitions.get(t).copied().unwrap_or(
+        cobre_core::temporal::StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+        },
+    );
+    crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         unscaled_primal,
         indexer,
+        &stage_lag,
+        &mut ws.scratch.lag_accumulator,
+        &mut ws.scratch.lag_weight_accum,
     );
     rec.state.clear();
     rec.state.extend_from_slice(&ws.current_state);
@@ -1106,6 +1116,13 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         &worker_records[local_m * num_stages + (t - 1)].state
                     };
                     ws.current_state.extend_from_slice(src);
+
+                    // Reset lag accumulator at trajectory start so it does not
+                    // carry state across scenarios or training iterations.
+                    if t == 0 {
+                        ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+                        ws.scratch.lag_weight_accum = 0.0;
+                    }
 
                     let global_scenario = fwd_offset + m;
                     #[allow(clippy::cast_possible_truncation)]
@@ -1718,6 +1735,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         }
     }
@@ -1808,6 +1827,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1914,6 +1934,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2026,6 +2047,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2433,6 +2455,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -2591,6 +2614,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
 
         // Run with 1 workspace.
@@ -2735,6 +2759,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -3021,6 +3046,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let stages = vec![Stage {
             index: 0,
@@ -3218,6 +3244,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3457,6 +3484,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -3553,6 +3581,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         };
 
@@ -3579,6 +3609,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3644,6 +3675,7 @@ mod tests {
     /// (bounded to roughly +-5 in practice) produces `mean + std * eta ~= -1000`,
     /// which must be clamped to `0.0` before block factor scaling.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn forward_pass_load_noise_clamped_to_zero() {
         let n_load_buses = 1usize;
         let stochastic = make_stochastic_context_1_hydro_1_load_bus(-1000.0, 1.0);
@@ -3669,6 +3701,8 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
             },
         };
 
@@ -3695,6 +3729,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3788,6 +3823,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

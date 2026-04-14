@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{scenario::SamplingScheme, Stage};
+use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
@@ -43,6 +43,14 @@ pub struct StageContext<'a> {
     /// factors for transitions preceding stage `t`. `[0] == 1.0` always.
     /// Length equals the number of study stages.
     pub cumulative_discount_factors: &'a [f64],
+    /// Precomputed lag accumulation weights and period-finalization flags, one
+    /// entry per study stage. Indexed by stage: `stage_lag_transitions[t]`.
+    ///
+    /// Populated by [`crate::lag_transition::precompute_stage_lag_transitions`]
+    /// at setup time. Used by the forward pass and simulation pipeline starting
+    /// in Epic 2 ticket-006.
+    #[allow(dead_code)]
+    pub stage_lag_transitions: &'a [StageLagTransition],
 }
 
 /// Immutable algorithm-level configuration for the training loop.

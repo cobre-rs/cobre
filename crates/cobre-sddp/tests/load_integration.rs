@@ -451,6 +451,7 @@ fn test_stochastic_load_training_completes() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -549,6 +550,7 @@ fn test_deterministic_load_training_matches_baseline() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = train(
         &mut solver,
@@ -661,6 +663,7 @@ fn test_stochastic_load_seed_determinism() {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let result = train(
             &mut solver,

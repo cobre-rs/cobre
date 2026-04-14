@@ -41,36 +41,36 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
 
 use cobre_comm::Communicator;
 use cobre_core::{
+    EntityId, Stage, System, TrainingEvent,
     entities::hydro::HydroGenerationModel,
     scenario::{SamplingScheme, ScenarioSource},
-    EntityId, Stage, System, TrainingEvent,
+    temporal::StageLagTransition,
 };
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{
+    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
     context::OpeningTree, discover_historical_windows, standardize_external_inflow,
     standardize_external_load, standardize_external_ncs, standardize_historical_windows,
-    validate_external_library, validate_historical_library, ExternalScenarioLibrary,
-    HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
+    validate_external_library, validate_historical_library,
 };
 
 use crate::{
-    build_stage_templates,
-    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
+    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
+    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
+    WorkspacePool, build_stage_templates,
+    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
     simulation::{EntityCounts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
-    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
-    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
-    WorkspacePool,
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -388,6 +388,16 @@ pub struct StudySetup {
     /// new cut rows before warm-starting the LP solver. Disabled by default.
     /// Set from `config.training.cut_selection.basis_padding` via `StudyParams`.
     basis_padding_enabled: bool,
+
+    /// Precomputed per-stage lag accumulation weights and period-finalization flags.
+    ///
+    /// Computed once at setup time by
+    /// [`crate::lag_transition::precompute_stage_lag_transitions`] from the study
+    /// stages and the policy-graph season map. Length equals the number of study
+    /// stages. Indexed by stage: `stage_lag_transitions[t]`.
+    ///
+    /// Exposed to the forward pass and simulation pipeline via [`StageContext`].
+    stage_lag_transitions: Vec<StageLagTransition>,
 }
 
 impl StudySetup {
@@ -489,8 +499,8 @@ impl StudySetup {
         simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
-            build_scaling_report, compute_coefficient_range, summarize_scale_factors, LpDimensions,
-            StageScalingReport,
+            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
+            summarize_scale_factors,
         };
 
         let mut stage_templates = build_stage_templates(
@@ -781,6 +791,23 @@ impl StudySetup {
             .filter(|s| s.id >= 0)
             .cloned()
             .collect();
+
+        // Precompute per-stage lag accumulation weights from stage date boundaries
+        // and the policy-graph season map. This runs once at setup time; the
+        // resulting Vec is stored in StudySetup and borrowed read-only on the hot path.
+        let noop_season_map;
+        let season_map_ref = if let Some(sm) = system.policy_graph().season_map.as_ref() {
+            sm
+        } else {
+            // No season map: all stages produce zero-weight no-op transitions.
+            noop_season_map = cobre_core::temporal::SeasonMap {
+                cycle_type: cobre_core::temporal::SeasonCycleType::Monthly,
+                seasons: Vec::new(),
+            };
+            &noop_season_map
+        };
+        let stage_lag_transitions =
+            crate::lag_transition::precompute_stage_lag_transitions(&stages, season_map_ref);
 
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
@@ -1292,6 +1319,7 @@ impl StudySetup {
             budget: None,
             basis_padding_enabled: false,
             export_states: false,
+            stage_lag_transitions,
         })
     }
 
@@ -1514,6 +1542,7 @@ impl StudySetup {
             ncs_max_gen: &self.ncs_max_gen,
             discount_factors: &self.stage_templates.discount_factors,
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
+            stage_lag_transitions: &self.stage_lag_transitions,
         }
     }
 
@@ -1650,6 +1679,7 @@ impl StudySetup {
             ncs_max_gen: &self.ncs_max_gen,
             discount_factors: &self.stage_templates.discount_factors,
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
+            stage_lag_transitions: &self.stage_lag_transitions,
         };
 
         let training_ctx = TrainingContext {
@@ -2269,10 +2299,17 @@ pub fn prepare_stochastic(
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
-    use crate::hydro_models::PrepareHydroModelsResult;
     use crate::StageIndexer;
+    use crate::hydro_models::PrepareHydroModelsResult;
 
     use cobre_core::{
+        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
+    };
+    use cobre_core::{
+        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -2283,13 +2320,6 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId, SystemBuilder,
-    };
-    use cobre_core::{
-        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
-        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -2297,7 +2327,7 @@ mod tests {
         SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig,
         TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
-    use cobre_stochastic::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
+    use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     /// Build a minimal system with 1 bus, 1 thermal, 1 hydro, and `n_stages`
     /// study stages (each with 1 block). All bounds and penalties are set to
@@ -3248,7 +3278,7 @@ mod tests {
     /// default values for all fields.
     #[test]
     fn study_params_from_config_defaults() {
-        use super::{StudyParams, DEFAULT_FORWARD_PASSES, DEFAULT_SEED};
+        use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
         use crate::stopping_rule::StoppingMode;
         use cobre_io::config::{
             Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -5241,9 +5271,9 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::scenario::InflowModel as CoreInflowModel;
         use cobre_core::{
+            NonControllableSource,
             scenario::{ExternalNcsRow, NcsModel},
             system::SystemBuilder,
-            NonControllableSource,
         };
 
         let bus = Bus {

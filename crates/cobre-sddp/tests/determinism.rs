@@ -527,6 +527,7 @@ fn run_training(
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
     };
     let result = pool
         .install(|| {
@@ -638,6 +639,7 @@ fn run_simulation(
                     ncs_max_gen: &[],
                     discount_factors: &[],
                     cumulative_discount_factors: &[],
+                    stage_lag_transitions: &[],
                 },
                 fcf,
                 &TrainingContext {

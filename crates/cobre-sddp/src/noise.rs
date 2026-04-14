@@ -5,6 +5,7 @@
 //! into the stage LP before each solve.  Extracting them here eliminates the
 //! class of bugs where one call site receives a fix and others are forgotten.
 
+use cobre_core::temporal::StageLagTransition;
 use cobre_stochastic::{evaluate_par_batch, solve_par_noise_batch, StochasticContext};
 
 use crate::{
@@ -156,6 +157,7 @@ pub(crate) fn transform_inflow_noise(
 ///
 /// Shifts older lags backward, with newest lag = realized inflow from LP primal.
 /// No-op when `max_par_order == 0`. Zero heap allocations.
+#[allow(dead_code)]
 pub(crate) fn shift_lag_state(
     state: &mut [f64],
     incoming_lags: &[f64],
@@ -178,6 +180,122 @@ pub(crate) fn shift_lag_state(
         // Newest lag = realized inflow from z_h primal.
         state[lag_start + h] = z_t_h;
     }
+}
+
+/// Shift the lag portion of the outgoing state vector using pre-computed monthly inflows.
+///
+/// Private helper used by [`accumulate_and_shift_lag_state`] when finalizing a lag
+/// period. Takes a `monthly_inflows` slice of length `hydro_count` directly, avoiding
+/// the need to read z-inflow offsets from a full primal buffer.
+///
+/// The caller guarantees `monthly_inflows.len() >= indexer.hydro_count`.
+/// No heap allocations.
+// Used by accumulate_and_shift_lag_state, wired into call sites in ticket-006.
+#[allow(dead_code)]
+fn shift_lag_state_from_inflows(
+    state: &mut [f64],
+    incoming_lags: &[f64],
+    monthly_inflows: &[f64],
+    indexer: &crate::indexer::StageIndexer,
+) {
+    let n_h = indexer.hydro_count;
+    let l_max = indexer.max_par_order;
+    let lag_start = indexer.inflow_lags.start;
+    for h in 0..n_h {
+        // Shift older lags down (read from incoming_lags to avoid aliasing).
+        // incoming_lags is in lag-major layout: incoming_lags[lag * n_h + h].
+        for lag in (1..l_max).rev() {
+            state[lag_start + lag * n_h + h] = incoming_lags[(lag - 1) * n_h + h];
+        }
+        // Newest lag = weighted-average monthly inflow for this period.
+        state[lag_start + h] = monthly_inflows[h];
+    }
+}
+
+/// Accumulate this stage's inflow and, when a lag period finalizes, shift the lag state.
+///
+/// Replaces the direct [`shift_lag_state`] call for multi-resolution studies where
+/// stages may be shorter than the lag granularity (for example, weekly stages feeding
+/// a monthly lag slot).  The three-step logic:
+///
+/// 1. **Accumulate**: add `z_inflow[h] * stage_lag.accumulate_weight` to
+///    `lag_accumulator[h]` and `stage_lag.accumulate_weight` to `*lag_weight_accum`.
+/// 2. **Finalize** (only when `stage_lag.finalize_period && *lag_weight_accum > 0.0`):
+///    divide the accumulator by the total weight to get the weighted average, call
+///    [`shift_lag_state_from_inflows`] with those averages, then reset the accumulator.
+///    If `stage_lag.spillover_weight > 0.0`, seed the next period immediately.
+/// 3. **Non-finalizing stages**: `state` is left untouched (lags frozen).
+///
+/// For the monthly identity case (`accumulate_weight=1.0, spillover_weight=0.0,
+/// finalize_period=true`) the function produces bit-for-bit identical results to
+/// [`shift_lag_state`].
+///
+/// **Zero heap allocation.** All scratch work is performed in `lag_accumulator`,
+/// which is overwritten with the monthly averages during finalization before being
+/// reset.
+///
+/// # Panics (debug only)
+///
+/// Panics in debug builds if `lag_accumulator.len() < indexer.hydro_count`.
+// Wired into forward pass and simulation pipeline in ticket-006.
+#[allow(dead_code)]
+pub(crate) fn accumulate_and_shift_lag_state(
+    state: &mut [f64],
+    incoming_lags: &[f64],
+    unscaled_primal: &[f64],
+    indexer: &crate::indexer::StageIndexer,
+    stage_lag: &StageLagTransition,
+    lag_accumulator: &mut [f64],
+    lag_weight_accum: &mut f64,
+) {
+    let n_h = indexer.hydro_count;
+    let l_max = indexer.max_par_order;
+    if l_max == 0 || n_h == 0 {
+        return; // No lags to shift — identical early-return guard as shift_lag_state
+    }
+
+    debug_assert!(
+        lag_accumulator.len() >= n_h,
+        "lag_accumulator too short: {} < {n_h}",
+        lag_accumulator.len()
+    );
+
+    let z_start = indexer.z_inflow.start;
+
+    // ── Step 1: Accumulate ────────────────────────────────────────────────────
+    // Must happen unconditionally before finalize check, so this stage's
+    // contribution is included in the average.
+    let w = stage_lag.accumulate_weight;
+    for h in 0..n_h {
+        lag_accumulator[h] += unscaled_primal[z_start + h] * w;
+    }
+    *lag_weight_accum += w;
+
+    // ── Step 2: Finalize (if this stage closes a lag period) ──────────────────
+    if stage_lag.finalize_period && *lag_weight_accum > 0.0 {
+        // Overwrite lag_accumulator[h] with the weighted-average monthly inflow.
+        // The original accumulated sum is not needed after this point.
+        let inv = 1.0 / *lag_weight_accum;
+        lag_accumulator[..n_h].iter_mut().for_each(|v| *v *= inv);
+
+        shift_lag_state_from_inflows(state, incoming_lags, lag_accumulator, indexer);
+
+        // ── Reset accumulator, then optionally seed spillover ─────────────────
+        // Spillover uses the RAW z_inflow (not the averaged value), because it
+        // is this stage's contribution to the NEXT lag period.
+        if stage_lag.spillover_weight > 0.0 {
+            let sw = stage_lag.spillover_weight;
+            for h in 0..n_h {
+                lag_accumulator[h] = unscaled_primal[z_start + h] * sw;
+            }
+            *lag_weight_accum = sw;
+        } else {
+            lag_accumulator[..n_h].iter_mut().for_each(|v| *v = 0.0);
+            *lag_weight_accum = 0.0;
+        }
+    }
+    // ── Step 3: Non-finalizing stage ─────────────────────────────────────────
+    // Lags frozen — state is not modified. Accumulation already applied above.
 }
 
 /// Transform raw load noise `η` into patched load-balance RHS values.
@@ -325,6 +443,8 @@ mod tests {
             effective_eta_buf: Vec::with_capacity(n_hydros),
             unscaled_primal: Vec::new(),
             unscaled_dual: Vec::new(),
+            lag_accumulator: Vec::new(),
+            lag_weight_accum: 0.0,
         }
     }
 
@@ -651,6 +771,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -717,6 +838,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -783,6 +905,7 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
         };
         let training_ctx = TrainingContext {
             horizon: &horizon,
@@ -1037,5 +1160,201 @@ mod tests {
             &mut effective,
         );
         assert_eq!(effective, vec![-1.0, 1.0]);
+    }
+
+    // ── accumulate_and_shift_lag_state tests ─────────────────────────────────
+
+    use cobre_core::temporal::StageLagTransition;
+
+    use crate::noise::accumulate_and_shift_lag_state;
+
+    /// Monthly identity: `accumulate_weight=1.0`, `spillover_weight=0.0`, `finalize_period=true`.
+    ///
+    /// With a single finalization stage the result must be bit-for-bit
+    /// identical to `shift_lag_state`.
+    #[test]
+    fn test_accumulate_monthly_identity() {
+        // N=1 hydro, L=1 lag order.
+        let indexer = StageIndexer::new(1, 1);
+
+        // Reference: shift_lag_state result.
+        let mut state_ref = vec![500.0, 99.0];
+        let incoming_lags = vec![42.0];
+        let mut primal = vec![0.0; 10];
+        primal[indexer.z_inflow.start] = 77.0;
+        shift_lag_state(&mut state_ref, &incoming_lags, &primal, &indexer);
+
+        // Accumulate: single stage with identity weights.
+        let mut state_acc = vec![500.0, 99.0];
+        let mut lag_accumulator = vec![0.0_f64; 1];
+        let mut lag_weight_accum = 0.0_f64;
+        let stage_lag = StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+        };
+        accumulate_and_shift_lag_state(
+            &mut state_acc,
+            &incoming_lags,
+            &primal,
+            &indexer,
+            &stage_lag,
+            &mut lag_accumulator,
+            &mut lag_weight_accum,
+        );
+
+        assert_eq!(
+            state_acc, state_ref,
+            "monthly identity must produce identical result to shift_lag_state"
+        );
+        // Accumulator must be zeroed (clean for next period).
+        assert_eq!(lag_accumulator[0], 0.0);
+        assert_eq!(lag_weight_accum, 0.0);
+    }
+
+    /// Four weekly stages each contributing weight=0.25, finalize only on stage 3.
+    ///
+    /// After processing all four stages the lag[0] must equal the weighted
+    /// average: (500 + 480 + 520 + 510) / 4 = 502.5.
+    #[test]
+    fn test_accumulate_four_weeks_then_finalize() {
+        let indexer = StageIndexer::new(1, 1);
+        let mut state = vec![500.0, 0.0]; // storage, lag0
+        let incoming_lags = vec![0.0]; // lag-major: lag0 for hydro 0
+        let mut lag_accumulator = vec![0.0_f64; 1];
+        let mut lag_weight_accum = 0.0_f64;
+
+        let z_inflows = [500.0_f64, 480.0, 520.0, 510.0];
+
+        for (week, &z) in z_inflows.iter().enumerate() {
+            let finalize = week == 3;
+            let stage_lag = StageLagTransition {
+                accumulate_weight: 0.25,
+                spillover_weight: 0.0,
+                finalize_period: finalize,
+            };
+            let mut primal = vec![0.0; 10];
+            primal[indexer.z_inflow.start] = z;
+            accumulate_and_shift_lag_state(
+                &mut state,
+                &incoming_lags,
+                &primal,
+                &indexer,
+                &stage_lag,
+                &mut lag_accumulator,
+                &mut lag_weight_accum,
+            );
+        }
+
+        // lag[0] is at inflow_lags.start = 1 (state index).
+        let expected = (500.0 + 480.0 + 520.0 + 510.0) / 4.0;
+        assert!(
+            (state[indexer.inflow_lags.start] - expected).abs() < 1e-12,
+            "lag[0] must equal weighted average {expected}, got {}",
+            state[indexer.inflow_lags.start]
+        );
+        // Accumulator reset after finalization.
+        assert_eq!(lag_accumulator[0], 0.0);
+        assert_eq!(lag_weight_accum, 0.0);
+    }
+
+    /// Spillover seeds the next lag period with raw `z_inflow` * `spillover_weight`.
+    #[test]
+    fn test_accumulate_spillover_seeds_next_period() {
+        let indexer = StageIndexer::new(1, 1);
+        let mut state = vec![0.0, 0.0];
+        let incoming_lags = vec![0.0];
+        let mut lag_accumulator = vec![0.0_f64; 1];
+        let mut lag_weight_accum = 0.0_f64;
+        let mut primal = vec![0.0; 10];
+        primal[indexer.z_inflow.start] = 200.0;
+
+        let stage_lag = StageLagTransition {
+            accumulate_weight: 0.968, // 1.0 - 0.032 = days in period / days in month
+            spillover_weight: 0.032,
+            finalize_period: true,
+        };
+        accumulate_and_shift_lag_state(
+            &mut state,
+            &incoming_lags,
+            &primal,
+            &indexer,
+            &stage_lag,
+            &mut lag_accumulator,
+            &mut lag_weight_accum,
+        );
+
+        // After finalization, accumulator seeded with raw z_inflow * spillover_weight.
+        let expected_seed = 200.0 * 0.032;
+        assert!(
+            (lag_accumulator[0] - expected_seed).abs() < 1e-12,
+            "accumulator must be seeded with z_inflow * spillover_weight = {expected_seed}, got {}",
+            lag_accumulator[0]
+        );
+        assert!(
+            (lag_weight_accum - 0.032).abs() < 1e-12,
+            "lag_weight_accum must equal spillover_weight = 0.032, got {lag_weight_accum}"
+        );
+    }
+
+    /// `max_par_order == 0`: function must return immediately, nothing modified.
+    #[test]
+    fn test_accumulate_noop_for_par0() {
+        let indexer = StageIndexer::new(2, 0); // no lag order
+        let mut state = vec![100.0, 200.0];
+        let incoming_lags: Vec<f64> = vec![];
+        let primal = vec![0.0; 10];
+        let mut lag_accumulator: Vec<f64> = vec![]; // empty — should never be accessed
+        let mut lag_weight_accum = 0.0_f64;
+        let stage_lag = StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+        };
+        accumulate_and_shift_lag_state(
+            &mut state,
+            &incoming_lags,
+            &primal,
+            &indexer,
+            &stage_lag,
+            &mut lag_accumulator,
+            &mut lag_weight_accum,
+        );
+        assert_eq!(
+            state,
+            vec![100.0, 200.0],
+            "state must be unchanged for PAR(0)"
+        );
+        assert_eq!(lag_weight_accum, 0.0, "weight must be unchanged for PAR(0)");
+    }
+
+    /// Storage region of state (indices 0..N) must not be touched by the shift.
+    #[test]
+    fn test_accumulate_preserves_storage() {
+        // N=2 hydros, L=2 lag order: state = [v0, v1, lag0_h0, lag0_h1, lag1_h0, lag1_h1]
+        let indexer = StageIndexer::new(2, 2);
+        let mut state = vec![100.0, 200.0, 0.0, 0.0, 0.0, 0.0];
+        let incoming_lags = vec![1.0, 2.0, 3.0, 4.0]; // lag-major: lag0 h0,h1; lag1 h0,h1
+        let mut primal = vec![0.0; 20];
+        primal[indexer.z_inflow.start] = 50.0;
+        primal[indexer.z_inflow.start + 1] = 60.0;
+        let mut lag_accumulator = vec![0.0_f64; 2];
+        let mut lag_weight_accum = 0.0_f64;
+        let stage_lag = StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+        };
+        accumulate_and_shift_lag_state(
+            &mut state,
+            &incoming_lags,
+            &primal,
+            &indexer,
+            &stage_lag,
+            &mut lag_accumulator,
+            &mut lag_weight_accum,
+        );
+        assert_eq!(state[0], 100.0, "storage[0] must be preserved");
+        assert_eq!(state[1], 200.0, "storage[1] must be preserved");
     }
 }

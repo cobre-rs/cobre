@@ -17,5 +17,5 @@ pub mod opening_tree;
 pub mod qmc_halton;
 pub mod qmc_sobol;
 
-pub use generate::{ClassDimensions, generate_opening_tree};
+pub use generate::{generate_opening_tree, ClassDimensions};
 pub use opening_tree::{OpeningTree, OpeningTreeView};

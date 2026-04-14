@@ -55,10 +55,10 @@ use cobre_core::{
 };
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{
-    context::OpeningTree, discover_historical_windows, standardize_external_inflow,
-    standardize_external_load, standardize_external_ncs, standardize_historical_windows,
-    validate_external_library, validate_historical_library, ExternalScenarioLibrary,
-    HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
+    context::OpeningTree, discover_historical_windows, pad_library_to_uniform,
+    standardize_external_inflow, standardize_external_load, standardize_external_ncs,
+    standardize_historical_windows, validate_external_library, validate_historical_library,
+    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
 };
 
 use crate::{
@@ -872,25 +872,19 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
-                    if rows_per_stage[0] % n_hydros != 0 {
-                        return Err(SddpError::Stochastic(
-                            cobre_stochastic::StochasticError::InsufficientData {
-                                context: format!(
-                                    "external inflow rows at stage 0 ({}) is not divisible by \
-                                     hydro count ({n_hydros}); each stage must have exactly \
-                                     n_scenarios * n_entities rows",
-                                    rows_per_stage[0],
-                                ),
-                            },
-                        ));
-                    }
-                    rows_per_stage[0] / n_hydros
+                let per_stage_scenarios: Vec<usize> = if n_hydros > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_hydros).collect()
                 } else {
-                    0
+                    vec![0usize; n_stages]
                 };
-                let mut library =
-                    ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_hydros, "inflow");
+                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+                let mut library = ExternalScenarioLibrary::new(
+                    n_stages,
+                    n_scenarios_ext,
+                    n_hydros,
+                    "inflow",
+                    per_stage_scenarios,
+                );
                 validate_external_library(
                     &library,
                     &hydro_ids,
@@ -909,6 +903,7 @@ impl StudySetup {
                     &system.initial_conditions().past_inflows,
                     &stage_lag_transitions,
                 );
+                pad_library_to_uniform(&mut library);
                 Some(library)
             } else {
                 None
@@ -940,25 +935,19 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                let n_scenarios_ext = if n_buses > 0 && !rows_per_stage.is_empty() {
-                    if rows_per_stage[0] % n_buses != 0 {
-                        return Err(SddpError::Stochastic(
-                            cobre_stochastic::StochasticError::InsufficientData {
-                                context: format!(
-                                    "external load rows at stage 0 ({}) is not divisible by \
-                                     bus count ({n_buses}); each stage must have exactly \
-                                     n_scenarios * n_entities rows",
-                                    rows_per_stage[0],
-                                ),
-                            },
-                        ));
-                    }
-                    rows_per_stage[0] / n_buses
+                let per_stage_scenarios: Vec<usize> = if n_buses > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
                 } else {
-                    0
+                    vec![0usize; n_stages]
                 };
-                let mut library =
-                    ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_buses, "load");
+                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+                let mut library = ExternalScenarioLibrary::new(
+                    n_stages,
+                    n_scenarios_ext,
+                    n_buses,
+                    "load",
+                    per_stage_scenarios,
+                );
                 validate_external_library(
                     &library,
                     &bus_ids,
@@ -975,6 +964,7 @@ impl StudySetup {
                     system.load_models(),
                     n_stages,
                 );
+                pad_library_to_uniform(&mut library);
                 Some(library)
             } else {
                 None
@@ -1002,24 +992,19 @@ impl StudySetup {
                     rows_per_stage[s] += 1;
                 }
             }
-            let n_scenarios_ext = if n_ncs > 0 && !rows_per_stage.is_empty() {
-                if rows_per_stage[0] % n_ncs != 0 {
-                    return Err(SddpError::Stochastic(
-                        cobre_stochastic::StochasticError::InsufficientData {
-                            context: format!(
-                                "external NCS rows at stage 0 ({}) is not divisible by \
-                                 NCS count ({n_ncs}); each stage must have exactly \
-                                 n_scenarios * n_entities rows",
-                                rows_per_stage[0],
-                            ),
-                        },
-                    ));
-                }
-                rows_per_stage[0] / n_ncs
+            let per_stage_scenarios: Vec<usize> = if n_ncs > 0 {
+                rows_per_stage.iter().map(|&r| r / n_ncs).collect()
             } else {
-                0
+                vec![0usize; n_stages]
             };
-            let mut library = ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_ncs, "ncs");
+            let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+            let mut library = ExternalScenarioLibrary::new(
+                n_stages,
+                n_scenarios_ext,
+                n_ncs,
+                "ncs",
+                per_stage_scenarios,
+            );
             validate_external_library(
                 &library,
                 &ncs_ids,
@@ -1036,6 +1021,7 @@ impl StudySetup {
                 system.ncs_models(),
                 n_stages,
             );
+            pad_library_to_uniform(&mut library);
             Some(library)
         } else {
             None
@@ -1111,25 +1097,19 @@ impl StudySetup {
                     rows_per_stage[s] += 1;
                 }
             }
-            let n_scenarios_ext = if n_hydros > 0 && !rows_per_stage.is_empty() {
-                if rows_per_stage[0] % n_hydros != 0 {
-                    return Err(SddpError::Stochastic(
-                        cobre_stochastic::StochasticError::InsufficientData {
-                            context: format!(
-                                "external inflow rows at stage 0 ({}) is not divisible by \
-                                     hydro count ({n_hydros}); each stage must have exactly \
-                                     n_scenarios * n_entities rows",
-                                rows_per_stage[0],
-                            ),
-                        },
-                    ));
-                }
-                rows_per_stage[0] / n_hydros
+            let per_stage_scenarios: Vec<usize> = if n_hydros > 0 {
+                rows_per_stage.iter().map(|&r| r / n_hydros).collect()
             } else {
-                0
+                vec![0usize; n_stages]
             };
-            let mut library =
-                ExternalScenarioLibrary::new(n_stages, n_scenarios_ext, n_hydros, "inflow");
+            let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+            let mut library = ExternalScenarioLibrary::new(
+                n_stages,
+                n_scenarios_ext,
+                n_hydros,
+                "inflow",
+                per_stage_scenarios,
+            );
             validate_external_library(
                 &library,
                 &hydro_ids,
@@ -1148,6 +1128,7 @@ impl StudySetup {
                 &system.initial_conditions().past_inflows,
                 &stage_lag_transitions,
             );
+            pad_library_to_uniform(&mut library);
             Some(library)
         } else {
             None
@@ -1177,25 +1158,19 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                let n_scenarios_ext = if n_buses > 0 && !rows_per_stage.is_empty() {
-                    if rows_per_stage[0] % n_buses != 0 {
-                        return Err(SddpError::Stochastic(
-                            cobre_stochastic::StochasticError::InsufficientData {
-                                context: format!(
-                                    "external load rows at stage 0 ({}) is not divisible by \
-                                     bus count ({n_buses}); each stage must have exactly \
-                                     n_scenarios * n_entities rows",
-                                    rows_per_stage[0],
-                                ),
-                            },
-                        ));
-                    }
-                    rows_per_stage[0] / n_buses
+                let per_stage_scenarios: Vec<usize> = if n_buses > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
                 } else {
-                    0
+                    vec![0usize; n_stages_sim]
                 };
-                let mut library =
-                    ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_buses, "load");
+                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+                let mut library = ExternalScenarioLibrary::new(
+                    n_stages_sim,
+                    n_scenarios_ext,
+                    n_buses,
+                    "load",
+                    per_stage_scenarios,
+                );
                 validate_external_library(
                     &library,
                     &bus_ids,
@@ -1212,6 +1187,7 @@ impl StudySetup {
                     system.load_models(),
                     n_stages_sim,
                 );
+                pad_library_to_uniform(&mut library);
                 Some(library)
             } else {
                 None
@@ -1237,25 +1213,19 @@ impl StudySetup {
                         rows_per_stage[s] += 1;
                     }
                 }
-                let n_scenarios_ext = if n_ncs > 0 && !rows_per_stage.is_empty() {
-                    if rows_per_stage[0] % n_ncs != 0 {
-                        return Err(SddpError::Stochastic(
-                            cobre_stochastic::StochasticError::InsufficientData {
-                                context: format!(
-                                    "external NCS rows at stage 0 ({}) is not divisible by \
-                                     NCS count ({n_ncs}); each stage must have exactly \
-                                     n_scenarios * n_entities rows",
-                                    rows_per_stage[0],
-                                ),
-                            },
-                        ));
-                    }
-                    rows_per_stage[0] / n_ncs
+                let per_stage_scenarios: Vec<usize> = if n_ncs > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_ncs).collect()
                 } else {
-                    0
+                    vec![0usize; n_stages_sim]
                 };
-                let mut library =
-                    ExternalScenarioLibrary::new(n_stages_sim, n_scenarios_ext, n_ncs, "ncs");
+                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
+                let mut library = ExternalScenarioLibrary::new(
+                    n_stages_sim,
+                    n_scenarios_ext,
+                    n_ncs,
+                    "ncs",
+                    per_stage_scenarios,
+                );
                 validate_external_library(
                     &library,
                     &ncs_ids,
@@ -1272,6 +1242,7 @@ impl StudySetup {
                     system.ncs_models(),
                     n_stages_sim,
                 );
+                pad_library_to_uniform(&mut library);
                 Some(library)
             } else {
                 None
@@ -2162,6 +2133,7 @@ pub fn load_load_factors_for_stochastic(
 ///   `estimate_from_history` or opening tree loading.
 /// - [`SddpError::Stochastic`] — PAR parameter validation or spectral
 ///   decomposition failure from `build_stochastic_context` or estimation.
+#[allow(clippy::too_many_lines)]
 pub fn prepare_stochastic(
     system: System,
     case_dir: &Path,
@@ -2269,6 +2241,126 @@ pub fn prepare_stochastic(
         }
     };
 
+    // Compute per-stage external scenario counts for opening tree clamping.
+    //
+    // When any entity class uses External sampling, the external library is
+    // padded to a uniform scenario count after loading. The opening tree
+    // generator must clamp per-stage openings to the pre-padding raw count to
+    // avoid redundant LP solves for stages with fewer distinct scenarios.
+    //
+    // The raw count for inflow is `rows_per_stage / n_hydros`.
+    // For load it is `rows_per_stage / n_buses`.
+    // For ncs it is `rows_per_stage / n_ncs_entities`.
+    // When multiple classes use External, the element-wise minimum is used.
+    let external_scenario_counts: Option<Vec<usize>> = {
+        let study_stages: Vec<_> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+        let n_stages = study_stages.len();
+
+        let inflow_counts: Option<Vec<usize>> =
+            if training_source.inflow_scheme == SamplingScheme::External && n_stages > 0 {
+                let external_rows = system.external_scenarios();
+                let n_hydros = system.hydros().len();
+                let mut rows_per_stage = vec![0usize; n_stages];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                Some(if n_hydros > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_hydros).collect()
+                } else {
+                    vec![0usize; n_stages]
+                })
+            } else {
+                None
+            };
+
+        let load_counts: Option<Vec<usize>> =
+            if training_source.load_scheme == SamplingScheme::External && n_stages > 0 {
+                let external_rows = system.external_load_scenarios();
+                let mut bus_ids: Vec<EntityId> = system
+                    .load_models()
+                    .iter()
+                    .filter(|m| m.std_mw > 0.0)
+                    .map(|m| m.bus_id)
+                    .collect();
+                bus_ids.sort_unstable_by_key(|id| id.0);
+                bus_ids.dedup();
+                let n_buses = bus_ids.len();
+                let mut rows_per_stage = vec![0usize; n_stages];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                Some(if n_buses > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
+                } else {
+                    vec![0usize; n_stages]
+                })
+            } else {
+                None
+            };
+
+        let ncs_counts: Option<Vec<usize>> =
+            if training_source.ncs_scheme == SamplingScheme::External && n_stages > 0 {
+                let external_rows = system.external_ncs_scenarios();
+                let mut ncs_ids: Vec<EntityId> =
+                    system.ncs_models().iter().map(|m| m.ncs_id).collect();
+                ncs_ids.sort_unstable_by_key(|id| id.0);
+                ncs_ids.dedup();
+                let n_ncs = ncs_ids.len();
+                let mut rows_per_stage = vec![0usize; n_stages];
+                #[allow(clippy::cast_sign_loss)]
+                for row in external_rows {
+                    let s = row.stage_id as usize;
+                    if s < n_stages {
+                        rows_per_stage[s] += 1;
+                    }
+                }
+                Some(if n_ncs > 0 {
+                    rows_per_stage.iter().map(|&r| r / n_ncs).collect()
+                } else {
+                    vec![0usize; n_stages]
+                })
+            } else {
+                None
+            };
+
+        // Combine class counts via element-wise minimum.
+        match (inflow_counts, load_counts, ncs_counts) {
+            (None, None, None) => None,
+            (Some(a), None, None) => Some(a),
+            (None, Some(b), None) => Some(b),
+            (None, None, Some(c)) => Some(c),
+            (Some(a), Some(b), None) => {
+                Some(a.iter().zip(b.iter()).map(|(&x, &y)| x.min(y)).collect())
+            }
+            (Some(a), None, Some(c)) => {
+                Some(a.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
+            }
+            (None, Some(b), Some(c)) => {
+                Some(b.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
+            }
+            (Some(a), Some(b), Some(c)) => Some(
+                a.iter()
+                    .zip(b.iter())
+                    .zip(c.iter())
+                    .map(|((&x, &y), &z)| x.min(y).min(z))
+                    .collect(),
+            ),
+        }
+    };
+
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
     let stochastic = cobre_stochastic::build_stochastic_context(
         &system,
@@ -2279,6 +2371,7 @@ pub fn prepare_stochastic(
         OpeningTreeInputs {
             user_tree: user_opening_tree,
             historical_library: opening_tree_library.as_ref(),
+            external_scenario_counts,
         },
         cobre_stochastic::ClassSchemes {
             inflow: Some(training_source.inflow_scheme),

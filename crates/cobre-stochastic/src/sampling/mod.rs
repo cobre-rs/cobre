@@ -30,20 +30,20 @@ pub mod window;
 
 pub use class_sampler::{ClassSampleRequest, ClassSampler};
 pub use external::{
-    ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
-    standardize_external_ncs, validate_external_library,
+    pad_library_to_uniform, standardize_external_inflow, standardize_external_load,
+    standardize_external_ncs, validate_external_library, ExternalScenarioLibrary,
 };
 pub use historical::{
-    HistoricalScenarioLibrary, standardize_historical_windows, validate_historical_library,
+    standardize_historical_windows, validate_historical_library, HistoricalScenarioLibrary,
 };
 pub use window::discover_historical_windows;
 pub(crate) mod out_of_sample;
 
-use cobre_core::{EntityId, scenario::SamplingScheme, temporal::NoiseMethod, temporal::Stage};
+use cobre_core::{scenario::SamplingScheme, temporal::NoiseMethod, temporal::Stage, EntityId};
 
 use crate::{
-    StochasticError, context::StochasticContext, correlation::resolve::DecomposedCorrelation,
-    tree::generate::ClassDimensions,
+    context::StochasticContext, correlation::resolve::DecomposedCorrelation,
+    tree::generate::ClassDimensions, StochasticError,
 };
 
 // ---------------------------------------------------------------------------
@@ -643,7 +643,6 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, InflowModel,
@@ -653,14 +652,15 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
 
-    use super::{ClassSampler, ForwardNoise, ForwardSampler, SampleRequest, build_forward_sampler};
+    use super::{build_forward_sampler, ClassSampler, ForwardNoise, ForwardSampler, SampleRequest};
     use crate::{
-        StochasticError,
-        context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context},
+        context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs},
         tree::generate::ClassDimensions,
         tree::opening_tree::OpeningTree,
+        StochasticError,
     };
 
     fn make_bus(id: i32) -> Bus {
@@ -986,7 +986,13 @@ mod tests {
             n_load_buses: ctx.n_load_buses(),
             n_ncs: ctx.n_stochastic_ncs(),
         };
-        let lib = ExternalScenarioLibrary::new(stages.len(), 10, n_hydros, "inflow");
+        let lib = ExternalScenarioLibrary::new(
+            stages.len(),
+            10,
+            n_hydros,
+            "inflow",
+            vec![10usize; stages.len()],
+        );
         let config = super::ForwardSamplerConfig {
             class_schemes: ClassSchemes {
                 inflow: Some(SamplingScheme::External),

@@ -2,12 +2,11 @@
 //! and deterministic per-opening seeds. Each `(opening_index, stage)` pair
 //! receives independent noise with spatial correlation applied in-place.
 
-use cobre_core::{EntityId, Stage, temporal::NoiseMethod};
+use cobre_core::{temporal::NoiseMethod, EntityId, Stage};
 use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     correlation::resolve::DecomposedCorrelation,
     noise::{rng::rng_from_seed, seed::derive_opening_seed},
     sampling::historical::HistoricalScenarioLibrary,
@@ -15,8 +14,9 @@ use crate::{
         lhs::generate_lhs,
         opening_tree::OpeningTree,
         qmc_halton::generate_qmc_halton,
-        qmc_sobol::{MAX_SOBOL_DIM, generate_qmc_sobol},
+        qmc_sobol::{generate_qmc_sobol, MAX_SOBOL_DIM},
     },
+    StochasticError,
 };
 
 /// Per-class entity counts for the noise dimension.
@@ -73,13 +73,26 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// replacement, so duplicate selections are possible even after clamping.
 /// A `tracing::warn!` is emitted per stage when clamping occurs.
 ///
+/// When `external_scenario_counts` is `Some`, each stage's opening count is additionally
+/// clamped to the corresponding element of that slice. This prevents redundant LP solves
+/// for stages where the external library was padded from fewer raw scenarios. A
+/// `tracing::warn!` is emitted per stage when External clamping reduces the opening count.
+/// The effective opening count is `min(branching_factor, historical_clamp, external_clamp)`.
+///
 /// # Errors
 ///
 /// - Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses
 ///   [`NoiseMethod::Selective`].
 /// - Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses
 ///   [`NoiseMethod::HistoricalResiduals`] and `historical_library` is `None`.
-#[allow(clippy::too_many_lines)]
+///
+/// # Panics
+///
+/// Panics if `external_scenario_counts` is `Some` and its length differs
+/// from `stages.len()`.
+// TODO: absorb historical_library + external_scenario_counts into OpeningTreeInputs
+// to reduce argument count (currently 8/7).
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],
@@ -88,27 +101,64 @@ pub fn generate_opening_tree(
     entity_order: &[EntityId],
     dims: ClassDimensions,
     historical_library: Option<&HistoricalScenarioLibrary>,
+    external_scenario_counts: Option<&[usize]>,
 ) -> Result<OpeningTree, StochasticError> {
+    if let Some(counts) = external_scenario_counts {
+        assert_eq!(
+            counts.len(),
+            stages.len(),
+            "external_scenario_counts length ({}) must equal stages length ({})",
+            counts.len(),
+            stages.len(),
+        );
+    }
+
     let n_stages = stages.len();
 
     let inflow_order = &entity_order[..dims.n_hydros];
     let load_order = &entity_order[dims.n_hydros..dims.n_hydros + dims.n_load_buses];
     let ncs_order = &entity_order[dims.n_hydros + dims.n_load_buses..];
 
-    // Compute per-stage opening counts. HistoricalResiduals stages are clamped
-    // to n_windows to reduce (but not eliminate) duplicate window selections.
+    // Compute per-stage opening counts.
+    //
+    // Two independent clamping steps are applied in order:
+    //   1. HistoricalResiduals: clamp to `n_windows` to reduce duplicate window
+    //      selections (existing behaviour).
+    //   2. External: clamp to `external_scenario_counts[stage_idx]` to avoid
+    //      redundant LP solves when the external library was padded from fewer
+    //      raw scenarios than the configured branching factor.
+    //
+    // Both clamps apply when both are configured; the tighter one wins.
     let openings_per_stage: Vec<usize> = stages
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(stage_idx, s)| {
+            let mut effective = s.scenario_config.branching_factor;
+
+            // Historical residuals clamping (existing logic).
             if s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals {
                 if let Some(lib) = historical_library {
-                    s.scenario_config.branching_factor.min(lib.n_windows())
-                } else {
-                    s.scenario_config.branching_factor
+                    effective = effective.min(lib.n_windows());
                 }
-            } else {
-                s.scenario_config.branching_factor
             }
+
+            // External scenario clamping (new).
+            if let Some(counts) = external_scenario_counts {
+                let raw = counts[stage_idx];
+                if raw < s.scenario_config.branching_factor && raw <= effective {
+                    tracing::warn!(
+                        stage_id = s.id,
+                        "External scenarios: {} raw scenarios < branching_factor {}; \
+                         opening tree clamped to {} openings",
+                        raw,
+                        s.scenario_config.branching_factor,
+                        raw,
+                    );
+                }
+                effective = effective.min(raw);
+            }
+
+            effective
         })
         .collect();
 
@@ -214,19 +264,19 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, Stage,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::{
             BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
         },
+        EntityId, Stage,
     };
 
     use crate::{
-        StochasticError, correlation::resolve::DecomposedCorrelation,
-        sampling::historical::HistoricalScenarioLibrary,
+        correlation::resolve::DecomposedCorrelation,
+        sampling::historical::HistoricalScenarioLibrary, StochasticError,
     };
 
-    use super::{ClassDimensions, generate_opening_tree};
+    use super::{generate_opening_tree, ClassDimensions};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -331,9 +381,9 @@ mod tests {
             n_ncs: 0,
         };
         let tree1 =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
         let tree2 =
-            generate_opening_tree(42, &stages, 2, &corr2, &entity_order, dims, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr2, &entity_order, dims, None, None).unwrap();
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -358,7 +408,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -380,9 +431,9 @@ mod tests {
         };
 
         let tree_a =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
         let tree_b =
-            generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+            generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -408,7 +459,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -432,7 +484,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims, None, None).unwrap();
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -454,8 +507,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(12345, &stages, 1, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(12345, &stages, 1, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -493,7 +546,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims, None, None).unwrap();
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -521,8 +575,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -568,7 +622,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims, None, None).unwrap();
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];
@@ -602,7 +657,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None).unwrap();
+        let tree =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
 
         // Golden values from pre-refactor opening-major implementation.
         assert_eq!(
@@ -653,7 +709,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None);
+        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -686,8 +742,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -725,8 +781,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -794,8 +850,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -823,7 +879,16 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, dim_over, &corr, &entity_order, dims, None);
+        let result = generate_opening_tree(
+            42,
+            &stages,
+            dim_over,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+        );
 
         match result {
             Err(StochasticError::DimensionExceedsCapacity {
@@ -858,8 +923,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -896,8 +961,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -927,8 +992,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree =
-            generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None).unwrap();
+        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
+            .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -1007,9 +1072,17 @@ mod tests {
         let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
 
         // Generate tree via the new per-class path (the only path in generate_opening_tree).
-        let tree_per_class =
-            generate_opening_tree(77, &stages, 2, &corr_per_class, &entity_order, dims, None)
-                .unwrap();
+        let tree_per_class = generate_opening_tree(
+            77,
+            &stages,
+            2,
+            &corr_per_class,
+            &entity_order,
+            dims,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Reproduce the old full-vector path manually: generate noise then call
         // apply_correlation on the full vector (not per-class).
@@ -1067,6 +1140,7 @@ mod tests {
     /// (identity group). Verifies that the per-class spectral path produces
     /// bit-identical results to the full-vector path for mixed-class scenarios.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_per_class_tree_matches_full_vector_multi_class() {
         use crate::noise::{rng::rng_from_seed, seed::derive_opening_seed};
         use rand::RngExt;
@@ -1119,9 +1193,17 @@ mod tests {
         let corr_per_class = DecomposedCorrelation::build(&corr_model).unwrap();
         let mut corr_full = DecomposedCorrelation::build(&corr_model).unwrap();
 
-        let tree_per_class =
-            generate_opening_tree(77, &stages, 3, &corr_per_class, &entity_order, dims, None)
-                .unwrap();
+        let tree_per_class = generate_opening_tree(
+            77,
+            &stages,
+            3,
+            &corr_per_class,
+            &entity_order,
+            dims,
+            None,
+            None,
+        )
+        .unwrap();
 
         corr_full.resolve_positions(&entity_order);
 
@@ -1243,6 +1325,7 @@ mod tests {
             &entity_order,
             dims,
             None,
+            None,
         )
         .unwrap();
 
@@ -1355,6 +1438,7 @@ mod tests {
             &entity_order,
             dims,
             None,
+            None,
         )
         .unwrap();
 
@@ -1450,7 +1534,7 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None);
+        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -1502,6 +1586,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
         )
         .unwrap();
 
@@ -1559,8 +1644,17 @@ mod tests {
             n_ncs,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, Some(&lib))
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+            None,
+        )
+        .unwrap();
 
         for opening_idx in 0..branching_factor {
             let slice = tree.opening(0, opening_idx);
@@ -1607,6 +1701,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
         )
         .unwrap();
 
@@ -1648,6 +1743,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
         )
         .unwrap();
         let tree2 = generate_opening_tree(
@@ -1658,6 +1754,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
         )
         .unwrap();
 
@@ -1670,5 +1767,136 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// External clamping reduces opening count when raw < `branching_factor`.
+    ///
+    /// 3 stages with `branching_factor=10`, `external_scenario_counts=[2, 10, 5]`.
+    /// Stage 0 clamps to 2, stage 1 stays at 10 (no clamping), stage 2 clamps to 5.
+    #[test]
+    fn test_external_clamping_reduces_openings() {
+        let stages = vec![
+            make_stage(0, 0, 10),
+            make_stage(1, 1, 10),
+            make_stage(2, 2, 10),
+        ];
+        let corr = identity_correlation(&[1]);
+        let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        let external_counts = [2usize, 10, 5];
+
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            1,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            Some(&external_counts),
+        )
+        .unwrap();
+
+        assert_eq!(tree.n_openings(0), 2, "stage 0 must be clamped to 2");
+        assert_eq!(tree.n_openings(1), 10, "stage 1 must remain at 10");
+        assert_eq!(tree.n_openings(2), 5, "stage 2 must be clamped to 5");
+    }
+
+    /// Passing `external_scenario_counts = None` leaves opening counts unchanged
+    /// (backward-compatible behaviour).
+    #[test]
+    fn test_external_clamping_none_no_effect() {
+        let stages = vec![make_stage(0, 0, 5), make_stage(1, 1, 5)];
+        let corr = identity_correlation(&[1]);
+        let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let tree =
+            generate_opening_tree(42, &stages, 1, &corr, &entity_order, dims, None, None).unwrap();
+
+        assert_eq!(tree.n_openings(0), 5, "stage 0 must remain at 5");
+        assert_eq!(tree.n_openings(1), 5, "stage 1 must remain at 5");
+    }
+
+    /// Both Historical and External clamping apply simultaneously; the tighter
+    /// clamp wins.
+    ///
+    /// `branching_factor=10`, `n_windows=5`, `external_count=3` -> effective=3.
+    #[test]
+    fn test_external_and_historical_clamping_combined() {
+        let n_windows = 5_usize;
+        let n_hydros = 2_usize;
+        let branching_factor = 10_usize;
+
+        let lib = make_test_library(n_windows, 1, n_hydros);
+
+        let stages = vec![make_stage_with_method(
+            0,
+            1,
+            branching_factor,
+            NoiseMethod::HistoricalResiduals,
+        )];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        let external_counts = [3usize];
+
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            n_hydros,
+            &corr,
+            &entity_order,
+            dims,
+            Some(&lib),
+            Some(&external_counts),
+        )
+        .unwrap();
+
+        assert_eq!(
+            tree.n_openings(0),
+            3,
+            "external clamp (3) is tighter than historical (5); effective must be 3"
+        );
+    }
+
+    /// Passing `external_scenario_counts` with wrong length panics with a
+    /// descriptive message.
+    #[test]
+    #[should_panic(expected = "external_scenario_counts length")]
+    fn test_external_clamping_counts_length_mismatch_panics() {
+        let stages = vec![make_stage(0, 0, 5), make_stage(1, 1, 5)];
+        let corr = identity_correlation(&[1]);
+        let entity_order = vec![EntityId(1)];
+        let dims = ClassDimensions {
+            n_hydros: 1,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        // 2 stages but only 1 count — must panic.
+        let external_counts = [1usize];
+
+        let _ = generate_opening_tree(
+            42,
+            &stages,
+            1,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            Some(&external_counts),
+        );
     }
 }

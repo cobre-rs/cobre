@@ -58,7 +58,8 @@ use crate::par::{evaluate::solve_par_noise, precompute::PrecomputedPar};
 /// ```
 /// use cobre_stochastic::ExternalScenarioLibrary;
 ///
-/// let mut lib = ExternalScenarioLibrary::new(12, 50, 5, "inflow");
+/// let raw = vec![50usize; 12];
+/// let mut lib = ExternalScenarioLibrary::new(12, 50, 5, "inflow", raw);
 /// assert_eq!(lib.n_stages(), 12);
 /// assert_eq!(lib.n_scenarios(), 50);
 /// assert_eq!(lib.n_entities(), 5);
@@ -74,36 +75,60 @@ pub struct ExternalScenarioLibrary {
     eta: Box<[f64]>,
     /// Number of study stages.
     n_stages: usize,
-    /// Number of scenarios per stage (uniform across all stages — V3.4).
+    /// Number of scenarios per stage (the padded, uniform count used for the eta buffer).
     n_scenarios: usize,
     /// Number of entities in the eta vector width.
     n_entities: usize,
     /// Entity class label for diagnostic messages (e.g., `"inflow"`, `"load"`, `"ncs"`).
     entity_class: &'static str,
+    /// Pre-padding scenario count per stage.
+    ///
+    /// When no padding is needed, all entries equal `n_scenarios`. When
+    /// padding was applied (non-uniform input counts), stages with fewer raw
+    /// scenarios retain their original count here so that downstream code
+    /// (e.g., opening-tree clamping) can distinguish padded from unpadded
+    /// stages.
+    raw_scenarios_per_stage: Vec<usize>,
 }
 
 impl ExternalScenarioLibrary {
     /// Construct a new library with zero-filled buffers.
     ///
+    /// `raw_scenarios_per_stage` records the pre-padding scenario count for
+    /// each stage. When all stages share the same count (no padding), every
+    /// entry equals `n_scenarios`. When padding is applied by
+    /// [`pad_library_to_uniform`], the padded stages retain their original
+    /// smaller count in this vector.
+    ///
     /// # Parameters
     ///
     /// - `n_stages` — number of study stages
-    /// - `n_scenarios` — number of scenarios per stage (uniform across all stages)
+    /// - `n_scenarios` — number of scenarios per stage in the eta buffer (max across all stages)
     /// - `n_entities` — number of entities in the eta vector (e.g., hydros, buses, NCS units)
     /// - `entity_class` — label for diagnostic messages (e.g., `"inflow"`, `"load"`, `"ncs"`)
+    /// - `raw_scenarios_per_stage` — pre-padding scenario count per stage (length must equal `n_stages`)
     #[must_use]
     pub fn new(
         n_stages: usize,
         n_scenarios: usize,
         n_entities: usize,
         entity_class: &'static str,
+        raw_scenarios_per_stage: Vec<usize>,
     ) -> Self {
+        debug_assert_eq!(
+            raw_scenarios_per_stage.len(),
+            n_stages,
+            "raw_scenarios_per_stage.len() ({}) must equal n_stages ({})",
+            raw_scenarios_per_stage.len(),
+            n_stages,
+        );
         Self {
             eta: vec![0.0_f64; n_stages * n_scenarios * n_entities].into_boxed_slice(),
             n_stages,
             n_scenarios,
             n_entities,
             entity_class,
+            raw_scenarios_per_stage,
         }
     }
 
@@ -137,6 +162,17 @@ impl ExternalScenarioLibrary {
     #[inline]
     pub fn entity_class(&self) -> &str {
         self.entity_class
+    }
+
+    /// Returns the pre-padding scenario count per stage.
+    ///
+    /// When no padding was applied, every entry equals `n_scenarios()`. When
+    /// padding was applied, stages with fewer raw scenarios carry their
+    /// original (pre-padding) count here.
+    #[must_use]
+    #[inline]
+    pub fn raw_scenarios_per_stage(&self) -> &[usize] {
+        &self.raw_scenarios_per_stage
     }
 
     // -----------------------------------------------------------------------
@@ -672,7 +708,7 @@ pub fn standardize_external_ncs(
 /// use cobre_core::EntityId;
 /// use cobre_stochastic::{ExternalScenarioLibrary, sampling::external::validate_external_library};
 ///
-/// let lib = ExternalScenarioLibrary::new(3, 50, 2, "inflow");
+/// let lib = ExternalScenarioLibrary::new(3, 50, 2, "inflow", vec![50usize; 3]);
 /// let entity_ids = [EntityId(1), EntityId(2)];
 /// let row_entity_ids: HashSet<EntityId> = entity_ids.iter().copied().collect();
 /// // 50 scenarios × 2 entities = 100 rows per stage.
@@ -724,15 +760,15 @@ pub fn validate_external_library<S: std::hash::BuildHasher>(
     }
 
     // -----------------------------------------------------------------------
-    // V3.4 — Consistent scenario count: rows_per_stage[s] / n_entities must
-    // be the same for every stage, and rows must be exactly divisible by
-    // n_entities (no partial rows).
+    // V3.4 — Exact divisibility: rows_per_stage[s] must be exactly divisible
+    // by n_entities (no partial rows). Non-uniform counts across stages are
+    // now accepted — padding is applied after standardization in the setup
+    // blocks. See `pad_library_to_uniform`.
     //
     // Guard against zero entities to avoid division by zero; this situation
     // is benign (empty library) so we skip the check.
     // -----------------------------------------------------------------------
     if n_entities > 0 && n_stages > 0 {
-        // Check exact divisibility for every stage first.
         for (stage_idx, &count) in rows_per_stage.iter().enumerate().take(n_stages) {
             if count % n_entities != 0 {
                 return Err(StochasticError::InsufficientData {
@@ -740,19 +776,6 @@ pub fn validate_external_library<S: std::hash::BuildHasher>(
                         "V3.4: external {class} library has {count} rows for stage \
                          {stage_idx} which is not exactly divisible by {n_entities} \
                          entities; each stage must have a whole number of scenarios",
-                    ),
-                });
-            }
-        }
-        let first_count = rows_per_stage[0] / n_entities;
-        for (stage_idx, &count) in rows_per_stage.iter().enumerate().take(n_stages).skip(1) {
-            let stage_count = count / n_entities;
-            if stage_count != first_count {
-                return Err(StochasticError::InsufficientData {
-                    context: format!(
-                        "V3.4: external {class} library has inconsistent scenario counts: \
-                         stage 0 has {first_count} scenarios but stage {stage_idx} has \
-                         {stage_count} scenarios; all stages must have the same count",
                     ),
                 });
             }
@@ -826,6 +849,74 @@ pub fn validate_external_library<S: std::hash::BuildHasher>(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// pad_library_to_uniform
+// ---------------------------------------------------------------------------
+
+/// Replicate eta values in stages that have fewer raw scenarios than
+/// `library.n_scenarios()`, filling the library to a uniform count.
+///
+/// For each stage `s` where `raw_scenarios_per_stage[s] < n_scenarios`,
+/// the raw scenario slots `0..raw_count` are already populated by the
+/// preceding standardization call. This function copies those values into
+/// the remaining slots `raw_count..n_scenarios` using wrap-around indexing
+/// (`k % raw_count`), so that every scenario index in `0..n_scenarios` holds
+/// a valid (possibly replicated) eta vector.
+///
+/// The function is a no-op when all stages already have `n_scenarios` raw
+/// scenarios (uniform input). A single `tracing::info!` is emitted only when
+/// at least one stage is actually padded.
+///
+/// # Panics
+///
+/// Does not panic — all indices are derived from library dimensions.
+pub fn pad_library_to_uniform(library: &mut ExternalScenarioLibrary) {
+    let n_scenarios = library.n_scenarios();
+    let n_stages = library.n_stages();
+    let n_entities = library.n_entities();
+    // Copy the class name before the mutable borrow loop so the
+    // tracing macro can reference it after eta mutation.
+    let class = library.entity_class().to_owned();
+
+    // Collect which stages need padding so we can emit a single info log.
+    let mut padded_stages: Vec<(usize, usize)> = Vec::new();
+
+    for s in 0..n_stages {
+        let raw_count = library.raw_scenarios_per_stage[s];
+        if raw_count == 0 || raw_count >= n_scenarios {
+            // Nothing to do for this stage.
+            continue;
+        }
+
+        padded_stages.push((s, raw_count));
+
+        // For each slot that needs to be filled, copy from the wrap-around
+        // raw slot. We work directly on the flat eta buffer to avoid borrow
+        // issues with `eta_slice` / `eta_slice_mut`.
+        for k in raw_count..n_scenarios {
+            let src_k = k % raw_count;
+            let src_offset = (s * n_scenarios + src_k) * n_entities;
+            let dst_offset = (s * n_scenarios + k) * n_entities;
+            library
+                .eta
+                .copy_within(src_offset..src_offset + n_entities, dst_offset);
+        }
+    }
+
+    if !padded_stages.is_empty() {
+        let stage_list: Vec<String> = padded_stages
+            .iter()
+            .map(|(s, raw)| format!("stage {s} ({raw}→{n_scenarios})"))
+            .collect();
+        tracing::info!(
+            entity_class = class,
+            padded_to = n_scenarios,
+            "external {class} library padded to {n_scenarios} scenarios: {}",
+            stage_list.join(", "),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -942,7 +1033,7 @@ mod tests {
         let par = PrecomputedPar::build(&models, &stages, &hydro_ids).unwrap();
 
         // 2 stages, 1 scenario, 1 hydro.
-        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow", vec![1, 1]);
 
         let rows = vec![
             ExternalScenarioRow {
@@ -1008,7 +1099,7 @@ mod tests {
         assert!((par.sigma(0, 0) - 25.0).abs() < 1e-10);
         assert!((par.psi_slice(0, 0)[0] - 0.5).abs() < 1e-10);
 
-        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow", vec![1, 1]);
         let rows = vec![
             ExternalScenarioRow {
                 stage_id: 0,
@@ -1118,7 +1209,7 @@ mod tests {
             },
         ];
 
-        let mut lib = ExternalScenarioLibrary::new(3, 1, 1, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(3, 1, 1, "inflow", vec![1, 1, 1]);
         let rows = vec![
             ExternalScenarioRow {
                 stage_id: 0,
@@ -1238,7 +1329,7 @@ mod tests {
             },
         ];
 
-        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(2, 1, 1, "inflow", vec![1, 1]);
         let rows = vec![
             ExternalScenarioRow {
                 stage_id: 0,
@@ -1310,7 +1401,7 @@ mod tests {
             std_mw: 40.0,
         }];
 
-        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "load");
+        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "load", vec![1]);
         let rows = vec![ExternalLoadRow {
             stage_id: 0,
             scenario_id: 0,
@@ -1340,7 +1431,7 @@ mod tests {
             std: 0.2,
         }];
 
-        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "ncs");
+        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "ncs", vec![1]);
         let rows = vec![ExternalNcsRow {
             stage_id: 0,
             scenario_id: 0,
@@ -1370,7 +1461,7 @@ mod tests {
             std_mw: 0.0,
         }];
 
-        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "load");
+        let mut lib = ExternalScenarioLibrary::new(1, 1, 1, "load", vec![1]);
         let rows = vec![ExternalLoadRow {
             stage_id: 0,
             scenario_id: 0,
@@ -1385,7 +1476,7 @@ mod tests {
 
     #[test]
     fn test_new_allocates_correct_sizes() {
-        let lib = ExternalScenarioLibrary::new(12, 50, 5, "inflow");
+        let lib = ExternalScenarioLibrary::new(12, 50, 5, "inflow", vec![50usize; 12]);
         assert_eq!(lib.n_stages(), 12);
         assert_eq!(lib.n_scenarios(), 50);
         assert_eq!(lib.n_entities(), 5);
@@ -1396,7 +1487,7 @@ mod tests {
 
     #[test]
     fn test_eta_roundtrip() {
-        let mut lib = ExternalScenarioLibrary::new(3, 2, 4, "load");
+        let mut lib = ExternalScenarioLibrary::new(3, 2, 4, "load", vec![2, 2, 2]);
         let written = [1.0_f64, 2.0, 3.0, 4.0];
         lib.eta_slice_mut(1, 0).copy_from_slice(&written);
         assert_eq!(lib.eta_slice(1, 0), &written);
@@ -1404,10 +1495,10 @@ mod tests {
 
     #[test]
     fn test_entity_class_metadata() {
-        let lib = ExternalScenarioLibrary::new(1, 1, 1, "ncs");
+        let lib = ExternalScenarioLibrary::new(1, 1, 1, "ncs", vec![1]);
         assert_eq!(lib.entity_class(), "ncs");
 
-        let lib2 = ExternalScenarioLibrary::new(1, 1, 1, "inflow");
+        let lib2 = ExternalScenarioLibrary::new(1, 1, 1, "inflow", vec![1]);
         assert_eq!(lib2.entity_class(), "inflow");
     }
 
@@ -1419,7 +1510,7 @@ mod tests {
 
     #[test]
     fn test_zero_initialized() {
-        let lib = ExternalScenarioLibrary::new(2, 3, 4, "inflow");
+        let lib = ExternalScenarioLibrary::new(2, 3, 4, "inflow", vec![3, 3]);
         for stage in 0..2 {
             for scenario in 0..3 {
                 for &v in lib.eta_slice(stage, scenario) {
@@ -1431,7 +1522,7 @@ mod tests {
 
     #[test]
     fn test_eta_roundtrip_multiple_cells() {
-        let mut lib = ExternalScenarioLibrary::new(3, 2, 4, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(3, 2, 4, "inflow", vec![2, 2, 2]);
         // Write to (0, 0)
         lib.eta_slice_mut(0, 0)
             .copy_from_slice(&[0.1, 0.2, 0.3, 0.4]);
@@ -1448,7 +1539,7 @@ mod tests {
 
     #[test]
     fn test_clone_is_independent() {
-        let mut lib = ExternalScenarioLibrary::new(2, 2, 2, "ncs");
+        let mut lib = ExternalScenarioLibrary::new(2, 2, 2, "ncs", vec![2, 2]);
         lib.eta_slice_mut(0, 0).copy_from_slice(&[1.0, 2.0]);
 
         let mut cloned = lib.clone();
@@ -1475,7 +1566,8 @@ mod tests {
         n_entities: usize,
         class: &'static str,
     ) -> ExternalScenarioLibrary {
-        let mut lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, n_entities, class);
+        let raw = vec![n_scenarios; n_stages];
+        let mut lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, n_entities, class, raw);
         // Fill with a known finite value so V3.7 passes.
         for stage in 0..n_stages {
             for scenario in 0..n_scenarios {
@@ -1560,17 +1652,19 @@ mod tests {
         }
     }
 
-    /// Given raw rows with 50 scenarios for stage 0 but 49 for stage 1,
-    /// `validate_external_library` returns `Err` with "V3.4" and the counts.
+    /// Given raw rows where stage counts differ but are all exactly divisible by
+    /// `n_entities`, `validate_external_library` now returns `Ok(())` because V3.4
+    /// only enforces exact divisibility — non-uniform counts are accepted and
+    /// handled by `pad_library_to_uniform`.
     #[test]
-    fn test_inconsistent_scenario_count_fails_v3_4() {
+    fn test_nonuniform_divisible_counts_accepted_v3_4() {
         let n_stages = 3;
         let n_scenarios = 50;
         let n_entities = 2;
         let lib = make_valid_library(n_stages, n_scenarios, n_entities, "load");
         let entity_ids = vec![EntityId(1), EntityId(2)];
         let row_entity_ids = entity_id_set([1, 2]);
-        // Stage 0: 50*2=100, Stage 1: 49*2=98 (inconsistent), Stage 2: 50*2=100.
+        // Stage 0: 50*2=100, Stage 1: 49*2=98 (non-uniform but divisible), Stage 2: 50*2=100.
         let rows_per_stage = vec![100usize, 98, 100];
 
         let result = validate_external_library(
@@ -1581,21 +1675,10 @@ mod tests {
             n_stages,
             50,
         );
-        match result {
-            Err(StochasticError::InsufficientData { context }) => {
-                assert!(
-                    context.contains("V3.4"),
-                    "expected message to contain 'V3.4', got: {context}",
-                );
-                // The message must mention both the expected count (50) and the
-                // observed count (49) for the inconsistent stage.
-                assert!(
-                    context.contains("50") && context.contains("49"),
-                    "expected message to contain counts '50' and '49', got: {context}",
-                );
-            }
-            other => panic!("expected Err(InsufficientData), got: {other:?}"),
-        }
+        assert!(
+            result.is_ok(),
+            "expected Ok(()) for non-uniform but divisible counts, got: {result:?}",
+        );
     }
 
     /// Given a library where `eta_slice(3, 10)[2]` is `NaN`,
@@ -1767,7 +1850,8 @@ mod tests {
         }];
 
         // Standardize: compute eta values for all (stage, scenario) pairs.
-        let mut lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, 1, "inflow");
+        let raw = vec![n_scenarios; n_stages];
+        let mut lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, 1, "inflow", raw);
         standardize_external_inflow(
             &mut lib,
             &rows,
@@ -1847,5 +1931,154 @@ mod tests {
             result.is_ok(),
             "V3.8 warning path must return Ok(()), got: {result:?}",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // ticket-010: relaxed V3.4, raw_scenarios_per_stage, pad_library_to_uniform
+    // -----------------------------------------------------------------------
+
+    use super::pad_library_to_uniform;
+
+    /// V3.4 accepts non-uniform scenario counts as long as every stage is
+    /// exactly divisible by `n_entities` (`rows_per_stage` = [2,2,2,2,100] with
+    /// `n_entities=2` → scenario counts [1,1,1,1,50]).
+    #[test]
+    fn test_v34_accepts_nonuniform_scenario_counts() {
+        // 5 stages: 4 with 1 scenario (2 rows each) and 1 with 50 scenarios (100 rows).
+        let n_entities = 2;
+        let n_stages = 5;
+        // Library must be big enough to hold V3.7 pass (50 scenarios max).
+        let lib = make_valid_library(n_stages, 50, n_entities, "inflow");
+        let entity_ids = vec![EntityId(1), EntityId(2)];
+        let row_entity_ids = entity_id_set([1, 2]);
+        let rows_per_stage = vec![2usize, 2, 2, 2, 100];
+
+        let result = validate_external_library(
+            &lib,
+            &entity_ids,
+            &row_entity_ids,
+            &rows_per_stage,
+            n_stages,
+            50,
+        );
+        assert!(
+            result.is_ok(),
+            "V3.4 must accept non-uniform but divisible counts, got: {result:?}",
+        );
+    }
+
+    /// V3.4 still rejects `rows_per_stage` where any stage has a row count not
+    /// exactly divisible by `n_entities`.
+    #[test]
+    fn test_v34_still_rejects_indivisible_rows() {
+        let n_entities = 2;
+        let n_stages = 2;
+        let lib = make_valid_library(n_stages, 2, n_entities, "inflow");
+        let entity_ids = vec![EntityId(1), EntityId(2)];
+        let row_entity_ids = entity_id_set([1, 2]);
+        // Stage 0: 3 rows (not divisible by 2), Stage 1: 2 rows (ok).
+        let rows_per_stage = vec![3usize, 2];
+
+        let result = validate_external_library(
+            &lib,
+            &entity_ids,
+            &row_entity_ids,
+            &rows_per_stage,
+            n_stages,
+            1,
+        );
+        match result {
+            Err(StochasticError::InsufficientData { context }) => {
+                assert!(
+                    context.contains("V3.4"),
+                    "expected error to contain 'V3.4', got: {context}",
+                );
+            }
+            other => panic!("expected Err(InsufficientData) with V3.4, got: {other:?}"),
+        }
+    }
+
+    /// When all stages have the same scenario count (uniform), `raw_scenarios_per_stage`
+    /// must equal `n_scenarios` for every entry.
+    #[test]
+    fn test_raw_scenarios_per_stage_uniform() {
+        let n_stages = 4;
+        let n_scenarios = 10;
+        let raw = vec![n_scenarios; n_stages];
+        let lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, 2, "inflow", raw);
+        assert_eq!(lib.raw_scenarios_per_stage(), &[10, 10, 10, 10]);
+    }
+
+    /// When the library is created with non-uniform raw counts, `raw_scenarios_per_stage`
+    /// returns exactly what was passed in.
+    #[test]
+    fn test_raw_scenarios_per_stage_nonuniform() {
+        let n_stages = 3;
+        let n_scenarios = 50; // max (padded-to) count
+        let raw = vec![1usize, 1, 50];
+        let lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, 1, "inflow", raw);
+        assert_eq!(lib.raw_scenarios_per_stage(), &[1, 1, 50]);
+        assert_eq!(lib.n_scenarios(), 50);
+    }
+
+    /// `pad_library_to_uniform` replicates stage 0's single eta value into
+    /// all `n_scenarios` slots so that `eta_slice(0, k)` is identical for all k.
+    #[test]
+    fn test_pad_library_replicates_eta() {
+        // 2 stages, 1 entity, raw counts [1, 3], padded to n_scenarios=3.
+        let raw = vec![1usize, 3];
+        let mut lib = ExternalScenarioLibrary::new(2, 3, 1, "inflow", raw);
+
+        // Write known values only to the raw slots.
+        // Stage 0 raw slot: scenario 0
+        lib.eta_slice_mut(0, 0).copy_from_slice(&[7.0]);
+        // Stage 1 raw slots: scenarios 0..3
+        lib.eta_slice_mut(1, 0).copy_from_slice(&[1.0]);
+        lib.eta_slice_mut(1, 1).copy_from_slice(&[2.0]);
+        lib.eta_slice_mut(1, 2).copy_from_slice(&[3.0]);
+
+        pad_library_to_uniform(&mut lib);
+
+        // Stage 0: all three scenario slots must equal the single raw value.
+        assert_eq!(lib.eta_slice(0, 0), &[7.0], "stage 0 scenario 0");
+        assert_eq!(lib.eta_slice(0, 1), &[7.0], "stage 0 scenario 1 (padded)");
+        assert_eq!(lib.eta_slice(0, 2), &[7.0], "stage 0 scenario 2 (padded)");
+
+        // Stage 1: unchanged (already had 3 raw scenarios == n_scenarios).
+        assert_eq!(lib.eta_slice(1, 0), &[1.0], "stage 1 scenario 0");
+        assert_eq!(lib.eta_slice(1, 1), &[2.0], "stage 1 scenario 1");
+        assert_eq!(lib.eta_slice(1, 2), &[3.0], "stage 1 scenario 2");
+    }
+
+    /// `pad_library_to_uniform` is a no-op when all stages already have the
+    /// maximum scenario count — eta values must not change.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn test_pad_library_noop_when_uniform() {
+        let n_stages = 3;
+        let n_scenarios = 5;
+        let raw = vec![n_scenarios; n_stages];
+        let mut lib = ExternalScenarioLibrary::new(n_stages, n_scenarios, 2, "load", raw);
+
+        // Fill with recognizable values.
+        for s in 0..n_stages {
+            for k in 0..n_scenarios {
+                lib.eta_slice_mut(s, k)
+                    .copy_from_slice(&[s as f64, k as f64]);
+            }
+        }
+
+        pad_library_to_uniform(&mut lib);
+
+        // Values must be identical to what was written.
+        for s in 0..n_stages {
+            for k in 0..n_scenarios {
+                assert_eq!(
+                    lib.eta_slice(s, k),
+                    &[s as f64, k as f64],
+                    "stage {s} scenario {k} must be unchanged",
+                );
+            }
+        }
     }
 }

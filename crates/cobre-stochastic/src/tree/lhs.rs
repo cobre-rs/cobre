@@ -174,7 +174,7 @@ mod tests {
     use rand::SeedableRng;
     use rand_pcg::Pcg64;
 
-    use super::{LhsPointSpec, fisher_yates, generate_lhs, sample_lhs_point};
+    use super::{fisher_yates, generate_lhs, sample_lhs_point, LhsPointSpec};
 
     /// A shuffled slice must contain exactly all elements 0..N (is a permutation).
     #[test]

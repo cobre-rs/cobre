@@ -23,13 +23,13 @@
 use cobre_core::temporal::NoiseMethod;
 
 use crate::{
-    StochasticError,
     noise::seed::derive_forward_seed,
     sampling::{
+        out_of_sample::{fill_uncorrelated, FreshNoiseSpec},
         ExternalScenarioLibrary, HistoricalScenarioLibrary,
-        out_of_sample::{FreshNoiseSpec, fill_uncorrelated},
     },
     tree::opening_tree::OpeningTreeView,
+    StochasticError,
 };
 
 use super::insample;
@@ -614,7 +614,7 @@ mod tests {
     #[allow(clippy::cast_precision_loss)]
     fn make_external_library() -> ExternalScenarioLibrary {
         // 4 stages, 50 scenarios, 3 entities.
-        let mut lib = ExternalScenarioLibrary::new(4, 50, 3, "inflow");
+        let mut lib = ExternalScenarioLibrary::new(4, 50, 3, "inflow", vec![50usize; 4]);
         for s in 0..4_usize {
             for sc in 0..50_usize {
                 let base = (s * 1000 + sc * 10) as f64;

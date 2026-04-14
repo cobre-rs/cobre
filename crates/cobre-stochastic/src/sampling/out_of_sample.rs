@@ -11,16 +11,16 @@ use rand::RngExt;
 use rand_distr::StandardNormal;
 
 use crate::{
-    StochasticError,
     noise::{rng::rng_from_seed, seed::derive_forward_seed},
     tree::{
-        lhs::{LhsPointSpec, sample_lhs_point},
-        qmc_halton::{HaltonPointSpec, scrambled_halton_point},
+        lhs::{sample_lhs_point, LhsPointSpec},
+        qmc_halton::{scrambled_halton_point, HaltonPointSpec},
         qmc_sobol::{
-            MAX_SOBOL_DIM, SobolPointSpec, SobolPrecomputed, scrambled_sobol_point,
-            scrambled_sobol_point_precomputed,
+            scrambled_sobol_point, scrambled_sobol_point_precomputed, SobolPointSpec,
+            SobolPrecomputed, MAX_SOBOL_DIM,
         },
     },
+    StochasticError,
 };
 
 /// Parameters for a single out-of-sample noise draw.
@@ -184,14 +184,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     use cobre_core::{
-        EntityId,
         scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
         temporal::NoiseMethod,
+        EntityId,
     };
 
-    use crate::{StochasticError, correlation::resolve::DecomposedCorrelation};
+    use crate::{correlation::resolve::DecomposedCorrelation, StochasticError};
 
-    use super::{FreshNoiseSpec, fill_uncorrelated, sample_fresh};
+    use super::{fill_uncorrelated, sample_fresh, FreshNoiseSpec};
 
     fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
         let n = entity_ids.len();

@@ -53,6 +53,7 @@ pub mod horizon_mode;
 pub mod hydro_models;
 pub mod indexer;
 pub mod inflow_method;
+pub(crate) mod lag_transition;
 pub mod lower_bound;
 pub mod lp_builder;
 pub(crate) mod noise;
@@ -74,71 +75,71 @@ pub mod visited_states;
 pub mod workspace;
 
 pub use angular_pruning::{
-    AngularPruningParams, AngularPruningResult, parse_angular_pruning_config,
-    select_angular_dominated,
+    parse_angular_pruning_config, select_angular_dominated, AngularPruningParams,
+    AngularPruningResult,
 };
-pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
+pub use backward::{run_backward_pass, BackwardPassSpec, BackwardResult};
 pub use config::TrainingConfig;
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};
 pub use cut_selection::{
-    CutMetadata, CutSelectionStrategy, DeactivationSet, parse_cut_selection_config,
+    parse_cut_selection_config, CutMetadata, CutSelectionStrategy, DeactivationSet,
 };
 pub use cut_sync::CutSyncBuffers;
 pub use error::SddpError;
 pub use estimation::{
     EstimationError, EstimationPath, EstimationReport, LagScaleWarning, StdRatioDivergence,
 };
-pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
+pub use forward::{run_forward_pass, sync_forward, ForwardResult, SyncResult};
 pub use horizon_mode::HorizonMode;
 pub use hydro_models::{
-    EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
-    FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
-    PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource, ResolvedProductionModel,
     build_hydro_model_summary, prepare_hydro_models, resolve_evaporation_models,
-    resolve_production_models,
+    resolve_production_models, EvaporationModel, EvaporationModelSet, EvaporationReferenceSource,
+    EvaporationSource, FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary,
+    LinearizedEvaporation, PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource,
+    ResolvedProductionModel,
 };
 pub use indexer::{
     EquipmentCounts, EvapConfig, EvaporationIndices, FphaColumnLayout, FphaRowRange, StageIndexer,
 };
 pub use inflow_method::InflowNonNegativityMethod;
-pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
+pub use lower_bound::{evaluate_lower_bound, LbEvalSpec};
 pub use lp_builder::{
-    GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
-    build_stage_templates,
+    ar_dynamics_row_offset, build_stage_templates, GenericConstraintRowEntry, PatchBuffer,
+    StageTemplates,
 };
 pub use policy_load::{
     build_basis_cache_from_checkpoint, resolve_warm_start_counts, validate_policy_compatibility,
 };
-pub use provenance::{ModelProvenanceReport, ProvenanceSource, build_provenance_report};
+pub use provenance::{build_provenance_report, ModelProvenanceReport, ProvenanceSource};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{
-    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,
-    StudyParams, StudySetup, prepare_stochastic,
+    prepare_stochastic, PrepareStochasticResult, StudyParams, StudySetup, DEFAULT_FORWARD_PASSES,
+    DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,
 };
 pub use simulation::{
-    CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,
-    SimulationContractResult, SimulationCostResult, SimulationError, SimulationExchangeResult,
-    SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
-    SimulationNonControllableResult, SimulationOutputSpec, SimulationPumpingResult,
-    SimulationRunResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
-    SimulationThermalResult, StageSummaryStats, accumulate_category_costs, aggregate_simulation,
-    assign_scenarios, extract_stage_result, simulate,
+    accumulate_category_costs, aggregate_simulation, assign_scenarios, extract_stage_result,
+    simulate, CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult,
+    SimulationConfig, SimulationContractResult, SimulationCostResult, SimulationError,
+    SimulationExchangeResult, SimulationGenericViolationResult, SimulationHydroResult,
+    SimulationInflowLagResult, SimulationNonControllableResult, SimulationOutputSpec,
+    SimulationPumpingResult, SimulationRunResult, SimulationScenarioResult, SimulationStageResult,
+    SimulationSummary, SimulationThermalResult, StageSummaryStats,
 };
 pub use solver_stats::{
-    SCENARIO_STATS_STRIDE, SOLVER_STATS_DELTA_SCALAR_FIELDS, SolverStatsDelta, SolverStatsEntry,
     aggregate_solver_statistics, pack_delta_scalars, pack_scenario_stats, unpack_delta_scalars,
-    unpack_scenario_stats,
+    unpack_scenario_stats, SolverStatsDelta, SolverStatsEntry, SCENARIO_STATS_STRIDE,
+    SOLVER_STATS_DELTA_SCALAR_FIELDS,
 };
 pub use state_exchange::ExchangeBuffers;
 pub use stochastic_summary::{
-    ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,
-    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
+    inflow_models_to_stats_rows, ArOrderSummary, StochasticSource, StochasticSummary,
 };
 pub use stopping_rule::{MonitorState, StoppingMode, StoppingRule, StoppingRuleSet};
-pub use training::{TrainingOutcome, TrainingResult, train};
+pub use training::{train, TrainingOutcome, TrainingResult};
 pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
 pub use visited_states::VisitedStatesArchive;

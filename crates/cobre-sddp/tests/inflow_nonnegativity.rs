@@ -550,6 +550,7 @@ fn train_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -623,6 +624,7 @@ fn simulate_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &SimulationConfig {

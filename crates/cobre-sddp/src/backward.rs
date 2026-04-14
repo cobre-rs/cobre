@@ -1464,6 +1464,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1556,6 +1557,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1648,6 +1650,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1736,6 +1739,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1824,6 +1828,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1910,6 +1915,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2040,6 +2046,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2148,6 +2155,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2261,6 +2269,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2361,6 +2370,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2470,6 +2480,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2574,6 +2585,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2672,6 +2684,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2777,6 +2790,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2909,6 +2923,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2979,6 +2994,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3339,6 +3355,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3484,6 +3501,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3634,6 +3652,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3749,6 +3768,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3873,6 +3893,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -4034,6 +4055,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],

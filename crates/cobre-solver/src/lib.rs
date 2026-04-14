@@ -35,7 +35,7 @@
 )]
 
 #[cfg(feature = "highs")]
-mod ffi;
+pub mod ffi;
 
 pub mod trait_def;
 pub use trait_def::SolverInterface;

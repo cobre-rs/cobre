@@ -78,7 +78,9 @@ use rayon::iter::{
 
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
+    basis_padding::pad_basis_for_cuts,
     context::{StageContext, TrainingContext},
+    cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
@@ -663,6 +665,9 @@ struct StageKey<'a> {
     /// `fcf.pools[num_stages - 1].warm_start_count > 0` and reused for every
     /// (scenario, stage) pair in the pass.
     terminal_has_boundary_cuts: bool,
+    /// Reference to the cut pool for stage `t`. Used by [`pad_basis_for_cuts`]
+    /// to assign informed basis statuses to new cut rows before warm-starting.
+    pool: &'a CutPool,
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -694,6 +699,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         raw_noise,
         basis_row_capacity,
         terminal_has_boundary_cuts,
+        pool,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -794,9 +800,20 @@ fn run_forward_stage<S: SolverInterface + Send>(
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
 
-    let view = match basis_slice.get(m, t) {
-        Some(rb) => ws.solver.solve_with_basis(rb),
-        None => ws.solver.solve(),
+    let view = match basis_slice.get_mut(m, t) {
+        &mut Some(ref mut rb) => {
+            let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
+            pad_basis_for_cuts(
+                rb,
+                pool,
+                &ws.current_state[..indexer.n_state],
+                theta_value,
+                ctx.templates[t].num_rows,
+                1e-7,
+            );
+            ws.solver.solve_with_basis(rb)
+        }
+        _ => ws.solver.solve(),
     }
     .map_err(|e| {
         *basis_slice.get_mut(m, t) = None;
@@ -1120,6 +1137,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         raw_noise,
                         basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
                         terminal_has_boundary_cuts,
+                        pool: &fcf.pools[t],
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(

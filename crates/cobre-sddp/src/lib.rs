@@ -36,6 +36,7 @@
 
 pub mod angular_pruning;
 pub mod backward;
+pub mod basis_padding;
 pub mod config;
 pub mod context;
 pub mod convergence;

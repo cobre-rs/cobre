@@ -117,6 +117,11 @@ pub struct StudyParams {
     pub cut_activity_tolerance: f64,
     /// Optional angular-accelerated dominance pruning parameters.
     pub angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Derived from
+    /// `config.training.cut_selection.max_active_per_stage`.
+    pub budget: Option<u32>,
 }
 
 impl StudyParams {
@@ -215,6 +220,24 @@ impl StudyParams {
         )
         .map_err(|msg| SddpError::Validation(format!("angular_pruning config error: {msg}")))?;
 
+        let budget = config.training.cut_selection.max_active_per_stage;
+
+        // Warn when the budget is so tight that every iteration will immediately
+        // evict all cuts older than the current one.  This is not an error —
+        // the solver remains correct — but it usually indicates a misconfiguration.
+        if let Some(b) = budget {
+            // world_size is not available here; use 1 as a conservative estimate.
+            // The CLI/Python layer may emit a more precise warning with the real
+            // world_size after broadcast.
+            if u64::from(b) < u64::from(forward_passes) {
+                eprintln!(
+                    "warning: max_active_per_stage ({b}) is less than forward_passes \
+                     ({forward_passes}); budget enforcement will evict all \
+                     non-current-iteration cuts every iteration"
+                );
+            }
+        }
+
         Ok(Self {
             seed,
             forward_passes,
@@ -226,6 +249,7 @@ impl StudyParams {
             cut_selection,
             cut_activity_tolerance,
             angular_pruning,
+            budget,
         })
     }
 }
@@ -336,6 +360,12 @@ pub struct StudySetup {
     /// Optional angular-accelerated dominance pruning parameters.
     angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
 
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Set from
+    /// `config.training.cut_selection.max_active_per_stage` via `StudyParams`.
+    budget: Option<u32>,
+
     /// Whether the caller wants the visited-states archive for export.
     ///
     /// When `true`, the archive is allocated during training regardless of the
@@ -366,6 +396,7 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         let params = StudyParams::from_config(config)?;
+        let budget = params.budget;
         // Use a sentinel path; training_scenario_source / simulation_scenario_source
         // only use the path for error messages and the historical-years look-up,
         // which is not exercised when the caller provides a validated Config.
@@ -376,7 +407,7 @@ impl StudySetup {
         let simulation_source = config
             .simulation_scenario_source(sentinel_path)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
-        Self::from_broadcast_params(
+        let mut setup = Self::from_broadcast_params(
             system,
             stochastic,
             params.seed,
@@ -392,7 +423,9 @@ impl StudySetup {
             hydro_models,
             &training_source,
             &simulation_source,
-        )
+        )?;
+        setup.budget = budget;
+        Ok(setup)
     }
 
     /// Build all precomputed study state from pre-resolved broadcast parameters.
@@ -1240,6 +1273,7 @@ impl StudySetup {
             cut_activity_tolerance,
             stopping_rule_set,
             angular_pruning,
+            budget: None,
             export_states: false,
         })
     }
@@ -1396,6 +1430,14 @@ impl StudySetup {
     /// `exports.states` configuration flag.
     pub fn set_export_states(&mut self, export: bool) {
         self.export_states = export;
+    }
+
+    /// Set the active-cut budget cap for training.
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after each backward pass. When `None`, no cap is enforced.
+    pub fn set_budget(&mut self, budget: Option<u32>) {
+        self.budget = budget;
     }
 
     /// Return the number of simulation scenarios (0 if simulation is disabled).
@@ -1572,6 +1614,7 @@ impl StudySetup {
             start_iteration: self.start_iteration,
             export_states: self.export_states,
             angular_pruning: self.angular_pruning,
+            budget: self.budget,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).

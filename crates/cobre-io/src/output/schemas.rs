@@ -321,7 +321,10 @@ pub(crate) fn retry_histogram_schema() -> Schema {
 /// Schema for `training/cut_selection/iterations.parquet` — per-stage
 /// cut selection statistics.
 ///
-/// 6 fields. One row per (iteration, stage) pair.
+/// 10 fields. One row per (iteration, stage) pair. The three nullable
+/// Int32 columns (`budget_evicted`, `active_after_angular`,
+/// `active_after_budget`) are `None` when the corresponding pipeline
+/// step is disabled.
 pub(crate) fn cut_selection_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
@@ -331,6 +334,9 @@ pub(crate) fn cut_selection_schema() -> Schema {
         Field::new("cuts_deactivated", DataType::Int32, false),
         Field::new("cuts_active_after", DataType::Int32, false),
         Field::new("selection_time_ms", DataType::Float64, false),
+        Field::new("budget_evicted", DataType::Int32, true),
+        Field::new("active_after_angular", DataType::Int32, true),
+        Field::new("active_after_budget", DataType::Int32, true),
     ])
 }
 
@@ -753,15 +759,36 @@ mod tests {
     #[test]
     fn cut_selection_schema_field_count_and_types() {
         let schema = cut_selection_schema();
-        assert_eq!(schema.fields().len(), 7);
-        // First 6 fields are Int32, last is Float64 (selection_time_ms).
+        assert_eq!(
+            schema.fields().len(),
+            10,
+            "cut_selection schema must have 10 fields"
+        );
+        // First 6 fields are non-nullable Int32.
         for field in &schema.fields()[..6] {
             assert_eq!(field.data_type(), &DataType::Int32);
             assert!(!field.is_nullable());
         }
+        // Field 7 (index 6): selection_time_ms, Float64, non-nullable.
         assert_eq!(schema.fields()[6].name(), "selection_time_ms");
         assert_eq!(schema.fields()[6].data_type(), &DataType::Float64);
         assert!(!schema.fields()[6].is_nullable());
+        // Fields 8-10 (indices 7-9): nullable Int32.
+        for &name in &[
+            "budget_evicted",
+            "active_after_angular",
+            "active_after_budget",
+        ] {
+            let field = schema
+                .field_with_name(name)
+                .unwrap_or_else(|_| panic!("field '{name}' not found"));
+            assert_eq!(
+                field.data_type(),
+                &DataType::Int32,
+                "field '{name}' must be Int32"
+            );
+            assert!(field.is_nullable(), "field '{name}' must be nullable");
+        }
     }
 
     #[test]
@@ -811,7 +838,7 @@ mod tests {
             ("convergence", 13),
             ("iteration_timing", 12),
             ("rank_timing", 8),
-            ("cut_selection", 7),
+            ("cut_selection", 10),
             ("solver_iterations", 16),
             ("retry_histogram", 5),
         ];

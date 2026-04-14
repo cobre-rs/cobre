@@ -230,6 +230,19 @@ pub struct CutSelectionConfig {
     /// disables angular pruning.
     #[serde(default)]
     pub angular_pruning: AngularPruningConfig,
+
+    /// Maximum number of active cuts per stage (stage 3 of the cut selection
+    /// pipeline — hard cap on LP size).
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after strategy selection and angular pruning have completed.
+    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
+    /// tie-broken by usage frequency (`active_count` ascending).
+    /// Cuts generated in the current iteration are never evicted.
+    ///
+    /// When `None` (the default), no hard cap is enforced.
+    #[serde(default)]
+    pub max_active_per_stage: Option<u32>,
 }
 
 /// Angular diversity pruning settings
@@ -1701,5 +1714,45 @@ mod tests {
         assert!(ap.enabled.is_none());
         assert!(ap.cosine_threshold.is_none());
         assert!(ap.check_frequency.is_none());
+    }
+
+    /// max_active_per_stage serde roundtrip: Some(100) serializes and deserializes correctly.
+    #[test]
+    fn max_active_per_stage_serde_roundtrip() {
+        let original = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("level1".to_string()),
+            threshold: None,
+            memory_window: None,
+            domination_epsilon: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+            angular_pruning: AngularPruningConfig::default(),
+            max_active_per_stage: Some(100),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped.max_active_per_stage, Some(100));
+        assert_eq!(roundtripped.enabled, Some(true));
+        assert_eq!(roundtripped.method.as_deref(), Some("level1"));
+    }
+
+    /// max_active_per_stage absent from JSON deserializes to None.
+    #[test]
+    fn max_active_per_stage_absent_defaults_none() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+                "cut_selection": {"enabled": true, "method": "level1"}
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.training.cut_selection.max_active_per_stage.is_none(),
+            "max_active_per_stage must be None when absent from config.json"
+        );
     }
 }

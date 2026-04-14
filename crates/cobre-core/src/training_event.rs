@@ -58,6 +58,11 @@ pub struct StoppingRuleResult {
 /// Each instance describes the cut lifecycle at a single stage after a
 /// selection step: how many cuts existed, how many were active before
 /// selection, how many were deactivated, and how many remain active.
+///
+/// The three optional fields capture the multi-step pipeline state:
+/// `active_after_angular` is set after Step 4b (angular dominance pruning),
+/// `budget_evicted` and `active_after_budget` are set after Step 4c (budget
+/// enforcement). All three are `None` when the corresponding step is disabled.
 #[derive(Debug, Clone)]
 pub struct StageSelectionRecord {
     /// 0-based stage index.
@@ -72,15 +77,27 @@ pub struct StageSelectionRecord {
     pub cuts_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
+    /// Active cuts after angular dominance pruning (Step 4b).
+    ///
+    /// `None` when angular pruning is disabled or has not run yet.
+    pub active_after_angular: Option<u32>,
+    /// Cuts evicted by budget enforcement (Step 4c) at this stage.
+    ///
+    /// `None` when budget enforcement is disabled.
+    pub budget_evicted: Option<u32>,
+    /// Active cuts after budget enforcement (Step 4c).
+    ///
+    /// `None` when budget enforcement is disabled.
+    pub active_after_budget: Option<u32>,
 }
 
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
 ///
-/// The enum has 13 variants: 9 per-iteration events (one per lifecycle step)
+/// The enum has 14 variants: 10 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a + 4b)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
@@ -90,6 +107,7 @@ pub struct StageSelectionRecord {
 /// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
 /// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
 /// | 4b   | [`Self::AngularPruningComplete`] | Angular dominance pruning done (conditional on `should_run`) |
+/// | 4c   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
@@ -218,6 +236,23 @@ pub enum TrainingEvent {
         stages_processed: u32,
         /// Wall-clock time for the angular pruning phase, in milliseconds.
         pruning_time_ms: u64,
+    },
+
+    /// Step 4c: Active-cut budget enforcement completed.
+    ///
+    /// Emitted every iteration when `budget` is set in `TrainingConfig`.
+    /// When `budget` is `None`, this variant is never emitted. Unlike Steps
+    /// 4a and 4b, budget enforcement is not gated by `check_frequency`
+    /// because the budget is a hard cap that must be maintained at all times.
+    BudgetEnforcementComplete {
+        /// Iteration number (1-based).
+        iteration: u64,
+        /// Total number of cuts evicted across all stages in this iteration.
+        cuts_evicted: u32,
+        /// Number of stages processed during budget enforcement.
+        stages_processed: u32,
+        /// Wall-clock time for the budget enforcement pass, in milliseconds.
+        enforcement_time_ms: u64,
     },
 
     /// Step 5: Convergence check completed.
@@ -408,6 +443,12 @@ mod tests {
                 stages_processed: 11,
                 pruning_time_ms: 8,
             },
+            TrainingEvent::BudgetEnforcementComplete {
+                iteration: 10,
+                cuts_evicted: 2,
+                stages_processed: 12,
+                enforcement_time_ms: 1,
+            },
             TrainingEvent::ConvergenceUpdate {
                 iteration: 1,
                 lower_bound: 100.0,
@@ -473,12 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn all_thirteen_variants_construct() {
+    fn all_fourteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            13,
-            "expected exactly 13 TrainingEvent variants"
+            14,
+            "expected exactly 14 TrainingEvent variants"
         );
     }
 
@@ -701,5 +742,28 @@ mod tests {
         assert_eq!(dominance_checks, 20);
         assert_eq!(stages_processed, 11);
         assert_eq!(pruning_time_ms, 12);
+    }
+
+    #[test]
+    fn budget_enforcement_complete_fields_accessible() {
+        let event = TrainingEvent::BudgetEnforcementComplete {
+            iteration: 7,
+            cuts_evicted: 5,
+            stages_processed: 12,
+            enforcement_time_ms: 3,
+        };
+        let TrainingEvent::BudgetEnforcementComplete {
+            iteration,
+            cuts_evicted,
+            stages_processed,
+            enforcement_time_ms,
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(iteration, 7);
+        assert_eq!(cuts_evicted, 5);
+        assert_eq!(stages_processed, 12);
+        assert_eq!(enforcement_time_ms, 3);
     }
 }

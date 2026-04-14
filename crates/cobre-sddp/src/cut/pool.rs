@@ -649,6 +649,121 @@ pub struct SparsityReport {
     pub per_dimension_zeros: Vec<usize>,
 }
 
+/// Result of a [`CutPool::enforce_budget`] call.
+///
+/// Reports how many cuts were evicted and the active-cut counts before and
+/// after the enforcement pass.
+#[derive(Debug, Clone)]
+pub struct BudgetEnforcementResult {
+    /// Number of cuts deactivated during this enforcement pass.
+    pub evicted_count: u32,
+    /// Active cut count before enforcement.
+    pub active_before: u32,
+    /// Active cut count after enforcement (`active_before - evicted_count`).
+    pub active_after: u32,
+}
+
+impl CutPool {
+    /// Enforce a hard cap on the number of active cuts per stage.
+    ///
+    /// If `active_count() <= budget`, returns immediately with zero evictions.
+    ///
+    /// Otherwise, collects all active slots where
+    /// `metadata[slot].iteration_generated != current_iteration` (protecting
+    /// cuts from the current backward pass), sorts them by
+    /// `(last_active_iter ASC, active_count ASC)` — stalest and least-used
+    /// first — and deactivates the first `active_count - budget` of them.
+    ///
+    /// Uses `select_nth_unstable_by` (partial sort) when the number of excess
+    /// cuts is small relative to the candidate set, otherwise `sort_unstable_by`.
+    ///
+    /// Cuts generated in `current_iteration` are **never** evicted. If the
+    /// current-iteration cuts alone exceed the budget, all current-iteration
+    /// cuts are preserved and `active_count()` may remain above `budget` after
+    /// the call.
+    ///
+    /// # Parameters
+    ///
+    /// - `budget`: maximum number of active cuts allowed.
+    /// - `current_iteration`: cuts generated in this iteration are protected.
+    /// - `forward_passes`: unused by the method; present for call-site
+    ///   uniformity with the training loop (which uses it for the warning
+    ///   validation in `StudyParams::from_config`).
+    pub fn enforce_budget(
+        &mut self,
+        budget: u32,
+        current_iteration: u64,
+        _forward_passes: u32,
+    ) -> BudgetEnforcementResult {
+        #[allow(clippy::cast_possible_truncation)]
+        let active_before = self.active_count() as u32;
+        let budget_usize = budget as usize;
+
+        if self.cached_active_count <= budget_usize {
+            return BudgetEnforcementResult {
+                evicted_count: 0,
+                active_before,
+                active_after: active_before,
+            };
+        }
+
+        let excess = self.cached_active_count - budget_usize;
+
+        // Collect eviction candidates: active slots not from current_iteration.
+        #[allow(clippy::cast_possible_truncation)]
+        let mut candidates: Vec<u32> = self.active[..self.populated_count]
+            .iter()
+            .enumerate()
+            .filter(|&(slot, &is_active)| {
+                is_active && self.metadata[slot].iteration_generated != current_iteration
+            })
+            .map(|(slot, _)| slot as u32)
+            .collect();
+
+        if candidates.is_empty() {
+            // All active cuts are from the current iteration; preserve them all.
+            return BudgetEnforcementResult {
+                evicted_count: 0,
+                active_before,
+                active_after: active_before,
+            };
+        }
+
+        // Eviction key: (last_active_iter ASC, active_count ASC).
+        // Stalest, least-frequently-used cuts are evicted first.
+        let evict_count = excess.min(candidates.len());
+
+        let key = |&slot: &u32| {
+            let meta = &self.metadata[slot as usize];
+            (meta.last_active_iter, meta.active_count)
+        };
+
+        // Use partial sort when only a small fraction of candidates need
+        // evicting; fall back to full sort otherwise.
+        if evict_count < candidates.len() / 2 {
+            // select_nth_unstable_by partitions so that candidates[..evict_count]
+            // contains the evict_count smallest elements (in any order).
+            candidates.select_nth_unstable_by(evict_count, |a, b| key(a).cmp(&key(b)));
+        } else {
+            candidates.sort_unstable_by(|a, b| key(a).cmp(&key(b)));
+        }
+
+        let to_evict = &candidates[..evict_count];
+        self.deactivate(to_evict);
+
+        #[allow(clippy::cast_possible_truncation)]
+        let evicted_count = evict_count as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let active_after = self.active_count() as u32;
+
+        BudgetEnforcementResult {
+            evicted_count,
+            active_before,
+            active_after,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::CutPool;
@@ -1096,5 +1211,104 @@ mod tests {
     fn no_boundary_cuts_when_warm_start_count_zero() {
         let pool = CutPool::new(100, 2, 10, 0);
         assert_eq!(pool.warm_start_count, 0, "no boundary cuts");
+    }
+
+    // ── enforce_budget tests ────────────────────────────────────────────────
+
+    #[test]
+    fn enforce_budget_noop_when_under_budget() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0, 2.0]);
+        pool.add_cut(0, 1, 2.0, &[3.0, 4.0]);
+        assert_eq!(pool.active_count(), 2);
+        let result = pool.enforce_budget(5, 1, 10);
+        assert_eq!(result.evicted_count, 0);
+        assert_eq!(result.active_after, 2);
+        assert_eq!(pool.active_count(), 2);
+    }
+
+    #[test]
+    fn enforce_budget_evicts_oldest_last_active_iter() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        // Add 5 cuts at iterations 0-4
+        for iter in 0..5_u64 {
+            pool.add_cut(iter, 0, 1.0, &[1.0, 0.0]);
+            // Set last_active_iter to make older cuts staler
+            pool.metadata[pool.populated_count - 1].last_active_iter = iter;
+        }
+        assert_eq!(pool.active_count(), 5);
+        // Budget = 3, current_iteration = 5 → evict 2 oldest
+        let result = pool.enforce_budget(3, 5, 10);
+        assert_eq!(result.evicted_count, 2);
+        assert_eq!(result.active_after, 3);
+        assert_eq!(pool.active_count(), 3);
+        // The 2 oldest (last_active_iter 0 and 1) should be evicted
+        // Slot for (iter=0, fp=0) = 0*10+0 = 0
+        // Slot for (iter=1, fp=0) = 1*10+0 = 10
+        assert!(!pool.active[0], "oldest cut should be evicted");
+        assert!(!pool.active[10], "second oldest should be evicted");
+    }
+
+    #[test]
+    fn enforce_budget_tiebreaks_by_active_count() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        // Two cuts with same last_active_iter but different active_count
+        pool.add_cut(0, 0, 1.0, &[1.0, 0.0]);
+        pool.metadata[0].last_active_iter = 1;
+        pool.metadata[0].active_count = 5;
+        pool.add_cut(0, 1, 2.0, &[0.0, 1.0]);
+        pool.metadata[1].last_active_iter = 1;
+        pool.metadata[1].active_count = 2;
+        assert_eq!(pool.active_count(), 2);
+        // Budget = 1 → evict the one with lower active_count (slot 1)
+        let result = pool.enforce_budget(1, 1, 10);
+        assert_eq!(result.evicted_count, 1);
+        assert!(pool.active[0], "higher active_count survives");
+        assert!(!pool.active[1], "lower active_count evicted");
+    }
+
+    #[test]
+    fn enforce_budget_protects_current_iteration() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        // 3 cuts: 2 from iteration 0, 1 from iteration 1 (current)
+        pool.add_cut(0, 0, 1.0, &[1.0, 0.0]);
+        pool.metadata[0].last_active_iter = 0;
+        pool.add_cut(0, 1, 2.0, &[0.0, 1.0]);
+        pool.metadata[1].last_active_iter = 0;
+        pool.add_cut(1, 0, 3.0, &[1.0, 1.0]);
+        pool.metadata[10].last_active_iter = 1;
+        assert_eq!(pool.active_count(), 3);
+        // Budget = 1, current_iteration = 1 → can only evict iter-0 cuts
+        let result = pool.enforce_budget(1, 1, 10);
+        assert_eq!(result.evicted_count, 2);
+        // Current-iteration cut (slot 10) survives
+        assert!(pool.active[10], "current iteration cut preserved");
+    }
+
+    #[test]
+    fn enforce_budget_all_current_iteration_no_eviction() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        // All cuts from current iteration
+        pool.add_cut(5, 0, 1.0, &[1.0, 0.0]);
+        pool.add_cut(5, 1, 2.0, &[0.0, 1.0]);
+        pool.add_cut(5, 2, 3.0, &[1.0, 1.0]);
+        assert_eq!(pool.active_count(), 3);
+        // Budget = 1, current_iteration = 5 → no candidates, no eviction
+        let result = pool.enforce_budget(1, 5, 10);
+        assert_eq!(result.evicted_count, 0);
+        assert_eq!(pool.active_count(), 3);
+    }
+
+    #[test]
+    fn enforce_budget_result_fields() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0, 0.0]);
+        pool.add_cut(1, 0, 2.0, &[0.0, 1.0]);
+        pool.add_cut(2, 0, 3.0, &[1.0, 1.0]);
+        assert_eq!(pool.active_count(), 3);
+        let result = pool.enforce_budget(1, 3, 10);
+        assert_eq!(result.active_before, 3);
+        assert_eq!(result.evicted_count, 2);
+        assert_eq!(result.active_after, 1);
     }
 }

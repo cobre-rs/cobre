@@ -43,6 +43,7 @@
 //!     start_iteration: 0,
 //!     export_states: false,
 //!     angular_pruning: None,
+//!     budget: None,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -82,6 +83,7 @@ use crate::cut_selection::CutSelectionStrategy;
 ///     start_iteration: 0,
 ///     export_states: false,
 ///     angular_pruning: None,
+///     budget: None,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -186,6 +188,18 @@ pub struct TrainingConfig {
     /// computational accelerator for pointwise dominance verification.
     /// When `None`, angular pruning is disabled.
     pub angular_pruning: Option<AngularPruningParams>,
+
+    /// Maximum number of active cuts per stage (stage 3 of the cut selection
+    /// pipeline — hard cap on LP size).
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after strategy selection and angular pruning have completed.
+    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
+    /// tie-broken by usage frequency (`active_count` ascending). Cuts generated
+    /// in the current iteration are never evicted.
+    ///
+    /// When `None`, no hard cap is enforced.
+    pub budget: Option<u32>,
 }
 
 #[cfg(test)]
@@ -211,6 +225,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -232,6 +247,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -249,6 +265,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -269,6 +286,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -291,6 +309,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         assert!(config.event_sender.is_none());
     }
@@ -312,6 +331,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         assert!(config.event_sender.is_some());
@@ -352,6 +372,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

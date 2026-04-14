@@ -123,6 +123,11 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: cobre_io::PolicyMode,
     /// Whether the visited-states archive should be allocated for export.
     pub(crate) export_states: bool,
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Derived from
+    /// `config.training.cut_selection.max_active_per_stage`.
+    pub(crate) budget: Option<u32>,
     /// Scenario source for the training forward pass, broadcast so non-root
     /// ranks can build the stochastic context with matching sampling schemes.
     pub(crate) training_source: ScenarioSource,
@@ -198,6 +203,7 @@ impl BroadcastConfig {
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
+            budget: params.budget,
             training_source,
             simulation_source,
         })

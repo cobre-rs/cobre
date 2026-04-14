@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int32Builder, Int64Builder, RecordBatch};
+use arrow::array::{ArrayRef, Float64Builder, Int32Builder, Int64Builder, RecordBatch};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -283,6 +283,9 @@ pub fn write_cut_selection_records(
     let mut deactivated_builder = Int32Builder::with_capacity(n);
     let mut active_after_builder = Int32Builder::with_capacity(n);
     let mut selection_time_builder = Float64Builder::with_capacity(n);
+    let mut budget_evicted_builder = Int32Builder::with_capacity(n);
+    let mut active_after_angular_builder = Int32Builder::with_capacity(n);
+    let mut active_after_budget_builder = Int32Builder::with_capacity(n);
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     for r in records {
@@ -293,21 +296,26 @@ pub fn write_cut_selection_records(
         deactivated_builder.append_value(r.cuts_deactivated as i32);
         active_after_builder.append_value(r.cuts_active_after as i32);
         selection_time_builder.append_value(r.selection_time_ms);
+        budget_evicted_builder.append_option(r.budget_evicted.map(|v| v as i32));
+        active_after_angular_builder.append_option(r.active_after_angular.map(|v| v as i32));
+        active_after_budget_builder.append_option(r.active_after_budget.map(|v| v as i32));
     }
 
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(iteration_builder.finish()),
-            Arc::new(stage_builder.finish()),
-            Arc::new(populated_builder.finish()),
-            Arc::new(active_before_builder.finish()),
-            Arc::new(deactivated_builder.finish()),
-            Arc::new(active_after_builder.finish()),
-            Arc::new(selection_time_builder.finish()),
-        ],
-    )
-    .map_err(|e| OutputError::serialization("cut_selection", e.to_string()))?;
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(iteration_builder.finish()),
+        Arc::new(stage_builder.finish()),
+        Arc::new(populated_builder.finish()),
+        Arc::new(active_before_builder.finish()),
+        Arc::new(deactivated_builder.finish()),
+        Arc::new(active_after_builder.finish()),
+        Arc::new(selection_time_builder.finish()),
+        Arc::new(budget_evicted_builder.finish()),
+        Arc::new(active_after_angular_builder.finish()),
+        Arc::new(active_after_budget_builder.finish()),
+    ];
+
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)
+        .map_err(|e| OutputError::serialization("cut_selection", e.to_string()))?;
 
     write_parquet(&dir.join("iterations.parquet"), &batch, config)
 }
@@ -736,6 +744,9 @@ mod tests {
                 cuts_deactivated: 0,
                 cuts_active_after: 10,
                 selection_time_ms: 0.0,
+                budget_evicted: None,
+                active_after_angular: None,
+                active_after_budget: None,
             },
             CutSelectionRecord {
                 iteration: 3,
@@ -745,6 +756,9 @@ mod tests {
                 cuts_deactivated: 2,
                 cuts_active_after: 6,
                 selection_time_ms: 1.5,
+                budget_evicted: None,
+                active_after_angular: None,
+                active_after_budget: None,
             },
         ];
         write_cut_selection_records(tmp.path(), &records, &config).unwrap();
@@ -758,6 +772,105 @@ mod tests {
             .unwrap();
         let batch: RecordBatch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 7);
+        assert_eq!(batch.num_columns(), 10);
+    }
+
+    #[test]
+    fn write_cut_selection_with_budget_columns_roundtrip() {
+        use super::super::CutSelectionRecord;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = ParquetWriterConfig::default();
+        let records = vec![
+            // Record with all budget columns populated (budget enabled).
+            CutSelectionRecord {
+                iteration: 5,
+                stage: 0,
+                cuts_populated: 20,
+                cuts_active_before: 20,
+                cuts_deactivated: 0,
+                cuts_active_after: 20,
+                selection_time_ms: 0.0,
+                budget_evicted: Some(3),
+                active_after_angular: Some(18),
+                active_after_budget: Some(15),
+            },
+            // Record with all budget columns None (budget disabled).
+            CutSelectionRecord {
+                iteration: 5,
+                stage: 1,
+                cuts_populated: 15,
+                cuts_active_before: 15,
+                cuts_deactivated: 2,
+                cuts_active_after: 13,
+                selection_time_ms: 2.0,
+                budget_evicted: None,
+                active_after_angular: None,
+                active_after_budget: None,
+            },
+        ];
+        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        let path = tmp.path().join("training/cut_selection/iterations.parquet");
+        assert!(path.exists());
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 10);
+
+        // Verify nullable columns: row 0 has Some values, row 1 has None.
+        let budget_evicted_col = batch.column_by_name("budget_evicted").unwrap();
+        assert!(
+            !budget_evicted_col.is_null(0),
+            "row 0: budget_evicted Some(3) must not be null"
+        );
+        assert!(
+            budget_evicted_col.is_null(1),
+            "row 1: budget_evicted None must be null"
+        );
+
+        let angular_col = batch.column_by_name("active_after_angular").unwrap();
+        assert!(
+            !angular_col.is_null(0),
+            "row 0: active_after_angular Some(18) must not be null"
+        );
+        assert!(
+            angular_col.is_null(1),
+            "row 1: active_after_angular None must be null"
+        );
+
+        let budget_col = batch.column_by_name("active_after_budget").unwrap();
+        assert!(
+            !budget_col.is_null(0),
+            "row 0: active_after_budget Some(15) must not be null"
+        );
+        assert!(
+            budget_col.is_null(1),
+            "row 1: active_after_budget None must be null"
+        );
+
+        // Verify the actual values for row 0.
+        let budget_evicted_arr = budget_evicted_col
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(budget_evicted_arr.value(0), 3);
+
+        let angular_arr = angular_col
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(angular_arr.value(0), 18);
+
+        let budget_arr = budget_col
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(budget_arr.value(0), 15);
     }
 }

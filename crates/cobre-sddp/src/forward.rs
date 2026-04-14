@@ -1751,6 +1751,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1854,6 +1855,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1963,6 +1965,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2369,6 +2372,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -3146,6 +3150,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };

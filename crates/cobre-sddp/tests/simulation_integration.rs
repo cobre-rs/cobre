@@ -566,6 +566,7 @@ fn train_simulate_write_cycle() {
         start_iteration: 0,
         export_states: false,
         angular_pruning: None,
+        budget: None,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -1310,6 +1311,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         start_iteration: 0,
         export_states: false,
         angular_pruning: None,
+        budget: None,
     };
 
     let risk_measures = vec![RiskMeasure::Expectation; n_stages];

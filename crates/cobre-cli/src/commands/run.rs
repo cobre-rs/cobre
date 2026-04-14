@@ -815,6 +815,7 @@ fn build_study_setup(
     )
     .map_err(CliError::from)?;
     setup.set_export_states(bcast_config.export_states);
+    setup.set_budget(bcast_config.budget);
     Ok(setup)
 }
 

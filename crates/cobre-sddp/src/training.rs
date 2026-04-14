@@ -466,11 +466,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         shutdown_flag,
         start_iteration,
         angular_pruning,
+        budget,
         ..
     } = config;
     let cut_selection = cut_selection.as_ref();
     let shutdown_flag = shutdown_flag.as_ref();
     let angular_pruning = angular_pruning.as_ref();
+    let budget = budget;
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -753,6 +755,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             },
         );
 
+        // Step 4a: Strategy-based cut selection.
+        // We defer the CutSelectionComplete event until after Steps 4b and 4c
+        // so that per_stage records can be annotated with angular and budget
+        // post-step counts before they are emitted.
+        //
+        // sel_state holds (per_stage, cuts_deactivated, selection_time_ms,
+        // stages_processed) when Step 4a ran; None otherwise.
+        let mut sel_state: Option<(Vec<StageSelectionRecord>, u32, u64, u32)> = None;
+
         if let Some(strategy) = cut_selection {
             if strategy.should_run(iteration) {
                 let sel_start = Instant::now();
@@ -774,6 +785,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         cuts_deactivated: 0,
                         cuts_active_after: active_0,
                         selection_time_ms: 0.0,
+                        active_after_angular: None,
+                        budget_evicted: None,
+                        active_after_budget: None,
                     });
                 }
 
@@ -815,6 +829,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         cuts_deactivated: n_deact,
                         cuts_active_after: active_after,
                         selection_time_ms: stage_sel_time_ms,
+                        active_after_angular: None,
+                        budget_evicted: None,
+                        active_after_budget: None,
                     });
                 }
 
@@ -822,18 +839,14 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 let selection_time_ms = sel_start.elapsed().as_millis() as u64;
 
                 #[allow(clippy::cast_possible_truncation)]
-                let stages_processed = num_sel_stages as u32;
-                emit(
-                    event_sender.as_ref(),
-                    TrainingEvent::CutSelectionComplete {
-                        iteration,
-                        cuts_deactivated,
-                        stages_processed,
-                        selection_time_ms,
-                        allgatherv_time_ms: 0,
-                        per_stage,
-                    },
-                );
+                let stages_processed_sel = num_sel_stages as u32;
+
+                sel_state = Some((
+                    per_stage,
+                    cuts_deactivated,
+                    selection_time_ms,
+                    stages_processed_sel,
+                ));
             }
         }
 
@@ -874,6 +887,17 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     if !result.deactivate.is_empty() {
                         fcf.pools[stage].deactivate(&result.deactivate);
                     }
+                    // Annotate per-stage records from Step 4a with post-angular counts.
+                    if let Some((ref mut per_stage, _, _, _)) = sel_state {
+                        let active_now = fcf.pools[stage].active_count() as u32;
+                        // per_stage is indexed by insertion order: stage 0 is at index 0,
+                        // stages 1..num_sel_stages-1 are at indices 1, 2, ...
+                        // The pruning loop covers stages 1..num_prune_stages-1, matching
+                        // the selection loop range, so the record index is `stage`.
+                        if let Some(rec) = per_stage.get_mut(stage) {
+                            rec.active_after_angular = Some(active_now);
+                        }
+                    }
                 }
 
                 #[allow(clippy::cast_possible_truncation)]
@@ -893,6 +917,55 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     },
                 );
             }
+        }
+
+        // Step 4c: Budget enforcement (every iteration when budget is set).
+        //
+        // Runs unconditionally when `budget` is Some — not gated by
+        // `check_frequency`. The budget is a hard cap that must be maintained
+        // at all times.
+        if let Some(b) = budget {
+            let budget_start = Instant::now();
+            let mut total_evicted = 0u32;
+            for stage in 0..num_stages {
+                #[allow(clippy::cast_possible_truncation)]
+                let result = fcf.pools[stage].enforce_budget(b, iteration, config_forward_passes);
+                total_evicted += result.evicted_count;
+                // Annotate per-stage records with post-budget counts.
+                if let Some((ref mut per_stage, _, _, _)) = sel_state {
+                    if let Some(rec) = per_stage.get_mut(stage) {
+                        rec.budget_evicted = Some(result.evicted_count);
+                        rec.active_after_budget = Some(result.active_after);
+                    }
+                }
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let enforcement_time_ms = budget_start.elapsed().as_millis() as u64;
+            emit(
+                event_sender.as_ref(),
+                TrainingEvent::BudgetEnforcementComplete {
+                    iteration,
+                    cuts_evicted: total_evicted,
+                    stages_processed: num_stages as u32,
+                    enforcement_time_ms,
+                },
+            );
+        }
+
+        // Emit CutSelectionComplete now that all per-stage annotation is done.
+        if let Some((per_stage, cuts_deactivated, selection_time_ms, stages_processed)) = sel_state
+        {
+            emit(
+                event_sender.as_ref(),
+                TrainingEvent::CutSelectionComplete {
+                    iteration,
+                    cuts_deactivated,
+                    stages_processed,
+                    selection_time_ms,
+                    allgatherv_time_ms: 0,
+                    per_stage,
+                },
+            );
         }
 
         // Periodic rebuild check for the lower bound solver.
@@ -1506,6 +1579,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1591,6 +1665,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1694,6 +1769,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1831,6 +1907,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1914,6 +1991,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1994,6 +2072,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2082,6 +2161,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2180,6 +2260,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2288,6 +2369,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2407,6 +2489,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2496,6 +2579,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2602,6 +2686,7 @@ mod tests {
             start_iteration: 3,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2685,6 +2770,7 @@ mod tests {
             start_iteration: 5,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2855,6 +2941,7 @@ mod tests {
             start_iteration: 0,
             export_states: false,
             angular_pruning: None,
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2953,6 +3040,7 @@ mod tests {
                 cosine_threshold: 0.999,
                 check_frequency: 3,
             }),
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3024,8 +3112,11 @@ mod tests {
     ///
     /// Given both `cut_selection` (check_frequency=3) and `angular_pruning`
     /// (check_frequency=3) enabled with the same frequency, at the firing
-    /// iteration the event log shows `CutSelectionComplete` before
-    /// `AngularPruningComplete`.
+    /// iteration the event log shows `AngularPruningComplete` before
+    /// `CutSelectionComplete`. Step 4a runs selection logic and saves records
+    /// to a deferred buffer; Step 4b runs angular pruning and emits
+    /// `AngularPruningComplete`; only after all sub-steps does Step 4 emit
+    /// `CutSelectionComplete` with fully annotated per-stage records.
     #[test]
     fn angular_pruning_after_cut_selection_ordering() {
         use crate::angular_pruning::AngularPruningParams;
@@ -3066,6 +3157,7 @@ mod tests {
                 cosine_threshold: 0.999,
                 check_frequency: 3,
             }),
+            budget: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3124,9 +3216,9 @@ mod tests {
             .expect("expected at least one AngularPruningComplete event");
 
         assert!(
-            sel_pos < prune_pos,
-            "CutSelectionComplete (pos={sel_pos}) must appear before \
-             AngularPruningComplete (pos={prune_pos})"
+            prune_pos < sel_pos,
+            "AngularPruningComplete (pos={prune_pos}) must appear before \
+             CutSelectionComplete (pos={sel_pos})"
         );
     }
 }

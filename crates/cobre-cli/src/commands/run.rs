@@ -808,6 +808,7 @@ fn build_study_setup(
         bcast_config.inflow_method.clone(),
         cut_selection,
         bcast_config.cut_activity_tolerance,
+        bcast_config.angular_pruning,
         hydro_models,
         &bcast_config.training_source,
         &bcast_config.simulation_source,

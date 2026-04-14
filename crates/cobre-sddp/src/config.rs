@@ -42,6 +42,7 @@
 //!     shutdown_flag: None,
 //!     start_iteration: 0,
 //!     export_states: false,
+//!     angular_pruning: None,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -53,6 +54,7 @@ use std::sync::atomic::AtomicBool;
 
 use cobre_core::TrainingEvent;
 
+use crate::angular_pruning::AngularPruningParams;
 use crate::cut_selection::CutSelectionStrategy;
 
 /// Parameters controlling the SDDP training loop.
@@ -79,6 +81,7 @@ use crate::cut_selection::CutSelectionStrategy;
 ///     shutdown_flag: None,
 ///     start_iteration: 0,
 ///     export_states: false,
+///     angular_pruning: None,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -174,6 +177,15 @@ pub struct TrainingConfig {
     /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
     /// Default: `false`.
     pub export_states: bool,
+
+    /// Optional angular diversity pruning parameters (stage 2 of the cut
+    /// selection pipeline).
+    ///
+    /// When `Some(params)`, the training loop applies angular pruning after the
+    /// strategy-based selection pass, using cosine similarity clustering as a
+    /// computational accelerator for pointwise dominance verification.
+    /// When `None`, angular pruning is disabled.
+    pub angular_pruning: Option<AngularPruningParams>,
 }
 
 #[cfg(test)]
@@ -198,6 +210,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -218,6 +231,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -234,6 +248,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -253,6 +268,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -274,6 +290,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         assert!(config.event_sender.is_none());
     }
@@ -294,6 +311,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         assert!(config.event_sender.is_some());
@@ -333,6 +351,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

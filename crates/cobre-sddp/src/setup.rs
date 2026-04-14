@@ -115,6 +115,8 @@ pub struct StudyParams {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
+    /// Optional angular-accelerated dominance pruning parameters.
+    pub angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
 }
 
 impl StudyParams {
@@ -207,6 +209,12 @@ impl StudyParams {
             .cut_activity_tolerance
             .unwrap_or(0.0);
 
+        let angular_pruning = crate::angular_pruning::parse_angular_pruning_config(
+            &config.training.cut_selection.angular_pruning,
+            config.training.cut_selection.check_frequency,
+        )
+        .map_err(|msg| SddpError::Validation(format!("angular_pruning config error: {msg}")))?;
+
         Ok(Self {
             seed,
             forward_passes,
@@ -217,6 +225,7 @@ impl StudyParams {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
+            angular_pruning,
         })
     }
 }
@@ -324,6 +333,8 @@ pub struct StudySetup {
     cut_selection: Option<CutSelectionStrategy>,
     cut_activity_tolerance: f64,
     stopping_rule_set: StoppingRuleSet,
+    /// Optional angular-accelerated dominance pruning parameters.
+    angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
 
     /// Whether the caller wants the visited-states archive for export.
     ///
@@ -377,6 +388,7 @@ impl StudySetup {
             params.inflow_method,
             params.cut_selection,
             params.cut_activity_tolerance,
+            params.angular_pruning,
             hydro_models,
             &training_source,
             &simulation_source,
@@ -422,6 +434,7 @@ impl StudySetup {
         inflow_method: InflowNonNegativityMethod,
         cut_selection: Option<CutSelectionStrategy>,
         cut_activity_tolerance: f64,
+        angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
         hydro_models: PrepareHydroModelsResult,
         training_source: &ScenarioSource,
         simulation_source: &ScenarioSource,
@@ -1226,6 +1239,7 @@ impl StudySetup {
             cut_selection,
             cut_activity_tolerance,
             stopping_rule_set,
+            angular_pruning,
             export_states: false,
         })
     }
@@ -1557,6 +1571,7 @@ impl StudySetup {
             shutdown_flag: shutdown_flag.map(Arc::clone),
             start_iteration: self.start_iteration,
             export_states: self.export_states,
+            angular_pruning: self.angular_pruning,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).

@@ -77,10 +77,10 @@ pub struct StageSelectionRecord {
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
 ///
-/// The enum has 12 variants: 8 per-iteration events (one per lifecycle step)
+/// The enum has 13 variants: 9 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
@@ -89,6 +89,7 @@ pub struct StageSelectionRecord {
 /// | 3    | [`Self::BackwardPassComplete`] | Backward sweep done                                    |
 /// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
 /// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
+/// | 4b   | [`Self::AngularPruningComplete`] | Angular dominance pruning done (conditional on `should_run`) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
@@ -193,6 +194,30 @@ pub enum TrainingEvent {
         allgatherv_time_ms: u64,
         /// Per-stage breakdown of selection results.
         per_stage: Vec<StageSelectionRecord>,
+    },
+
+    /// Step 4b: Angular diversity pruning completed.
+    ///
+    /// Only emitted on iterations where angular pruning runs (i.e., when
+    /// `should_run(iteration)` returns `true`). On non-pruning iterations
+    /// this variant is skipped entirely. Always emitted after
+    /// [`Self::CutSelectionComplete`] when both are enabled on the same
+    /// iteration.
+    AngularPruningComplete {
+        /// Iteration number (1-based).
+        iteration: u64,
+        /// Total number of cuts deactivated across all stages.
+        cuts_deactivated: u32,
+        /// Total number of angular clusters formed across all stages.
+        clusters_formed: u32,
+        /// Total number of within-cluster dominance checks performed across all
+        /// stages.
+        dominance_checks: u32,
+        /// Number of stages processed (stages 1..num_stages-1; stage 0 is
+        /// exempt).
+        stages_processed: u32,
+        /// Wall-clock time for the angular pruning phase, in milliseconds.
+        pruning_time_ms: u64,
     },
 
     /// Step 5: Convergence check completed.
@@ -375,6 +400,14 @@ mod tests {
                 allgatherv_time_ms: 1,
                 per_stage: vec![],
             },
+            TrainingEvent::AngularPruningComplete {
+                iteration: 10,
+                cuts_deactivated: 3,
+                clusters_formed: 5,
+                dominance_checks: 12,
+                stages_processed: 11,
+                pruning_time_ms: 8,
+            },
             TrainingEvent::ConvergenceUpdate {
                 iteration: 1,
                 lower_bound: 100.0,
@@ -440,12 +473,12 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_variants_construct() {
+    fn all_thirteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            12,
-            "expected exactly 12 TrainingEvent variants"
+            13,
+            "expected exactly 13 TrainingEvent variants"
         );
     }
 
@@ -639,5 +672,34 @@ mod tests {
             panic!("wrong variant")
         };
         assert!((scenario_cost - 50_000.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn angular_pruning_complete_fields_accessible() {
+        let event = TrainingEvent::AngularPruningComplete {
+            iteration: 15,
+            cuts_deactivated: 7,
+            clusters_formed: 4,
+            dominance_checks: 20,
+            stages_processed: 11,
+            pruning_time_ms: 12,
+        };
+        let TrainingEvent::AngularPruningComplete {
+            iteration,
+            cuts_deactivated,
+            clusters_formed,
+            dominance_checks,
+            stages_processed,
+            pruning_time_ms,
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(iteration, 15);
+        assert_eq!(cuts_deactivated, 7);
+        assert_eq!(clusters_formed, 4);
+        assert_eq!(dominance_checks, 20);
+        assert_eq!(stages_processed, 11);
+        assert_eq!(pruning_time_ms, 12);
     }
 }

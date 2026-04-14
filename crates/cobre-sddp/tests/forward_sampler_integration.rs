@@ -515,6 +515,7 @@ fn run_programmatic(
         InflowNonNegativityMethod::None,
         None, // cut_selection
         0.0,  // cut_activity_tolerance
+        None, // angular_pruning
         hydro_models,
         source,
         source,
@@ -813,6 +814,7 @@ fn run_with_setup(
         InflowNonNegativityMethod::None,
         None,
         0.0,
+        None, // angular_pruning
         hydro_models,
         source,
         source,

@@ -437,12 +437,14 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
 
     // Visited-states archive: allocated only when needed for dominated cut
-    // selection (which reads visited states at pruning time) or when the caller
-    // requests state export to the policy checkpoint.
+    // selection (which reads visited states at pruning time), angular dominance
+    // pruning (which also reads visited states), or when the caller requests
+    // state export to the policy checkpoint.
     let needs_archive = matches!(
         config.cut_selection,
         Some(crate::cut_selection::CutSelectionStrategy::Dominated { .. })
-    ) || config.export_states;
+    ) || config.angular_pruning.is_some()
+        || config.export_states;
     let mut visited_archive = if needs_archive {
         Some(crate::visited_states::VisitedStatesArchive::new(
             num_stages,
@@ -463,10 +465,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         cut_selection,
         shutdown_flag,
         start_iteration,
+        angular_pruning,
         ..
     } = config;
     let cut_selection = cut_selection.as_ref();
     let shutdown_flag = shutdown_flag.as_ref();
+    let angular_pruning = angular_pruning.as_ref();
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -828,6 +832,64 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         selection_time_ms,
                         allgatherv_time_ms: 0,
                         per_stage,
+                    },
+                );
+            }
+        }
+
+        // Step 4b: Angular dominance pruning (stage 1..num_stages-1, stage 0 exempt).
+        if let Some(params) = angular_pruning {
+            if params.should_run(iteration) {
+                let prune_start = Instant::now();
+                let num_prune_stages = num_stages.saturating_sub(1);
+                let archive_ref = visited_archive.as_ref();
+
+                let pruning_results: Vec<(usize, crate::angular_pruning::AngularPruningResult)> =
+                    (1..num_prune_stages)
+                        .into_par_iter()
+                        .map(|stage| {
+                            let pool = &fcf.pools[stage];
+                            let states =
+                                archive_ref.map_or(&[] as &[f64], |a| a.states_for_stage(stage));
+                            let result = crate::angular_pruning::select_angular_dominated(
+                                pool,
+                                states,
+                                params.cosine_threshold,
+                                iteration,
+                            );
+                            (stage, result)
+                        })
+                        .collect();
+
+                let mut total_cuts_deactivated = 0u32;
+                let mut total_clusters_formed = 0u32;
+                let mut total_dominance_checks = 0u32;
+
+                #[allow(clippy::cast_possible_truncation)]
+                for (stage, result) in pruning_results {
+                    total_clusters_formed += result.clusters_formed as u32;
+                    total_dominance_checks += result.dominance_checks as u32;
+                    let n_deact = result.deactivate.len() as u32;
+                    total_cuts_deactivated += n_deact;
+                    if !result.deactivate.is_empty() {
+                        fcf.pools[stage].deactivate(&result.deactivate);
+                    }
+                }
+
+                #[allow(clippy::cast_possible_truncation)]
+                let pruning_time_ms = prune_start.elapsed().as_millis() as u64;
+                #[allow(clippy::cast_possible_truncation)]
+                let stages_processed = num_prune_stages.saturating_sub(1) as u32;
+
+                emit(
+                    event_sender.as_ref(),
+                    TrainingEvent::AngularPruningComplete {
+                        iteration,
+                        cuts_deactivated: total_cuts_deactivated,
+                        clusters_formed: total_clusters_formed,
+                        dominance_checks: total_dominance_checks,
+                        stages_processed,
+                        pruning_time_ms,
                     },
                 );
             }
@@ -1443,6 +1505,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1527,6 +1590,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1629,6 +1693,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1765,6 +1830,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1847,6 +1913,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1926,6 +1993,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2013,6 +2081,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2110,6 +2179,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2217,6 +2287,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2335,6 +2406,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2423,6 +2495,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2528,6 +2601,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 3,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2610,6 +2684,7 @@ mod tests {
             shutdown_flag: None,
             start_iteration: 5,
             export_states: false,
+            angular_pruning: None,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2741,5 +2816,317 @@ mod tests {
                 "stage {t} must be None when basis store has no entry for scenario 0"
             );
         }
+    }
+
+    // ── Angular pruning integration tests ────────────────────────────────────
+
+    /// `angular_pruning_none_skips_step`
+    ///
+    /// Given `angular_pruning: None` running for 5 iterations, then no
+    /// `AngularPruningComplete` event is emitted.
+    #[test]
+    fn angular_pruning_none_skips_step() {
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: None,
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+        };
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+            },
+            &risk_measures,
+            iteration_limit_rules(5),
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+        let prune_count = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
+            .count();
+
+        assert_eq!(
+            prune_count, 0,
+            "expected no AngularPruningComplete events with angular_pruning: None"
+        );
+    }
+
+    /// `angular_pruning_runs_at_frequency`
+    ///
+    /// Given `angular_pruning: Some(AngularPruningParams { check_frequency: 3,
+    /// .. })` running for 5 iterations, then `AngularPruningComplete` is emitted
+    /// exactly once (at iteration 3).
+    #[test]
+    fn angular_pruning_runs_at_frequency() {
+        use crate::angular_pruning::AngularPruningParams;
+
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: None,
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: Some(AngularPruningParams {
+                cosine_threshold: 0.999,
+                check_frequency: 3,
+            }),
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+        };
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+            },
+            &risk_measures,
+            iteration_limit_rules(5),
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+        let prune_events: Vec<&TrainingEvent> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
+            .collect();
+
+        assert_eq!(
+            prune_events.len(),
+            1,
+            "expected exactly 1 AngularPruningComplete event for check_frequency=3 over 5 \
+             iterations"
+        );
+
+        let TrainingEvent::AngularPruningComplete { iteration, .. } = prune_events[0] else {
+            panic!("wrong variant");
+        };
+        assert_eq!(
+            *iteration, 3,
+            "AngularPruningComplete must fire at iteration 3"
+        );
+    }
+
+    /// `angular_pruning_after_cut_selection_ordering`
+    ///
+    /// Given both `cut_selection` (check_frequency=3) and `angular_pruning`
+    /// (check_frequency=3) enabled with the same frequency, at the firing
+    /// iteration the event log shows `CutSelectionComplete` before
+    /// `AngularPruningComplete`.
+    #[test]
+    fn angular_pruning_after_cut_selection_ordering() {
+        use crate::angular_pruning::AngularPruningParams;
+        use crate::cut_selection::CutSelectionStrategy;
+
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: Some(tx),
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 3,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: Some(AngularPruningParams {
+                cosine_threshold: 0.999,
+                check_frequency: 3,
+            }),
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+        };
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+            },
+            &risk_measures,
+            iteration_limit_rules(5),
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+
+        // Find the position of CutSelectionComplete and AngularPruningComplete.
+        let sel_pos = events
+            .iter()
+            .position(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .expect("expected at least one CutSelectionComplete event");
+        let prune_pos = events
+            .iter()
+            .position(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
+            .expect("expected at least one AngularPruningComplete event");
+
+        assert!(
+            sel_pos < prune_pos,
+            "CutSelectionComplete (pos={sel_pos}) must appear before \
+             AngularPruningComplete (pos={prune_pos})"
+        );
     }
 }

@@ -114,6 +114,8 @@ pub(crate) struct BroadcastConfig {
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: BroadcastCutSelection,
     pub(crate) cut_activity_tolerance: f64,
+    /// Optional angular-accelerated dominance pruning parameters.
+    pub(crate) angular_pruning: Option<cobre_sddp::angular_pruning::AngularPruningParams>,
     /// Whether the training phase is enabled. When `false`, all ranks skip
     /// training and proceed directly to simulation (or exit).
     pub(crate) training_enabled: bool,
@@ -192,6 +194,7 @@ impl BroadcastConfig {
             inflow_method: params.inflow_method,
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
+            angular_pruning: params.angular_pruning,
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,

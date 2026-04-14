@@ -221,6 +221,57 @@ pub struct CutSelectionConfig {
     /// Minimum dual multiplier for a cut to count as binding.
     #[serde(default)]
     pub cut_activity_tolerance: Option<f64>,
+
+    /// Angular diversity pruning settings (stage 2 of the cut selection pipeline).
+    ///
+    /// Uses cosine similarity clustering as a computational accelerator for
+    /// pointwise dominance verification. When absent from `config.json`, serde
+    /// applies `AngularPruningConfig::default()` (all fields `None`), which
+    /// disables angular pruning.
+    #[serde(default)]
+    pub angular_pruning: AngularPruningConfig,
+}
+
+/// Angular diversity pruning settings
+/// (`config.json → training.cut_selection.angular_pruning`).
+///
+/// Angular pruning uses cosine similarity clustering as a computational
+/// accelerator for pointwise dominance verification — it is **not** a
+/// standalone pruning criterion. This preserves Assumption (H2) from
+/// Guigues 2017 and finite convergence of the stochastic programming algorithm.
+///
+/// All fields are `Option` so the struct can be absent from `config.json`
+/// without causing a deserialization error.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AngularPruningConfig {
+    /// Enable angular diversity pruning. When `None` or `false`, angular
+    /// pruning is disabled and the other fields are ignored.
+    ///
+    /// Default: `None` (disabled).
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    /// Cosine similarity threshold in `(0.0, 1.0]`.
+    ///
+    /// Cuts whose cosine similarity exceeds this threshold are considered
+    /// candidates for pointwise dominance verification. Higher values make
+    /// the clustering more conservative (fewer candidates per cluster).
+    ///
+    /// Default when enabled: `0.999`.
+    #[serde(default)]
+    pub cosine_threshold: Option<f64>,
+
+    /// Iterations between angular pruning runs.
+    ///
+    /// When `None`, inherits from the parent
+    /// [`CutSelectionConfig::check_frequency`], or defaults to `5` if that
+    /// is also `None`.
+    ///
+    /// Must be `> 0` when specified.
+    #[serde(default)]
+    pub check_frequency: Option<u32>,
 }
 
 /// LP solver retry settings (`config.json → training.solver`).
@@ -1632,5 +1683,23 @@ mod tests {
         assert!(cfg.simulation.enabled);
         // The new scenario_source field is absent.
         assert!(cfg.simulation.scenario_source.is_none());
+    }
+
+    #[test]
+    fn angular_pruning_absent_deserializes_to_default() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+                "cut_selection": {"enabled": true, "method": "level1"}
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let ap = &cfg.training.cut_selection.angular_pruning;
+        assert!(ap.enabled.is_none());
+        assert!(ap.cosine_threshold.is_none());
+        assert!(ap.check_frequency.is_none());
     }
 }

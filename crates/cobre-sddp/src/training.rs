@@ -472,7 +472,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let cut_selection = cut_selection.as_ref();
     let shutdown_flag = shutdown_flag.as_ref();
     let angular_pruning = angular_pruning.as_ref();
-    let budget = budget;
 
     #[allow(clippy::cast_possible_truncation)]
     emit(
@@ -788,7 +787,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
-                        basis_padding_enabled: false,
                     });
                 }
 
@@ -833,7 +831,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
-                        basis_padding_enabled: false,
                     });
                 }
 
@@ -945,6 +942,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             let enforcement_time_ms = budget_start.elapsed().as_millis() as u64;
             emit(
                 event_sender.as_ref(),
+                #[allow(clippy::cast_possible_truncation)]
                 TrainingEvent::BudgetEnforcementComplete {
                     iteration,
                     cuts_evicted: total_evicted,

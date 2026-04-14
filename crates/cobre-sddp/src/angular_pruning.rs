@@ -654,8 +654,8 @@ mod tests {
     use super::select_angular_dominated;
     use crate::cut::pool::CutPool;
 
-    /// Build a minimal CutPool with `n_state`-dimensional cuts.
-    /// Each call to `add_cut_simple` uses iteration=1, sequential fp_idx.
+    /// Build a minimal `CutPool` with `n_state`-dimensional cuts.
+    /// Each call to `add_cut_simple` uses iteration=1, sequential `fp_idx`.
     fn make_pool(n_state: usize) -> CutPool {
         // capacity=32, forward_passes=32 so slot = 0 + 1*32 + fp_idx = 32+fp_idx
         CutPool::new(64, n_state, 32, 0)

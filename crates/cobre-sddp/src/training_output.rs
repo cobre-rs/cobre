@@ -862,7 +862,6 @@ mod tests {
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
-                        basis_padding_enabled: false,
                     },
                     StageSelectionRecord {
                         stage: 1,
@@ -874,7 +873,6 @@ mod tests {
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
-                        basis_padding_enabled: false,
                     },
                 ],
             },

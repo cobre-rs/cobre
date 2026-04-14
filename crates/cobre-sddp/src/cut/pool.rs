@@ -745,7 +745,7 @@ impl CutPool {
             // contains the evict_count smallest elements (in any order).
             candidates.select_nth_unstable_by(evict_count, |a, b| key(a).cmp(&key(b)));
         } else {
-            candidates.sort_unstable_by(|a, b| key(a).cmp(&key(b)));
+            candidates.sort_unstable_by_key(|a| key(a));
         }
 
         let to_evict = &candidates[..evict_count];

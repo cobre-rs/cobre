@@ -66,7 +66,7 @@ fn sparse_full_mask_equals_dense() {
 
     // Create FCF: new(num_stages, state_dim, fwd_passes, max_iter, warm_start).
     // capacity = warm_start + max_iter * fwd_passes = 0 + 3 * 3 = 9 cuts/pool.
-    let mut fcf = FutureCostFunction::new(2, n_state, 3, 3, &vec![0; 2]);
+    let mut fcf = FutureCostFunction::new(2, n_state, 3, 3, &[0; 2]);
 
     // Add several cuts at stage 0 with known coefficients.
     // Slot formula: warm_start + iteration * fwd_passes + fwd_idx
@@ -157,7 +157,7 @@ fn sparse_partial_mask_produces_correct_subset() {
     );
 
     // Create FCF: new(num_stages, state_dim, fwd_passes, max_iter, warm_start).
-    let mut fcf = FutureCostFunction::new(2, n_state, 1, 1, &vec![0; 2]);
+    let mut fcf = FutureCostFunction::new(2, n_state, 1, 1, &[0; 2]);
     let coeffs = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
     fcf.add_cut(0, 0, 0, 50.0, &coeffs);
 
@@ -216,7 +216,7 @@ fn sparse_dense_with_scaling() {
     let mut sparse_indexer = StageIndexer::new(n_hydro, max_par_order);
     sparse_indexer.set_nonzero_mask(&[max_par_order, max_par_order]);
 
-    let mut fcf = FutureCostFunction::new(2, n_state, 1, 1, &vec![0; 2]);
+    let mut fcf = FutureCostFunction::new(2, n_state, 1, 1, &[0; 2]);
     let coeffs = vec![10.0, -20.0, 30.0, -40.0];
     fcf.add_cut(0, 0, 0, 500.0, &coeffs);
 

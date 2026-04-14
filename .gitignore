@@ -23,6 +23,9 @@ target
 # mdBook output
 book/output/
 
+# JSON schemas generated in the wrong directory (canonical location: book/src/schemas/)
+/*.schema.json
+
 # Implementation plans (local development only)
 plans/
 

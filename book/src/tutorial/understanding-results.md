@@ -156,9 +156,12 @@ The 1dtoy run produces:
     "peak_active": 384
   },
   "checksum": null,
-  "mpi_info": {
+  "distribution": {
+    "backend": "local",
     "world_size": 1,
-    "ranks_participated": 1
+    "ranks_participated": 1,
+    "num_nodes": 1,
+    "threads_per_rank": 1
   }
 }
 ```
@@ -176,7 +179,9 @@ Field-by-field explanation:
 | `cuts.total_generated`           | Total optimality cuts created across all stages over the entire training run.                                                                                                              |
 | `cuts.total_active`              | Cuts still active in the pool at the end of training (not deactivated by the cut selection strategy).                                                                                      |
 | `cuts.peak_active`               | Maximum number of active cuts at any point during training.                                                                                                                                |
-| `mpi_info.world_size`            | Number of MPI ranks involved in the run. `1` for single-process runs.                                                                                                                      |
+| `distribution.backend`           | Communication backend: `"local"` for single-process, `"mpi"` for distributed runs.                                                                                                        |
+| `distribution.world_size`        | Number of MPI ranks involved in the run. `1` for single-process runs.                                                                                                                      |
+| `distribution.threads_per_rank`  | Number of rayon worker threads per process.                                                                                                                                                |
 
 **What "converged" means in practice.** A converged run (`convergence.achieved:
 true`) means a stopping rule determined that continuing would not meaningfully

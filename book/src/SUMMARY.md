@@ -23,6 +23,7 @@
   - [Network Topology](./guide/network-topology.md)
   - [Stochastic Modeling](./guide/stochastic-modeling.md)
 - [Configuration](./guide/configuration.md)
+- [Performance Accelerators](./guide/performance-accelerators.md)
 - [Running Studies](./guide/running-studies.md)
 - [Policy Management](./guide/policy-management.md)
 - [Case Conversion (cobre-bridge)](./guide/cobre-bridge.md)

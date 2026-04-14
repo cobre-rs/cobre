@@ -1,5 +1,38 @@
 {
   "$defs": {
+    "AngularPruningConfig": {
+      "description": "Angular diversity pruning settings\n(`config.json → training.cut_selection.angular_pruning`).\n\nAngular pruning uses cosine similarity clustering as a computational\naccelerator for pointwise dominance verification — it is **not** a\nstandalone pruning criterion. This preserves Assumption (H2) from\nGuigues 2017 and finite convergence of the stochastic programming algorithm.\n\nAll fields are `Option` so the struct can be absent from `config.json`\nwithout causing a deserialization error.",
+      "properties": {
+        "check_frequency": {
+          "default": null,
+          "description": "Iterations between angular pruning runs.\n\nWhen `None`, inherits from the parent\n[`CutSelectionConfig::check_frequency`], or defaults to `5` if that\nis also `None`.\n\nMust be `> 0` when specified.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cosine_threshold": {
+          "default": null,
+          "description": "Cosine similarity threshold in `(0.0, 1.0]`.\n\nCuts whose cosine similarity exceeds this threshold are considered\ncandidates for pointwise dominance verification. Higher values make\nthe clustering more conservative (fewer candidates per cluster).\n\nDefault when enabled: `0.999`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": null,
+          "description": "Enable angular diversity pruning. When `None` or `false`, angular\npruning is disabled and the other fields are ignored.\n\nDefault: `None` (disabled).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "CheckpointingConfig": {
       "description": "Checkpoint settings (`config.json → policy.checkpointing`).",
       "properties": {
@@ -53,6 +86,15 @@
     "CutSelectionConfig": {
       "description": "Cut selection settings (`config.json → training.cut_selection`).",
       "properties": {
+        "angular_pruning": {
+          "$ref": "#/$defs/AngularPruningConfig",
+          "default": {
+            "check_frequency": null,
+            "cosine_threshold": null,
+            "enabled": null
+          },
+          "description": "Angular diversity pruning settings (stage 2 of the cut selection pipeline).\n\nUses cosine similarity clustering as a computational accelerator for\npointwise dominance verification. When absent from `config.json`, serde\napplies `AngularPruningConfig::default()` (all fields `None`), which\ndisables angular pruning."
+        },
         "check_frequency": {
           "default": null,
           "description": "Iterations between pruning checks.",
@@ -72,11 +114,40 @@
             "null"
           ]
         },
+        "domination_epsilon": {
+          "default": null,
+          "description": "Epsilon for the `\"domination\"` method.\n\nOverrides `threshold` when the method is `\"domination\"`. Accepts\nfractional values (e.g., `1e-6`) unlike the integer-limited `threshold`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "enabled": {
           "default": null,
           "description": "Enable cut pruning.",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "max_active_per_stage": {
+          "default": null,
+          "description": "Maximum number of active cuts per stage (stage 3 of the cut selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active cuts\nper stage after strategy selection and angular pruning have completed.\nCuts are evicted in order of staleness (`last_active_iter` ascending),\ntie-broken by usage frequency (`active_count` ascending).\nCuts generated in the current iteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory_window": {
+          "default": null,
+          "description": "Memory window size for the `\"lml1\"` method (iterations).\n\nOverrides `threshold` when the method is `\"lml1\"`. Ignored for other methods.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -90,7 +161,7 @@
         },
         "threshold": {
           "default": null,
-          "description": "Minimum iterations before first pruning pass.",
+          "description": "Generic threshold (deprecated — prefer method-specific fields below).\n\nInterpretation depends on the method:\n- `\"level1\"`: minimum iterations before first pruning pass\n- `\"lml1\"`: memory window size (iterations)\n- `\"domination\"`: epsilon for domination test (integer-limited)\n\nUse `memory_window` for lml1 and `domination_epsilon` for domination\nto avoid the integer limitation. This field is retained for backwards\ncompatibility.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -625,9 +696,17 @@
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
           "default": {
+            "angular_pruning": {
+              "check_frequency": null,
+              "cosine_threshold": null,
+              "enabled": null
+            },
             "check_frequency": null,
             "cut_activity_tolerance": null,
+            "domination_epsilon": null,
             "enabled": null,
+            "max_active_per_stage": null,
+            "memory_window": null,
             "method": null,
             "threshold": null
           },

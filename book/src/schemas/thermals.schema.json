@@ -9,7 +9,9 @@
           "type": "integer"
         }
       },
-      "required": ["lag_stages"],
+      "required": [
+        "lag_stages"
+      ],
       "type": "object"
     },
     "RawThermal": {
@@ -21,7 +23,7 @@
           "type": "integer"
         },
         "cost_per_mwh": {
-          "description": "Marginal cost of generation [$/MWh]. Must be >= 0.0.",
+          "description": "Marginal cost of generation [$/`MWh`]. Must be ≥ 0.0.",
           "format": "double",
           "type": "number"
         },
@@ -29,13 +31,19 @@
           "default": null,
           "description": "Stage index when the plant enters service. Absent or null = always exists.",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "exit_stage_id": {
           "default": null,
           "description": "Stage index when the plant is decommissioned. Absent or null = never.",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "generation": {
           "$ref": "#/$defs/RawThermalGeneration",
@@ -62,7 +70,13 @@
           "type": "string"
         }
       },
-      "required": ["id", "name", "bus_id", "cost_per_mwh", "generation"],
+      "required": [
+        "id",
+        "name",
+        "bus_id",
+        "cost_per_mwh",
+        "generation"
+      ],
       "type": "object"
     },
     "RawThermalGeneration": {
@@ -79,7 +93,10 @@
           "type": "number"
         }
       },
-      "required": ["min_mw", "max_mw"],
+      "required": [
+        "min_mw",
+        "max_mw"
+      ],
       "type": "object"
     }
   },
@@ -88,7 +105,10 @@
   "properties": {
     "$schema": {
       "description": "`$schema` field — informational, not validated.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "thermals": {
       "description": "Array of thermal plant entries.",
@@ -98,7 +118,9 @@
       "type": "array"
     }
   },
-  "required": ["thermals"],
+  "required": [
+    "thermals"
+  ],
   "title": "RawThermalFile",
   "type": "object"
 }

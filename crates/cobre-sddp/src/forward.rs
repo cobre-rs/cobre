@@ -668,6 +668,8 @@ struct StageKey<'a> {
     /// Reference to the cut pool for stage `t`. Used by [`pad_basis_for_cuts`]
     /// to assign informed basis statuses to new cut rows before warm-starting.
     pool: &'a CutPool,
+    /// Whether basis padding is enabled (config-gated, default false).
+    basis_padding_enabled: bool,
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -700,6 +702,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         basis_row_capacity,
         terminal_has_boundary_cuts,
         pool,
+        basis_padding_enabled,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -802,15 +805,17 @@ fn run_forward_stage<S: SolverInterface + Send>(
 
     let view = match basis_slice.get_mut(m, t) {
         &mut Some(ref mut rb) => {
-            let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
-            pad_basis_for_cuts(
-                rb,
-                pool,
-                &ws.current_state[..indexer.n_state],
-                theta_value,
-                ctx.templates[t].num_rows,
-                1e-7,
-            );
+            if basis_padding_enabled {
+                let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
+                pad_basis_for_cuts(
+                    rb,
+                    pool,
+                    &ws.current_state[..indexer.n_state],
+                    theta_value,
+                    ctx.templates[t].num_rows,
+                    1e-7,
+                );
+            }
             ws.solver.solve_with_basis(rb)
         }
         _ => ws.solver.solve(),
@@ -996,8 +1001,10 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         indexer,
         stochastic,
         initial_state,
+        basis_padding_enabled,
         ..
     } = training_ctx;
+    let basis_padding_enabled = *basis_padding_enabled;
     let ForwardPassBatch {
         local_forward_passes,
         total_forward_passes,
@@ -1138,6 +1145,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
                         terminal_has_boundary_cuts,
                         pool: &fcf.pools[t],
+                        basis_padding_enabled,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(

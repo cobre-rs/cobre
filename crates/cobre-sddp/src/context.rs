@@ -85,4 +85,6 @@ pub struct TrainingContext<'a> {
     ///
     /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
     pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,
+    /// Whether basis-aware warm-start padding is enabled (config-gated).
+    pub basis_padding_enabled: bool,
 }

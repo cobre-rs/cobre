@@ -44,6 +44,7 @@
 //!     export_states: false,
 //!     angular_pruning: None,
 //!     budget: None,
+//!     basis_padding_enabled: false,
 //! };
 //! assert_eq!(config.forward_passes, 10);
 //! assert_eq!(config.max_iterations, 200);
@@ -84,6 +85,7 @@ use crate::cut_selection::CutSelectionStrategy;
 ///     export_states: false,
 ///     angular_pruning: None,
 ///     budget: None,
+///     basis_padding_enabled: false,
 /// };
 /// assert_eq!(config.forward_passes, 10);
 /// assert_eq!(config.max_iterations, 100);
@@ -200,6 +202,15 @@ pub struct TrainingConfig {
     ///
     /// When `None`, no hard cap is enforced.
     pub budget: Option<u32>,
+
+    /// Enable basis padding for warm-start (Epic 05).
+    ///
+    /// When `true`, the forward pass applies informed basis status assignment for
+    /// new cut rows before warm-starting the LP solver, reducing the number of
+    /// simplex pivots required after each cut addition.
+    ///
+    /// Disabled by default (`false`).
+    pub basis_padding_enabled: bool,
 }
 
 #[cfg(test)]
@@ -226,6 +237,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         assert_eq!(config.forward_passes, 10);
         assert_eq!(config.max_iterations, 100);
@@ -248,6 +260,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         assert!(config_none.checkpoint_interval.is_none());
 
@@ -266,6 +279,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         assert_eq!(config_some.checkpoint_interval, Some(10));
     }
@@ -287,6 +301,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         assert_eq!(config.warm_start_cuts, 500);
     }
@@ -310,6 +325,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         assert!(config.event_sender.is_none());
     }
@@ -332,6 +348,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         assert!(config.event_sender.is_some());
@@ -373,6 +390,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

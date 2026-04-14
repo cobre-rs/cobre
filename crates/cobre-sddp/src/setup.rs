@@ -122,6 +122,11 @@ pub struct StudyParams {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub budget: Option<u32>,
+    /// Whether basis padding is enabled for warm-start.
+    ///
+    /// Derived from `config.training.cut_selection.basis_padding`.
+    /// Disabled by default (`false`).
+    pub basis_padding_enabled: bool,
 }
 
 impl StudyParams {
@@ -238,6 +243,8 @@ impl StudyParams {
             }
         }
 
+        let basis_padding_enabled = config.training.cut_selection.basis_padding.unwrap_or(false);
+
         Ok(Self {
             seed,
             forward_passes,
@@ -250,6 +257,7 @@ impl StudyParams {
             cut_activity_tolerance,
             angular_pruning,
             budget,
+            basis_padding_enabled,
         })
     }
 }
@@ -372,6 +380,13 @@ pub struct StudySetup {
     /// cut selection strategy. Defaults to `false`; set by CLI/Python callers
     /// based on `exports.states`.
     export_states: bool,
+
+    /// Whether basis padding is enabled for warm-start.
+    ///
+    /// When `true`, the forward pass applies informed basis status assignment for
+    /// new cut rows before warm-starting the LP solver. Disabled by default.
+    /// Set from `config.training.cut_selection.basis_padding` via `StudyParams`.
+    basis_padding_enabled: bool,
 }
 
 impl StudySetup {
@@ -1274,6 +1289,7 @@ impl StudySetup {
             stopping_rule_set,
             angular_pruning,
             budget: None,
+            basis_padding_enabled: false,
             export_states: false,
         })
     }
@@ -1517,6 +1533,7 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
+            basis_padding_enabled: self.basis_padding_enabled,
         }
     }
 
@@ -1573,6 +1590,7 @@ impl StudySetup {
             external_inflow_library,
             external_load_library,
             external_ncs_library,
+            basis_padding_enabled: false,
         }
     }
 
@@ -1615,6 +1633,7 @@ impl StudySetup {
             export_states: self.export_states,
             angular_pruning: self.angular_pruning,
             budget: self.budget,
+            basis_padding_enabled: self.basis_padding_enabled,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -1646,6 +1665,7 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
+            basis_padding_enabled: self.basis_padding_enabled,
         };
 
         crate::train(

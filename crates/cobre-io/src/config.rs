@@ -243,6 +243,17 @@ pub struct CutSelectionConfig {
     /// When `None` (the default), no hard cap is enforced.
     #[serde(default)]
     pub max_active_per_stage: Option<u32>,
+
+    /// Enable basis padding for warm-start (Epic 05).
+    ///
+    /// When `Some(true)`, the forward pass applies informed basis status
+    /// assignment for new cut rows before warm-starting the LP solver.
+    /// This can reduce the number of simplex pivots required after each
+    /// cut addition.
+    ///
+    /// Disabled by default (`None` or `Some(false)`).
+    #[serde(default)]
+    pub basis_padding: Option<bool>,
 }
 
 /// Angular diversity pruning settings

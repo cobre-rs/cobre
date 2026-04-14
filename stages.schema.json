@@ -1,0 +1,385 @@
+{
+  "$defs": {
+    "RawBlock": {
+      "description": "Intermediate type for one load block.",
+      "properties": {
+        "hours": {
+          "description": "Block duration in hours. Must be > 0.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "description": "Block index (0-based within the stage). Must be contiguous.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Human-readable block label.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "hours"
+      ],
+      "type": "object"
+    },
+    "RawCVarParams": {
+      "description": "`CVaR` parameters nested inside the `cvar` key.",
+      "properties": {
+        "alpha": {
+          "description": "Confidence level alpha in (0, 1].",
+          "format": "double",
+          "type": "number"
+        },
+        "lambda": {
+          "description": "Risk aversion weight lambda in [0, 1].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "alpha",
+        "lambda"
+      ],
+      "type": "object"
+    },
+    "RawPolicyGraph": {
+      "description": "Intermediate type for the `policy_graph` sub-object.",
+      "properties": {
+        "annual_discount_rate": {
+          "description": "Global annual discount rate. Must be >= 0.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "transitions": {
+          "description": "Stage transitions.",
+          "items": {
+            "$ref": "#/$defs/RawTransition"
+          },
+          "type": "array"
+        },
+        "type": {
+          "description": "Horizon type: `\"finite_horizon\"` or `\"cyclic\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "annual_discount_rate"
+      ],
+      "type": "object"
+    },
+    "RawPreStudyStage": {
+      "description": "Intermediate type for a pre-study stage entry (negative IDs).",
+      "properties": {
+        "end_date": {
+          "description": "End date as ISO 8601 string.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stage identifier (negative for pre-study stages).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "season_id": {
+          "default": null,
+          "description": "Optional season index.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_date": {
+          "description": "Start date as ISO 8601 string.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "start_date",
+        "end_date"
+      ],
+      "type": "object"
+    },
+    "RawRiskMeasure": {
+      "anyOf": [
+        {
+          "description": "String variant: any string (canonically `\"expectation\"`).\n\nThe inner `String` is only used by serde during deserialization;\nthe actual value is not inspected in `convert_risk_measure`.",
+          "type": "string"
+        },
+        {
+          "description": "Object variant: `{\"cvar\": {\"alpha\": ..., \"lambda\": ...}}`.",
+          "properties": {
+            "cvar": {
+              "$ref": "#/$defs/RawCVarParams",
+              "description": "Inner `CVaR` parameters object."
+            }
+          },
+          "required": [
+            "cvar"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "Intermediate untagged union for the `risk_measure` field.\n\nThe JSON value can be:\n- A string: `\"expectation\"`\n- An object: `{\"cvar\": {\"alpha\": 0.95, \"lambda\": 0.5}}`\n\n`#[serde(untagged)]` tries each variant in declaration order.\nThe `Expectation` string variant must come first so it is tried before\nthe `CVaR` object variant.\n\nThe inner string of `Expectation` is not read after deserialization;\npresence of the variant alone signals `StageRiskConfig::Expectation`."
+    },
+    "RawSeasonDefinitions": {
+      "description": "Intermediate type for the `season_definitions` sub-object.",
+      "properties": {
+        "cycle_type": {
+          "description": "Cycle type: `\"monthly\"`, `\"weekly\"`, or `\"custom\"`.",
+          "type": "string"
+        },
+        "seasons": {
+          "description": "List of season entries.",
+          "items": {
+            "$ref": "#/$defs/RawSeasonEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cycle_type",
+        "seasons"
+      ],
+      "type": "object"
+    },
+    "RawSeasonEntry": {
+      "description": "Intermediate type for one season entry.",
+      "properties": {
+        "day_end": {
+          "default": null,
+          "description": "Calendar day where the season ends (1-31). Only for `custom` cycle.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "day_start": {
+          "default": null,
+          "description": "Calendar day where the season starts (1-31). Only for `custom` cycle.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Season index (0-based).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "description": "Human-readable label.",
+          "type": "string"
+        },
+        "month_end": {
+          "default": null,
+          "description": "Calendar month where the season ends (1-12). Only for `custom` cycle.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "month_start": {
+          "description": "Calendar month where the season starts (1-12).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "month_start"
+      ],
+      "type": "object"
+    },
+    "RawStage": {
+      "description": "Intermediate type for a study stage entry.",
+      "properties": {
+        "block_mode": {
+          "default": "parallel",
+          "description": "Block mode: `\"parallel\"` (default) or `\"chronological\"`.",
+          "type": "string"
+        },
+        "blocks": {
+          "description": "Load blocks within this stage.",
+          "items": {
+            "$ref": "#/$defs/RawBlock"
+          },
+          "type": "array"
+        },
+        "end_date": {
+          "description": "End date as ISO 8601 string.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stage identifier (non-negative for study stages).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "num_scenarios": {
+          "description": "Number of scenarios (branching factor). Must be > 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "risk_measure": {
+          "$ref": "#/$defs/RawRiskMeasure",
+          "description": "Risk measure: `\"expectation\"` or `{\"cvar\": {\"alpha\": ..., \"lambda\": ...}}`."
+        },
+        "sampling_method": {
+          "default": "saa",
+          "description": "Sampling method for noise generation. Default: `\"saa\"`.",
+          "type": "string"
+        },
+        "season_id": {
+          "default": null,
+          "description": "Optional season index.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_date": {
+          "description": "Start date as ISO 8601 string.",
+          "type": "string"
+        },
+        "state_variables": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawStateVariables"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "State variable flags."
+        }
+      },
+      "required": [
+        "id",
+        "start_date",
+        "end_date",
+        "blocks",
+        "num_scenarios"
+      ],
+      "type": "object"
+    },
+    "RawStateVariables": {
+      "description": "Intermediate type for the `state_variables` sub-object.",
+      "properties": {
+        "inflow_lags": {
+          "default": false,
+          "description": "Whether inflow lags are state variables. Default: false.",
+          "type": "boolean"
+        },
+        "storage": {
+          "default": true,
+          "description": "Whether storage is a state variable. Default: true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RawTransition": {
+      "description": "Intermediate type for one policy graph transition.",
+      "properties": {
+        "annual_discount_rate_override": {
+          "default": null,
+          "description": "Optional per-transition discount rate override.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "probability": {
+          "description": "Transition probability.",
+          "format": "double",
+          "type": "number"
+        },
+        "source_id": {
+          "description": "Source stage ID.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "target_id": {
+          "description": "Target stage ID.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_id",
+        "target_id",
+        "probability"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level intermediate type for `stages.json`.\n\nPrivate — only used during deserialization. Not re-exported.",
+  "properties": {
+    "$schema": {
+      "description": "`$schema` field — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "policy_graph": {
+      "$ref": "#/$defs/RawPolicyGraph",
+      "description": "Policy graph: horizon type, discount rate, and transitions."
+    },
+    "pre_study_stages": {
+      "description": "Pre-study stages (negative IDs). Absent or null means empty.",
+      "items": {
+        "$ref": "#/$defs/RawPreStudyStage"
+      },
+      "type": "array"
+    },
+    "scenario_source": {
+      "default": null,
+      "description": "Detection field: present when a `stages.json` still contains the old\n`scenario_source` key. `parse_stages` rejects it with a clear migration\nerror directing the user to move the field to `config.json`."
+    },
+    "season_definitions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawSeasonDefinitions"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional season definitions. Absent or null means no seasonal structure."
+    },
+    "stages": {
+      "description": "Study stages (non-negative IDs).",
+      "items": {
+        "$ref": "#/$defs/RawStage"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "policy_graph",
+    "stages"
+  ],
+  "title": "RawStagesFile",
+  "type": "object"
+}

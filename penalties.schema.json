@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "RawBusPenalties": {
+      "description": "Intermediate type for the `bus` section.",
+      "properties": {
+        "deficit_segments": {
+          "description": "Piecewise-linear deficit cost segments.",
+          "items": {
+            "$ref": "#/$defs/RawDeficitSegment"
+          },
+          "type": "array"
+        },
+        "excess_cost": {
+          "description": "Excess generation cost \\[$/`MWh`\\].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "deficit_segments",
+        "excess_cost"
+      ],
+      "type": "object"
+    },
+    "RawDeficitSegment": {
+      "description": "Intermediate type for one deficit segment entry.",
+      "properties": {
+        "cost": {
+          "description": "Cost per `MWh` of deficit in this segment \\[$/`MWh`\\].",
+          "format": "double",
+          "type": "number"
+        },
+        "depth_mw": {
+          "description": "MW depth of this segment. `null` means the segment is unbounded (last segment).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cost"
+      ],
+      "type": "object"
+    },
+    "RawHydroPenalties": {
+      "description": "Intermediate type for the `hydro` section.\n\nAll fields end with `_cost` because these are penalty cost values. The\nshared postfix is intentional and mirrors both the JSON schema and the\n[`HydroPenalties`] struct field names.",
+      "properties": {
+        "diversion_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "evaporation_violation_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "evaporation_violation_neg_cost": {
+          "description": "Optional directional under-evaporation cost. Defaults to symmetric.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaporation_violation_pos_cost": {
+          "description": "Optional directional over-evaporation cost. Defaults to symmetric.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "filling_target_violation_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "fpha_turbined_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "generation_violation_below_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "inflow_nonnegativity_cost": {
+          "description": "Optional inflow non-negativity cost. Defaults to 1000.0.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "outflow_violation_above_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "outflow_violation_below_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "spillage_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "storage_violation_below_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "turbined_violation_below_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "water_withdrawal_violation_cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "water_withdrawal_violation_neg_cost": {
+          "description": "Optional directional under-withdrawal cost. Defaults to symmetric.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "water_withdrawal_violation_pos_cost": {
+          "description": "Optional directional over-withdrawal cost. Defaults to symmetric.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "spillage_cost",
+        "fpha_turbined_cost",
+        "diversion_cost",
+        "storage_violation_below_cost",
+        "filling_target_violation_cost",
+        "turbined_violation_below_cost",
+        "outflow_violation_below_cost",
+        "outflow_violation_above_cost",
+        "generation_violation_below_cost",
+        "evaporation_violation_cost",
+        "water_withdrawal_violation_cost"
+      ],
+      "type": "object"
+    },
+    "RawLinePenalties": {
+      "description": "Intermediate type for the `line` section.",
+      "properties": {
+        "exchange_cost": {
+          "description": "Exchange cost \\[$/`MWh`\\].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "exchange_cost"
+      ],
+      "type": "object"
+    },
+    "RawNcsPenalties": {
+      "description": "Intermediate type for the `non_controllable_source` section.",
+      "properties": {
+        "curtailment_cost": {
+          "description": "Curtailment cost \\[$/`MWh`\\].",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "curtailment_cost"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level intermediate type for `penalties.json`.\n\nPrivate — only used during deserialization. Not re-exported.",
+  "properties": {
+    "$schema": {
+      "description": "`$schema` field — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bus": {
+      "$ref": "#/$defs/RawBusPenalties",
+      "description": "Bus penalty defaults."
+    },
+    "hydro": {
+      "$ref": "#/$defs/RawHydroPenalties",
+      "description": "Hydro penalty defaults."
+    },
+    "line": {
+      "$ref": "#/$defs/RawLinePenalties",
+      "description": "Line penalty defaults."
+    },
+    "non_controllable_source": {
+      "$ref": "#/$defs/RawNcsPenalties",
+      "description": "Non-controllable source penalty defaults."
+    },
+    "version": {
+      "description": "File format version — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "bus",
+    "line",
+    "hydro",
+    "non_controllable_source"
+  ],
+  "title": "RawPenalties",
+  "type": "object"
+}

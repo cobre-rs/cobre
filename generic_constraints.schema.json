@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "RawConstraint": {
+      "description": "Intermediate type for a single constraint entry.",
+      "properties": {
+        "description": {
+          "description": "Optional human-readable description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expression": {
+          "description": "Expression string to be parsed. E.g. `\"2.5 * thermal_generation(5) - hydro_generation(3)\"`.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Constraint identifier. Must be unique within the file.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Short name used in reports and log output.",
+          "type": "string"
+        },
+        "sense": {
+          "description": "Comparison sense: `\">=\"`, `\"<=\"`, or `\"==\"`.",
+          "type": "string"
+        },
+        "slack": {
+          "$ref": "#/$defs/RawSlackConfig",
+          "description": "Slack variable configuration."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "expression",
+        "sense",
+        "slack"
+      ],
+      "type": "object"
+    },
+    "RawSlackConfig": {
+      "description": "Intermediate type for the slack configuration.",
+      "properties": {
+        "enabled": {
+          "description": "Whether a slack variable is allowed.",
+          "type": "boolean"
+        },
+        "penalty": {
+          "description": "Penalty per unit of violation. Must be > 0.0 when `enabled` is `true`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Top-level intermediate type for `generic_constraints.json`.\n\nPrivate — only used during deserialization. Not re-exported.",
+  "properties": {
+    "$schema": {
+      "description": "`$schema` field — informational, not validated.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "constraints": {
+      "description": "Array of constraint entries.",
+      "items": {
+        "$ref": "#/$defs/RawConstraint"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "constraints"
+  ],
+  "title": "RawGenericConstraintsFile",
+  "type": "object"
+}

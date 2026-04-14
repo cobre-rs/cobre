@@ -114,6 +114,8 @@ pub(crate) struct BroadcastConfig {
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: BroadcastCutSelection,
     pub(crate) cut_activity_tolerance: f64,
+    /// Optional angular-accelerated dominance pruning parameters.
+    pub(crate) angular_pruning: Option<cobre_sddp::angular_pruning::AngularPruningParams>,
     /// Whether the training phase is enabled. When `false`, all ranks skip
     /// training and proceed directly to simulation (or exit).
     pub(crate) training_enabled: bool,
@@ -121,6 +123,11 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: cobre_io::PolicyMode,
     /// Whether the visited-states archive should be allocated for export.
     pub(crate) export_states: bool,
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Derived from
+    /// `config.training.cut_selection.max_active_per_stage`.
+    pub(crate) budget: Option<u32>,
     /// Scenario source for the training forward pass, broadcast so non-root
     /// ranks can build the stochastic context with matching sampling schemes.
     pub(crate) training_source: ScenarioSource,
@@ -192,9 +199,11 @@ impl BroadcastConfig {
             inflow_method: params.inflow_method,
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
+            angular_pruning: params.angular_pruning,
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
+            budget: params.budget,
             training_source,
             simulation_source,
         })

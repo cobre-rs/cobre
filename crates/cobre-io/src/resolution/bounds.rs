@@ -75,7 +75,7 @@ pub struct BoundsOverrides<'a> {
 /// use cobre_core::EntityId;
 /// use cobre_core::entities::{
 ///     EnergyContract, ContractType, Hydro, HydroGenerationModel, HydroPenalties,
-///     Line, PumpingStation, Thermal, ThermalCostSegment,
+///     Line, PumpingStation, Thermal,
 /// };
 /// use cobre_io::constraints::HydroBoundsRow;
 /// use cobre_io::resolution::{resolve_bounds, BoundsEntitySlices, BoundsOverrides};
@@ -181,38 +181,38 @@ pub fn resolve_bounds(
     stage_index: &HashMap<i32, usize>,
     overrides: &BoundsOverrides<'_>,
 ) -> ResolvedBounds {
-    let hydros = entities.hydros;
-    let thermals = entities.thermals;
-    let lines = entities.lines;
-    let pumping_stations = entities.pumping_stations;
-    let contracts = entities.contracts;
     let hydro_overrides = overrides.hydro;
     let thermal_overrides = overrides.thermal;
     let line_overrides = overrides.line;
     let pumping_overrides = overrides.pumping;
     let contract_overrides = overrides.contract;
 
-    let hydro_index: HashMap<EntityId, usize> = hydros
+    let hydro_index: HashMap<EntityId, usize> = entities
+        .hydros
         .iter()
         .enumerate()
         .map(|(idx, h)| (h.id, idx))
         .collect();
-    let thermal_index: HashMap<EntityId, usize> = thermals
+    let thermal_index: HashMap<EntityId, usize> = entities
+        .thermals
         .iter()
         .enumerate()
         .map(|(idx, t)| (t.id, idx))
         .collect();
-    let line_index: HashMap<EntityId, usize> = lines
+    let line_index: HashMap<EntityId, usize> = entities
+        .lines
         .iter()
         .enumerate()
         .map(|(idx, l)| (l.id, idx))
         .collect();
-    let pumping_index: HashMap<EntityId, usize> = pumping_stations
+    let pumping_index: HashMap<EntityId, usize> = entities
+        .pumping_stations
         .iter()
         .enumerate()
         .map(|(idx, p)| (p.id, idx))
         .collect();
-    let contract_index: HashMap<EntityId, usize> = contracts
+    let contract_index: HashMap<EntityId, usize> = entities
+        .contracts
         .iter()
         .enumerate()
         .map(|(idx, c)| (c.id, idx))
@@ -224,20 +224,23 @@ pub fn resolve_bounds(
     // Since entities can have different bound values, we use the first entity's values
     // (or a sentinel zero struct for empty slices) to satisfy the allocation API.
     // Step 3 unconditionally overwrites all cells with entity-specific base values.
-    let hydro_default = hydros
+    let hydro_default = entities
+        .hydros
         .first()
         .map_or(zero_hydro_stage_bounds(), hydro_base_bounds);
-    let thermal_default = thermals.first().map_or(
+    let thermal_default = entities.thermals.first().map_or(
         ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 0.0,
+            cost_per_mwh: 0.0,
         },
         |t| ThermalStageBounds {
             min_generation_mw: t.min_generation_mw,
             max_generation_mw: t.max_generation_mw,
+            cost_per_mwh: t.cost_per_mwh,
         },
     );
-    let line_default = lines.first().map_or(
+    let line_default = entities.lines.first().map_or(
         LineStageBounds {
             direct_mw: 0.0,
             reverse_mw: 0.0,
@@ -247,7 +250,7 @@ pub fn resolve_bounds(
             reverse_mw: l.reverse_capacity_mw,
         },
     );
-    let pumping_default = pumping_stations.first().map_or(
+    let pumping_default = entities.pumping_stations.first().map_or(
         PumpingStageBounds {
             min_flow_m3s: 0.0,
             max_flow_m3s: 0.0,
@@ -257,7 +260,7 @@ pub fn resolve_bounds(
             max_flow_m3s: p.max_flow_m3s,
         },
     );
-    let contract_default = contracts.first().map_or(
+    let contract_default = entities.contracts.first().map_or(
         ContractStageBounds {
             min_mw: 0.0,
             max_mw: 0.0,
@@ -276,11 +279,11 @@ pub fn resolve_bounds(
 
     let mut table = ResolvedBounds::new(
         &cobre_core::BoundsCountsSpec {
-            n_hydros: hydros.len(),
-            n_thermals: thermals.len(),
-            n_lines: lines.len(),
-            n_pumping: pumping_stations.len(),
-            n_contracts: contracts.len(),
+            n_hydros: entities.hydros.len(),
+            n_thermals: entities.thermals.len(),
+            n_lines: entities.lines.len(),
+            n_pumping: entities.pumping_stations.len(),
+            n_contracts: entities.contracts.len(),
             n_stages: alloc_stages,
         },
         &cobre_core::BoundsDefaults {
@@ -302,24 +305,25 @@ pub fn resolve_bounds(
     // default filled by new() — iterate every entity and write its values to every
     // stage cell.
 
-    for (entity_idx, hydro) in hydros.iter().enumerate() {
+    for (entity_idx, hydro) in entities.hydros.iter().enumerate() {
         let base = hydro_base_bounds(hydro);
         for stage_idx in 0..n_stages {
             *table.hydro_bounds_mut(entity_idx, stage_idx) = base;
         }
     }
 
-    for (entity_idx, thermal) in thermals.iter().enumerate() {
+    for (entity_idx, thermal) in entities.thermals.iter().enumerate() {
         let base = ThermalStageBounds {
             min_generation_mw: thermal.min_generation_mw,
             max_generation_mw: thermal.max_generation_mw,
+            cost_per_mwh: thermal.cost_per_mwh,
         };
         for stage_idx in 0..n_stages {
             *table.thermal_bounds_mut(entity_idx, stage_idx) = base;
         }
     }
 
-    for (entity_idx, line) in lines.iter().enumerate() {
+    for (entity_idx, line) in entities.lines.iter().enumerate() {
         let base = LineStageBounds {
             direct_mw: line.direct_capacity_mw,
             reverse_mw: line.reverse_capacity_mw,
@@ -329,7 +333,7 @@ pub fn resolve_bounds(
         }
     }
 
-    for (entity_idx, pumping) in pumping_stations.iter().enumerate() {
+    for (entity_idx, pumping) in entities.pumping_stations.iter().enumerate() {
         let base = PumpingStageBounds {
             min_flow_m3s: pumping.min_flow_m3s,
             max_flow_m3s: pumping.max_flow_m3s,
@@ -339,7 +343,7 @@ pub fn resolve_bounds(
         }
     }
 
-    for (entity_idx, contract) in contracts.iter().enumerate() {
+    for (entity_idx, contract) in entities.contracts.iter().enumerate() {
         let base = ContractStageBounds {
             min_mw: contract.min_mw,
             max_mw: contract.max_mw,
@@ -400,6 +404,11 @@ pub fn resolve_bounds(
     }
 
     for row in thermal_overrides {
+        // Rows with non-null block_id are reserved for future per-block cost support
+        // (DECOMP). They are parsed but silently ignored during bounds resolution.
+        if row.block_id.is_some() {
+            continue;
+        }
         let Some(&entity_idx) = thermal_index.get(&row.thermal_id) else {
             continue;
         };
@@ -412,6 +421,9 @@ pub fn resolve_bounds(
         }
         if let Some(v) = row.max_generation_mw {
             cell.max_generation_mw = v;
+        }
+        if let Some(v) = row.cost_per_mwh {
+            cell.cost_per_mwh = v;
         }
     }
 
@@ -529,7 +541,6 @@ mod tests {
     use super::*;
     use cobre_core::entities::{
         ContractType, DiversionChannel, FillingConfig, HydroGenerationModel, HydroPenalties,
-        ThermalCostSegment,
     };
 
     /// Build a 0-based consecutive stage_index map: {0→0, 1→1, …, (n-1)→(n-1)}.
@@ -641,10 +652,7 @@ mod tests {
             bus_id: EntityId::from(1),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: max_generation_mw,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             min_generation_mw,
             max_generation_mw,
             gnl_config: None,
@@ -892,6 +900,8 @@ mod tests {
             stage_id: 0,
             min_generation_mw: None,
             max_generation_mw: Some(500.0),
+            cost_per_mwh: None,
+            block_id: None,
         };
 
         let result = resolve_bounds(
@@ -1069,6 +1079,8 @@ mod tests {
             stage_id: 0,
             min_generation_mw: Some(10.0),
             max_generation_mw: Some(200.0),
+            cost_per_mwh: None,
+            block_id: None,
         };
 
         let result = resolve_bounds(
@@ -1135,6 +1147,8 @@ mod tests {
             stage_id: 0,
             min_generation_mw: None,
             max_generation_mw: Some(500.0),
+            cost_per_mwh: None,
+            block_id: None,
         };
 
         let result = resolve_bounds(
@@ -1275,5 +1289,134 @@ mod tests {
 
         assert!((result.hydro_bounds(0, 0).water_withdrawal_m3s - (-5.0)).abs() < f64::EPSILON);
         assert!((result.hydro_bounds(0, 1).water_withdrawal_m3s - 0.0).abs() < f64::EPSILON);
+    }
+
+    // ── Tests: ticket-002 acceptance criteria ────────────────────────────────
+
+    /// AC1 (ticket-002): cost_per_mwh override with null block_id — applied.
+    /// thermal T1, stages 0 and 1, cost overrides 50.0 and 100.0.
+    #[test]
+    fn test_thermal_cost_override_null_block_id() {
+        let thermals = vec![make_thermal(0, 0.0, 400.0)];
+        let overrides = vec![
+            ThermalBoundsRow {
+                thermal_id: EntityId::from(0),
+                stage_id: 0,
+                min_generation_mw: None,
+                max_generation_mw: None,
+                cost_per_mwh: Some(50.0),
+                block_id: None,
+            },
+            ThermalBoundsRow {
+                thermal_id: EntityId::from(0),
+                stage_id: 1,
+                min_generation_mw: None,
+                max_generation_mw: None,
+                cost_per_mwh: Some(100.0),
+                block_id: None,
+            },
+        ];
+
+        let result = resolve_bounds(
+            &[],
+            &thermals,
+            &[],
+            &[],
+            &[],
+            2,
+            &[],
+            &overrides,
+            &[],
+            &[],
+            &[],
+        );
+
+        assert!(
+            (result.thermal_bounds(0, 0).cost_per_mwh - 50.0).abs() < f64::EPSILON,
+            "expected cost_per_mwh=50.0 at stage 0, got {}",
+            result.thermal_bounds(0, 0).cost_per_mwh
+        );
+        assert!(
+            (result.thermal_bounds(0, 1).cost_per_mwh - 100.0).abs() < f64::EPSILON,
+            "expected cost_per_mwh=100.0 at stage 1, got {}",
+            result.thermal_bounds(0, 1).cost_per_mwh
+        );
+    }
+
+    /// AC2 (ticket-002): no parquet cost override — falls back to base Thermal.cost_per_mwh.
+    #[test]
+    fn test_thermal_cost_fallback_to_base() {
+        // make_thermal uses cost_per_mwh: 50.0 in the helper.
+        let thermals = vec![make_thermal(0, 0.0, 400.0)];
+
+        let result = resolve_bounds(&[], &thermals, &[], &[], &[], 3, &[], &[], &[], &[], &[]);
+
+        for stage in 0..3 {
+            assert!(
+                (result.thermal_bounds(0, stage).cost_per_mwh - 50.0).abs() < f64::EPSILON,
+                "expected base cost_per_mwh=50.0 at stage {stage}"
+            );
+        }
+    }
+
+    /// AC3 (ticket-002): row with non-null block_id is silently ignored — no effect on bounds.
+    #[test]
+    fn test_thermal_cost_block_id_row_ignored() {
+        // make_thermal uses cost_per_mwh: 50.0; override with block_id=1 must be ignored.
+        let thermals = vec![make_thermal(0, 0.0, 400.0)];
+        let override_row = ThermalBoundsRow {
+            thermal_id: EntityId::from(0),
+            stage_id: 0,
+            min_generation_mw: None,
+            max_generation_mw: None,
+            cost_per_mwh: Some(999.0),
+            block_id: Some(1),
+        };
+
+        let result = resolve_bounds(
+            &[],
+            &thermals,
+            &[],
+            &[],
+            &[],
+            2,
+            &[],
+            &[override_row],
+            &[],
+            &[],
+            &[],
+        );
+
+        // Cost must remain at the entity base value (50.0), not 999.0.
+        assert!(
+            (result.thermal_bounds(0, 0).cost_per_mwh - 50.0).abs() < f64::EPSILON,
+            "row with non-null block_id must be ignored; expected 50.0, got {}",
+            result.thermal_bounds(0, 0).cost_per_mwh
+        );
+    }
+
+    /// AC4 (ticket-002): thermal with cost_per_mwh == 0.0, no override — resolves to 0.0.
+    #[test]
+    fn test_thermal_zero_base_cost_no_override() {
+        let thermals = vec![Thermal {
+            id: EntityId::from(0),
+            name: "ZeroCost".to_string(),
+            bus_id: EntityId::from(1),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            cost_per_mwh: 0.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            gnl_config: None,
+        }];
+
+        let result = resolve_bounds(&[], &thermals, &[], &[], &[], 2, &[], &[], &[], &[], &[]);
+
+        for stage in 0..2 {
+            assert!(
+                result.thermal_bounds(0, stage).cost_per_mwh.abs() < f64::EPSILON,
+                "expected cost_per_mwh=0.0 at stage {stage}"
+            );
+        }
     }
 }

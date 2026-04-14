@@ -22,12 +22,10 @@
           "format": "int32",
           "type": "integer"
         },
-        "cost_segments": {
-          "description": "Piecewise-linear cost segments. Must be non-empty.",
-          "items": {
-            "$ref": "#/$defs/RawThermalCostSegment"
-          },
-          "type": "array"
+        "cost_per_mwh": {
+          "description": "Marginal cost of generation [$/`MWh`]. Must be ≥ 0.0.",
+          "format": "double",
+          "type": "number"
         },
         "entry_stage_id": {
           "default": null,
@@ -76,28 +74,8 @@
         "id",
         "name",
         "bus_id",
-        "cost_segments",
+        "cost_per_mwh",
         "generation"
-      ],
-      "type": "object"
-    },
-    "RawThermalCostSegment": {
-      "description": "Intermediate type for a single cost segment.",
-      "properties": {
-        "capacity_mw": {
-          "description": "Generation capacity of this segment [MW].",
-          "format": "double",
-          "type": "number"
-        },
-        "cost_per_mwh": {
-          "description": "Marginal cost in this segment [$/`MWh`].",
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "capacity_mw",
-        "cost_per_mwh"
       ],
       "type": "object"
     },

@@ -155,7 +155,7 @@ impl PyLine {
 
 // ─── Thermal ─────────────────────────────────────────────────────────────────
 
-/// Thermal power plant with piecewise-linear generation cost curve.
+/// Thermal power plant with a scalar marginal cost.
 ///
 /// A `Thermal` contributes generation variables and cost objective terms to
 /// each stage LP.
@@ -194,22 +194,10 @@ impl PyThermal {
         self.inner.max_generation_mw
     }
 
-    /// Piecewise-linear cost segments ordered by ascending cost.
-    ///
-    /// Each segment is returned as a dict with keys `"capacity_mw"` (float)
-    /// and `"cost_per_mwh"` (float).
+    /// Marginal cost of generation [$/MWh].
     #[getter]
-    fn cost_segments<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        self.inner
-            .cost_segments
-            .iter()
-            .map(|seg| {
-                let d = PyDict::new(py);
-                d.set_item("capacity_mw", seg.capacity_mw)?;
-                d.set_item("cost_per_mwh", seg.cost_per_mwh)?;
-                Ok(d)
-            })
-            .collect()
+    fn cost_per_mwh(&self) -> f64 {
+        self.inner.cost_per_mwh
     }
 
     fn __repr__(&self) -> String {

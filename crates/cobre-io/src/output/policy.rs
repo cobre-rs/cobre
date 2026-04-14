@@ -162,6 +162,7 @@ pub struct StageStatesReadResult {
 ///     max_iterations: 200,
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
+///     warm_start_counts: vec![],
 ///     rng_seed: 42,
 ///     total_visited_states: 0,
 /// };
@@ -190,6 +191,14 @@ pub struct PolicyCheckpointMetadata {
     pub forward_passes: u32,
     /// Number of cuts loaded from a previous policy at run start.
     pub warm_start_cuts: u32,
+    /// Per-stage warm-start cut counts (one per stage, 0-based).
+    ///
+    /// When non-empty, supersedes [`warm_start_cuts`] for per-stage accuracy.
+    /// Empty in old checkpoints; fall back to broadcasting [`warm_start_cuts`].
+    ///
+    /// [`warm_start_cuts`]: Self::warm_start_cuts
+    #[serde(default)]
+    pub warm_start_counts: Vec<u32>,
     /// RNG seed used by the scenario sampler.
     ///
     /// The noise sampling architecture derives per-draw seeds from
@@ -554,6 +563,7 @@ pub struct StageCutsPayload<'a> {
 ///     max_iterations: 100,
 ///     forward_passes: 4,
 ///     warm_start_cuts: 0,
+///     warm_start_counts: vec![0],
 ///     rng_seed: 0,
 ///     total_visited_states: 0,
 /// };
@@ -1468,6 +1478,7 @@ mod tests {
             max_iterations: 200,
             forward_passes: 4,
             warm_start_cuts: 0,
+            warm_start_counts: vec![],
             rng_seed: 42,
             total_visited_states: 0,
         };
@@ -1529,6 +1540,7 @@ mod tests {
             max_iterations: 10,
             forward_passes: 1,
             warm_start_cuts: 0,
+            warm_start_counts: vec![],
             rng_seed: 0,
             total_visited_states: 0,
         };
@@ -1559,6 +1571,7 @@ mod tests {
             max_iterations: 100,
             forward_passes: 4,
             warm_start_cuts: 0,
+            warm_start_counts: vec![0; num_stages as usize],
             rng_seed: 42,
             total_visited_states: 0,
         }
@@ -2204,6 +2217,7 @@ mod tests {
             max_iterations: 100,
             forward_passes: 4,
             warm_start_cuts: 10,
+            warm_start_counts: vec![10, 10, 10],
             rng_seed: 12345,
             total_visited_states: 0,
         };
@@ -2237,6 +2251,7 @@ mod tests {
             max_iterations: 10,
             forward_passes: 1,
             warm_start_cuts: 0,
+            warm_start_counts: vec![],
             rng_seed: 0,
             total_visited_states: 0,
         };
@@ -2412,6 +2427,7 @@ mod tests {
             max_iterations: 500,
             forward_passes: 8,
             warm_start_cuts: 20,
+            warm_start_counts: vec![20; 4],
             rng_seed: 99999,
             total_visited_states: 0,
         };
@@ -2431,6 +2447,147 @@ mod tests {
         assert_eq!(m.max_iterations, 500);
         assert_eq!(m.forward_passes, 8);
         assert_eq!(m.warm_start_cuts, 20);
+        assert_eq!(m.warm_start_counts, vec![20u32; 4]);
         assert_eq!(m.rng_seed, 99999);
+    }
+
+    // ── warm_start_counts JSON serialization tests ────────────────────────────
+
+    #[test]
+    fn policy_checkpoint_metadata_warm_start_counts_round_trips() {
+        let meta = PolicyCheckpointMetadata {
+            cobre_version: "0.0.1".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            completed_iterations: 5,
+            final_lower_bound: 0.0,
+            best_upper_bound: None,
+            state_dimension: 2,
+            num_stages: 3,
+            max_iterations: 10,
+            forward_passes: 1,
+            warm_start_cuts: 8,
+            warm_start_counts: vec![10, 8, 6],
+            rng_seed: 0,
+            total_visited_states: 0,
+        };
+
+        let json = serde_json::to_string(&meta).expect("serialize must succeed");
+        let back: PolicyCheckpointMetadata =
+            serde_json::from_str(&json).expect("deserialize must succeed");
+
+        assert_eq!(
+            back.warm_start_counts,
+            vec![10u32, 8, 6],
+            "warm_start_counts must round-trip"
+        );
+    }
+
+    #[test]
+    fn policy_checkpoint_metadata_warm_start_counts_absent_defaults_to_empty() {
+        // Simulate an old checkpoint JSON that has no warm_start_counts field.
+        let json = r#"{
+            "cobre_version": "0.0.1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "completed_iterations": 5,
+            "final_lower_bound": 0.0,
+            "best_upper_bound": null,
+            "state_dimension": 2,
+            "num_stages": 3,
+            "max_iterations": 10,
+            "forward_passes": 1,
+            "warm_start_cuts": 5,
+            "rng_seed": 0,
+            "total_visited_states": 0
+        }"#;
+
+        let meta: PolicyCheckpointMetadata =
+            serde_json::from_str(json).expect("old-format JSON must deserialize");
+
+        assert!(
+            meta.warm_start_counts.is_empty(),
+            "absent warm_start_counts must default to empty vec"
+        );
+        assert_eq!(
+            meta.warm_start_cuts, 5,
+            "warm_start_cuts scalar must still be read"
+        );
+    }
+
+    #[test]
+    fn read_policy_checkpoint_warm_start_counts_in_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let c0 = [1.0_f64, 2.0];
+        let c1 = [3.0_f64, 4.0];
+        let c2 = [5.0_f64, 6.0];
+        let cuts_s0 = [make_cut_record(1, 0, 1, &c0), make_cut_record(2, 1, 1, &c0)];
+        let cuts_s1 = [
+            make_cut_record(3, 0, 2, &c1),
+            make_cut_record(4, 1, 2, &c1),
+            make_cut_record(5, 2, 2, &c1),
+        ];
+        let cuts_s2 = [
+            make_cut_record(6, 0, 3, &c2),
+            make_cut_record(7, 1, 3, &c2),
+            make_cut_record(8, 2, 3, &c2),
+            make_cut_record(9, 3, 3, &c2),
+        ];
+
+        let stage_cuts_payloads = [
+            StageCutsPayload {
+                stage_id: 0,
+                state_dimension: 2,
+                capacity: 100,
+                warm_start_count: 10,
+                cuts: &cuts_s0,
+                active_cut_indices: &[0, 1],
+                populated_count: 2,
+            },
+            StageCutsPayload {
+                stage_id: 1,
+                state_dimension: 2,
+                capacity: 100,
+                warm_start_count: 8,
+                cuts: &cuts_s1,
+                active_cut_indices: &[0, 1, 2],
+                populated_count: 3,
+            },
+            StageCutsPayload {
+                stage_id: 2,
+                state_dimension: 2,
+                capacity: 100,
+                warm_start_count: 6,
+                cuts: &cuts_s2,
+                active_cut_indices: &[0, 1, 2, 3],
+                populated_count: 4,
+            },
+        ];
+
+        let metadata = PolicyCheckpointMetadata {
+            cobre_version: "0.0.1".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            completed_iterations: 10,
+            final_lower_bound: 100.0,
+            best_upper_bound: None,
+            state_dimension: 2,
+            num_stages: 3,
+            max_iterations: 50,
+            forward_passes: 1,
+            warm_start_cuts: 10,
+            warm_start_counts: vec![10, 8, 6],
+            rng_seed: 0,
+            total_visited_states: 0,
+        };
+
+        write_policy_checkpoint(tmp.path(), &stage_cuts_payloads, &[], &metadata, &[])
+            .expect("write must succeed");
+
+        let checkpoint = read_policy_checkpoint(tmp.path()).expect("read must succeed");
+
+        assert_eq!(
+            checkpoint.metadata.warm_start_counts,
+            vec![10u32, 8, 6],
+            "warm_start_counts [10, 8, 6] must round-trip through metadata.json"
+        );
     }
 }

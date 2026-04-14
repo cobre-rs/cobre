@@ -1416,7 +1416,8 @@ mod tests {
         let n_state = indexer.n_state;
         let n_stages = 1_usize;
         let forward_passes = 2_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -1463,6 +1464,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1502,7 +1504,8 @@ mod tests {
 
         let n_state = indexer.n_state; // 1
         let forward_passes = 2_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
 
         // Two trial points with states [10.0] and [20.0] at stage 0.
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
@@ -1554,6 +1557,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1596,7 +1600,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 3_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
 
         // 3 trial points (forward_passes=3 on a single rank).
         let mut exchange = exchange_with_states(n_state, vec![vec![5.0], vec![10.0], vec![15.0]]);
@@ -1645,6 +1650,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1685,7 +1691,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -1732,6 +1739,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1772,7 +1780,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![5.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -1819,6 +1828,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1856,7 +1866,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -1904,6 +1915,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -1985,7 +1997,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2033,6 +2046,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2091,7 +2105,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![50.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2140,6 +2155,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2202,7 +2218,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let x_hat = 30.0_f64;
         let mut exchange = exchange_with_states(n_state, vec![vec![x_hat]]);
 
@@ -2252,6 +2269,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2304,7 +2322,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 2_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2351,6 +2370,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2400,7 +2420,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 6_u32; // 6 scenarios on a single rank
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
 
         // 6 trial points (m = 0..5). ExchangeBuffers: local_count=6, num_ranks=1.
         let mut exchange = exchange_with_states(
@@ -2459,6 +2480,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2511,7 +2533,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2562,6 +2585,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2610,7 +2634,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2659,6 +2684,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2712,7 +2738,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -2763,6 +2790,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2835,7 +2863,8 @@ mod tests {
         let comm = StubComm;
 
         // --- Run with 1 workspace ---
-        let mut fcf_1 = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf_1 =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let solver_1 = MockSolver::always_ok(solution.clone());
         let mut workspaces_1 = vec![SolverWorkspace {
             solver: solver_1,
@@ -2894,6 +2923,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -2916,7 +2946,8 @@ mod tests {
         .unwrap();
 
         // --- Run with 4 workspaces ---
-        let mut fcf_4 = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf_4 =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
             .map(|_| SolverWorkspace {
                 solver: MockSolver::always_ok(solution.clone()),
@@ -2963,6 +2994,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3246,7 +3278,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -3322,6 +3355,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3398,7 +3432,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -3466,6 +3501,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3543,7 +3579,8 @@ mod tests {
 
         let n_state = indexer.n_state; // 1
         let forward_passes = 1_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 10, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -3615,6 +3652,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3682,7 +3720,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 3_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -3729,6 +3768,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3801,7 +3841,8 @@ mod tests {
 
         let n_state = indexer.n_state;
         let forward_passes = 3_u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 20, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
 
         let horizon = HorizonMode::Finite {
@@ -3852,6 +3893,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],
@@ -3933,7 +3975,8 @@ mod tests {
         // all trial points in a single iteration (iteration 0, slots 0..5).
         #[allow(clippy::cast_possible_truncation)]
         let forward_passes = local_work as u32;
-        let mut fcf = FutureCostFunction::new(n_stages, n_state, forward_passes, 64, 0);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 64, &vec![0; n_stages]);
 
         // Build `local_work` trial points with distinct states so each cut
         // has a different intercept. State for trial point i = (i+1)*10.0.
@@ -4012,6 +4055,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &mut BackwardPassSpec {
                 records: &[],

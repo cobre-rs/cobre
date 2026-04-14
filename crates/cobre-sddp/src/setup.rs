@@ -115,6 +115,18 @@ pub struct StudyParams {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
+    /// Optional angular-accelerated dominance pruning parameters.
+    pub angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Derived from
+    /// `config.training.cut_selection.max_active_per_stage`.
+    pub budget: Option<u32>,
+    /// Whether basis padding is enabled for warm-start.
+    ///
+    /// Derived from `config.training.cut_selection.basis_padding`.
+    /// Disabled by default (`false`).
+    pub basis_padding_enabled: bool,
 }
 
 impl StudyParams {
@@ -207,6 +219,32 @@ impl StudyParams {
             .cut_activity_tolerance
             .unwrap_or(0.0);
 
+        let angular_pruning = crate::angular_pruning::parse_angular_pruning_config(
+            &config.training.cut_selection.angular_pruning,
+            config.training.cut_selection.check_frequency,
+        )
+        .map_err(|msg| SddpError::Validation(format!("angular_pruning config error: {msg}")))?;
+
+        let budget = config.training.cut_selection.max_active_per_stage;
+
+        // Warn when the budget is so tight that every iteration will immediately
+        // evict all cuts older than the current one.  This is not an error —
+        // the solver remains correct — but it usually indicates a misconfiguration.
+        if let Some(b) = budget {
+            // world_size is not available here; use 1 as a conservative estimate.
+            // The CLI/Python layer may emit a more precise warning with the real
+            // world_size after broadcast.
+            if u64::from(b) < u64::from(forward_passes) {
+                eprintln!(
+                    "warning: max_active_per_stage ({b}) is less than forward_passes \
+                     ({forward_passes}); budget enforcement will evict all \
+                     non-current-iteration cuts every iteration"
+                );
+            }
+        }
+
+        let basis_padding_enabled = config.training.cut_selection.basis_padding.unwrap_or(false);
+
         Ok(Self {
             seed,
             forward_passes,
@@ -217,6 +255,9 @@ impl StudyParams {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
+            angular_pruning,
+            budget,
+            basis_padding_enabled,
         })
     }
 }
@@ -324,6 +365,14 @@ pub struct StudySetup {
     cut_selection: Option<CutSelectionStrategy>,
     cut_activity_tolerance: f64,
     stopping_rule_set: StoppingRuleSet,
+    /// Optional angular-accelerated dominance pruning parameters.
+    angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
+
+    /// Maximum number of active cuts per stage (hard cap on LP size).
+    ///
+    /// `None` means no cap is enforced. Set from
+    /// `config.training.cut_selection.max_active_per_stage` via `StudyParams`.
+    budget: Option<u32>,
 
     /// Whether the caller wants the visited-states archive for export.
     ///
@@ -331,6 +380,13 @@ pub struct StudySetup {
     /// cut selection strategy. Defaults to `false`; set by CLI/Python callers
     /// based on `exports.states`.
     export_states: bool,
+
+    /// Whether basis padding is enabled for warm-start.
+    ///
+    /// When `true`, the forward pass applies informed basis status assignment for
+    /// new cut rows before warm-starting the LP solver. Disabled by default.
+    /// Set from `config.training.cut_selection.basis_padding` via `StudyParams`.
+    basis_padding_enabled: bool,
 }
 
 impl StudySetup {
@@ -355,6 +411,7 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         let params = StudyParams::from_config(config)?;
+        let budget = params.budget;
         // Use a sentinel path; training_scenario_source / simulation_scenario_source
         // only use the path for error messages and the historical-years look-up,
         // which is not exercised when the caller provides a validated Config.
@@ -365,7 +422,7 @@ impl StudySetup {
         let simulation_source = config
             .simulation_scenario_source(sentinel_path)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
-        Self::from_broadcast_params(
+        let mut setup = Self::from_broadcast_params(
             system,
             stochastic,
             params.seed,
@@ -377,10 +434,13 @@ impl StudySetup {
             params.inflow_method,
             params.cut_selection,
             params.cut_activity_tolerance,
+            params.angular_pruning,
             hydro_models,
             &training_source,
             &simulation_source,
-        )
+        )?;
+        setup.budget = budget;
+        Ok(setup)
     }
 
     /// Build all precomputed study state from pre-resolved broadcast parameters.
@@ -422,6 +482,7 @@ impl StudySetup {
         inflow_method: InflowNonNegativityMethod,
         cut_selection: Option<CutSelectionStrategy>,
         cut_activity_tolerance: f64,
+        angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
         hydro_models: PrepareHydroModelsResult,
         training_source: &ScenarioSource,
         simulation_source: &ScenarioSource,
@@ -654,7 +715,7 @@ impl StudySetup {
             indexer.n_state,
             forward_passes,
             fcf_capacity_iterations,
-            0,
+            &vec![0; n_stages],
         );
 
         let horizon = HorizonMode::Finite {
@@ -1226,6 +1287,9 @@ impl StudySetup {
             cut_selection,
             cut_activity_tolerance,
             stopping_rule_set,
+            angular_pruning,
+            budget: None,
+            basis_padding_enabled: false,
             export_states: false,
         })
     }
@@ -1384,6 +1448,14 @@ impl StudySetup {
         self.export_states = export;
     }
 
+    /// Set the active-cut budget cap for training.
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after each backward pass. When `None`, no cap is enforced.
+    pub fn set_budget(&mut self, budget: Option<u32>) {
+        self.budget = budget;
+    }
+
     /// Return the number of simulation scenarios (0 if simulation is disabled).
     #[must_use]
     pub fn n_scenarios(&self) -> u32 {
@@ -1461,6 +1533,7 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
+            basis_padding_enabled: self.basis_padding_enabled,
         }
     }
 
@@ -1517,6 +1590,7 @@ impl StudySetup {
             external_inflow_library,
             external_load_library,
             external_ncs_library,
+            basis_padding_enabled: false,
         }
     }
 
@@ -1557,6 +1631,9 @@ impl StudySetup {
             shutdown_flag: shutdown_flag.map(Arc::clone),
             start_iteration: self.start_iteration,
             export_states: self.export_states,
+            angular_pruning: self.angular_pruning,
+            budget: self.budget,
+            basis_padding_enabled: self.basis_padding_enabled,
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -1588,6 +1665,7 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
+            basis_padding_enabled: self.basis_padding_enabled,
         };
 
         crate::train(
@@ -2204,7 +2282,7 @@ mod tests {
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
-            thermal::{Thermal, ThermalCostSegment},
+            thermal::Thermal,
         },
         scenario::{InflowModel, LoadModel, SamplingScheme},
         temporal::{
@@ -2248,10 +2326,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -2405,6 +2480,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -3536,10 +3612,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -3674,6 +3747,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4031,6 +4105,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4392,10 +4467,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -4521,6 +4593,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4665,10 +4738,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -4788,6 +4858,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -4919,10 +4990,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5056,6 +5124,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5191,10 +5260,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5350,6 +5416,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,
@@ -5490,10 +5557,7 @@ mod tests {
             bus_id: EntityId(1),
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             gnl_config: None,
             entry_stage_id: None,
             exit_stage_id: None,
@@ -5614,6 +5678,7 @@ mod tests {
                 thermal: ThermalStageBounds {
                     min_generation_mw: 0.0,
                     max_generation_mw: 100.0,
+                    cost_per_mwh: 0.0,
                 },
                 line: LineStageBounds {
                     direct_mw: 0.0,

@@ -271,7 +271,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     fwd_rayon_overhead_ms: 0,
 /// }];
 ///
-/// let fcf = FutureCostFunction::new(2, 1, 4, 1, 0);
+/// let fcf = FutureCostFunction::new(2, 1, 4, 1, &[0; 2]);
 /// let output = build_training_output(&result, &events, &fcf);
 ///
 /// assert_eq!(output.convergence_records.len(), 1);
@@ -339,6 +339,9 @@ pub fn build_training_output(
                     cuts_deactivated: rec.cuts_deactivated,
                     cuts_active_after: rec.cuts_active_after,
                     selection_time_ms: rec.selection_time_ms,
+                    active_after_angular: rec.active_after_angular,
+                    budget_evicted: rec.budget_evicted,
+                    active_after_budget: rec.active_after_budget,
                 }))
             } else {
                 None
@@ -402,7 +405,7 @@ mod tests {
     }
 
     fn make_empty_fcf() -> FutureCostFunction {
-        FutureCostFunction::new(2, 1, 4, 10, 0)
+        FutureCostFunction::new(2, 1, 4, 10, &[0; 2])
     }
 
     #[test]
@@ -458,7 +461,7 @@ mod tests {
         let result = make_result("iteration_limit", 80.0, 100.0, 0.2, 1);
         let events = vec![make_iteration_summary(1, 80.0, 100.0, 0.2)];
 
-        let mut fcf = FutureCostFunction::new(2, 1, 4, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 1, 4, 10, &[0; 2]);
 
         // Add 3 cuts to pool[0] and 2 cuts to pool[1].
         fcf.add_cut(0, 0, 0, 1.0, &[1.0]);
@@ -856,6 +859,9 @@ mod tests {
                         cuts_deactivated: 0,
                         cuts_active_after: 5,
                         selection_time_ms: 0.0,
+                        active_after_angular: None,
+                        budget_evicted: None,
+                        active_after_budget: None,
                     },
                     StageSelectionRecord {
                         stage: 1,
@@ -864,6 +870,9 @@ mod tests {
                         cuts_deactivated: 3,
                         cuts_active_after: 5,
                         selection_time_ms: 2.5,
+                        active_after_angular: None,
+                        budget_evicted: None,
+                        active_after_budget: None,
                     },
                 ],
             },

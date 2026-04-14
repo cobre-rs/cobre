@@ -672,7 +672,7 @@ mod tests {
 
     fn make_fcf(n_stages: usize, n_state: usize) -> FutureCostFunction {
         // max_cuts=100, n_transfer=0
-        FutureCostFunction::new(n_stages, n_state, 2, 100, 0)
+        FutureCostFunction::new(n_stages, n_state, 2, 100, &vec![0; n_stages])
     }
 
     // ── Unit tests ───────────────────────────────────────────────────────────

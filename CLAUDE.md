@@ -16,30 +16,34 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.4.3)
+## Current State (v0.4.4)
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,450+ tests, including 24 deterministic regression cases (D01–D16, D19–D26)
+3,450+ tests, including 27 deterministic regression cases (D01–D16, D19–D27)
 and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
 cascade coupling, water withdrawal, inflow non-negativity (truncation, penalty, 
 truncation-with-penalty), multi-segment deficit, generic constraints (20
 variable types), NCS stochastic availability, block factors, per-stage 
-productivity override, CVaR risk measure, PAR(p) estimation (periodic YW,
-PACF), LP scaling, solver statistics instrumentation, LP setup optimisation
-(model persistence, incremental cuts, sparse cuts), simulation basis
-warm-start, cut selection with Parquet output, backward pass performance 
-optimisations, solver safeguards (12-level retry escalation with wall-clock
-budgets), MPI distribution, Python bindings with Arrow zero-copy, CLI with 7 
-subcommands, policy warm-start and resume-from-checkpoint, cost decomposition,
-per-block operational violations, bidirectional withdrawal/evaporation slacks,
-per-plant inflow penalty via cascade, discount rate, visited state persistence,
-per-class scenario sampling (Historical, External, InSample, OutOfSample per
-entity class), composite ForwardSampler with ClassSampler dispatch,
-HistoricalScenarioLibrary and ExternalScenarioLibrary, historical window
-discovery, per-class external scenario files, same-type correlation enforcement.
+productivity override, per-stage thermal cost override, CVaR risk measure,
+PAR(p) estimation (periodic YW, PACF), LP scaling, solver statistics
+instrumentation, LP setup optimisation (model persistence, incremental cuts,
+sparse cuts), simulation basis warm-start, three-stage cut management pipeline
+(strategy-based selection, angular-accelerated dominance pruning, active cut
+budget enforcement), basis-aware warm-start padding, backward pass work-stealing
+parallelism, parallel lower bound evaluation, solver safeguards (12-level retry
+escalation with wall-clock budgets), MPI distribution with execution topology
+reporting, Python bindings with Arrow zero-copy, CLI with 7 subcommands, policy
+warm-start and resume-from-checkpoint with per-stage cut counts, cost
+decomposition, per-block operational violations, bidirectional
+withdrawal/evaporation slacks, per-plant inflow penalty via cascade, discount
+rate, visited state persistence, per-class scenario sampling (Historical,
+External, InSample, OutOfSample per entity class), composite ForwardSampler with
+ClassSampler dispatch, HistoricalScenarioLibrary and ExternalScenarioLibrary,
+HistoricalResiduals noise method, historical window discovery, per-class
+external scenario files, same-type correlation enforcement.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 

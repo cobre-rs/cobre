@@ -1,5 +1,19 @@
 # Design: Per-Stage Warm-Start Counts and Terminal-Stage Boundary Conditions
 
+## Implementation Status
+
+**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+
+| Component                                                                                                | Status |
+| -------------------------------------------------------------------------------------------------------- | ------ |
+| API: `warm_start_counts: &[u32]` replaces scalar `warm_start_count`                                      | DONE   |
+| Checkpoint field: `warm_start_counts: Vec<u32>` with backward-compat fallback (empty vector → all zeros) | DONE   |
+| Terminal theta variable when `warm_start_counts[T-1] > 0`                                                | DONE   |
+| Warm-start cut sentinel: `iteration = u64::MAX` (WARM_START_ITERATION)                                   | DONE   |
+| Horizon mode constraint: boundary cuts only valid for `HorizonMode::Finite`                              | DONE   |
+
+---
+
 ## Context
 
 `FutureCostFunction::new` currently accepts a single `warm_start_count: u32` parameter

@@ -274,18 +274,27 @@ Example:
 
 ## `cut_selection`
 
-Controls the cut selection strategy for managing cut pool growth. Cut
-selection periodically scans the cut pool and deactivates cuts that are
-unlikely to improve the policy, reducing LP size without sacrificing
-convergence quality.
+Controls the cut management pipeline for managing cut pool growth. The
+pipeline has up to three stages: strategy-based selection, angular
+diversity pruning, and budget enforcement. Cut management periodically
+scans the cut pool and deactivates cuts that are unlikely to improve the
+policy, reducing LP size without sacrificing convergence quality. For a
+detailed explanation of each stage, see
+[Performance Accelerators](./performance-accelerators.md#cut-management-pipeline).
 
-| Field                    | Type    | Default | Description                                                                       |
-| ------------------------ | ------- | ------- | --------------------------------------------------------------------------------- |
-| `enabled`                | boolean | `false` | Enable cut pruning.                                                               |
-| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                        |
-| `threshold`              | integer | `0`     | Activity threshold. For Level1: deactivate cuts with `active_count <= threshold`. |
-| `check_frequency`        | integer | `1`     | Iterations between pruning checks.                                                |
-| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                            |
+### Core Fields
+
+| Field                    | Type    | Default | Description                                                                                                |
+| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `enabled`                | boolean | `false` | Enable cut pruning.                                                                                        |
+| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                 |
+| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                            |
+| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.    |
+| `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                   |
+| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stages 1 and 2).                                                        |
+| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                     |
+| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 3 budget enforcement). `null` = no budget.                        |
+| `basis_padding`          | boolean | `false` | Enable basis-aware warm-start padding (Strategy S3). See [Basis Warm-Start](./performance-accelerators.md#basis-warm-start). |
 
 **Methods:**
 
@@ -293,14 +302,26 @@ convergence quality.
   binding count at or below `threshold`). Least aggressive; preserves
   convergence guarantee.
 - `"lml1"` -- deactivates cuts that have not been binding within a sliding
-  window of `threshold` iterations.
+  window of `memory_window` iterations (falls back to `threshold` if
+  `memory_window` is not set).
 - `"domination"` -- deactivates cuts that are dominated at every visited
   forward-pass trial point. Most aggressive; requires the visited-states
-  archive (always collected during training). The `threshold` parameter
-  controls how many consecutive domination checks a cut must fail before
-  deactivation.
+  archive (always collected during training). The `domination_epsilon`
+  parameter controls the tolerance for domination comparisons.
 
-Example:
+### `angular_pruning`
+
+Optional second stage of the cut management pipeline. Clusters cuts by
+cosine similarity and performs within-cluster dominance verification.
+Gated by its own `check_frequency`.
+
+| Field              | Type    | Default | Description                                                         |
+| ------------------ | ------- | ------- | ------------------------------------------------------------------- |
+| `enabled`          | boolean | `false` | Enable angular diversity pruning.                                   |
+| `cosine_threshold` | float   | `0.999` | Cosine similarity threshold for clustering coefficient vectors.     |
+| `check_frequency`  | integer | `1`     | Iterations between angular pruning checks.                          |
+
+Example with all three pipeline stages:
 
 ```json
 {
@@ -310,7 +331,14 @@ Example:
       "method": "level1",
       "threshold": 0,
       "check_frequency": 5,
-      "cut_activity_tolerance": 1e-6
+      "cut_activity_tolerance": 1e-6,
+      "angular_pruning": {
+        "enabled": true,
+        "cosine_threshold": 0.999,
+        "check_frequency": 5
+      },
+      "max_active_per_stage": 500,
+      "basis_padding": false
     }
   }
 }
@@ -409,7 +437,14 @@ Controls which outputs are written to the results directory.
       "method": "level1",
       "threshold": 0,
       "check_frequency": 5,
-      "cut_activity_tolerance": 1e-6
+      "cut_activity_tolerance": 1e-6,
+      "angular_pruning": {
+        "enabled": false,
+        "cosine_threshold": 0.999,
+        "check_frequency": 5
+      },
+      "max_active_per_stage": null,
+      "basis_padding": false
     }
   },
   "modeling": {
@@ -444,14 +479,13 @@ The `Config` struct supports additional sections not documented on this page.
 These fields are deserialized from `config.json` when present but are intended
 for advanced use cases and may change between releases:
 
-| Section                           | Purpose                                                     |
-| --------------------------------- | ----------------------------------------------------------- |
-| `upper_bound_evaluation`          | Inner approximation upper-bound evaluation settings         |
-| `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)           |
-| `training.forward_pass.pass_type` | Forward pass strategy selection                             |
-| `training.solver`                 | LP solver retry budget and attempt limits                   |
-| `simulation.scenario_source`      | Simulation per-class scenario sampling configuration        |
-| `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing |
+| Section                           | Purpose                                                                                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `upper_bound_evaluation`          | Inner approximation upper-bound evaluation settings                                                      |
+| `training.cut_formulation`        | Cut formulation variant (single-cut or multi-cut)                                                        |
+| `training.forward_pass.pass_type` | Forward pass strategy selection                                                                          |
+| `training.solver`                 | LP solver options (see [Solver Safeguards](./performance-accelerators.md#solver-safeguards) for details) |
+| `simulation.io_channel_capacity`  | Async I/O channel buffer size for simulation output writing                                              |
 
 All fields have defaults and can be omitted. For the complete list of fields
 and their types, see the `Config` struct in the

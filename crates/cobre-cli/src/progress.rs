@@ -247,6 +247,8 @@ pub fn run_progress_thread(
                     | TrainingEvent::BackwardPassComplete { .. }
                     | TrainingEvent::CutSyncComplete { .. }
                     | TrainingEvent::CutSelectionComplete { .. }
+                    | TrainingEvent::AngularPruningComplete { .. }
+                    | TrainingEvent::BudgetEnforcementComplete { .. }
                     | TrainingEvent::ConvergenceUpdate { .. }
                     | TrainingEvent::CheckpointComplete { .. } => {}
                 }

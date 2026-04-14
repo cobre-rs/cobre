@@ -249,7 +249,13 @@ fn make_sync_result(global_ub_mean: f64) -> SyncResult {
 }
 
 fn make_fcf(n_stages: usize, state_dimension: usize) -> cobre_sddp::cut::fcf::FutureCostFunction {
-    cobre_sddp::cut::fcf::FutureCostFunction::new(n_stages, state_dimension, 2, 100, 0)
+    cobre_sddp::cut::fcf::FutureCostFunction::new(
+        n_stages,
+        state_dimension,
+        2,
+        100,
+        &vec![0; n_stages],
+    )
 }
 
 // ===========================================================================

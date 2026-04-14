@@ -1,5 +1,21 @@
 # Per-Stage Thermal Costs
 
+## Implementation Status
+
+**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+
+| Component                                                                              | Status   | Notes                                      |
+| -------------------------------------------------------------------------------------- | -------- | ------------------------------------------ |
+| cobre-core: `cost_per_mwh: f64` on `ThermalStageBounds`                                | DONE     |                                            |
+| cobre-io: `cost_per_mwh: Option<f64>` + `block_id: Option<i32>` on `ThermalBoundsRow`  | DONE     |                                            |
+| cobre-sddp: LP builder reads `tb.cost_per_mwh`                                         | DONE     |                                            |
+| D27 deterministic regression test                                                      | DONE     |                                            |
+| Negative cost validation in parquet parser                                             | DONE     |                                            |
+| `ThermalCostSegment` struct removed; `cost_segments` replaced by scalar `cost_per_mwh` | DONE     | Design was simplified vs original proposal |
+| cobre-bridge: CLAST.DAT per-year cost extraction                                       | NOT DONE | Separate repo; tracked separately          |
+
+---
+
 ## Problem
 
 CLAST.DAT in newave defines thermal generation costs per `(plant, study_year)`.

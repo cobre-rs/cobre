@@ -100,8 +100,9 @@ complete contracts.
 | `solve_with_basis` | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
 | `reset`            | `&mut self`           | `()`                                    | Clears solver state for error recovery or model switch                      |
 | `get_basis`        | `&mut self`           | `()`                                    | Writes basis status codes into a caller-owned `&mut Basis`                  |
-| `statistics`       | `&self`               | `SolverStatistics`                      | Returns accumulated monotonic solve counters                                |
-| `name`             | `&self`               | `&'static str`                          | Returns a static string identifying the backend                             |
+| `statistics`           | `&self`               | `SolverStatistics`                      | Returns accumulated monotonic solve counters                                |
+| `name`                 | `&self`               | `&'static str`                          | Returns a static string identifying the backend                             |
+| `solver_name_version`  | `&self`               | `String`                                | Returns `"name vX.Y.Z"` (e.g. `"HiGHS v1.8.1"`) for metadata output       |
 
 ### Mutability convention
 
@@ -201,12 +202,33 @@ rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/enum.SolverError.html)
 
 ### `SolverStatistics`
 
-Accumulated solve metrics for one solver instance: `solve_count`,
-`success_count`, `failure_count`, `total_iterations`, `retry_count`,
-`total_solve_time_seconds`, and `basis_rejections`. All counters grow
+Accumulated solve metrics for one solver instance. All counters grow
 monotonically from zero. `reset()` does not zero them — statistics persist for
 the lifetime of the solver instance and are aggregated across threads after
-iterative solving completes. See the [`SolverStatistics`
+iterative solving completes.
+
+| Field                          | Type       | Description                                                                                         |
+| ------------------------------ | ---------- | --------------------------------------------------------------------------------------------------- |
+| `solve_count`                  | `u64`      | Total `solve` and `solve_with_basis` calls.                                                         |
+| `success_count`                | `u64`      | Solves that returned optimal.                                                                       |
+| `failure_count`                | `u64`      | Solves that returned terminal error after retries.                                                   |
+| `total_iterations`             | `u64`      | Total simplex iterations across all solves.                                                          |
+| `retry_count`                  | `u64`      | Total retry attempts across all solves.                                                              |
+| `total_solve_time_seconds`     | `f64`      | Cumulative wall-clock solve time.                                                                    |
+| `basis_rejections`             | `u64`      | Times `solve_with_basis` fell back to cold-start.                                                    |
+| `first_try_successes`          | `u64`      | Solves optimal on first attempt. Enables: `first_try_rate = first_try_successes / solve_count`.      |
+| `basis_offered`                | `u64`      | Total `solve_with_basis` calls. Enables: `basis_hit_rate = 1 - basis_rejections / basis_offered`.    |
+| `load_model_count`             | `u64`      | Total `load_model` calls.                                                                            |
+| `add_rows_count`               | `u64`      | Total `add_rows` calls.                                                                              |
+| `total_load_model_time_seconds`| `f64`      | Cumulative time in `load_model`.                                                                     |
+| `total_add_rows_time_seconds`  | `f64`      | Cumulative time in `add_rows`.                                                                       |
+| `total_set_bounds_time_seconds`| `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                              |
+| `total_basis_set_time_seconds` | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                          |
+| `basis_padding_tight`          | `u64`      | Cut rows assigned `NONBASIC_LOWER` by basis-aware padding (Strategy S3). Set by the calling algorithm. |
+| `basis_padding_slack`          | `u64`      | Cut rows assigned `BASIC` by basis-aware padding. Set by the calling algorithm.                      |
+| `retry_level_histogram`        | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.  |
+
+See the [`SolverStatistics`
 rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.SolverStatistics.html).
 
 ## HiGHS backend (`HighsSolver`)

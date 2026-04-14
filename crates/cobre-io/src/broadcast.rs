@@ -105,7 +105,7 @@ mod tests {
     use super::*;
     use cobre_core::{
         Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel, HydroPenalties, SystemBuilder,
-        Thermal, ThermalCostSegment,
+        Thermal,
     };
 
     fn minimal_bus(id: i32) -> Bus {
@@ -127,10 +127,7 @@ mod tests {
             bus_id: EntityId(bus_id),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
             gnl_config: None,

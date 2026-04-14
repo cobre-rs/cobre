@@ -423,7 +423,7 @@ fn minimal_template() -> StageTemplate {
 }
 
 fn make_fcf(n_stages: usize) -> FutureCostFunction {
-    FutureCostFunction::new(n_stages, 1, 1, FCF_CAPACITY_ITERATIONS, 0)
+    FutureCostFunction::new(n_stages, 1, 1, FCF_CAPACITY_ITERATIONS, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {
@@ -512,6 +512,9 @@ fn run_one_deterministic_pass(
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -528,6 +531,7 @@ fn run_one_deterministic_pass(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -561,6 +565,9 @@ fn train_converges_with_mock_solver() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let stage_ctx = StageContext {
@@ -594,6 +601,7 @@ fn train_converges_with_mock_solver() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -657,6 +665,9 @@ fn train_lb_monotonically_nondecreasing() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let stage_ctx = StageContext {
@@ -690,6 +701,7 @@ fn train_lb_monotonically_nondecreasing() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -741,6 +753,9 @@ fn train_emits_correct_event_sequence() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let stage_ctx = StageContext {
@@ -774,6 +789,7 @@ fn train_emits_correct_event_sequence() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -844,6 +860,9 @@ fn train_stops_at_iteration_limit() {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -860,6 +879,7 @@ fn train_stops_at_iteration_limit() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -920,6 +940,9 @@ fn train_stops_on_graceful_shutdown() {
             shutdown_flag: Some(Arc::clone(&shutdown_flag)),
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -936,6 +959,7 @@ fn train_stops_on_graceful_shutdown() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -986,6 +1010,9 @@ fn train_propagates_infeasible_error() {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -1002,6 +1029,7 @@ fn train_propagates_infeasible_error() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -1062,6 +1090,9 @@ fn d17_level1_cut_selection_convergence() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let stage_ctx = StageContext {
@@ -1095,6 +1126,7 @@ fn d17_level1_cut_selection_convergence() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -1214,6 +1246,9 @@ fn d18_lml1_cut_selection_convergence() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let stage_ctx = StageContext {
@@ -1247,6 +1282,7 @@ fn d18_lml1_cut_selection_convergence() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,

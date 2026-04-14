@@ -269,6 +269,7 @@ fn build_resolved_bounds(n_hydros: usize, n_stages: usize) -> ResolvedBounds {
             thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
             line: LineStageBounds {
                 direct_mw: 0.0,
@@ -514,6 +515,7 @@ fn run_programmatic(
         InflowNonNegativityMethod::None,
         None, // cut_selection
         0.0,  // cut_activity_tolerance
+        None, // angular_pruning
         hydro_models,
         source,
         source,
@@ -812,6 +814,7 @@ fn run_with_setup(
         InflowNonNegativityMethod::None,
         None,
         0.0,
+        None, // angular_pruning
         hydro_models,
         source,
         source,

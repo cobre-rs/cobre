@@ -5,31 +5,21 @@
       "id": 0,
       "name": "T0",
       "bus_id": 0,
-      "cost_segments": [
-        {
-          "capacity_mw": 15.0,
-          "cost_per_mwh": 5.0
-        }
-      ],
       "generation": {
         "min_mw": 0.0,
         "max_mw": 15.0
-      }
+      },
+      "cost_per_mwh": 5.0
     },
     {
       "id": 1,
       "name": "T1",
       "bus_id": 0,
-      "cost_segments": [
-        {
-          "capacity_mw": 15.0,
-          "cost_per_mwh": 10.0
-        }
-      ],
       "generation": {
         "min_mw": 0.0,
         "max_mw": 15.0
-      }
+      },
+      "cost_per_mwh": 10.0
     }
   ]
 }

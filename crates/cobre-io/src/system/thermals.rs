@@ -13,9 +13,7 @@
 //!       "id": 0,
 //!       "name": "Angra 1",
 //!       "bus_id": 2,
-//!       "cost_segments": [
-//!         { "capacity_mw": 600.0, "cost_per_mwh": 12.0 }
-//!       ],
+//!       "cost_per_mwh": 12.0,
 //!       "generation": { "min_mw": 0.0, "max_mw": 600.0 }
 //!     },
 //!     {
@@ -24,9 +22,7 @@
 //!       "bus_id": 3,
 //!       "entry_stage_id": 1,
 //!       "exit_stage_id": 120,
-//!       "cost_segments": [
-//!         { "capacity_mw": 360.0, "cost_per_mwh": 120.0 }
-//!       ],
+//!       "cost_per_mwh": 120.0,
 //!       "generation": { "min_mw": 100.0, "max_mw": 360.0 },
 //!       "gnl_config": { "lag_stages": 2 }
 //!     }
@@ -39,10 +35,9 @@
 //! After deserializing, the following invariants are checked before conversion:
 //!
 //! 1. No two thermals share the same `id`.
-//! 2. `cost_segments` must not be empty.
-//! 3. Every `capacity_mw` and `cost_per_mwh` in cost segments must be ≥ 0.0.
-//! 4. `min_generation_mw` and `max_generation_mw` must be ≥ 0.0.
-//! 5. `max_generation_mw >= min_generation_mw`.
+//! 2. `cost_per_mwh` must be ≥ 0.0.
+//! 3. `min_generation_mw` and `max_generation_mw` must be ≥ 0.0.
+//! 4. `max_generation_mw >= min_generation_mw`.
 //!
 //! GNL config is parsed but NOT rejected at this layer — GNL rejection is a
 //! semantic validation concern for Epic 06. Cross-reference validation (checking
@@ -50,7 +45,7 @@
 
 use cobre_core::{
     EntityId,
-    entities::{GnlConfig, Thermal, ThermalCostSegment},
+    entities::{GnlConfig, Thermal},
 };
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -85,23 +80,13 @@ pub(crate) struct RawThermal {
     /// Stage index when the plant is decommissioned. Absent or null = never.
     #[serde(default)]
     exit_stage_id: Option<i32>,
-    /// Piecewise-linear cost segments. Must be non-empty.
-    cost_segments: Vec<RawThermalCostSegment>,
+    /// Marginal cost of generation [$/`MWh`]. Must be ≥ 0.0.
+    cost_per_mwh: f64,
     /// Generation bounds.
     generation: RawThermalGeneration,
     /// GNL dispatch anticipation configuration. Absent = no lag.
     #[serde(default)]
     gnl_config: Option<RawGnlConfig>,
-}
-
-/// Intermediate type for a single cost segment.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub(crate) struct RawThermalCostSegment {
-    /// Generation capacity of this segment [MW].
-    capacity_mw: f64,
-    /// Marginal cost in this segment [$/`MWh`].
-    cost_per_mwh: f64,
 }
 
 /// Intermediate type for the generation bounds sub-object.
@@ -139,8 +124,7 @@ pub(crate) struct RawGnlConfig {
 /// | File not found / read failure                       | [`LoadError::IoError`]     |
 /// | Invalid JSON syntax or missing required field       | [`LoadError::ParseError`]  |
 /// | Duplicate `id` within the thermals array            | [`LoadError::SchemaError`] |
-/// | Empty `cost_segments` array                         | [`LoadError::SchemaError`] |
-/// | Negative `capacity_mw` or `cost_per_mwh` in segments | [`LoadError::SchemaError`] |
+/// | Negative `cost_per_mwh`                             | [`LoadError::SchemaError`] |
 /// | Negative `min_generation_mw` or `max_generation_mw` | [`LoadError::SchemaError`] |
 /// | `max_generation_mw < min_generation_mw`             | [`LoadError::SchemaError`] |
 ///
@@ -168,7 +152,7 @@ pub fn parse_thermals(path: &Path) -> Result<Vec<Thermal>, LoadError> {
 fn validate_raw_thermals(raw: &RawThermalFile, path: &Path) -> Result<(), LoadError> {
     validate_no_duplicate_thermal_ids(&raw.thermals, path)?;
     for (i, thermal) in raw.thermals.iter().enumerate() {
-        validate_cost_segments(&thermal.cost_segments, i, path)?;
+        validate_cost_per_mwh(thermal.cost_per_mwh, i, path)?;
         validate_generation_bounds(&thermal.generation, i, path)?;
     }
     Ok(())
@@ -192,39 +176,21 @@ fn validate_no_duplicate_thermal_ids(
     Ok(())
 }
 
-/// Validate cost segments for thermal at `thermal_index`.
+/// Validate `cost_per_mwh` for thermal at `thermal_index`.
 ///
-/// Checks: non-empty, all `capacity_mw >= 0.0`, all `cost_per_mwh >= 0.0`.
-fn validate_cost_segments(
-    segments: &[RawThermalCostSegment],
+/// Checks: `cost_per_mwh >= 0.0`.
+fn validate_cost_per_mwh(
+    cost_per_mwh: f64,
     thermal_index: usize,
     path: &Path,
 ) -> Result<(), LoadError> {
-    if segments.is_empty() {
+    if cost_per_mwh < 0.0 {
         return Err(LoadError::SchemaError {
             path: path.to_path_buf(),
-            field: format!("thermals[{thermal_index}].cost_segments"),
-            message: "cost_segments must not be empty".to_string(),
+            field: format!("thermals[{thermal_index}].cost_per_mwh"),
+            message: format!("cost_per_mwh must be >= 0.0, got {cost_per_mwh}"),
         });
     }
-
-    for (j, seg) in segments.iter().enumerate() {
-        if seg.capacity_mw < 0.0 {
-            return Err(LoadError::SchemaError {
-                path: path.to_path_buf(),
-                field: format!("thermals[{thermal_index}].cost_segments[{j}].capacity_mw"),
-                message: format!("capacity_mw must be >= 0.0, got {}", seg.capacity_mw),
-            });
-        }
-        if seg.cost_per_mwh < 0.0 {
-            return Err(LoadError::SchemaError {
-                path: path.to_path_buf(),
-                field: format!("thermals[{thermal_index}].cost_segments[{j}].cost_per_mwh"),
-                message: format!("cost_per_mwh must be >= 0.0, got {}", seg.cost_per_mwh),
-            });
-        }
-    }
-
     Ok(())
 }
 
@@ -269,15 +235,6 @@ fn convert_thermals(raw: RawThermalFile) -> Vec<Thermal> {
         .thermals
         .into_iter()
         .map(|raw_thermal| {
-            let cost_segments: Vec<ThermalCostSegment> = raw_thermal
-                .cost_segments
-                .into_iter()
-                .map(|s| ThermalCostSegment {
-                    capacity_mw: s.capacity_mw,
-                    cost_per_mwh: s.cost_per_mwh,
-                })
-                .collect();
-
             let gnl_config: Option<GnlConfig> = raw_thermal.gnl_config.map(|g| GnlConfig {
                 lag_stages: g.lag_stages,
             });
@@ -288,7 +245,7 @@ fn convert_thermals(raw: RawThermalFile) -> Vec<Thermal> {
                 bus_id: EntityId(raw_thermal.bus_id),
                 entry_stage_id: raw_thermal.entry_stage_id,
                 exit_stage_id: raw_thermal.exit_stage_id,
-                cost_segments,
+                cost_per_mwh: raw_thermal.cost_per_mwh,
                 min_generation_mw: raw_thermal.generation.min_mw,
                 max_generation_mw: raw_thermal.generation.max_mw,
                 gnl_config,
@@ -324,9 +281,7 @@ mod tests {
           "id": 0,
           "name": "Angra 1",
           "bus_id": 2,
-          "cost_segments": [
-            { "capacity_mw": 600.0, "cost_per_mwh": 12.0 }
-          ],
+          "cost_per_mwh": 12.0,
           "generation": { "min_mw": 0.0, "max_mw": 600.0 }
         },
         {
@@ -335,9 +290,7 @@ mod tests {
           "bus_id": 3,
           "entry_stage_id": 1,
           "exit_stage_id": 120,
-          "cost_segments": [
-            { "capacity_mw": 360.0, "cost_per_mwh": 120.0 }
-          ],
+          "cost_per_mwh": 120.0,
           "generation": { "min_mw": 100.0, "max_mw": 360.0 },
           "gnl_config": { "lag_stages": 2 }
         }
@@ -362,16 +315,10 @@ mod tests {
         assert_eq!(thermals[0].bus_id, EntityId(2));
         assert_eq!(thermals[0].entry_stage_id, None);
         assert_eq!(thermals[0].exit_stage_id, None);
-        assert_eq!(thermals[0].cost_segments.len(), 1);
         assert!(
-            (thermals[0].cost_segments[0].capacity_mw - 600.0).abs() < f64::EPSILON,
-            "capacity_mw: expected 600.0, got {}",
-            thermals[0].cost_segments[0].capacity_mw
-        );
-        assert!(
-            (thermals[0].cost_segments[0].cost_per_mwh - 12.0).abs() < f64::EPSILON,
+            (thermals[0].cost_per_mwh - 12.0).abs() < f64::EPSILON,
             "cost_per_mwh: expected 12.0, got {}",
-            thermals[0].cost_segments[0].cost_per_mwh
+            thermals[0].cost_per_mwh
         );
         assert!((thermals[0].min_generation_mw - 0.0).abs() < f64::EPSILON);
         assert!((thermals[0].max_generation_mw - 600.0).abs() < f64::EPSILON);
@@ -383,7 +330,11 @@ mod tests {
         assert_eq!(thermals[1].bus_id, EntityId(3));
         assert_eq!(thermals[1].entry_stage_id, Some(1));
         assert_eq!(thermals[1].exit_stage_id, Some(120));
-        assert_eq!(thermals[1].cost_segments.len(), 1);
+        assert!(
+            (thermals[1].cost_per_mwh - 120.0).abs() < f64::EPSILON,
+            "cost_per_mwh: expected 120.0, got {}",
+            thermals[1].cost_per_mwh
+        );
         assert!((thermals[1].min_generation_mw - 100.0).abs() < f64::EPSILON);
         assert!((thermals[1].max_generation_mw - 360.0).abs() < f64::EPSILON);
         assert_eq!(thermals[1].gnl_config, Some(GnlConfig { lag_stages: 2 }));
@@ -399,12 +350,12 @@ mod tests {
           "thermals": [
             {
               "id": 5, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": 0.0, "max_mw": 100.0 }
             },
             {
               "id": 5, "name": "Beta", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 200.0, "cost_per_mwh": 80.0 }],
+              "cost_per_mwh": 80.0,
               "generation": { "min_mw": 0.0, "max_mw": 200.0 }
             }
           ]
@@ -426,73 +377,64 @@ mod tests {
         }
     }
 
-    // ── AC: empty cost_segments → SchemaError ────────────────────────────────
+    // ── AC: cost_per_mwh 75.0 round-trips through parser ───────────────────
 
-    /// Given `thermals.json` with empty `cost_segments`, `parse_thermals` returns
-    /// `Err(LoadError::SchemaError)` with field containing `"cost_segments"`.
+    /// Given a `thermals.json` with `"cost_per_mwh": 75.0`, the parser
+    /// produces `Thermal { cost_per_mwh: 75.0, .. }`.
     #[test]
-    fn test_empty_cost_segments() {
+    fn test_parse_cost_per_mwh_75() {
         let json = r#"{
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [],
+              "cost_per_mwh": 75.0,
+              "generation": { "min_mw": 0.0, "max_mw": 100.0 }
+            }
+          ]
+        }"#;
+        let f = write_json(json);
+        let thermals = parse_thermals(f.path()).unwrap();
+        assert_eq!(thermals.len(), 1);
+        assert!(
+            (thermals[0].cost_per_mwh - 75.0).abs() < f64::EPSILON,
+            "cost_per_mwh: expected 75.0, got {}",
+            thermals[0].cost_per_mwh
+        );
+    }
+
+    // ── AC: old array-based cost format fails to parse ──────────────────────
+
+    /// Given `thermals.json` using the old array-based cost format (removed in
+    /// this version), `parse_thermals` returns `Err(LoadError::ParseError)` —
+    /// the old format is a breaking change with no backward compat.
+    #[test]
+    fn test_legacy_array_cost_format_fails() {
+        let json = r#"{
+          "thermals": [
+            {
+              "id": 0, "name": "Alpha", "bus_id": 0,
               "generation": { "min_mw": 0.0, "max_mw": 100.0 }
             }
           ]
         }"#;
         let f = write_json(json);
         let err = parse_thermals(f.path()).unwrap_err();
-        match &err {
-            LoadError::SchemaError { field, message, .. } => {
-                assert!(
-                    field.contains("cost_segments"),
-                    "field should contain 'cost_segments', got: {field}"
-                );
-                assert!(
-                    message.contains("empty"),
-                    "message should mention 'empty', got: {message}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
+        assert!(
+            matches!(err, LoadError::ParseError { .. }),
+            "expected ParseError for legacy array-based cost format, got: {err:?}"
+        );
     }
 
-    // ── AC: negative capacity/cost rejection ──────────────────────────────────
+    // ── AC: negative cost_per_mwh → SchemaError ──────────────────────────────
 
-    /// Negative `capacity_mw` in cost segment → `SchemaError`.
-    #[test]
-    fn test_negative_capacity_mw() {
-        let json = r#"{
-          "thermals": [
-            {
-              "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": -100.0, "cost_per_mwh": 50.0 }],
-              "generation": { "min_mw": 0.0, "max_mw": 100.0 }
-            }
-          ]
-        }"#;
-        let f = write_json(json);
-        let err = parse_thermals(f.path()).unwrap_err();
-        match &err {
-            LoadError::SchemaError { field, .. } => {
-                assert!(
-                    field.contains("capacity_mw"),
-                    "field should contain 'capacity_mw', got: {field}"
-                );
-            }
-            other => panic!("expected SchemaError, got: {other:?}"),
-        }
-    }
-
-    /// Negative `cost_per_mwh` in cost segment → `SchemaError`.
+    /// Negative `cost_per_mwh` → `SchemaError`.
     #[test]
     fn test_negative_cost_per_mwh() {
         let json = r#"{
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": -50.0 }],
+              "cost_per_mwh": -50.0,
               "generation": { "min_mw": 0.0, "max_mw": 100.0 }
             }
           ]
@@ -519,7 +461,7 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": -10.0, "max_mw": 100.0 }
             }
           ]
@@ -548,7 +490,7 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": 0.0, "max_mw": -100.0 }
             }
           ]
@@ -577,7 +519,7 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": 200.0, "max_mw": 100.0 }
             }
           ]
@@ -609,12 +551,12 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Angra 1", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 600.0, "cost_per_mwh": 12.0 }],
+              "cost_per_mwh": 12.0,
               "generation": { "min_mw": 0.0, "max_mw": 600.0 }
             },
             {
               "id": 1, "name": "Pecém I", "bus_id": 1,
-              "cost_segments": [{ "capacity_mw": 360.0, "cost_per_mwh": 120.0 }],
+              "cost_per_mwh": 120.0,
               "generation": { "min_mw": 0.0, "max_mw": 360.0 }
             }
           ]
@@ -623,12 +565,12 @@ mod tests {
           "thermals": [
             {
               "id": 1, "name": "Pecém I", "bus_id": 1,
-              "cost_segments": [{ "capacity_mw": 360.0, "cost_per_mwh": 120.0 }],
+              "cost_per_mwh": 120.0,
               "generation": { "min_mw": 0.0, "max_mw": 360.0 }
             },
             {
               "id": 0, "name": "Angra 1", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 600.0, "cost_per_mwh": 12.0 }],
+              "cost_per_mwh": 12.0,
               "generation": { "min_mw": 0.0, "max_mw": 600.0 }
             }
           ]
@@ -706,7 +648,7 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": 0.0, "max_mw": 100.0 }
             }
           ]
@@ -724,7 +666,7 @@ mod tests {
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 50.0 }],
+              "cost_per_mwh": 50.0,
               "generation": { "min_mw": 100.0, "max_mw": 100.0 }
             }
           ]
@@ -737,14 +679,14 @@ mod tests {
         );
     }
 
-    /// Zero-cost segment (`cost_per_mwh` = 0.0) is valid (non-negative check only).
+    /// Zero-cost thermal (`cost_per_mwh` = 0.0) is valid (non-negative check only).
     #[test]
-    fn test_zero_cost_segment_is_valid() {
+    fn test_zero_cost_is_valid() {
         let json = r#"{
           "thermals": [
             {
               "id": 0, "name": "Alpha", "bus_id": 0,
-              "cost_segments": [{ "capacity_mw": 100.0, "cost_per_mwh": 0.0 }],
+              "cost_per_mwh": 0.0,
               "generation": { "min_mw": 0.0, "max_mw": 100.0 }
             }
           ]

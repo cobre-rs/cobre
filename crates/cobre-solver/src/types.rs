@@ -191,6 +191,19 @@ pub struct SolverStatistics {
     /// `solve()` (without basis) does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
+    /// Number of new cut rows assigned `NONBASIC_LOWER` by basis-aware padding
+    /// (Strategy S3).
+    ///
+    /// Incremented by the calling algorithm, not by the solver itself. A
+    /// non-zero value indicates that basis padding is active and functioning.
+    pub basis_padding_tight: u64,
+
+    /// Number of new cut rows assigned `BASIC` by basis-aware padding
+    /// (Strategy S3).
+    ///
+    /// Incremented by the calling algorithm, not by the solver itself.
+    pub basis_padding_slack: u64,
+
     /// Per-level retry success histogram. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
     /// were recovered at retry level `k`. The sum equals
@@ -534,6 +547,8 @@ mod tests {
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
         assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
+        assert_eq!(stats.basis_padding_tight, 0);
+        assert_eq!(stats.basis_padding_slack, 0);
         assert!(stats.retry_level_histogram.is_empty());
     }
 

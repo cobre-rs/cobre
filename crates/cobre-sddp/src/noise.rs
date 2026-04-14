@@ -666,6 +666,7 @@ mod tests {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
         };
         let mut scratch = make_scratch(1);
 
@@ -731,6 +732,7 @@ mod tests {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
         };
         let mut scratch = make_scratch(1);
 
@@ -796,6 +798,7 @@ mod tests {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
         };
         let mut scratch = make_scratch(1);
 

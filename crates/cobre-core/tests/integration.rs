@@ -21,7 +21,7 @@
 use cobre_core::{
     ContractType, DeficitSegment, DiversionChannel, EnergyContract, EntityId, FillingConfig, Hydro,
     HydroGenerationModel, HydroPenalties, Line, NonControllableSource, PumpingStation,
-    SystemBuilder, Thermal, ThermalCostSegment, ValidationError,
+    SystemBuilder, Thermal, ValidationError,
 };
 
 // Test helpers (public API only)
@@ -110,10 +110,7 @@ fn make_thermal(id: i32, bus_id: i32) -> Thermal {
         bus_id: EntityId(bus_id),
         entry_stage_id: None,
         exit_stage_id: None,
-        cost_segments: vec![ThermalCostSegment {
-            capacity_mw: 300.0,
-            cost_per_mwh: 80.0,
-        }],
+        cost_per_mwh: 80.0,
         min_generation_mw: 0.0,
         max_generation_mw: 300.0,
         gnl_config: None,

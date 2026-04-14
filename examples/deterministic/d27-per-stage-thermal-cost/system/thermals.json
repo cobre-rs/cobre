@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/thermals.schema.json",
+  "thermals": [
+    {
+      "id": 0,
+      "name": "T1",
+      "bus_id": 0,
+      "generation": {
+        "min_mw": 0.0,
+        "max_mw": 60.0
+      },
+      "cost_per_mwh": 50.0
+    },
+    {
+      "id": 1,
+      "name": "T2",
+      "bus_id": 0,
+      "generation": {
+        "min_mw": 0.0,
+        "max_mw": 80.0
+      },
+      "cost_per_mwh": 80.0
+    }
+  ]
+}

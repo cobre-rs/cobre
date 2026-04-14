@@ -58,6 +58,18 @@ pub struct SolverStatsDelta {
     /// Cumulative wall-clock time spent in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
 
+    /// Number of new cut rows assigned `NONBASIC_LOWER` by basis-aware padding
+    /// (Strategy S3) during this phase.
+    ///
+    /// Application-level counter: not included in MPI packing or allreduce.
+    pub basis_padding_tight: u64,
+
+    /// Number of new cut rows assigned `BASIC` by basis-aware padding
+    /// (Strategy S3) during this phase.
+    ///
+    /// Application-level counter: not included in MPI packing or allreduce.
+    pub basis_padding_slack: u64,
+
     /// Per-level retry success histogram delta. Length depends on the solver
     /// backend (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -102,6 +114,8 @@ impl SolverStatsDelta {
             basis_set_time_ms: (after.total_basis_set_time_seconds
                 - before.total_basis_set_time_seconds)
                 * 1000.0,
+            basis_padding_tight: after.basis_padding_tight - before.basis_padding_tight,
+            basis_padding_slack: after.basis_padding_slack - before.basis_padding_slack,
             retry_level_histogram: after
                 .retry_level_histogram
                 .iter()
@@ -133,6 +147,8 @@ impl SolverStatsDelta {
             result.add_rows_time_ms += d.add_rows_time_ms;
             result.set_bounds_time_ms += d.set_bounds_time_ms;
             result.basis_set_time_ms += d.basis_set_time_ms;
+            result.basis_padding_tight += d.basis_padding_tight;
+            result.basis_padding_slack += d.basis_padding_slack;
             ensure_histogram_capacity(&mut result.retry_level_histogram, &d.retry_level_histogram);
             for (dst, src) in result
                 .retry_level_histogram
@@ -170,6 +186,8 @@ pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatisti
         result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
         result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
         result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
+        result.basis_padding_tight += s.basis_padding_tight;
+        result.basis_padding_slack += s.basis_padding_slack;
         ensure_histogram_capacity(&mut result.retry_level_histogram, &s.retry_level_histogram);
         for (dst, src) in result
             .retry_level_histogram
@@ -266,6 +284,9 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         add_rows_time_ms: buf[12],
         set_bounds_time_ms: buf[13],
         basis_set_time_ms: buf[14],
+        // Padding counters are application-level and excluded from MPI packing.
+        basis_padding_tight: 0,
+        basis_padding_slack: 0,
         retry_level_histogram: Vec::new(),
     }
 }
@@ -346,6 +367,8 @@ mod tests {
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.1,
+            basis_padding_tight: 0,
+            basis_padding_slack: 0,
             retry_level_histogram: vec![0; 12],
         };
         let after = SolverStatistics {
@@ -364,6 +387,8 @@ mod tests {
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.3,
+            basis_padding_tight: 0,
+            basis_padding_slack: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -403,6 +428,8 @@ mod tests {
             total_add_rows_time_seconds: 0.05,
             total_set_bounds_time_seconds: 0.02,
             total_basis_set_time_seconds: 0.01,
+            basis_padding_tight: 0,
+            basis_padding_slack: 0,
             retry_level_histogram: vec![0; 12],
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
@@ -446,6 +473,8 @@ mod tests {
             add_rows_time_ms: 5.0,
             set_bounds_time_ms: 2.0,
             basis_set_time_ms: 1.0,
+            basis_padding_tight: 3,
+            basis_padding_slack: 7,
             retry_level_histogram: vec![0; 12],
         };
         let d2 = SolverStatsDelta {
@@ -464,6 +493,8 @@ mod tests {
             add_rows_time_ms: 10.0,
             set_bounds_time_ms: 4.0,
             basis_set_time_ms: 2.0,
+            basis_padding_tight: 5,
+            basis_padding_slack: 2,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -483,6 +514,8 @@ mod tests {
         assert!((agg.add_rows_time_ms - 15.0).abs() < 1e-6);
         assert!((agg.set_bounds_time_ms - 6.0).abs() < 1e-6);
         assert!((agg.basis_set_time_ms - 3.0).abs() < 1e-6);
+        assert_eq!(agg.basis_padding_tight, 8);
+        assert_eq!(agg.basis_padding_slack, 9);
     }
 
     #[test]
@@ -503,6 +536,8 @@ mod tests {
             total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.05,
+            basis_padding_tight: 4,
+            basis_padding_slack: 6,
             retry_level_histogram: vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let s2 = SolverStatistics {
@@ -521,6 +556,8 @@ mod tests {
             total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.15,
+            basis_padding_tight: 10,
+            basis_padding_slack: 20,
             retry_level_histogram: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
@@ -543,6 +580,8 @@ mod tests {
         assert_eq!(agg.retry_level_histogram[0], 1);
         assert_eq!(agg.retry_level_histogram[1], 2);
         assert_eq!(agg.retry_level_histogram[2], 0);
+        assert_eq!(agg.basis_padding_tight, 14);
+        assert_eq!(agg.basis_padding_slack, 26);
     }
 
     fn make_delta(lp_solves: u64) -> SolverStatsDelta {
@@ -562,6 +601,8 @@ mod tests {
             add_rows_time_ms: 2.5,
             set_bounds_time_ms: 0.25,
             basis_set_time_ms: 0.125,
+            basis_padding_tight: 0,
+            basis_padding_slack: 0,
             retry_level_histogram: vec![0; 12],
         }
     }
@@ -637,5 +678,25 @@ mod tests {
         assert!(buf.is_empty());
         let unpacked = unpack_scenario_stats(&buf);
         assert!(unpacked.is_empty());
+    }
+
+    #[test]
+    fn test_solver_stats_delta_includes_padding_fields() {
+        // Acceptance criterion: from_snapshots correctly computes the delta for
+        // basis_padding_tight and basis_padding_slack.
+        let before = SolverStatistics {
+            basis_padding_tight: 3,
+            basis_padding_slack: 5,
+            ..SolverStatistics::default()
+        };
+        let after = SolverStatistics {
+            basis_padding_tight: 10,
+            basis_padding_slack: 12,
+            ..SolverStatistics::default()
+        };
+
+        let delta = SolverStatsDelta::from_snapshots(&before, &after);
+        assert_eq!(delta.basis_padding_tight, 7);
+        assert_eq!(delta.basis_padding_slack, 7);
     }
 }

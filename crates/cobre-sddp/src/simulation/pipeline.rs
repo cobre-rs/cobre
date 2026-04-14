@@ -1375,7 +1375,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0); // N=1, L=0; theta=2
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 4,
@@ -1425,6 +1425,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1478,7 +1479,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 4,
@@ -1529,6 +1530,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1572,7 +1574,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 4,
@@ -1623,6 +1625,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1663,7 +1666,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 2,
@@ -1715,6 +1718,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1752,7 +1756,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0); // theta=2
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 2,
@@ -1809,6 +1813,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1849,7 +1854,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 6,
@@ -1900,6 +1905,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -1941,7 +1947,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 3,
@@ -1991,6 +1997,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2027,7 +2034,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios,
@@ -2079,6 +2086,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2155,6 +2163,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2222,7 +2231,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 10,
@@ -2273,6 +2282,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2335,7 +2345,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 4,
@@ -2385,6 +2395,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2431,7 +2442,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios,
@@ -2482,6 +2493,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2536,7 +2548,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios,
@@ -2590,6 +2602,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2646,7 +2659,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios,
@@ -2697,6 +2710,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -2767,7 +2781,7 @@ mod tests {
         let base_rows: Vec<usize> = vec![0; n_stages];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let stochastic = make_stochastic_context(n_stages);
         let config = SimulationConfig {
             n_scenarios: 5,
@@ -2819,6 +2833,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -3042,7 +3057,7 @@ mod tests {
         let n_load_buses = 1usize;
         let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
         let indexer = StageIndexer::new(1, 0); // N=1, L=0; theta=2
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
@@ -3120,6 +3135,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -3212,7 +3228,7 @@ mod tests {
 
         let stochastic = make_stochastic_context(n_stages);
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
@@ -3262,6 +3278,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -3332,7 +3349,7 @@ mod tests {
         let n_load_buses = 1usize;
         let stochastic = make_stochastic_context_1_hydro_1_load_bus_sim(300.0, 30.0);
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
@@ -3408,6 +3425,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -3688,7 +3706,7 @@ mod tests {
         let noise_scale = vec![noise_scale_val];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, &vec![0; n_stages]);
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
@@ -3738,6 +3756,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {
@@ -3795,7 +3814,7 @@ mod tests {
         let noise_scale = vec![noise_scale_val];
 
         let indexer = StageIndexer::new(1, 0);
-        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, 0);
+        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 1, 10, &vec![0; n_stages]);
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
@@ -3844,6 +3863,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &config,
             SimulationOutputSpec {

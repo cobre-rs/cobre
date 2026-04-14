@@ -74,7 +74,7 @@ use crate::{
 /// // Single rank, 2 state dimensions, max 3 cuts per rank.
 /// let mut bufs = CutSyncBuffers::new(2, 3, 1);
 ///
-/// let mut fcf = FutureCostFunction::new(2, 2, 3, 10, 0);
+/// let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
 /// let comm = LocalBackend;
 ///
 /// let local_cuts: &[(u32, u32, u32, f64, &[f64])] = &[
@@ -649,7 +649,7 @@ mod tests {
         // single-rank mode, then it returns Ok(0) — the single rank's own
         // cuts are skipped.
         let mut bufs = CutSyncBuffers::new(2, 3, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
         let comm = LocalBackend;
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
@@ -665,7 +665,7 @@ mod tests {
         // the local rank's cuts are skipped (they were already inserted by the
         // backward pass before this function is called).
         let mut bufs = CutSyncBuffers::new(2, 3, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
         let comm = LocalBackend;
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
@@ -688,7 +688,7 @@ mod tests {
         // checking FCF state after manually inserting the local cut, then
         // confirming no additional cuts appear from sync (single rank skips).
         let mut bufs = CutSyncBuffers::new(2, 2, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
         let comm = LocalBackend;
 
         // Simulate backward pass: insert cut into FCF (this rank's own cut).
@@ -709,7 +709,7 @@ mod tests {
         // When no cuts are generated (empty local_cuts), sync_cuts must still
         // succeed and return Ok(0) for single rank.
         let mut bufs = CutSyncBuffers::new(2, 5, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 5, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 5, 10, &[0; 2]);
         let comm = LocalBackend;
 
         let result = bufs.sync_cuts(0, &[], &mut fcf, &comm).unwrap();
@@ -775,7 +775,7 @@ mod tests {
         }
 
         let mut bufs = CutSyncBuffers::new(2, 2, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, 0);
+        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] = &[(0, 1, 0, 5.0, &[1.0, 2.0])];
 
@@ -858,7 +858,7 @@ mod tests {
 
         // FCF: 1 stage, n_state=2, forward_passes=6, max_iterations=10,
         // warm_start=0 → capacity = 0 + 10*6 = 60 slots.
-        let mut fcf = FutureCostFunction::new(1, n_state, 6, 10, 0);
+        let mut fcf = FutureCostFunction::new(1, n_state, 6, 10, &[0; 1]);
         let mut bufs = CutSyncBuffers::new(n_state, n_local, 3);
 
         // Pre-populate recv_buf with remote rank data at the exact offsets
@@ -919,7 +919,7 @@ mod tests {
         // examining the recv_buf contents after the allgatherv identity copy.
         let n_state = 2usize;
         let mut bufs = CutSyncBuffers::new(n_state, 1, 1);
-        let mut fcf = FutureCostFunction::new(1, n_state, 1, 10, 0);
+        let mut fcf = FutureCostFunction::new(1, n_state, 1, 10, &[0; 1]);
         let comm = LocalBackend;
 
         let coeffs = [7.5_f64, -3.25_f64];

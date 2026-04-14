@@ -235,9 +235,10 @@ pub struct HydroStageBounds {
 /// ```
 /// use cobre_core::resolved::ThermalStageBounds;
 ///
-/// let b = ThermalStageBounds { min_generation_mw: 50.0, max_generation_mw: 400.0 };
+/// let b = ThermalStageBounds { min_generation_mw: 50.0, max_generation_mw: 400.0, cost_per_mwh: 120.0 };
 /// let c = b; // Copy
 /// assert!((c.max_generation_mw - 400.0).abs() < f64::EPSILON);
+/// assert!((c.cost_per_mwh - 120.0).abs() < f64::EPSILON);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -246,6 +247,9 @@ pub struct ThermalStageBounds {
     pub min_generation_mw: f64,
     /// Maximum generation capacity \[MW\]. Hard upper bound.
     pub max_generation_mw: f64,
+    /// Dispatch cost override (`$/MWh`). Resolved from `Thermal.cost_per_mwh` with optional
+    /// per-stage override from `constraints/thermal_bounds.parquet` (null `block_id` rows only).
+    pub cost_per_mwh: f64,
 }
 
 /// Transmission line bound values for a given (line, stage) pair.
@@ -578,7 +582,7 @@ impl ResolvedPenalties {
 ///     max_diversion_m3s: None,
 ///     filling_inflow_m3s: 0.0, water_withdrawal_m3s: 0.0,
 /// };
-/// let thermal_default = ThermalStageBounds { min_generation_mw: 0.0, max_generation_mw: 100.0 };
+/// let thermal_default = ThermalStageBounds { min_generation_mw: 0.0, max_generation_mw: 100.0, cost_per_mwh: 50.0 };
 /// let line_default = LineStageBounds { direct_mw: 500.0, reverse_mw: 500.0 };
 /// let pumping_default = PumpingStageBounds { min_flow_m3s: 0.0, max_flow_m3s: 20.0 };
 /// let contract_default = ContractStageBounds { min_mw: 0.0, max_mw: 50.0, price_per_mwh: 80.0 };
@@ -1521,6 +1525,7 @@ mod tests {
         let tb = ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
+            cost_per_mwh: 50.0,
         };
         let lb = LineStageBounds {
             direct_mw: 500.0,
@@ -1660,6 +1665,7 @@ mod tests {
         let tb = ThermalStageBounds {
             min_generation_mw: 50.0,
             max_generation_mw: 400.0,
+            cost_per_mwh: 0.0,
         };
         let lb = LineStageBounds {
             direct_mw: 1000.0,
@@ -1715,6 +1721,7 @@ mod tests {
         let tb = ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 200.0,
+            cost_per_mwh: 0.0,
         };
         let lb = LineStageBounds {
             direct_mw: 500.0,
@@ -1820,6 +1827,7 @@ mod tests {
         let tb = ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
+            cost_per_mwh: 0.0,
         };
         let lb = LineStageBounds {
             direct_mw: 500.0,

@@ -294,6 +294,7 @@ fn build_system() -> cobre_core::System {
             thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
             line: LineStageBounds {
                 direct_mw: 0.0,
@@ -490,7 +491,7 @@ fn train_fixture(
     iterations: u64,
 ) -> Result<cobre_sddp::TrainingOutcome, cobre_sddp::SddpError> {
     let n_stages = fx.stage_templates.templates.len();
-    let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
     let comm = StubComm;
 
@@ -531,6 +532,9 @@ fn train_fixture(
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -547,6 +551,7 @@ fn train_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -620,6 +625,7 @@ fn simulate_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &SimulationConfig {
@@ -680,7 +686,7 @@ fn test_penalty_method_prevents_infeasibility() {
 fn test_penalty_slack_value_matches_negative_inflow() {
     let fx = build_fixture();
     let n_stages = fx.stage_templates.templates.len();
-    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
 
     train_fixture(&fx, 3).expect("training must succeed before simulation");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");
@@ -713,7 +719,7 @@ fn test_penalty_slack_value_matches_negative_inflow() {
 fn test_simulation_slack_output_populated() {
     let fx = build_fixture();
     let n_stages = fx.stage_templates.templates.len();
-    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, 0);
+    let fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
 
     train_fixture(&fx, 3).expect("training must succeed");
     let scenario_results = simulate_fixture(&fx, &fcf).expect("simulate must succeed");

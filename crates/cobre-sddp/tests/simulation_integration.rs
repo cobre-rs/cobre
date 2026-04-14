@@ -319,7 +319,7 @@ fn minimal_template() -> StageTemplate {
 }
 
 fn make_fcf(n_stages: usize) -> FutureCostFunction {
-    FutureCostFunction::new(n_stages, 1, 1, FCF_CAPACITY_ITERATIONS, 0)
+    FutureCostFunction::new(n_stages, 1, 1, FCF_CAPACITY_ITERATIONS, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {
@@ -565,6 +565,9 @@ fn train_simulate_write_cycle() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -599,6 +602,7 @@ fn train_simulate_write_cycle() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &fx.risk_measures,
@@ -668,6 +672,7 @@ fn train_simulate_write_cycle() {
         })
         .collect();
 
+    let warm_start_counts: Vec<u32> = fcf.pools.iter().map(|p| p.warm_start_count).collect();
     let policy_metadata = PolicyCheckpointMetadata {
         cobre_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: "2026-03-08T00:00:00Z".to_string(),
@@ -678,7 +683,8 @@ fn train_simulate_write_cycle() {
         num_stages: fx.n_stages as u32,
         max_iterations: 3,
         forward_passes: 1,
-        warm_start_cuts: 0,
+        warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
+        warm_start_counts,
         rng_seed: 42,
         total_visited_states: 0,
     };
@@ -754,6 +760,7 @@ fn train_simulate_write_cycle() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &sim_config,
@@ -1098,6 +1105,7 @@ fn make_min_outflow_system() -> cobre_core::System {
             thermal: ThermalStageBounds {
                 min_generation_mw: 0.0,
                 max_generation_mw: 0.0,
+                cost_per_mwh: 0.0,
             },
             line: LineStageBounds {
                 direct_mw: 0.0,
@@ -1305,6 +1313,9 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     let risk_measures = vec![RiskMeasure::Expectation; n_stages];
@@ -1327,6 +1338,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &risk_measures,
@@ -1390,6 +1402,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &sim_config,

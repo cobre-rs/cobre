@@ -1031,7 +1031,7 @@ mod tests {
     use cobre_core::{
         Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
         HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig, SystemBuilder, Thermal, ThermalCostSegment,
+        StageStateConfig, SystemBuilder, Thermal,
         resolved::{
             BoundsCountsSpec, BoundsDefaults, ContractStageBounds, HydroStageBounds,
             LineStageBounds, PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
@@ -1098,10 +1098,7 @@ mod tests {
             bus_id: EntityId(bus_id),
             entry_stage_id: None,
             exit_stage_id: None,
-            cost_segments: vec![ThermalCostSegment {
-                capacity_mw: 100.0,
-                cost_per_mwh: 50.0,
-            }],
+            cost_per_mwh: 50.0,
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
             gnl_config: None,
@@ -1169,6 +1166,7 @@ mod tests {
         let thermal_bounds_default = ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
+            cost_per_mwh: 0.0,
         };
         let line_default = LineStageBounds {
             direct_mw: 500.0,
@@ -1234,6 +1232,7 @@ mod tests {
         let thermal_default = ThermalStageBounds {
             min_generation_mw: 0.0,
             max_generation_mw: 100.0,
+            cost_per_mwh: 0.0,
         };
         let line_default = LineStageBounds {
             direct_mw: 500.0,
@@ -1410,8 +1409,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 185,
-            "variables.csv must have exactly 185 data rows (one per column across all 16 schemas)"
+            row_count, 188,
+            "variables.csv must have exactly 188 data rows (one per column across all 16 schemas)"
         );
     }
 

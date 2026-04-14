@@ -221,6 +221,81 @@ pub struct CutSelectionConfig {
     /// Minimum dual multiplier for a cut to count as binding.
     #[serde(default)]
     pub cut_activity_tolerance: Option<f64>,
+
+    /// Angular diversity pruning settings (stage 2 of the cut selection pipeline).
+    ///
+    /// Uses cosine similarity clustering as a computational accelerator for
+    /// pointwise dominance verification. When absent from `config.json`, serde
+    /// applies `AngularPruningConfig::default()` (all fields `None`), which
+    /// disables angular pruning.
+    #[serde(default)]
+    pub angular_pruning: AngularPruningConfig,
+
+    /// Maximum number of active cuts per stage (stage 3 of the cut selection
+    /// pipeline — hard cap on LP size).
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after strategy selection and angular pruning have completed.
+    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
+    /// tie-broken by usage frequency (`active_count` ascending).
+    /// Cuts generated in the current iteration are never evicted.
+    ///
+    /// When `None` (the default), no hard cap is enforced.
+    #[serde(default)]
+    pub max_active_per_stage: Option<u32>,
+
+    /// Enable basis padding for warm-start (Epic 05).
+    ///
+    /// When `Some(true)`, the forward pass applies informed basis status
+    /// assignment for new cut rows before warm-starting the LP solver.
+    /// This can reduce the number of simplex pivots required after each
+    /// cut addition.
+    ///
+    /// Disabled by default (`None` or `Some(false)`).
+    #[serde(default)]
+    pub basis_padding: Option<bool>,
+}
+
+/// Angular diversity pruning settings
+/// (`config.json → training.cut_selection.angular_pruning`).
+///
+/// Angular pruning uses cosine similarity clustering as a computational
+/// accelerator for pointwise dominance verification — it is **not** a
+/// standalone pruning criterion. This preserves Assumption (H2) from
+/// Guigues 2017 and finite convergence of the stochastic programming algorithm.
+///
+/// All fields are `Option` so the struct can be absent from `config.json`
+/// without causing a deserialization error.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AngularPruningConfig {
+    /// Enable angular diversity pruning. When `None` or `false`, angular
+    /// pruning is disabled and the other fields are ignored.
+    ///
+    /// Default: `None` (disabled).
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    /// Cosine similarity threshold in `(0.0, 1.0]`.
+    ///
+    /// Cuts whose cosine similarity exceeds this threshold are considered
+    /// candidates for pointwise dominance verification. Higher values make
+    /// the clustering more conservative (fewer candidates per cluster).
+    ///
+    /// Default when enabled: `0.999`.
+    #[serde(default)]
+    pub cosine_threshold: Option<f64>,
+
+    /// Iterations between angular pruning runs.
+    ///
+    /// When `None`, inherits from the parent
+    /// [`CutSelectionConfig::check_frequency`], or defaults to `5` if that
+    /// is also `None`.
+    ///
+    /// Must be `> 0` when specified.
+    #[serde(default)]
+    pub check_frequency: Option<u32>,
 }
 
 /// LP solver retry settings (`config.json → training.solver`).
@@ -1632,5 +1707,64 @@ mod tests {
         assert!(cfg.simulation.enabled);
         // The new scenario_source field is absent.
         assert!(cfg.simulation.scenario_source.is_none());
+    }
+
+    #[test]
+    fn angular_pruning_absent_deserializes_to_default() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+                "cut_selection": {"enabled": true, "method": "level1"}
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let ap = &cfg.training.cut_selection.angular_pruning;
+        assert!(ap.enabled.is_none());
+        assert!(ap.cosine_threshold.is_none());
+        assert!(ap.check_frequency.is_none());
+    }
+
+    /// max_active_per_stage serde roundtrip: Some(100) serializes and deserializes correctly.
+    #[test]
+    fn max_active_per_stage_serde_roundtrip() {
+        let original = CutSelectionConfig {
+            enabled: Some(true),
+            method: Some("level1".to_string()),
+            threshold: None,
+            memory_window: None,
+            domination_epsilon: None,
+            check_frequency: None,
+            cut_activity_tolerance: None,
+            angular_pruning: AngularPruningConfig::default(),
+            max_active_per_stage: Some(100),
+            basis_padding: None,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped.max_active_per_stage, Some(100));
+        assert_eq!(roundtripped.enabled, Some(true));
+        assert_eq!(roundtripped.method.as_deref(), Some("level1"));
+    }
+
+    /// max_active_per_stage absent from JSON deserializes to None.
+    #[test]
+    fn max_active_per_stage_absent_defaults_none() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+                "cut_selection": {"enabled": true, "method": "level1"}
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.training.cut_selection.max_active_per_stage.is_none(),
+            "max_active_per_stage must be None when absent from config.json"
+        );
     }
 }

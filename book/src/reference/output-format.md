@@ -37,6 +37,12 @@ will not produce `simulation/pumping_stations/`.
     timing/
       iterations.parquet
       mpi_ranks.parquet
+    solver/
+      iterations.parquet
+      retry_histogram.parquet
+    scaling_report.json
+    cut_selection/
+      iterations.parquet         (when cut_selection is enabled)
   policy/
     cuts/
       stage_000.bin
@@ -90,11 +96,11 @@ will not produce `simulation/pumping_stations/`.
       generic/
         scenario_id=0000/data.parquet
         ...
+    solver/
+      iterations.parquet
+      retry_histogram.parquet
   hydro_models/
     fpha_hyperplanes.parquet         (when any hydro uses source: "computed")
-  solver_stats/
-    solver_stats.parquet             (always)
-    scaling_report.json              (always)
   stochastic/
     inflow_seasonal_stats.parquet    (when estimation was performed)
     inflow_ar_coefficients.parquet   (when estimation was performed)
@@ -138,9 +144,16 @@ updated on each checkpoint if checkpointing is enabled). Consumers should read
     "peak_active": 1100000
   },
   "checksum": null,
-  "mpi_info": {
+  "distribution": {
+    "backend": "local",
     "world_size": 1,
-    "ranks_participated": 1
+    "ranks_participated": 1,
+    "num_nodes": 1,
+    "threads_per_rank": 4,
+    "mpi_library": null,
+    "mpi_standard": null,
+    "thread_level": null,
+    "slurm_job_id": null
   }
 }
 ```
@@ -162,9 +175,16 @@ updated on each checkpoint if checkpointing is enabled). Consumers should read
 | `cuts.total_generated`           | integer | No       | Total Benders cuts generated across all stages and iterations.                                                                                           |
 | `cuts.total_active`              | integer | No       | Cuts still active in the pool at termination.                                                                                                            |
 | `cuts.peak_active`               | integer | No       | Maximum number of simultaneously active cuts at any point during training.                                                                               |
-| `checksum`                       | object  | Yes      | Integrity checksum over policy and convergence files. `null` in current release (deferred).                                                              |
-| `mpi_info.world_size`            | integer | No       | Total number of MPI ranks. `1` for single-process runs.                                                                                                  |
-| `mpi_info.ranks_participated`    | integer | No       | Number of MPI ranks that wrote data.                                                                                                                     |
+| `checksum`                           | object  | Yes      | Integrity checksum over policy and convergence files. `null` in current release (deferred).                                                     |
+| `distribution.backend`               | string  | No       | Communication backend: `"mpi"` or `"local"`.                                                                                                    |
+| `distribution.world_size`            | integer | No       | Total number of MPI ranks. `1` for single-process runs.                                                                                         |
+| `distribution.ranks_participated`    | integer | No       | Number of MPI ranks that wrote data.                                                                                                            |
+| `distribution.num_nodes`             | integer | No       | Number of distinct physical hosts.                                                                                                              |
+| `distribution.threads_per_rank`      | integer | No       | Rayon worker threads per process.                                                                                                               |
+| `distribution.mpi_library`           | string  | Yes      | MPI library version (e.g. `"MPICH 4.2.3"`). `null` for local backend.                                                                          |
+| `distribution.mpi_standard`          | string  | Yes      | MPI standard version (e.g. `"MPI 4.0"`). `null` for local backend.                                                                             |
+| `distribution.thread_level`          | string  | Yes      | MPI thread safety level (e.g. `"Funneled"`). `null` for local backend.                                                                         |
+| `distribution.slurm_job_id`          | string  | Yes      | SLURM job ID when running under a SLURM scheduler. `null` otherwise.                                                                           |
 
 ---
 
@@ -232,13 +252,19 @@ when implemented.
 
 **`environment` fields:**
 
-| Field                | Type    | Nullable | Description                                                            |
-| -------------------- | ------- | -------- | ---------------------------------------------------------------------- |
-| `mpi_implementation` | string  | Yes      | MPI implementation name (e.g. `"OpenMPI"`). `null` in current release. |
-| `mpi_version`        | string  | Yes      | MPI library version. `null` in current release.                        |
-| `num_ranks`          | integer | Yes      | Number of MPI ranks. `null` in current release.                        |
-| `cpus_per_rank`      | integer | Yes      | CPU cores per rank. `null` in current release.                         |
-| `memory_per_rank_gb` | number  | Yes      | Memory per rank in gigabytes. `null` in current release.               |
+The `environment` object contains a `distribution` sub-object with the same
+fields as the manifest's `distribution` (see above). Additionally:
+
+| Field                        | Type    | Nullable | Description                                                            |
+| ---------------------------- | ------- | -------- | ---------------------------------------------------------------------- |
+| `distribution.backend`       | string  | No       | Communication backend: `"mpi"` or `"local"`.                          |
+| `distribution.world_size`    | integer | No       | Total number of MPI ranks.                                             |
+| `distribution.num_nodes`     | integer | No       | Number of distinct physical hosts.                                     |
+| `distribution.threads_per_rank` | integer | No    | Rayon worker threads per process.                                      |
+| `distribution.mpi_library`   | string  | Yes      | MPI library version. `null` for local backend.                         |
+| `distribution.mpi_standard`  | string  | Yes      | MPI standard version. `null` for local backend.                        |
+| `distribution.thread_level`  | string  | Yes      | MPI thread safety level. `null` for local backend.                     |
+| `distribution.slurm_job_id`  | string  | Yes      | SLURM job ID. `null` when not running under SLURM.                     |
 
 ---
 
@@ -267,20 +293,29 @@ Per-iteration convergence log. One row per training iteration. 13 columns.
 ### `training/timing/iterations.parquet`
 
 Per-iteration wall-clock timing breakdown by phase. One row per training
-iteration. 10 columns. All columns are non-nullable.
+iteration. 12 columns. All columns are non-nullable.
 
-| Column              | Type  | Nullable | Description                                                                  |
-| ------------------- | ----- | -------- | ---------------------------------------------------------------------------- |
-| `iteration`         | Int32 | No       | Training iteration number (1-based).                                         |
-| `forward_solve_ms`  | Int64 | No       | Time spent solving LPs during the forward pass.                              |
-| `forward_sample_ms` | Int64 | No       | Time spent sampling scenarios and computing inflows during the forward pass. |
-| `backward_solve_ms` | Int64 | No       | Time spent solving LPs during the backward pass.                             |
-| `backward_cut_ms`   | Int64 | No       | Time spent constructing and adding Benders cuts during the backward pass.    |
-| `cut_selection_ms`  | Int64 | No       | Time spent running the cut selection strategy.                               |
-| `mpi_allreduce_ms`  | Int64 | No       | Time spent in MPI `allreduce` operations (cut coefficient aggregation).      |
-| `mpi_broadcast_ms`  | Int64 | No       | Time spent in MPI `broadcast` operations (cut distribution).                 |
-| `io_write_ms`       | Int64 | No       | Time spent writing Parquet and JSON files.                                   |
-| `overhead_ms`       | Int64 | No       | Remaining wall-clock time not attributed to the above phases.                |
+The top-level non-overlapping phases are: `forward_wall_ms`,
+`backward_wall_ms`, `cut_selection_ms`, `mpi_allreduce_ms`, and
+`lower_bound_ms`. The backward phase has sub-components: `cut_sync_ms`,
+`state_exchange_ms`, `cut_batch_build_ms`, `bwd_rayon_overhead_ms`.
+The forward phase has one sub-component: `fwd_rayon_overhead_ms`. The
+residual not attributed to any phase is `overhead_ms`.
+
+| Column                  | Type  | Nullable | Description                                                                                            |
+| ----------------------- | ----- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `iteration`             | Int32 | No       | Training iteration number (1-based).                                                                   |
+| `forward_wall_ms`       | Int64 | No       | Wall-clock time for the forward pass (all stages and scenarios).                                       |
+| `backward_wall_ms`      | Int64 | No       | Wall-clock time for the backward pass (all stages and trial points).                                   |
+| `cut_selection_ms`      | Int64 | No       | Time spent running the cut selection pipeline (all three stages).                                      |
+| `mpi_allreduce_ms`      | Int64 | No       | Time spent in MPI allreduce (forward-pass bound synchronization).                                      |
+| `cut_sync_ms`           | Int64 | No       | Time spent in per-stage cut sync allgatherv (sub-component of backward).                               |
+| `lower_bound_ms`        | Int64 | No       | Time spent evaluating the lower bound (stage-0 LP solves for all openings).                            |
+| `state_exchange_ms`     | Int64 | No       | Time spent in state exchange allgatherv (sub-component of backward).                                   |
+| `cut_batch_build_ms`    | Int64 | No       | Time spent assembling cut row batches (sub-component of backward).                                     |
+| `bwd_rayon_overhead_ms` | Int64 | No       | Estimated rayon parallel overhead in the backward pass (load imbalance + scheduling).                  |
+| `fwd_rayon_overhead_ms` | Int64 | No       | Estimated rayon parallel overhead in the forward pass.                                                 |
+| `overhead_ms`           | Int64 | No       | Residual wall-clock time not attributed to any of the above phases.                                    |
 
 ### `training/timing/mpi_ranks.parquet`
 
@@ -297,6 +332,88 @@ Per-iteration, per-rank timing statistics for distributed runs. One row per
 | `idle_time_ms`          | Int64 | No       | Wall-clock time this rank was idle (waiting for other ranks). |
 | `lp_solves`             | Int64 | No       | Number of LP solves performed by this rank in this iteration. |
 | `scenarios_processed`   | Int32 | No       | Number of scenario trajectories processed by this rank.       |
+
+---
+
+### `training/solver/iterations.parquet`
+
+Per-iteration, per-phase, per-stage LP solver statistics for diagnosing
+conditioning issues and retry behavior. One row per `(iteration, phase,
+stage)` triple. 16 columns. All columns are non-nullable.
+
+The `phase` column is a string: `"forward"`, `"backward"`, or
+`"lower_bound"`.
+
+| Column               | Type    | Nullable | Description                                                                            |
+| -------------------- | ------- | -------- | -------------------------------------------------------------------------------------- |
+| `iteration`          | UInt32  | No       | Training iteration number (1-based).                                                   |
+| `phase`              | Utf8    | No       | Algorithm phase: `"forward"`, `"backward"`, or `"lower_bound"`.                        |
+| `stage`              | Int32   | No       | Stage index (0-based).                                                                 |
+| `lp_solves`          | UInt32  | No       | Number of LP solves in this `(iteration, phase, stage)` triple.                        |
+| `lp_successes`       | UInt32  | No       | Number of solves that returned optimal.                                                |
+| `lp_retries`         | UInt32  | No       | Number of solves that required at least one retry.                                     |
+| `lp_failures`        | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                        |
+| `retry_attempts`     | UInt32  | No       | Total retry attempts across all LP solves.                                             |
+| `basis_offered`      | UInt32  | No       | Number of `solve_with_basis` calls (warm-start attempts).                              |
+| `basis_rejections`   | UInt32  | No       | Number of times a basis was rejected and the solver fell back to cold-start.           |
+| `simplex_iterations` | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                        |
+| `solve_time_ms`      | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                   |
+| `load_model_time_ms` | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                          |
+| `add_rows_time_ms`   | Float64 | No       | Cumulative time spent in `add_rows` calls, in milliseconds.                            |
+| `set_bounds_time_ms` | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds.   |
+| `basis_set_time_ms`  | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.                |
+
+### `training/solver/retry_histogram.parquet`
+
+Per-level retry success counts, normalized from the solver iterations
+table. One row per `(iteration, phase, stage, retry_level)` tuple where
+the count is positive (sparse encoding). 5 columns. All non-nullable.
+
+| Column        | Type   | Nullable | Description                                                        |
+| ------------- | ------ | -------- | ------------------------------------------------------------------ |
+| `iteration`   | UInt32 | No       | Training iteration number (1-based).                               |
+| `phase`       | Utf8   | No       | Algorithm phase: `"forward"`, `"backward"`, or `"lower_bound"`.    |
+| `stage`       | Int32  | No       | Stage index (0-based).                                             |
+| `retry_level` | UInt32 | No       | Retry escalation level (0--11). See [Solver Safeguards](../guide/performance-accelerators.md#solver-safeguards). |
+| `count`       | UInt64 | No       | Number of LP solves recovered at this retry level.                 |
+
+### `training/scaling_report.json`
+
+LP prescaling diagnostics written once after stage template construction.
+Documents the coefficient range before and after column/row scaling for
+each stage. Useful for diagnosing numerical conditioning issues.
+
+The JSON is an array of per-stage objects, each containing:
+
+| Field                     | Type   | Description                                                  |
+| ------------------------- | ------ | ------------------------------------------------------------ |
+| `stage`                   | integer | Stage index (0-based).                                      |
+| `before.coefficient_min`  | number | Smallest absolute non-zero matrix coefficient before scaling. |
+| `before.coefficient_max`  | number | Largest absolute matrix coefficient before scaling.           |
+| `before.rhs_min`          | number | Smallest absolute non-zero RHS value before scaling.          |
+| `before.rhs_max`          | number | Largest absolute RHS value before scaling.                    |
+| `after.coefficient_min`   | number | Smallest absolute non-zero coefficient after scaling.         |
+| `after.coefficient_max`   | number | Largest absolute coefficient after scaling.                   |
+| `after.rhs_min`           | number | Smallest absolute non-zero RHS value after scaling.           |
+| `after.rhs_max`           | number | Largest absolute RHS value after scaling.                     |
+
+### `training/cut_selection/iterations.parquet`
+
+Per-stage cut selection statistics. One row per `(iteration, stage)` pair,
+written only at iterations where selection ran. 10 columns.
+
+| Column                 | Type    | Nullable | Description                                                                |
+| ---------------------- | ------- | -------- | -------------------------------------------------------------------------- |
+| `iteration`            | Int32   | No       | Training iteration number (1-based).                                       |
+| `stage`                | Int32   | No       | Stage index (0-based).                                                     |
+| `cuts_populated`       | Int32   | No       | Total cut slots containing cuts (active + inactive).                       |
+| `cuts_active_before`   | Int32   | No       | Active cuts before this iteration's selection pipeline.                    |
+| `cuts_deactivated`     | Int32   | No       | Cuts deactivated by the strategy-based selection (Stage 1).                |
+| `cuts_active_after`    | Int32   | No       | Active cuts after Stage 1 selection.                                       |
+| `selection_time_ms`    | Float64 | No       | Wall-clock time for the full selection pipeline.                           |
+| `active_after_angular` | Int32   | Yes      | Active cuts after angular pruning (Stage 2). `null` when S2 is disabled.  |
+| `budget_evicted`       | Int32   | Yes      | Cuts evicted by budget enforcement (Stage 3). `null` when S3 is disabled. |
+| `active_after_budget`  | Int32   | Yes      | Active cuts after budget enforcement (Stage 3). `null` when S3 is disabled.|
 
 ---
 

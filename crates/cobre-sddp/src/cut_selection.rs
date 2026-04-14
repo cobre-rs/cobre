@@ -904,6 +904,9 @@ mod tests {
             threshold: Some(0),
             check_frequency: Some(5),
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -932,6 +935,9 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -959,6 +965,9 @@ mod tests {
             threshold: Some(0),
             check_frequency: Some(10),
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -987,6 +996,9 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1007,6 +1019,9 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1022,6 +1037,9 @@ mod tests {
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1040,6 +1058,9 @@ mod tests {
             threshold: None,
             check_frequency: Some(0),
             cut_activity_tolerance: None,
+            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
+            max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };

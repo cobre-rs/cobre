@@ -55,7 +55,6 @@ pub use entities::{
     Bus, ContractType, DeficitSegment, DiversionChannel, EfficiencyModel, EnergyContract,
     FillingConfig, GnlConfig, HydraulicLossesModel, Hydro, HydroGenerationModel, HydroPenalties,
     Line, NonControllableSource, PumpingStation, TailraceModel, TailracePoint, Thermal,
-    ThermalCostSegment,
 };
 pub use entity_id::EntityId;
 pub use error::ValidationError;

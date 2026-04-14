@@ -349,7 +349,7 @@ fn minimal_template() -> StageTemplate {
 
 fn make_fcf(n_stages: usize) -> FutureCostFunction {
     // capacity=50 iterations, state_dimension=1, 1 stage cut pool
-    FutureCostFunction::new(n_stages, 1, 1, 50, 0)
+    FutureCostFunction::new(n_stages, 1, 1, 50, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {
@@ -426,6 +426,9 @@ fn test_stochastic_load_training_completes() {
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -467,6 +470,7 @@ fn test_stochastic_load_training_completes() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &risk_measures,
@@ -561,6 +565,9 @@ fn test_deterministic_load_training_matches_baseline() {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,
@@ -577,6 +584,7 @@ fn test_deterministic_load_training_matches_baseline() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
+            basis_padding_enabled: false,
             stages: &[],
         },
         &risk_measures,
@@ -632,6 +640,9 @@ fn test_stochastic_load_seed_determinism() {
             shutdown_flag: None,
             start_iteration: 0,
             export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -669,6 +680,7 @@ fn test_stochastic_load_seed_determinism() {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
                 stages: &[],
             },
             &risk_measures,

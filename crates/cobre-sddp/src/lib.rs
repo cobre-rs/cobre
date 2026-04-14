@@ -34,7 +34,9 @@
     )
 )]
 
+pub mod angular_pruning;
 pub mod backward;
+pub mod basis_padding;
 pub mod config;
 pub mod context;
 pub mod convergence;
@@ -71,11 +73,15 @@ pub mod trajectory;
 pub mod visited_states;
 pub mod workspace;
 
+pub use angular_pruning::{
+    AngularPruningParams, AngularPruningResult, parse_angular_pruning_config,
+    select_angular_dominated,
+};
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::TrainingConfig;
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
-pub use cut::{CutPool, FutureCostFunction};
+pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};
 pub use cut_selection::{
     CutMetadata, CutSelectionStrategy, DeactivationSet, parse_cut_selection_config,
 };
@@ -102,7 +108,9 @@ pub use lp_builder::{
     GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
     build_stage_templates,
 };
-pub use policy_load::{build_basis_cache_from_checkpoint, validate_policy_compatibility};
+pub use policy_load::{
+    build_basis_cache_from_checkpoint, resolve_warm_start_counts, validate_policy_compatibility,
+};
 pub use provenance::{ModelProvenanceReport, ProvenanceSource, build_provenance_report};
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;

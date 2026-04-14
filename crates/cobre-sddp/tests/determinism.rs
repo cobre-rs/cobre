@@ -420,7 +420,7 @@ fn template_3h() -> StageTemplate {
 
 fn make_fcf_3h(n_stages: usize) -> FutureCostFunction {
     // state_dimension = 3, forward_passes = 1, capacity = 50 iterations, 0 warm-start cuts
-    FutureCostFunction::new(n_stages, 3, 1, 50, 0)
+    FutureCostFunction::new(n_stages, 3, 1, 50, &vec![0; n_stages])
 }
 
 fn iteration_limit(limit: u64) -> StoppingRuleSet {
@@ -503,6 +503,9 @@ fn run_training(
         shutdown_flag: None,
         start_iteration: 0,
         export_states: false,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts
@@ -545,6 +548,7 @@ fn run_training(
                     external_inflow_library: None,
                     external_load_library: None,
                     external_ncs_library: None,
+                    basis_padding_enabled: false,
                     stages: &[],
                 },
                 &fx.risk_measures,
@@ -649,6 +653,7 @@ fn run_simulation(
                     external_inflow_library: None,
                     external_load_library: None,
                     external_ncs_library: None,
+                    basis_padding_enabled: false,
                     stages: &[],
                 },
                 &sim_config,

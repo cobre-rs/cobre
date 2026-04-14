@@ -16,7 +16,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.4.3+dev)
+## Current State (v0.4.4)
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.

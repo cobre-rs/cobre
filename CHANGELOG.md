@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.4.4] - 2026-04-14
+
+### Added
+
+- **Per-stage thermal cost override** — `thermal_bounds.parquet` now supports
+  an optional `cost_per_mwh` column alongside `block_id` to override thermal
+  costs per `(plant, stage)`. D27 deterministic regression test verifying
+  per-stage dispatch ordering.
+- **Per-stage warm-start cut counts** — `FutureCostFunction::new` accepts
+  per-stage `warm_start_counts: &[u32]` instead of a uniform scalar.
+  `WARM_START_ITERATION` sentinel distinguishes warm-start from training cuts.
+  Terminal-stage theta conditionally activated for boundary cuts.
+- **Angular-accelerated dominance pruning** (Stage 2 of the cut management
+  pipeline) — two-phase algorithm: cluster cuts by cosine similarity of their
+  coefficient vectors, then perform pointwise dominance verification within
+  each cluster. Preserves Assumption (H2) from Guigues 2017 and finite
+  convergence. Config: `angular_pruning.enabled`, `cosine_threshold`,
+  `check_frequency`.
+- **Active cut budget enforcement** (Stage 3 of the cut management pipeline)
+  — hard cap on LP size via `max_active_per_stage`. Evicts stalest cuts
+  when the budget is exceeded, protecting current-iteration cuts. Runs every
+  iteration (not gated by `check_frequency`).
+- **Basis-aware warm-start padding** — `pad_basis_for_cuts` evaluates each
+  active cut at the warm-start state and assigns informed basis status
+  (`NONBASIC_LOWER` for tight, `BASIC` for slack). Gated by `basis_padding`
+  config flag (default: `false`).
+- **Performance Accelerators documentation** — new mdBook chapter documenting
+  LP setup optimizations, solver safeguards, LP scaling, cut management
+  pipeline, basis warm-start, parallel execution, and memory efficiency.
+- **Comprehensive documentation update** — updated output-format reference
+  (timing schema, solver stats, cut selection, metadata), configuration guide,
+  crate developer docs (sddp, solver, overview), and JSON schemas.
+
+### Changed
+
+- **Cut selection Parquet schema** (breaking) — `cut_selection/iterations.parquet`
+  expanded from 7 to 10 columns: added `active_after_angular`,
+  `budget_evicted`, `active_after_budget`.
+- **JSON schemas** regenerated for config (angular pruning, cut budget, basis
+  padding, memory_window, domination_epsilon) and thermals (schemars update).
+- Root-level `.schema.json` files moved to `book/src/schemas/` (canonical
+  location); `.gitignore` updated to prevent re-accumulation.
+
 ## [0.4.3] - 2026-04-13
 
 ### Added

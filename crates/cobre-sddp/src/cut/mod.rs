@@ -16,7 +16,7 @@
 //! ## Sentinel value
 //!
 //! [`WARM_START_ITERATION`] is the sentinel stored in
-//! [`CutMetadata::iteration_generated`] for every cut loaded from a policy
+//! [`CutMetadata::iteration_generated`](crate::cut_selection::CutMetadata::iteration_generated) for every cut loaded from a policy
 //! checkpoint.  Cut selection strategies may inspect this sentinel to apply
 //! warm-start-specific pruning policies (e.g., exempt warm-start cuts from
 //! LML1 deactivation).

@@ -1740,6 +1740,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: AngularPruningConfig::default(),
             max_active_per_stage: Some(100),
+            basis_padding: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();

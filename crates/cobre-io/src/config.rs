@@ -243,6 +243,7 @@ pub struct CutSelectionConfig {
     /// When `None` (the default), no hard cap is enforced.
     #[serde(default)]
     pub max_active_per_stage: Option<u32>,
+    basis_padding: None,
 
     /// Enable basis padding for warm-start (Epic 05).
     ///

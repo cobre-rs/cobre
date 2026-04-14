@@ -534,6 +534,7 @@ fn train_fixture(
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         },
         &mut fcf,
         &stage_ctx,

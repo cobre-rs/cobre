@@ -788,6 +788,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
+                        basis_padding_enabled: false,
                     });
                 }
 
@@ -832,6 +833,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                         active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
+                        basis_padding_enabled: false,
                     });
                 }
 
@@ -1580,6 +1582,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1667,6 +1670,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1772,6 +1776,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1911,6 +1916,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1996,6 +2002,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2078,6 +2085,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2168,6 +2176,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2268,6 +2277,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2378,6 +2388,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2499,6 +2510,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2590,6 +2602,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2698,6 +2711,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2783,6 +2797,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2955,6 +2970,7 @@ mod tests {
             export_states: false,
             angular_pruning: None,
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3055,6 +3071,7 @@ mod tests {
                 check_frequency: 3,
             }),
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3173,6 +3190,7 @@ mod tests {
                 check_frequency: 3,
             }),
             budget: None,
+            basis_padding_enabled: false,
         };
 
         let mut solver = MockSolver::with_fixed(100.0);

@@ -505,6 +505,7 @@ fn run_training(
         export_states: false,
         angular_pruning: None,
         budget: None,
+        basis_padding_enabled: false,
     };
 
     // Use an isolated thread pool so that tests with different workspace counts

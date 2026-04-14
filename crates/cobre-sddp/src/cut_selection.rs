@@ -906,6 +906,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -936,6 +937,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -965,6 +967,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -995,6 +998,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1017,6 +1021,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1034,6 +1039,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };
@@ -1054,6 +1060,7 @@ mod tests {
             cut_activity_tolerance: None,
             angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
+            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
         };

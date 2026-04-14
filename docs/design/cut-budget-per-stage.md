@@ -1,5 +1,19 @@
 # Design: Cut Budget Per Stage
 
+## Implementation Status
+
+**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+
+| Component | Status |
+| --- | --- |
+| Config: `max_active_per_stage: Option<u32>` in `CutSelectionConfig` | DONE |
+| `CutPool::enforce_budget` with eviction by `(last_active_iter ASC, active_count ASC)` | DONE |
+| Current-iteration cut protection | DONE |
+| Training loop integration (runs every iteration, after strategy selection) | DONE |
+
+---
+
+
 ## Problem
 
 When `forward_passes` is large relative to the number of iterations, active
@@ -308,4 +322,5 @@ and verify:
 
 ## Status
 
-**Ready for implementation.**
+**IMPLEMENTED** (v0.5.0). See `lp-scalability-cut-management.md` for the
+composite pipeline context (S2 runs after S1 angular pruning).

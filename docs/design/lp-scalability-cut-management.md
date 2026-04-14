@@ -1,5 +1,34 @@
 # Design: LP Scalability — Adaptive Cut Management
 
+## Implementation Status
+
+**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+
+> **IMPORTANT DESIGN CHANGE — S1 Angular Pruning**: The original design
+> ("cluster by cosine similarity, keep tightest at a reference point") was
+> found to violate Assumption (H2) from Guigues 2017 — near-parallel cuts
+> with different intercepts create crossing hyperplanes where dominance is
+> state-dependent. The implemented version uses angular clustering as a
+> computational accelerator for pointwise dominance verification (same
+> criterion as the existing `select_dominated` function, but restricted to
+> within-cluster pairs). This preserves (H2) and finite convergence.
+> See `angular-prunning-research-report.md` (root) and
+> `docs/design/angular-pruning-mathematical-background.md` for the
+> mathematical analysis.
+
+| Strategy | Status | Config key | Default |
+| --- | --- | --- | --- |
+| S1: Angular-accelerated dominance (`angular_pruning.rs`, `select_angular_dominated`) | DONE | `angular_pruning.enabled`, `cosine_threshold`, `check_frequency` | disabled |
+| S2: Active cut budget (`CutPool::enforce_budget`) | DONE | `max_active_per_stage: Option<u32>` | disabled |
+| S3: Basis-aware warm-start padding (`basis_padding.rs`, `pad_basis_for_cuts`) | DONE | `basis_padding: Option<bool>` | disabled |
+
+References:
+- `angular-prunning-research-report.md` (repo root) — mathematical analysis of pruning safety
+- `docs/design/angular-pruning-mathematical-background.md` — formal propositions
+
+---
+
+
 ## Problem
 
 When `forward_passes` is large, active cuts accumulate faster than existing
@@ -980,5 +1009,5 @@ solve time, orthogonal to selection.
 
 ## Status
 
-**Ready for implementation.** Supersedes and incorporates
+**IMPLEMENTED** (v0.5.0). Supersedes and incorporates
 `docs/design/cut-budget-per-stage.md` (S2).

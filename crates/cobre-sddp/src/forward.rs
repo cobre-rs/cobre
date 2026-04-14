@@ -1828,6 +1828,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1932,6 +1933,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2042,6 +2044,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2447,6 +2450,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2609,6 +2613,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2646,6 +2651,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2746,6 +2752,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3053,6 +3060,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3226,6 +3234,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -3464,6 +3473,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3585,6 +3595,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3700,6 +3711,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3792,6 +3804,7 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
+                basis_padding_enabled: false,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,

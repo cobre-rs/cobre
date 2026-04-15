@@ -19,12 +19,14 @@
 //! - [`contribution`] — recursive contribution composition for detecting
 //!   explosive lag effects in periodic autoregressive models
 
+pub mod aggregate;
 pub mod contribution;
 pub mod evaluate;
 pub mod fitting;
 pub mod precompute;
 pub mod validation;
 
+pub use aggregate::aggregate_observations_to_season;
 pub use contribution::{
     check_negative_contributions, compute_contributions, find_max_valid_order, has_negative_phi1,
 };
@@ -34,11 +36,11 @@ pub use evaluate::{
     solve_par_noise_batch, solve_par_noises,
 };
 pub use fitting::{
-    AicSelectionResult, ArCoefficientEstimate, PacfSelectionResult, PeriodicYwResult,
-    SeasonalStats, build_periodic_yw_matrix, estimate_ar_coefficients, estimate_correlation,
+    build_periodic_yw_matrix, estimate_ar_coefficients, estimate_correlation,
     estimate_periodic_ar_coefficients, estimate_seasonal_stats, find_season_for_date,
     periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
-    solve_linear_system,
+    solve_linear_system, AicSelectionResult, ArCoefficientEstimate, PacfSelectionResult,
+    PeriodicYwResult, SeasonalStats,
 };
 pub use precompute::PrecomputedPar;
-pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};
+pub use validation::{validate_par_parameters, ParValidationReport, ParWarning};

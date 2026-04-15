@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -1749,11 +1749,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -2111,7 +2111,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -2993,8 +2993,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }

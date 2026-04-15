@@ -60,7 +60,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{ErrorKind, ValidationContext, schema::ParsedData};
+use super::{schema::ParsedData, ErrorKind, ValidationContext};
 
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
@@ -1315,7 +1315,11 @@ fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext
             let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
             let season_id = if pos > 0 {
                 let (_, end_date, sid) = stage_index[pos - 1];
-                if row.date < end_date { Some(sid) } else { None }
+                if row.date < end_date {
+                    Some(sid)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -1566,19 +1570,24 @@ fn check_season_id_consistency(data: &ParsedData, ctx: &mut ValidationContext) {
 
 // ── Rule 31: Observation-to-season alignment ──────────────────────────────────
 
-/// Rule 31: Observation resolution must not be finer than season resolution.
+/// Rule 31: Observation-to-season alignment check.
 ///
-/// If any `(hydro_id, season_id, year)` triple has more than one observation,
-/// the observation data has finer temporal resolution than the season
-/// definitions (e.g., daily observations paired with monthly seasons).
-/// This causes the PAR estimation pipeline to silently receive multiple values
-/// where exactly one is expected, distorting parameter estimates.
+/// Detects two cases:
+///
+/// **Finer-than-season (warning)**: If any `(hydro_id, season_id, year)` triple
+/// has more than one observation, the observation data has finer temporal
+/// resolution than the season definitions (e.g., monthly observations with
+/// quarterly seasons). The PAR estimation pipeline will automatically aggregate
+/// these observations using duration-weighted averaging. A warning is emitted.
+///
+/// **Coarser-than-season (error)**: If a hydro has at least one observation in
+/// a given year but has no observation for some `(season_id, year)` group that
+/// the season map covers, the observation data is coarser than the season
+/// resolution (e.g., quarterly observations with monthly seasons). Aggregation
+/// cannot disaggregate observations, so this is an unrecoverable data error.
 ///
 /// Only runs when estimation is active (history present, not both stats and AR
 /// coefficients pre-computed) and `season_map` is `Some`.
-///
-/// Note: Layer 2 (aggregation of finer-than-season observations) is deferred
-/// to Pattern D and is not implemented here.
 fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationContext) {
     use chrono::Datelike;
 
@@ -1603,12 +1612,17 @@ fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationCon
         .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, sid)))
         .collect();
 
+    // Build counts: (hydro_id, season_id, year) -> observation count.
     let mut counts: HashMap<(i32, usize, i32), usize> = HashMap::new();
     for row in &data.inflow_history {
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date { Some(sid) } else { None }
+            if row.date < end_date {
+                Some(sid)
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -1620,22 +1634,61 @@ fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationCon
         }
     }
 
-    let mut violations: Vec<(i32, usize, i32, usize)> = counts
+    // ── Finer-than-season: warn when count > 1 (observations will be aggregated) ──
+    let mut finer_violations: Vec<(i32, usize, i32, usize)> = counts
         .iter()
         .filter(|&(_, &n)| n > 1)
         .map(|(&(hid, sid, yr), &n)| (hid, sid, yr, n))
         .collect();
-    violations.sort_unstable();
-    for (hid, sid, yr, count) in violations {
-        ctx.add_error(
+    finer_violations.sort_unstable();
+    for (hid, sid, yr, count) in finer_violations {
+        ctx.add_warning(
             ErrorKind::BusinessRuleViolation,
             "scenarios/inflow_history.parquet",
             Some(format!("Hydro {hid}")),
             format!(
                 "hydro {hid} has {count} observations for season {sid} year {yr} \
-                 in inflow_history.parquet; expected exactly 1 observation per \
-                 (hydro, season, year); finer-than-season observation resolution is not \
-                 yet supported (aggregation will be added in a future release)",
+                 in inflow_history.parquet; these will be aggregated to season \
+                 resolution during PAR estimation",
+            ),
+        );
+    }
+
+    // ── Coarser-than-season: error when a hydro has observations in a year but
+    // is missing an entire (season_id, year) group that the season map defines ──
+    //
+    // Collect the distinct season IDs defined in the season map.
+    let defined_season_ids: Vec<usize> = season_map.seasons.iter().map(|s| s.id).collect();
+
+    // For each hydro, collect the set of years where it has at least one observation.
+    let mut hydro_years: HashMap<i32, HashSet<i32>> = HashMap::new();
+    for &(hid, _sid, yr) in counts.keys() {
+        hydro_years.entry(hid).or_default().insert(yr);
+    }
+
+    // Detect missing (hydro, season, year) groups: the hydro has history in
+    // that year, but the counts map has no entry for that (hydro, season, year).
+    let mut coarser_violations: Vec<(i32, usize, i32)> = Vec::new();
+    for (&hid, years) in &hydro_years {
+        for &yr in years {
+            for &sid in &defined_season_ids {
+                if !counts.contains_key(&(hid, sid, yr)) {
+                    coarser_violations.push((hid, sid, yr));
+                }
+            }
+        }
+    }
+    coarser_violations.sort_unstable();
+    for (hid, sid, yr) in coarser_violations {
+        ctx.add_error(
+            ErrorKind::BusinessRuleViolation,
+            "scenarios/inflow_history.parquet",
+            Some(format!("Hydro {hid}")),
+            format!(
+                "hydro {hid} has no observations for season {sid} year {yr} \
+                 in inflow_history.parquet, suggesting coarser-than-season \
+                 observation resolution; coarser-than-season observations \
+                 cannot be disaggregated and are not supported",
             ),
         );
     }
@@ -1687,7 +1740,11 @@ fn check_season_observation_coverage(
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date { Some(sid) } else { None }
+            if row.date < end_date {
+                Some(sid)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -1761,7 +1818,6 @@ fn check_season_contiguity(
 mod tests {
     use super::*;
     use cobre_core::{
-        EntityId,
         entities::{Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal},
         initial_conditions::InitialConditions,
         penalty::GlobalPenaltyDefaults,
@@ -1769,13 +1825,14 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{ErrorKind, ValidationContext, schema::ParsedData},
+        validation::{schema::ParsedData, ErrorKind, ValidationContext},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -5676,7 +5733,8 @@ mod tests {
     // ── Rule 31: Observation-to-season alignment tests ────────────────────────
 
     /// Given a monthly study with one observation per hydro per month per year
-    /// (one obs per (hydro, season, year)), no errors are emitted by rule 31.
+    /// (one obs per (hydro, season, year)), no errors and no rule-31 warnings
+    /// are emitted.
     #[test]
     fn test_observation_alignment_valid_monthly() {
         // 36 stages = 3 years × 12 months, season_map present.
@@ -5691,26 +5749,35 @@ mod tests {
         let rule31_errors: Vec<_> = ctx
             .errors()
             .into_iter()
-            .filter(|e| {
-                e.kind == ErrorKind::BusinessRuleViolation
-                    && e.message
-                        .contains("finer-than-season observation resolution")
-            })
+            .filter(|e| e.kind == ErrorKind::BusinessRuleViolation)
             .collect();
         assert!(
             rule31_errors.is_empty(),
             "valid monthly observations should produce no rule-31 errors; got: {rule31_errors:?}"
         );
+        let rule31_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::BusinessRuleViolation && w.message.contains("aggregated")
+            })
+            .collect();
+        assert!(
+            rule31_warnings.is_empty(),
+            "valid monthly observations should produce no aggregation warnings; got: {rule31_warnings:?}"
+        );
     }
 
     /// Given a monthly study where hydro 1 has 2 observations for season 0
-    /// (January) year 2020, a `BusinessRuleViolation` error is emitted
-    /// mentioning hydro 1, season 0, year 2020, and count 2.
+    /// (January) year 2020 and exactly 1 observation for every other season,
+    /// a warning (not an error) is emitted for the duplicated season. No
+    /// `BusinessRuleViolation` error is produced.
     #[test]
     fn test_observation_alignment_duplicate_obs() {
-        // Two observations for hydro 1, season 0 (January), year 2020.
-        let history = vec![
-            // Two observations for hydro 1, season 0 (January), year 2020.
+        // Season 0 (January 2020) has two observations — finer-than-season.
+        // Seasons 1-11 have exactly one observation each — no coarser-than-season
+        // check fires because no season is missing for the year.
+        let mut history = vec![
             InflowHistoryRow {
                 hydro_id: EntityId::from(1),
                 date: chrono::NaiveDate::from_ymd_opt(2020, 1, 5).unwrap(),
@@ -5722,6 +5789,14 @@ mod tests {
                 value_m3s: 200.0,
             },
         ];
+        // Add one observation per month for February–December 2020.
+        for month in 2u32..=12 {
+            history.push(InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, month, 15).unwrap(),
+                value_m3s: f64::from(month) * 10.0,
+            });
+        }
         // Build 12 stages covering January 2020 – December 2020, season_map present.
         let mut stages_2020 = make_stages_with_seasons(12, /*with_season_map=*/ true);
         // Override stage dates to cover year 2020.
@@ -5740,44 +5815,122 @@ mod tests {
         let mut ctx = ValidationContext::new();
         check_observation_season_alignment(&data, &mut ctx);
 
-        let rule31_errors: Vec<_> = ctx
+        // Must produce no errors — finer-than-season is now a warning only.
+        assert!(
+            ctx.errors().is_empty(),
+            "finer-than-season observations must not produce errors; got: {:?}",
+            ctx.errors()
+        );
+
+        // Must produce exactly one warning stating observations will be aggregated.
+        let rule31_warnings: Vec<_> = ctx
+            .warnings()
+            .into_iter()
+            .filter(|w| {
+                w.kind == ErrorKind::BusinessRuleViolation
+                    && w.message.contains("will be aggregated")
+            })
+            .collect();
+        assert_eq!(
+            rule31_warnings.len(),
+            1,
+            "expected exactly one rule-31 aggregation warning; got: {rule31_warnings:?}"
+        );
+        let msg = &rule31_warnings[0].message;
+        assert!(
+            msg.contains("hydro 1"),
+            "warning must mention hydro 1; got: {msg}"
+        );
+        assert!(
+            msg.contains("season 0"),
+            "warning must mention season 0; got: {msg}"
+        );
+        assert!(
+            msg.contains("year 2020"),
+            "warning must mention year 2020; got: {msg}"
+        );
+        assert!(
+            msg.contains(" 2 ") || msg.contains("has 2 observations"),
+            "warning must mention count 2; got: {msg}"
+        );
+        // Verify entity context mentions hydro 1.
+        assert_eq!(
+            rule31_warnings[0].entity,
+            Some("Hydro 1".to_string()),
+            "entity context must be 'Hydro 1'; got: {:?}",
+            rule31_warnings[0].entity
+        );
+    }
+
+    /// Given quarterly observations (1 obs per quarter) with a monthly SeasonMap
+    /// (12 seasons), a `BusinessRuleViolation` error is emitted stating that
+    /// coarser-than-season observations cannot be disaggregated.
+    #[test]
+    fn test_observation_alignment_coarser_than_season() {
+        // Build 12 monthly stages covering 2020, season_map present (12 seasons).
+        let mut stages_2020 = make_stages_with_seasons(12, /*with_season_map=*/ true);
+        for (i, stage) in stages_2020.stages.iter_mut().enumerate() {
+            let month = (i % 12) as u32 + 1;
+            stage.start_date = chrono::NaiveDate::from_ymd_opt(2020, month, 1).unwrap();
+            let (end_year, end_month) = if month == 12 {
+                (2021, 1u32)
+            } else {
+                (2020, month + 1)
+            };
+            stage.end_date = chrono::NaiveDate::from_ymd_opt(end_year, end_month, 1).unwrap();
+        }
+
+        // Only 4 quarterly observations (one per quarter mid-point), not 12.
+        // This simulates coarser-than-season data: the hydro has observations
+        // in 2020 but many (season, year) groups have no observations.
+        let history = vec![
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 2, 15).unwrap(), // Feb → season 1
+                value_m3s: 100.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 5, 15).unwrap(), // May → season 4
+                value_m3s: 200.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 8, 15).unwrap(), // Aug → season 7
+                value_m3s: 300.0,
+            },
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 11, 15).unwrap(), // Nov → season 10
+                value_m3s: 400.0,
+            },
+        ];
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages_2020, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        // Must produce at least one coarser-than-season error.
+        let coarser_errors: Vec<_> = ctx
             .errors()
             .into_iter()
             .filter(|e| {
                 e.kind == ErrorKind::BusinessRuleViolation
-                    && e.message
-                        .contains("finer-than-season observation resolution")
+                    && e.message.contains("coarser-than-season")
             })
             .collect();
-        assert_eq!(
-            rule31_errors.len(),
-            1,
-            "expected exactly one rule-31 error; got: {rule31_errors:?}"
-        );
-        let msg = &rule31_errors[0].message;
         assert!(
-            msg.contains("hydro 1"),
-            "error must mention hydro 1; got: {msg}"
+            !coarser_errors.is_empty(),
+            "coarser-than-season observations must produce at least one BusinessRuleViolation error; got none"
         );
-        assert!(
-            msg.contains("season 0"),
-            "error must mention season 0; got: {msg}"
-        );
-        assert!(
-            msg.contains("year 2020"),
-            "error must mention year 2020; got: {msg}"
-        );
-        assert!(
-            msg.contains(" 2 ") || msg.contains("has 2 observations"),
-            "error must mention count 2; got: {msg}"
-        );
-        // Verify entity context mentions hydro 1.
-        assert_eq!(
-            rule31_errors[0].entity,
-            Some("Hydro 1".to_string()),
-            "entity context must be 'Hydro 1'; got: {:?}",
-            rule31_errors[0].entity
-        );
+        // All errors must mention "cannot be disaggregated".
+        for e in &coarser_errors {
+            assert!(
+                e.message.contains("cannot be disaggregated"),
+                "error message must mention 'cannot be disaggregated'; got: {}",
+                e.message
+            );
+        }
     }
 
     /// Given a study where `season_map` is `None`, rule 31 is skipped entirely

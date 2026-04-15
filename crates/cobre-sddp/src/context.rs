@@ -51,6 +51,26 @@ pub struct StageContext<'a> {
     /// in Epic 2 ticket-006.
     #[allow(dead_code)]
     pub stage_lag_transitions: &'a [StageLagTransition],
+    /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
+    ///
+    /// Stages with the same group ID share the same noise draw in the opening
+    /// tree and forward pass. For uniform monthly studies every stage has a
+    /// unique group ID, so no sharing is triggered. Populated from
+    /// [`StudySetup::noise_group_ids`] at setup time. Length equals the number
+    /// of study stages.
+    pub noise_group_ids: &'a [u32],
+}
+
+impl StageContext<'_> {
+    /// Returns the noise group ID for stage index `t`.
+    #[inline]
+    #[must_use]
+    pub fn noise_group_id_at(&self, t: usize) -> u32 {
+        self.noise_group_ids
+            .get(t)
+            .copied()
+            .unwrap_or(u32::try_from(t).unwrap_or(u32::MAX))
+    }
 }
 
 /// Immutable algorithm-level configuration for the training loop.

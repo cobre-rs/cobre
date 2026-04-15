@@ -131,7 +131,8 @@ fn saa_golden_value_regression() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+        .unwrap();
 
     assert_eq!(
         tree.opening(0, 0)[0],

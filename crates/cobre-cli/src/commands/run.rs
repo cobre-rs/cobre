@@ -767,6 +767,11 @@ fn broadcast_and_build_setup(
                 user_tree,
                 historical_library: opening_tree_library.as_ref(),
                 external_scenario_counts: None,
+                // noise_group_ids: None for non-root ranks — the opened tree
+                // is broadcast from rank 0 when auto-generated, so independent
+                // noise per stage is acceptable here. Pattern C wiring for
+                // non-root SAA tree generation is deferred to Epic 5.
+                noise_group_ids: None,
             },
             cobre_stochastic::ClassSchemes {
                 inflow: Some(training_src.inflow_scheme),

@@ -16,15 +16,15 @@ use cobre_core::System;
 use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
-    write_simulation_metadata, write_training_metadata, MetadataConfiguration, MetadataConvergence,
-    MetadataCuts, MetadataIterations, MetadataProblemDimensions, MetadataScenarios, OutputContext,
-    SimulationMetadata, TrainingMetadata,
+    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
+    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
+    TrainingMetadata, write_simulation_metadata, write_training_metadata,
 };
 use super::parquet_config::ParquetWriterConfig;
 use super::training_writer::TrainingParquetWriter;
 use super::{SimulationOutput, TrainingOutput};
-use crate::config::StoppingRuleConfig;
 use crate::Config;
+use crate::config::StoppingRuleConfig;
 
 /// Write all training artifacts to the output directory.
 ///

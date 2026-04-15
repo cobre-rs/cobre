@@ -436,10 +436,6 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
-    // -----------------------------------------------------------------------
-    // Test 1: uniform monthly identity
-    // -----------------------------------------------------------------------
-
     #[test]
     fn test_uniform_monthly_identity() {
         let season_map = monthly_season_map();
@@ -477,10 +473,6 @@ mod tests {
             );
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Test 2: PMO_APR_2026_rv0 production DECOMP trace
-    // -----------------------------------------------------------------------
 
     /// Six-stage mixed weekly+monthly layout from the design doc.
     ///
@@ -728,9 +720,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use cobre_core::{
+        EntityId,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         initial_conditions::RecentObservation,
-        EntityId,
     };
 
     fn make_hydro(id: i32) -> Hydro {
@@ -944,12 +936,6 @@ mod tests {
         assert_eq!(seed.weight_seed, 0.0);
     }
 
-    // -----------------------------------------------------------------------
-    // precompute_noise_groups tests
-    // -----------------------------------------------------------------------
-
-    /// Test 1: 12 monthly stages each with a unique `(season_id, year)` pair
-    /// must produce 12 distinct group IDs `[0, 1, ..., 11]`.
     #[test]
     fn test_noise_groups_monthly_unique() {
         let stages: Vec<Stage> = (0..12usize)
@@ -973,11 +959,8 @@ mod tests {
         assert_eq!(groups, expected);
     }
 
-    /// Test 2: 4 weekly stages (`season_id=0`) + 4 weekly stages (`season_id=1`),
-    /// all in year 2024. Stages 0-3 get group 0, stages 4-7 get group 1.
     #[test]
     fn test_noise_groups_weekly_shared() {
-        // Weekly stages in season 0 (e.g. weeks 1-4 of January)
         let stages_s0: Vec<Stage> = (0..4usize)
             .map(|i| {
                 let day_start = u32::try_from(i * 7 + 1).unwrap();
@@ -987,7 +970,6 @@ mod tests {
                 make_stage(i, start, end, Some(0))
             })
             .collect();
-        // Weekly stages in season 1 (e.g. weeks 1-4 of February)
         let stages_s1: Vec<Stage> = (0..4usize)
             .map(|i| {
                 let day_start = u32::try_from(i * 7 + 1).unwrap();
@@ -1004,13 +986,10 @@ mod tests {
         let groups = precompute_noise_groups(&all_stages);
 
         assert_eq!(groups.len(), 8);
-        // Stages 0-3 share group 0, stages 4-7 share group 1.
         assert!(groups[0..4].iter().all(|&g| g == 0));
         assert!(groups[4..8].iter().all(|&g| g == 1));
     }
 
-    /// Test 3: 4 weekly stages (season 0, year 2024) + 1 monthly stage (season 0,
-    /// year 2024). All 5 stages share group 0 because they have the same key.
     #[test]
     fn test_noise_groups_mixed_weekly_monthly() {
         let weekly: Vec<Stage> = (0..4usize)
@@ -1022,7 +1001,6 @@ mod tests {
                 make_stage(i, start, end, Some(0))
             })
             .collect();
-        // Monthly stage: same season_id=0 and start_date in 2024.
         let monthly = make_stage(4, d(2024, 1, 1), d(2024, 2, 1), Some(0));
 
         let mut stages = weekly;
@@ -1037,7 +1015,6 @@ mod tests {
         );
     }
 
-    /// Test 4: stages with `season_id = None` each get a unique group ID.
     #[test]
     fn test_noise_groups_none_season_id() {
         let stages: Vec<Stage> = (0..3usize)
@@ -1051,7 +1028,6 @@ mod tests {
         let groups = precompute_noise_groups(&stages);
 
         assert_eq!(groups.len(), 3);
-        // Each None-season stage gets a distinct group.
         assert_eq!(groups[0], 0);
         assert_eq!(groups[1], 1);
         assert_eq!(groups[2], 2);

@@ -722,10 +722,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
         write_cut_selection_records(tmp.path(), &[], &config).unwrap();
-        assert!(!tmp
-            .path()
-            .join("training/cut_selection/iterations.parquet")
-            .exists());
+        assert!(
+            !tmp.path()
+                .join("training/cut_selection/iterations.parquet")
+                .exists()
+        );
     }
 
     #[test]

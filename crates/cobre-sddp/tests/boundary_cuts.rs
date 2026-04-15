@@ -19,7 +19,7 @@ use std::path::Path;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::output::policy::write_policy_checkpoint;
-use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for testing.

@@ -345,8 +345,18 @@ fn lhs_marginal_uniformity() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        42,
+        &stages,
+        dim,
+        &corr,
+        &entity_order,
+        dims,
+        None,
+        None,
+        None,
+    )
+    .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
     assert_eq!(tree.n_openings(0), n);
@@ -389,8 +399,18 @@ fn lhs_no_stratum_collision() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(99, &stages, dim, &corr, &entity_order, dims, None, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        99,
+        &stages,
+        dim,
+        &corr,
+        &entity_order,
+        dims,
+        None,
+        None,
+        None,
+    )
+    .expect("generate_opening_tree must succeed");
 
     let n_f = n as f64;
     for d in 0..dim {
@@ -431,8 +451,18 @@ fn lhs_normal_statistics() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims, None, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        12345,
+        &stages,
+        dim,
+        &corr,
+        &entity_order,
+        dims,
+        None,
+        None,
+        None,
+    )
+    .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
 
@@ -472,8 +502,18 @@ fn lhs_correlation_applied() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        54321,
+        &stages,
+        2,
+        &corr,
+        &entity_order,
+        dims,
+        None,
+        None,
+        None,
+    )
+    .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)
         .map(|o| {

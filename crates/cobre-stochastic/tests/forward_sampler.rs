@@ -294,6 +294,7 @@ fn insample_dispatch_returns_tree_slice_of_correct_dim() {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -332,6 +333,7 @@ fn insample_copy_equivalence_matches_direct_call() {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -373,6 +375,7 @@ fn out_of_sample_dispatch_returns_fresh_noise_of_correct_dim() {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -416,6 +419,7 @@ fn out_of_sample_is_deterministic() {
             noise_buf: &mut buf_a,
             perm_scratch: &mut perm_a,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -428,6 +432,7 @@ fn out_of_sample_is_deterministic() {
             noise_buf: &mut buf_b,
             perm_scratch: &mut perm_b,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -468,6 +473,7 @@ fn out_of_sample_scenario_changes_noise() {
             noise_buf: &mut buf_0,
             perm_scratch: &mut perm_0,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -480,6 +486,7 @@ fn out_of_sample_scenario_changes_noise() {
             noise_buf: &mut buf_1,
             perm_scratch: &mut perm_1,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 
@@ -525,6 +532,7 @@ fn out_of_sample_noise_is_finite() {
                 noise_buf: &mut noise_buf,
                 perm_scratch: &mut perm_scratch,
                 total_scenarios,
+                noise_group_id: 0,
             })
             .unwrap();
 
@@ -571,6 +579,7 @@ fn out_of_sample_correlation_matches_target() {
                 noise_buf: &mut noise_buf,
                 perm_scratch: &mut perm_scratch,
                 total_scenarios: n_scenarios,
+                noise_group_id: 0,
             })
             .unwrap();
 
@@ -631,6 +640,7 @@ fn out_of_sample_per_stage_method_mixing() {
                     noise_buf: &mut noise_buf,
                     perm_scratch: &mut perm_scratch,
                     total_scenarios,
+                    noise_group_id: 0,
                 })
                 .unwrap();
 
@@ -757,6 +767,7 @@ fn out_of_sample_resume_invariance() {
             noise_buf: &mut buf_first,
             perm_scratch: &mut perm_first,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
     let first_values: Vec<f64> = first.as_slice().to_vec();
@@ -771,6 +782,7 @@ fn out_of_sample_resume_invariance() {
             noise_buf: &mut buf_resume,
             perm_scratch: &mut perm_resume,
             total_scenarios: 5,
+            noise_group_id: 0,
         })
         .unwrap();
 

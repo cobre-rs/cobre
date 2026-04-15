@@ -405,8 +405,8 @@ pub struct StudySetup {
     /// Stages with the same `(season_id, year)` share a noise group, so weekly
     /// stages within the same month share the same noise draw. Computed at setup
     /// time by [`crate::lag_transition::precompute_noise_groups`]. Indexed by stage.
-    /// Consumed by `ForwardSampler` and `generate_opening_tree` in Epic 2.
-    #[allow(dead_code)]
+    /// Consumed by `ForwardSampler`, `generate_opening_tree`, and
+    /// `StageContext` for per-stage noise group lookups.
     noise_group_ids: Vec<u32>,
 
     /// Pre-computed lag accumulator seed from `initial_conditions.recent_observations`.
@@ -1565,6 +1565,7 @@ impl StudySetup {
             discount_factors: &self.stage_templates.discount_factors,
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
             stage_lag_transitions: &self.stage_lag_transitions,
+            noise_group_ids: &self.noise_group_ids,
         }
     }
 
@@ -1706,6 +1707,7 @@ impl StudySetup {
             discount_factors: &self.stage_templates.discount_factors,
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
             stage_lag_transitions: &self.stage_lag_transitions,
+            noise_group_ids: &self.noise_group_ids,
         };
 
         let training_ctx = TrainingContext {
@@ -2433,6 +2435,22 @@ pub fn prepare_stochastic(
         }
     };
 
+    // Compute noise group IDs for Pattern C noise sharing (Epic 2).
+    // Groups stages with the same (season_id, year) so weekly stages within
+    // the same monthly bucket share noise draws in the opening tree.
+    // For uniform monthly studies each stage has a unique group ID, so no
+    // sharing is triggered and the opening tree is identical to the pre-noise-
+    // sharing baseline (modulo the seed domain change from ticket-003).
+    let opening_tree_noise_group_ids: Vec<u32> = {
+        let study_stages: Vec<_> = system
+            .stages()
+            .iter()
+            .filter(|s| s.id >= 0)
+            .cloned()
+            .collect();
+        crate::lag_transition::precompute_noise_groups(&study_stages)
+    };
+
     let forward_seed = training_source.seed.map(i64::unsigned_abs);
     let stochastic = cobre_stochastic::build_stochastic_context(
         &system,
@@ -2444,6 +2462,7 @@ pub fn prepare_stochastic(
             user_tree: user_opening_tree,
             historical_library: opening_tree_library.as_ref(),
             external_scenario_counts,
+            noise_group_ids: Some(opening_tree_noise_group_ids),
         },
         cobre_stochastic::ClassSchemes {
             inflow: Some(training_source.inflow_scheme),

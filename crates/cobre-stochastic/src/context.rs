@@ -40,8 +40,9 @@ pub struct ClassSchemes {
 /// tree: a pre-built `OpeningTree` that bypasses generation entirely, a
 /// `HistoricalScenarioLibrary` used when any stage is configured with
 /// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals),
-/// and a pre-padding external scenario count per stage used to clamp openings
-/// for stages whose external library was padded from fewer raw scenarios.
+/// a pre-padding external scenario count per stage used to clamp openings
+/// for stages whose external library was padded from fewer raw scenarios,
+/// and per-stage noise group IDs for the Pattern C noise sharing feature.
 ///
 /// When all optional fields are `None` the opening tree is generated from SAA/LHS/QMC
 /// noise depending on each stage's `scenario_config.noise_method`.
@@ -59,6 +60,14 @@ pub struct OpeningTreeInputs<'a> {
     /// configured branching factor. `None` when no entity class uses External
     /// sampling. When `Some`, length must equal the number of study stages.
     pub external_scenario_counts: Option<Vec<usize>>,
+    /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
+    ///
+    /// Stages with the same group ID share the same noise draw in the opening
+    /// tree, enabling weekly stages within the same monthly bucket to receive
+    /// identical noise. `None` generates independent noise for every stage
+    /// (the original behaviour). When `Some`, length must equal the number of
+    /// study stages.
+    pub noise_group_ids: Option<Vec<u32>>,
 }
 
 use crate::{
@@ -388,6 +397,7 @@ pub fn build_stochastic_context(
         user_tree: user_opening_tree,
         historical_library,
         external_scenario_counts,
+        noise_group_ids,
     } = opening_tree_inputs;
     let _report = validate_par_parameters(system.inflow_models())?;
 
@@ -489,6 +499,7 @@ pub fn build_stochastic_context(
             },
             historical_library,
             external_scenario_counts.as_deref(),
+            noise_group_ids.as_deref(),
         )?
     };
 
@@ -1482,6 +1493,7 @@ mod tests {
                 user_tree: Some(user_tree),
                 historical_library: None,
                 external_scenario_counts: None,
+                noise_group_ids: None,
             },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
@@ -1625,6 +1637,7 @@ mod tests {
                 user_tree: Some(user_tree),
                 historical_library: None,
                 external_scenario_counts: None,
+                noise_group_ids: None,
             },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),

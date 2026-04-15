@@ -51,8 +51,8 @@
 //! assert_eq!(config.checkpoint_interval, Some(50));
 //! ```
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use cobre_core::TrainingEvent;
 

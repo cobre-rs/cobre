@@ -489,6 +489,7 @@ mod tests {
             },
             None,
             None,
+            None, // noise_group_ids: mock tree has 1 stage, no sharing needed
         )
         .unwrap()
     }

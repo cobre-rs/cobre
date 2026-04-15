@@ -1676,14 +1676,16 @@ fn d19_multi_hydro_par_truncation() {
 /// the PAR evaluation and truncation logic -- it is not hand-computable
 /// due to the 2-hydro x 2-lag state space.
 ///
-/// Updated from 1,603,530.894 after the pre-study lag stats fix: the old
-/// value was recorded with a bug that zeroed AR coefficients at stage 0
-/// when inflow_seasonal_stats.parquet lacked pre-study entries. The fix
-/// restores non-zero coefficients via season fallback, changing the optimal.
+/// Updated from 1,332,425.292_764_49 after Epic 2 ticket-005 wired
+/// `noise_group_ids` to the opening tree. D19 has all 3 study stages with
+/// `season_id=0` in year 2024, so `precompute_noise_groups` assigns them
+/// the same group ID. The Pattern C copy path in `generate_opening_tree`
+/// therefore makes stages 1 and 2 share stage 0's correlated noise draws,
+/// producing a different — but still deterministic — optimal cost.
 ///
 /// If the lag-major/hydro-major indexing bug regresses, different lag values
 /// are read for each hydro during PAR evaluation, producing a different cost.
-pub const D19_EXPECTED_COST: f64 = 1_332_425.292_764_49;
+pub const D19_EXPECTED_COST: f64 = 1_332_571.796_891_952_6;
 
 /// Operational violation slacks: 1 hydro with active min_outflow, max_outflow,
 /// min_turbined, and min_generation bounds.

@@ -23,13 +23,13 @@
 use cobre_core::temporal::NoiseMethod;
 
 use crate::{
+    StochasticError,
     noise::seed::derive_forward_seed,
     sampling::{
-        out_of_sample::{fill_uncorrelated, FreshNoiseSpec},
         ExternalScenarioLibrary, HistoricalScenarioLibrary,
+        out_of_sample::{FreshNoiseSpec, fill_uncorrelated},
     },
     tree::opening_tree::OpeningTreeView,
-    StochasticError,
 };
 
 use super::insample;
@@ -54,6 +54,13 @@ pub struct ClassSampleRequest {
     pub stage_idx: usize,
     /// Total scenario count across all ranks (for LHS stratification).
     pub total_scenarios: u32,
+    /// Noise group identifier for seed derivation (Pattern C sharing).
+    ///
+    /// Stages within the same `(season_id, year)` bucket share the same
+    /// `noise_group_id` so that their `OutOfSample` noise draws are identical.
+    /// Until ticket-005 wires actual group IDs, callers supply `stage.id as u32`
+    /// to preserve current per-stage seed behaviour.
+    pub noise_group_id: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +288,7 @@ impl ClassSampler<'_> {
                     iteration: req.iteration,
                     scenario: req.scenario,
                     stage_id: req.stage,
+                    noise_group_id: req.noise_group_id,
                     dim: *dim,
                     total_scenarios: req.total_scenarios,
                 };
@@ -358,6 +366,7 @@ mod tests {
             stage: 0,
             stage_idx: 0,
             total_scenarios: 10,
+            noise_group_id: 0,
         }
     }
 
@@ -422,6 +431,7 @@ mod tests {
             stage: 1,
             stage_idx: 1,
             total_scenarios: 5,
+            noise_group_id: 0,
         };
 
         let mut out_a = vec![0.0f64; 2];
@@ -455,6 +465,7 @@ mod tests {
             stage: 0,
             stage_idx: 0,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
 
         let mut out_a = vec![0.0f64; 3];
@@ -523,6 +534,7 @@ mod tests {
             stage: 0,
             stage_idx: 1,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
 
         let mut out_a = vec![0.0f64; 2];
@@ -552,6 +564,7 @@ mod tests {
                     stage: 0,
                     stage_idx: 0,
                     total_scenarios: 20,
+                    noise_group_id: 0,
                 };
                 let mut out = vec![0.0f64; 2];
                 sampler.fill(&req, &mut out, &mut perm).unwrap();
@@ -582,6 +595,7 @@ mod tests {
             stage: 0,
             stage_idx: 0,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
         let req_stage1 = ClassSampleRequest {
             stage_idx: 1,
@@ -636,6 +650,7 @@ mod tests {
             stage: 0,
             stage_idx: 2,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
 
         let mut output = vec![0.0f64; 3];
@@ -671,6 +686,7 @@ mod tests {
             stage: 1,
             stage_idx: 1,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
 
         let mut out_a = vec![0.0f64; 3];
@@ -699,6 +715,7 @@ mod tests {
             stage: 0,
             stage_idx: 0,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
         let req_stage1 = ClassSampleRequest {
             stage_idx: 1,
@@ -770,6 +787,7 @@ mod tests {
             stage: 0,
             stage_idx: 0,
             total_scenarios: 10,
+            noise_group_id: 0,
         };
 
         let lag_offset = 5;
@@ -812,6 +830,7 @@ mod tests {
                 stage: 0,
                 stage_idx: 0,
                 total_scenarios: 20,
+                noise_group_id: 0,
             };
 
             // Derive the window index via the shared helper.
@@ -943,5 +962,87 @@ mod tests {
         let ext_debug = format!("{:?}", ClassSampler::External { library: &ext_lib });
         assert!(hist_debug.contains("Historical"));
         assert!(ext_debug.contains("External"));
+    }
+    // -----------------------------------------------------------------------
+    // AC (ticket-003): noise_group_id propagation tests
+    // -----------------------------------------------------------------------
+
+    /// AC: Two `OutOfSample::fill()` calls with the same `noise_group_id` but
+    /// different `stage` must produce identical noise.
+    #[test]
+    fn test_out_of_sample_same_group_produces_identical_noise() {
+        let noise_methods: Box<[NoiseMethod]> =
+            vec![NoiseMethod::Saa, NoiseMethod::Saa].into_boxed_slice();
+        let sampler = ClassSampler::OutOfSample {
+            forward_seed: 42,
+            dim: 3,
+            noise_methods,
+        };
+
+        // Same noise_group_id=5, different stage (0 vs 1).
+        let req_stage0 = ClassSampleRequest {
+            iteration: 1,
+            scenario: 2,
+            stage: 0,
+            stage_idx: 0,
+            total_scenarios: 10,
+            noise_group_id: 5,
+        };
+        let req_stage1 = ClassSampleRequest {
+            stage: 1,
+            stage_idx: 1,
+            ..req_stage0
+        };
+
+        let mut out0 = vec![0.0f64; 3];
+        let mut out1 = vec![0.0f64; 3];
+        let mut perm = vec![0usize; 10];
+
+        sampler.fill(&req_stage0, &mut out0, &mut perm).unwrap();
+        sampler.fill(&req_stage1, &mut out1, &mut perm).unwrap();
+
+        assert_eq!(
+            out0, out1,
+            "OutOfSample::fill with same noise_group_id must produce identical noise              regardless of stage"
+        );
+    }
+
+    /// AC: Two `OutOfSample::fill()` calls with different `noise_group_id`
+    /// values must produce different noise.
+    #[test]
+    fn test_out_of_sample_different_group_produces_different_noise() {
+        let noise_methods: Box<[NoiseMethod]> =
+            vec![NoiseMethod::Saa, NoiseMethod::Saa].into_boxed_slice();
+        let sampler = ClassSampler::OutOfSample {
+            forward_seed: 42,
+            dim: 3,
+            noise_methods,
+        };
+
+        let req_group0 = ClassSampleRequest {
+            iteration: 1,
+            scenario: 2,
+            stage: 0,
+            stage_idx: 0,
+            total_scenarios: 10,
+            noise_group_id: 0,
+        };
+        let req_group1 = ClassSampleRequest {
+            noise_group_id: 1,
+            ..req_group0
+        };
+
+        let mut out0 = vec![0.0f64; 3];
+        let mut out1 = vec![0.0f64; 3];
+        let mut perm = vec![0usize; 10];
+
+        sampler.fill(&req_group0, &mut out0, &mut perm).unwrap();
+        sampler.fill(&req_group1, &mut out1, &mut perm).unwrap();
+
+        let any_differ = out0.iter().zip(&out1).any(|(a, b)| a != b);
+        assert!(
+            any_differ,
+            "OutOfSample::fill with different noise_group_id must produce different noise"
+        );
     }
 }

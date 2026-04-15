@@ -29,24 +29,24 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{InflowModel, LoadModel, SamplingScheme},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_sddp::{
-    cut::fcf::FutureCostFunction, train, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext,
+    HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageContext, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
+    train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 // ===========================================================================
@@ -452,6 +452,7 @@ fn test_stochastic_load_training_completes() {
         discount_factors: &[],
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
+        noise_group_ids: &[],
     };
     let result = train(
         &mut solver,
@@ -553,6 +554,7 @@ fn test_deterministic_load_training_matches_baseline() {
         discount_factors: &[],
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
+        noise_group_ids: &[],
     };
     let result = train(
         &mut solver,
@@ -668,6 +670,7 @@ fn test_stochastic_load_seed_determinism() {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = train(
             &mut solver,

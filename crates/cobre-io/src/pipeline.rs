@@ -10,25 +10,25 @@
 
 use std::collections::HashMap;
 
-use cobre_core::{scenario::CorrelationModel, SystemBuilder};
+use cobre_core::{SystemBuilder, scenario::CorrelationModel};
 
 use crate::{
-    report::{generate_report, ValidationReport},
+    LoadError,
+    report::{ValidationReport, generate_report},
     resolution::{
+        BoundsEntitySlices, BoundsOverrides, PenaltiesEntitySlices, PenaltiesOverrides,
         resolve_bounds, resolve_exchange_factors, resolve_generic_constraint_bounds,
         resolve_load_factors, resolve_ncs_bounds, resolve_ncs_factors, resolve_penalties,
-        BoundsEntitySlices, BoundsOverrides, PenaltiesEntitySlices, PenaltiesOverrides,
     },
     scenarios::assembly::{assemble_inflow_models, assemble_load_models},
     validation::{
+        ValidationContext,
         dimensional::validate_dimensional_consistency,
         referential::validate_referential_integrity,
         schema::validate_schema,
         semantic::{validate_semantic_hydro_thermal, validate_semantic_stages_penalties_scenarios},
         structural::validate_structure,
-        ValidationContext,
     },
-    LoadError,
 };
 
 use cobre_core::System;

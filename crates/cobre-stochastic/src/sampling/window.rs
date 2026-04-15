@@ -31,12 +31,12 @@ use std::collections::HashSet;
 
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
+    EntityId,
     scenario::{HistoricalYears, InflowHistoryRow},
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
-use crate::{par::fitting::find_season_for_date, StochasticError};
+use crate::{StochasticError, par::fitting::find_season_for_date};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -250,12 +250,12 @@ fn is_window_complete(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::{HistoricalYears, InflowHistoryRow},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
             SeasonMap, Stage, StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use super::discover_historical_windows;

@@ -1164,6 +1164,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                             stage: 0,
                             stage_idx: 0,
                             total_scenarios: total_scenarios_u32,
+                            noise_group_id: 0,
                         };
                         sampler.apply_initial_state(
                             &class_req,
@@ -1179,6 +1180,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         noise_buf: &mut raw_noise_buf,
                         perm_scratch: &mut perm_scratch,
                         total_scenarios: total_scenarios_u32,
+                        noise_group_id: ctx.noise_group_id_at(t),
                     })?;
                     let raw_noise = noise.as_slice();
                     let key = StageKey {
@@ -1858,6 +1860,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1967,6 +1970,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2082,6 +2086,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2492,6 +2497,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -2653,6 +2659,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
 
         // Run with 1 workspace.
@@ -2802,6 +2809,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -3091,6 +3099,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let stages = vec![Stage {
             index: 0,
@@ -3291,6 +3300,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3533,6 +3543,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -3661,6 +3672,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3784,6 +3796,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3880,6 +3893,7 @@ mod tests {
             discount_factors: &[],
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
+            noise_group_ids: &[],
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

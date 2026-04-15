@@ -79,6 +79,12 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// `tracing::warn!` is emitted per stage when External clamping reduces the opening count.
 /// The effective opening count is `min(branching_factor, historical_clamp, external_clamp)`.
 ///
+/// When `noise_group_ids` is `Some(ids)`, consecutive stages with the same group ID share
+/// identical noise: the noise (including applied spatial correlation) from the first stage
+/// of each group is copied into all subsequent stages of that group. When `None`, each stage
+/// generates independent noise (the original behaviour). The length of `ids` must equal
+/// `stages.len()` when `Some`.
+///
 /// # Errors
 ///
 /// - Returns [`StochasticError::UnsupportedNoiseMethod`] if any stage uses
@@ -89,6 +95,9 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// # Panics
 ///
 /// Panics if `external_scenario_counts` is `Some` and its length differs
+/// from `stages.len()`.
+///
+/// Panics (debug-only) if `noise_group_ids` is `Some` and its length differs
 /// from `stages.len()`.
 // TODO: absorb historical_library + external_scenario_counts into OpeningTreeInputs
 // to reduce argument count (currently 8/7).
@@ -102,6 +111,7 @@ pub fn generate_opening_tree(
     dims: ClassDimensions,
     historical_library: Option<&HistoricalScenarioLibrary>,
     external_scenario_counts: Option<&[usize]>,
+    noise_group_ids: Option<&[u32]>,
 ) -> Result<OpeningTree, StochasticError> {
     if let Some(counts) = external_scenario_counts {
         assert_eq!(
@@ -112,6 +122,12 @@ pub fn generate_opening_tree(
             stages.len(),
         );
     }
+    debug_assert!(
+        noise_group_ids.is_none_or(|ids| ids.len() == stages.len()),
+        "noise_group_ids length ({}) must equal stages length ({})",
+        noise_group_ids.map_or(0, <[u32]>::len),
+        stages.len(),
+    );
 
     let n_stages = stages.len();
 
@@ -175,6 +191,30 @@ pub fn generate_opening_tree(
     for (stage_idx, stage) in stages.iter().enumerate() {
         let n_openings = openings_per_stage[stage_idx];
         let offset = stage_offsets[stage_idx];
+
+        // Noise-group copy: when this stage shares a group ID with the immediately
+        // preceding stage, copy the already-generated and already-correlated noise
+        // from the source stage instead of generating fresh noise. The copy covers
+        // `min(src_openings, dst_openings) * dim` contiguous elements so that a
+        // theoretical mismatch in branching factor only copies the available prefix;
+        // any excess destination openings in that case are left as the zero-fill from
+        // `vec![0.0f64; total_len]` and would be populated by the normal generation
+        // path below. In practice same-group stages always share the same branching
+        // factor, so `copy_openings == n_openings` universally.
+        if let Some(ids) = noise_group_ids {
+            if stage_idx > 0 && ids[stage_idx] == ids[stage_idx - 1] {
+                let src_n_openings = openings_per_stage[stage_idx - 1];
+                let src_offset = stage_offsets[stage_idx - 1];
+                let copy_openings = src_n_openings.min(n_openings);
+                let copy_len = copy_openings * dim;
+                // `src_offset` and `offset` do not overlap: stage buffers are
+                // non-overlapping contiguous segments of `data`.
+                data.copy_within(src_offset..src_offset + copy_len, offset);
+                // No noise generation or correlation needed for this stage.
+                continue;
+            }
+        }
+
         let stage_slice = &mut data[offset..offset + n_openings * dim];
 
         match stage.scenario_config.noise_method {
@@ -381,9 +421,20 @@ mod tests {
             n_ncs: 0,
         };
         let tree1 =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
-        let tree2 =
-            generate_opening_tree(42, &stages, 2, &corr2, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
+        let tree2 = generate_opening_tree(
+            42,
+            &stages,
+            2,
+            &corr2,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree1.len(), tree2.len());
         for s in 0..tree1.n_stages() {
@@ -409,7 +460,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         let slice = tree.opening(0, 0);
         assert_eq!(slice.len(), 2);
@@ -431,9 +483,11 @@ mod tests {
         };
 
         let tree_a =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
         let tree_b =
-            generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(99, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         // At least one element must differ; with high probability all will differ.
         let any_differ = (0..tree_a.n_stages()).any(|s| {
@@ -460,7 +514,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         assert_eq!(tree.n_openings(0), 2, "stage 0");
         assert_eq!(tree.n_openings(1), 3, "stage 1");
@@ -485,7 +540,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(7, &stages, 3, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         assert_eq!(tree.n_stages(), 3);
         assert_eq!(tree.dim(), 3);
@@ -507,8 +563,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(12345, &stages, 1, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            12345,
+            &stages,
+            1,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Collect all dim=1 noise values.
         let values: Vec<f64> = (0..n_openings).map(|o| tree.opening(0, o)[0]).collect();
@@ -547,7 +613,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(99, &stages, 4, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         for s in 0..tree.n_stages() {
             for o in 0..tree.n_openings(s) {
@@ -575,8 +642,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            54321,
+            &stages,
+            2,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Collect paired samples.
         let pairs: Vec<(f64, f64)> = (0..n_openings)
@@ -623,7 +700,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(0, &stages, 1, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         let s0_o0 = tree.opening(0, 0)[0];
         let s0_o1 = tree.opening(0, 1)[0];
@@ -658,7 +736,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         // Golden values from pre-refactor opening-major implementation.
         assert_eq!(
@@ -709,7 +788,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None);
+        let result =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -742,8 +822,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -781,8 +871,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -850,8 +950,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -886,6 +996,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
+            None,
             None,
             None,
         );
@@ -923,8 +1034,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -961,8 +1082,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 1, "tree must have 1 stage");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -992,8 +1123,18 @@ mod tests {
             n_ncs: 0,
         };
 
-        let tree = generate_opening_tree(42, &stages, dim, &corr, &entity_order, dims, None, None)
-            .unwrap();
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            dim,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(tree.n_stages(), 2, "tree must have 2 stages");
         assert_eq!(tree.n_openings(0), n_openings, "stage 0 opening count");
@@ -1079,6 +1220,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
+            None,
             None,
             None,
         )
@@ -1200,6 +1342,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
+            None,
             None,
             None,
         )
@@ -1326,6 +1469,7 @@ mod tests {
             dims,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -1439,6 +1583,7 @@ mod tests {
             dims,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -1534,7 +1679,8 @@ mod tests {
             n_ncs: 0,
         };
 
-        let result = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None);
+        let result =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None);
 
         match result {
             Err(StochasticError::UnsupportedNoiseMethod {
@@ -1586,6 +1732,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
             None,
         )
         .unwrap();
@@ -1653,6 +1800,7 @@ mod tests {
             dims,
             Some(&lib),
             None,
+            None,
         )
         .unwrap();
 
@@ -1702,6 +1850,7 @@ mod tests {
             dims,
             Some(&lib),
             None,
+            None,
         )
         .unwrap();
 
@@ -1744,6 +1893,7 @@ mod tests {
             dims,
             Some(&lib),
             None,
+            None,
         )
         .unwrap();
         let tree2 = generate_opening_tree(
@@ -1754,6 +1904,7 @@ mod tests {
             &entity_order,
             dims,
             Some(&lib),
+            None,
             None,
         )
         .unwrap();
@@ -1798,6 +1949,7 @@ mod tests {
             dims,
             None,
             Some(&external_counts),
+            None,
         )
         .unwrap();
 
@@ -1820,7 +1972,8 @@ mod tests {
         };
 
         let tree =
-            generate_opening_tree(42, &stages, 1, &corr, &entity_order, dims, None, None).unwrap();
+            generate_opening_tree(42, &stages, 1, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
 
         assert_eq!(tree.n_openings(0), 5, "stage 0 must remain at 5");
         assert_eq!(tree.n_openings(1), 5, "stage 1 must remain at 5");
@@ -1862,6 +2015,7 @@ mod tests {
             dims,
             Some(&lib),
             Some(&external_counts),
+            None,
         )
         .unwrap();
 
@@ -1897,6 +2051,228 @@ mod tests {
             dims,
             None,
             Some(&external_counts),
+            None,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // noise_group_ids tests (ticket-004)
+    // -----------------------------------------------------------------------
+
+    /// Calling `generate_opening_tree` with `noise_group_ids = None` produces the
+    /// same output as calling it with all-unique group IDs (backward compatibility).
+    #[test]
+    fn test_opening_tree_noise_group_none_backward_compat() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+            make_stage(3, 3, 3),
+        ];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        // Tree generated with no noise groups.
+        let tree_none =
+            generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None, None, None)
+                .unwrap();
+
+        // Tree generated with all-unique group IDs — no copying should occur.
+        let unique_ids = [0u32, 1, 2, 3];
+        let tree_unique = generate_opening_tree(
+            42,
+            &stages,
+            2,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            Some(&unique_ids),
+        )
+        .unwrap();
+
+        assert_eq!(tree_none.n_stages(), tree_unique.n_stages());
+        for s in 0..tree_none.n_stages() {
+            assert_eq!(tree_none.n_openings(s), tree_unique.n_openings(s));
+            for o in 0..tree_none.n_openings(s) {
+                assert_eq!(
+                    tree_none.opening(s, o),
+                    tree_unique.opening(s, o),
+                    "stage={s} opening={o}: None and unique-IDs trees must be bit-identical"
+                );
+            }
+        }
+    }
+
+    /// Four stages all in the same noise group (group 0): stages 1, 2, and 3 must
+    /// have noise vectors bit-identical to stage 0 for every opening.
+    #[test]
+    fn test_opening_tree_same_group_copies_noise() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+            make_stage(3, 3, 3),
+        ];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        let all_same_group = [0u32, 0, 0, 0];
+
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            2,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            Some(&all_same_group),
+        )
+        .unwrap();
+
+        // All stages must have 3 openings.
+        for s in 0..4 {
+            assert_eq!(tree.n_openings(s), 3, "stage {s} must have 3 openings");
+        }
+
+        // Stages 1, 2, 3 must be bit-identical to stage 0 for each opening.
+        for s in 1..4 {
+            for o in 0..3 {
+                assert_eq!(
+                    tree.opening(0, o),
+                    tree.opening(s, o),
+                    "stage {s} opening {o} must be identical to stage 0 opening {o}"
+                );
+            }
+        }
+    }
+
+    /// Four stages with groups [0, 0, 1, 1]: stages 0-1 share identical noise,
+    /// stages 2-3 share identical noise, but the two groups differ from each other.
+    #[test]
+    fn test_opening_tree_two_groups() {
+        let stages = vec![
+            make_stage(0, 0, 3),
+            make_stage(1, 1, 3),
+            make_stage(2, 2, 3),
+            make_stage(3, 3, 3),
+        ];
+        let corr = identity_correlation(&[1, 2]);
+        let entity_order = vec![EntityId(1), EntityId(2)];
+        let dims = ClassDimensions {
+            n_hydros: 2,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+        let two_groups = [0u32, 0, 1, 1];
+
+        let tree = generate_opening_tree(
+            42,
+            &stages,
+            2,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            Some(&two_groups),
+        )
+        .unwrap();
+
+        // Intra-group: stage 1 must match stage 0.
+        for o in 0..3 {
+            assert_eq!(
+                tree.opening(0, o),
+                tree.opening(1, o),
+                "group 0: stage 1 opening {o} must match stage 0 opening {o}"
+            );
+        }
+
+        // Intra-group: stage 3 must match stage 2.
+        for o in 0..3 {
+            assert_eq!(
+                tree.opening(2, o),
+                tree.opening(3, o),
+                "group 1: stage 3 opening {o} must match stage 2 opening {o}"
+            );
+        }
+
+        // Inter-group: group 0 noise must differ from group 1 noise (with overwhelming
+        // probability given the random seed; zero probability of accidental equality).
+        let group0_any = (0..3).map(|o| tree.opening(0, o)).collect::<Vec<_>>();
+        let group1_any = (0..3).map(|o| tree.opening(2, o)).collect::<Vec<_>>();
+        assert_ne!(
+            group0_any, group1_any,
+            "group 0 and group 1 noise must differ"
+        );
+    }
+
+    /// 12 stages with unique group IDs (monthly study): no copying occurs and the
+    /// output is bit-identical to the `noise_group_ids = None` case.
+    #[test]
+    fn test_opening_tree_monthly_no_copy() {
+        let stages: Vec<_> = (0..12_usize)
+            .map(|i| make_stage(i, i32::try_from(i).unwrap(), 4))
+            .collect();
+        let entity_ids: Vec<i32> = (1..=3).collect();
+        let corr = identity_correlation(&entity_ids);
+        let entity_order: Vec<EntityId> = entity_ids.iter().map(|&id| EntityId(id)).collect();
+        let dims = ClassDimensions {
+            n_hydros: 3,
+            n_load_buses: 0,
+            n_ncs: 0,
+        };
+
+        let tree_none = generate_opening_tree(
+            999,
+            &stages,
+            3,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Unique IDs: 0..12 — no stage shares a group with its predecessor.
+        let unique_ids: Vec<u32> = (0..12).collect();
+        let tree_unique = generate_opening_tree(
+            999,
+            &stages,
+            3,
+            &corr,
+            &entity_order,
+            dims,
+            None,
+            None,
+            Some(&unique_ids),
+        )
+        .unwrap();
+
+        assert_eq!(tree_none.n_stages(), 12);
+        assert_eq!(tree_unique.n_stages(), 12);
+        for s in 0..12 {
+            for o in 0..tree_none.n_openings(s) {
+                assert_eq!(
+                    tree_none.opening(s, o),
+                    tree_unique.opening(s, o),
+                    "monthly study stage={s} opening={o}: None and unique-IDs must be identical"
+                );
+            }
+        }
     }
 }

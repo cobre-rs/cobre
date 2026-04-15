@@ -284,16 +284,16 @@ detailed explanation of each stage, see
 
 ### Core Fields
 
-| Field                    | Type    | Default | Description                                                                                                |
-| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `enabled`                | boolean | `false` | Enable cut pruning.                                                                                        |
-| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                 |
-| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                            |
-| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.    |
-| `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                   |
-| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stages 1 and 2).                                                        |
-| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                     |
-| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 3 budget enforcement). `null` = no budget.                        |
+| Field                    | Type    | Default | Description                                                                                                                  |
+| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                | boolean | `false` | Enable cut pruning.                                                                                                          |
+| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                                   |
+| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                                             |
+| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.                      |
+| `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                                     |
+| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stages 1 and 2).                                                                          |
+| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                                       |
+| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 3 budget enforcement). `null` = no budget.                                          |
 | `basis_padding`          | boolean | `false` | Enable basis-aware warm-start padding (Strategy S3). See [Basis Warm-Start](./performance-accelerators.md#basis-warm-start). |
 
 **Methods:**
@@ -315,11 +315,11 @@ Optional second stage of the cut management pipeline. Clusters cuts by
 cosine similarity and performs within-cluster dominance verification.
 Gated by its own `check_frequency`.
 
-| Field              | Type    | Default | Description                                                         |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------- |
-| `enabled`          | boolean | `false` | Enable angular diversity pruning.                                   |
-| `cosine_threshold` | float   | `0.999` | Cosine similarity threshold for clustering coefficient vectors.     |
-| `check_frequency`  | integer | `1`     | Iterations between angular pruning checks.                          |
+| Field              | Type    | Default | Description                                                     |
+| ------------------ | ------- | ------- | --------------------------------------------------------------- |
+| `enabled`          | boolean | `false` | Enable angular diversity pruning.                               |
+| `cosine_threshold` | float   | `0.999` | Cosine similarity threshold for clustering coefficient vectors. |
+| `check_frequency`  | integer | `1`     | Iterations between angular pruning checks.                      |
 
 Example with all three pipeline stages:
 
@@ -382,6 +382,7 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 | `path`                   | string                                   | `"./policy"` | Directory where policy data (cuts, states) is stored.                                                                                       |
 | `mode`                   | `"fresh"`, `"warm_start"`, or `"resume"` | `"fresh"`    | Initialization mode. `"fresh"` starts from scratch; `"warm_start"` loads cuts from a previous run; `"resume"` continues an interrupted run. |
 | `validate_compatibility` | boolean                                  | `true`       | When loading a policy, verify that entity counts, stage counts, and cut dimensions match the current system.                                |
+| `boundary`               | object or null                           | `null`       | Terminal boundary cut configuration for coupling with an outer model's FCF. See below.                                                      |
 
 ### `checkpointing`
 
@@ -392,6 +393,40 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 | `interval_iterations` | integer | `null`  | Iterations between checkpoints.                 |
 | `store_basis`         | boolean | `false` | Include LP basis in checkpoints for warm-start. |
 | `compress`            | boolean | `false` | Compress checkpoint files.                      |
+
+### `boundary`
+
+Optional configuration for loading terminal-stage boundary cuts from a
+different Cobre policy checkpoint. When present, the solver loads cuts from
+the source checkpoint and injects them as fixed boundary conditions at the
+terminal stage of the current study. The imported cuts are not updated by
+training — they remain fixed throughout.
+
+This enables Cobre-to-Cobre model coupling: a monthly study produces a
+policy checkpoint, and a weekly+monthly DECOMP study loads that checkpoint's
+cuts as its terminal-stage future cost function.
+
+| Field          | Type    | Description                                                     |
+| -------------- | ------- | --------------------------------------------------------------- |
+| `path`         | string  | Path to the source policy checkpoint directory.                 |
+| `source_stage` | integer | 0-based stage index in the source checkpoint to load cuts from. |
+
+Example — load stage 2's cuts from a monthly policy as terminal boundary:
+
+```json
+{
+  "policy": {
+    "mode": "fresh",
+    "boundary": {
+      "path": "../monthly_study/policy",
+      "source_stage": 2
+    }
+  }
+}
+```
+
+See [Policy Management — Boundary Cuts](./policy-management.md#boundary-cuts)
+for a full explanation of the coupling workflow.
 
 ---
 

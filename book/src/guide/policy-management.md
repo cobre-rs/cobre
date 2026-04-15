@@ -147,6 +147,97 @@ in `"warm_start"` or `"resume"` mode.
 
 ---
 
+## Boundary Cuts
+
+Boundary cuts allow a Cobre study to load terminal-stage future cost function
+(FCF) approximations from a different Cobre policy checkpoint. This is the
+mechanism for **model coupling** — a short-horizon study (e.g., weekly+monthly
+DECOMP) can use the long-horizon policy (e.g., a monthly NEWAVE-equivalent)
+as its terminal boundary condition, ensuring that end-of-horizon decisions
+account for the long-term future cost of water.
+
+### How it works
+
+1. **Run a monthly study** and produce a policy checkpoint (the "outer" model).
+2. **Run a weekly+monthly study** with `policy.boundary` pointing to the
+   monthly checkpoint. Cobre loads cuts from the specified stage and injects
+   them into the terminal stage's cut pool as fixed boundary conditions.
+
+The imported boundary cuts are **not updated** by the SDDP training algorithm.
+They remain fixed throughout training and simulation, providing a floor on
+the terminal-stage future cost.
+
+### Configuration
+
+Add a `boundary` object to the `policy` section of `config.json`:
+
+```json
+{
+  "policy": {
+    "mode": "fresh",
+    "boundary": {
+      "path": "../monthly_study/policy",
+      "source_stage": 2
+    }
+  }
+}
+```
+
+| Field          | Type    | Description                                                     |
+| -------------- | ------- | --------------------------------------------------------------- |
+| `path`         | string  | Path to the source Cobre policy checkpoint directory.           |
+| `source_stage` | integer | 0-based stage index in the source checkpoint to load cuts from. |
+
+When `boundary` is absent or `null`, no boundary cuts are loaded (the default).
+
+### Compatibility requirements
+
+The source checkpoint must have the same state dimension (number of hydro
+plants and maximum PAR order) as the current study. Cobre validates this
+automatically when `validate_compatibility` is `true`. If the dimensions
+don't match, loading fails with a descriptive error.
+
+### Production DECOMP workflow
+
+The typical production DECOMP pipeline uses boundary cuts as follows:
+
+```text
+Monthly Cobre study (12 stages)
+  └─ policy checkpoint: cuts for stages 0–11
+
+Weekly+monthly DECOMP study (W1, W2, W3, W4, M2)
+  └─ policy.boundary.path = "../monthly/policy"
+  └─ policy.boundary.source_stage = 2  (March cuts → terminal FCF)
+```
+
+The DECOMP study's terminal stage (M2) receives the monthly model's March
+cuts as its future cost function. The lag accumulation mechanism ensures that
+the state vector's lag values at the terminal stage are monthly averages,
+making the imported cut coefficients evaluate correctly.
+
+### Interaction with warm-start
+
+Boundary cuts and warm-start are independent features. You can combine them:
+
+```json
+{
+  "policy": {
+    "mode": "warm_start",
+    "path": "./policy",
+    "boundary": {
+      "path": "../monthly/policy",
+      "source_stage": 2
+    }
+  }
+}
+```
+
+This loads the previous DECOMP policy's own cuts via warm-start AND loads
+the monthly model's boundary cuts at the terminal stage. Both sets of cuts
+contribute to the lower bound.
+
+---
+
 ## See Also
 
 - [Configuration](./configuration.md) — every `config.json` field documented

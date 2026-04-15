@@ -20,7 +20,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
-3,450+ tests, including 27 deterministic regression cases (D01–D16, D19–D27)
+3,600+ tests, including 28 deterministic regression cases (D01–D16, D19–D28)
 and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
@@ -43,7 +43,11 @@ rate, visited state persistence, per-class scenario sampling (Historical,
 External, InSample, OutOfSample per entity class), composite ForwardSampler with
 ClassSampler dispatch, HistoricalScenarioLibrary and ExternalScenarioLibrary,
 HistoricalResiduals noise method, historical window discovery, per-class
-external scenario files, same-type correlation enforcement.
+external scenario files, same-type correlation enforcement, sub-monthly stage
+lag accumulation (StageLagTransition precomputation with frozen-lag semantics),
+recent_observations input for mid-season study starts, terminal boundary cuts
+(BoundaryPolicy for Cobre-to-Cobre FCF coupling), non-uniform scenario count
+support (V3.4 relaxation with padding for DECOMP weekly+monthly studies).
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 

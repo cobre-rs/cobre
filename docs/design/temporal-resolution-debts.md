@@ -1,8 +1,8 @@
 # Temporal Resolution Debts & Design Gaps
 
 **Date:** 2026-04-11 (revised 2026-04-12, structural revision 2026-04-12,
-status update 2026-04-13)
-**Status:** Pattern A complete (v0.4.3); Patterns B/C/D open
+status update 2026-04-13, production-decomp update 2026-04-14)
+**Status:** Patterns A+B complete (v0.4.3 + production-decomp plan); Patterns C/D open
 **Context:** Cobre supports variable-length stages, but the stochastic pipeline
 assumes uniform monthly resolution in several places. This document catalogs
 the known debts and design gaps that must be addressed before non-monthly
@@ -17,12 +17,12 @@ studies (weekly, quarterly, mixed-resolution DECOMP-like) can be supported.
 | 3 (past_inflows metadata)     | Open                   | —       | —         | Low priority                                                                        |
 | 4 (season_id validation)      | **Resolved**           | v0.4.3  | `9c37529` | Rules 27–30 (range, coverage, consistency, contiguity)                              |
 | 5 (noise sharing)             | Open                   | —       | —         | Pattern C only                                                                      |
-| 6 (lag accumulation)          | Open                   | —       | —         | Patterns B/C/D                                                                      |
+| 6 (lag accumulation)          | **Resolved**           | v0.4.5  | `97f9655` | StageLagTransition precomputation + accumulate_and_shift hot-path function          |
 | 7 (PAR behavior doc)          | **Resolved**           | v0.4.3  | `ae4403a` | mdBook page documents behavior and validation rules                                 |
 | 8 (historical residuals)      | **Resolved**           | v0.4.3  | `d4a604d` | NoiseMethod::HistoricalResiduals with hash-based window selection                   |
-| 9 (external standardization)  | Open                   | —       | —         | Pattern B                                                                           |
-| 10 (recent_observations)      | Open                   | —       | —         | Pattern B                                                                           |
-| 12 (terminal-stage FCF)       | Open                   | —       | —         | Pattern B                                                                           |
+| 9 (external standardization)  | **Resolved**           | v0.4.5  | `8f8cf73` | standardize_external_inflow uses StageLagTransition for frozen-lag + accumulation   |
+| 10 (recent_observations)      | **Resolved**           | v0.4.5  | `08c1a32` | RecentObservation type + IO parser + accumulator seeding for mid-season starts      |
+| 12 (terminal-stage FCF)       | **Resolved**           | v0.4.5  | `667c240` | BoundaryPolicy config + boundary cut loader + inject_boundary_cuts                  |
 | 13 (multi-res PAR transition) | Open                   | —       | —         | Pattern D                                                                           |
 
 Additionally, a latent bug was discovered and fixed during implementation:
@@ -36,8 +36,9 @@ normalizes year offsets so the first study stage gets `year_offset=0`.
 This document catalogs 13 debts and 2 opportunities across Cobre's temporal
 resolution handling. The work falls into four layers:
 
-1. **Production DECOMP critical path** (Debts 4→6→9→10→12): lag accumulation,
-   external standardization, mid-season starts, and terminal-stage FCF.
+1. **Production DECOMP critical path** (Debts ~~4~~→~~6~~→~~9~~→~~10~~→~~12~~):
+   ~~lag accumulation~~, ~~external standardization~~, ~~mid-season starts~~,
+   and ~~terminal-stage FCF~~. **All resolved** in the production-decomp plan.
 2. **Mixed-res PAR correctness** (Debts ~~1~~, 5, ~~8~~): noise sharing,
    ~~`month0` bug fix~~, and ~~historical residuals as opening tree noise~~.
 3. **Defense-in-depth validation** (Debts ~~2~~, ~~4~~): ~~observation-to-season
@@ -48,11 +49,15 @@ resolution handling. The work falls into four layers:
 
 **Pattern A (monthly uniform) is fully resolved as of v0.4.3.** Debts 1, 4,
 7, and 8 are closed. Debt 2 Layer 1 validation is implemented (Layer 2
-aggregation deferred to Pattern D). A latent window-year normalization bug
-was discovered and fixed during implementation.
+aggregation deferred to Pattern D).
 
-Remaining open debts (Patterns B/C/D): 3, 5, 6, 9, 10, 12, 13, plus
-Debt 2 Layer 2.
+**Pattern B (production DECOMP) is fully resolved as of the production-decomp
+plan (2026-04-14).** Debts 6 (lag accumulation), 9 (external standardization),
+10 (recent_observations), and 12 (terminal boundary cuts) are closed. D28
+DECOMP integration test verifies end-to-end correctness with weekly+monthly
+stages, External scenarios, recent_observations, and non-uniform scenario counts.
+
+Remaining open debts (Patterns C/D): 3, 5, 13, plus Debt 2 Layer 2.
 
 All proposed hot-path changes are zero-allocation with O(n_hydros) per-stage
 cost. The accumulator design degenerates to current behavior for uniform
@@ -132,22 +137,22 @@ Key characteristics:
 | 3 (past_inflows metadata)     | Low priority               | Low priority                         | Medium              | Medium                |
 | 4 (season_id validation)      | ✅ v0.4.3                  | **Yes**                              | **Yes**             | **Critical**          |
 | 5 (noise sharing)             | N/A (monthly stages)       | N/A (External scenarios)             | **Critical**        | If sub-season stages  |
-| 6 (lag accumulation)          | N/A (monthly stages)       | **Critical**                         | **Critical**        | **Critical**          |
+| 6 (lag accumulation)          | N/A (monthly stages)       | ✅ production-decomp                 | **Critical**        | **Critical**          |
 | 7 (PAR behavior doc)          | ✅ v0.4.3                  | N/A                                  | **Yes**             | **Yes**               |
 | 8 (historical residuals)      | ✅ v0.4.3                  | N/A                                  | Maybe               | Maybe                 |
-| 9 (external standardization)  | N/A (no External)          | **Critical**                         | If External used    | If External used      |
-| 10 (recent_observations)      | N/A                        | **Critical**                         | If mid-season start | N/A                   |
-| 12 (terminal-stage FCF)       | N/A                        | **Critical**                         | If coupling needed  | If coupling needed    |
+| 9 (external standardization)  | N/A (no External)          | ✅ production-decomp                 | If External used    | If External used      |
+| 10 (recent_observations)      | N/A                        | ✅ production-decomp                 | If mid-season start | N/A                   |
+| 12 (terminal-stage FCF)       | N/A                        | ✅ production-decomp                 | If coupling needed  | If coupling needed    |
 | 13 (multi-res PAR transition) | N/A                        | N/A                                  | N/A                 | **Critical**          |
 
 **Critical paths by pattern:**
 
-- **Pattern B (production DECOMP):**
-  Debt 4 → Debt 6 → Debt 9 → Debt 10 → Debt 12 (terminal-stage FCF) +
-  the `n_scenarios` uniformity workaround (see Debt 6, "Uniform scenario
-  count" subsection).
+- **Pattern B (production DECOMP):** ✅ **Fully resolved.**
+  ~~Debt 4 → Debt 6 → Debt 9 → Debt 10 → Debt 12~~ (all closed) +
+  non-uniform scenario count support via V3.4 relaxation with padding.
 - **Pattern D (multi-resolution):**
-  Debt 2 → Debt 4 → Debt 6 → Debt 13 (lag resolution transition).
+  Debt 2 → ~~Debt 4~~ → ~~Debt 6~~ → Debt 13 (lag resolution transition).
+  Debts 4 and 6 are resolved; Debt 2 Layer 2 and Debt 13 remain open.
 
 ---
 
@@ -497,6 +502,16 @@ are handled by the accumulator mechanism in Debt 6.
 ---
 
 ## Debt 6: State transition assumes uniform stage resolution
+
+> **Status: RESOLVED** in the production-decomp plan (`81776e1`, `97f9655`).
+> `StageLagTransition` struct added to `cobre-core::temporal` with precomputation
+> algorithm in `cobre-sddp::lag_transition`. The `accumulate_and_shift_lag_state`
+> hot-path function replaces `shift_lag_state` in both `forward.rs` and
+> `simulation/pipeline.rs`. Lag accumulator and weight accumulator fields added
+> to `ScratchBuffers`. Monthly studies produce bit-identical results (degenerate
+> identity: `accumulate_weight=1.0`, `finalize_period=true` every stage).
+> All 32 deterministic regression tests pass unchanged. D28 DECOMP integration
+> test verifies weekly+monthly lag accumulation end-to-end.
 
 **Severity:** Architectural gap — blocks mixed-resolution and DECOMP coupling.
 
@@ -1145,6 +1160,14 @@ finite pool `{ε_{·,m,y} : y ∈ selected_years}` for each season `m`.
 
 ## Debt 9: `standardize_external_inflow` advances lags per-stage
 
+> **Status: RESOLVED** in the production-decomp plan (`8f8cf73`).
+> `standardize_external_inflow` in `cobre-stochastic/src/sampling/external.rs`
+> now accepts `&[StageLagTransition]` and uses frozen-lag + accumulation logic
+> matching the runtime forward pass. Round-trip consistency test added:
+> standardize then evaluate with a PMO_APR_2026-style mixed weekly+monthly
+> layout verifies realized inflows match external targets within solver
+> tolerance. All 32 deterministic regression tests pass unchanged.
+
 **Severity:** Setup-time bug — produces incorrect eta values for
 mixed-resolution studies with External scenarios.
 
@@ -1206,6 +1229,15 @@ within solver tolerance.
 ---
 
 ## Debt 10: Mid-season study start — `recent_observations`
+
+> **Status: RESOLVED** in the production-decomp plan (`08c1a32`).
+> `RecentObservation` type added to `cobre-core::initial_conditions` with date
+> range and value fields. IO parser in `cobre-io::initial_conditions` handles
+> date parsing, value validation (finite, non-negative), and overlap detection.
+> Accumulator seeding implemented in `cobre-sddp::lag_transition`: weighted seed
+> from recent_observations replaces zero-fill at trajectory start. Backward
+> compatible — empty `recent_observations` produces identical behavior to before.
+> D28 DECOMP integration test uses recent_observations with mid-season start.
 
 **Severity:** Missing feature — required for rolling DECOMP revisions
 (Pattern B).
@@ -1641,6 +1673,16 @@ to External scenarios. The only difference is what's being sampled:
 ---
 
 ## Debt 12: Terminal-stage external FCF (boundary cuts)
+
+> **Status: RESOLVED** in the production-decomp plan (`667c240`).
+> `BoundaryPolicy` config added to `cobre-io::config` with `path` and
+> `source_stage` fields under `policy.boundary`. `load_boundary_cuts` and
+> `inject_boundary_cuts` implemented in `cobre-sddp::policy_load` — loads cuts
+> from a source Cobre policy checkpoint and injects them as fixed boundary
+> conditions at the terminal stage. Wired into both CLI (`run.rs`) and Python
+> bindings (`cobre-python/src/run.rs`). Integration test verifies LB does not
+> degrade when boundary cuts are added. D28 DECOMP test exercises boundary
+> cut composition end-to-end.
 
 **Severity:** Missing feature — required for production DECOMP (Pattern B)
 and any study that couples with an outer model.

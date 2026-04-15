@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [Unreleased]
+
+### Added
+
+- **Production DECOMP support** — weekly+monthly mixed-resolution studies
+  with External scenarios are now fully supported. This includes:
+  - **Sub-monthly lag accumulation** — `StageLagTransition` precomputation
+    in `cobre-core::temporal` with `accumulate_and_shift_lag_state` hot-path
+    function. Frozen-lag semantics between weekly stages preserve monthly
+    PAR resolution. Degenerates to identity for uniform monthly studies.
+  - **External standardization fix** — `standardize_external_inflow` now
+    uses `StageLagTransition` for frozen-lag + accumulation logic, matching
+    the runtime forward pass. Ensures eta values are consistent across
+    weekly+monthly stage layouts.
+  - **`recent_observations` input** — `RecentObservation` type in
+    `cobre-core::initial_conditions` with IO parser and validation (date
+    parsing, value validation, overlap detection). Seeds the lag accumulator
+    when a study begins mid-season, replacing zero-fill with pre-computed
+    weighted seeds from observed partial-period data.
+  - **Terminal boundary cuts** — `BoundaryPolicy` config
+    (`policy.boundary.path`, `policy.boundary.source_stage`) for loading
+    cuts from a source Cobre policy checkpoint and injecting them as fixed
+    boundary conditions at the terminal stage. Enables Cobre-to-Cobre FCF
+    coupling for the DECOMP pipeline.
+  - **Non-uniform scenario count support** — relaxed V3.4 uniform scenario
+    count validation with padding workaround for DECOMP-style studies where
+    weekly stages have 1 scenario and monthly stages have N. Opening tree
+    clamping extended to use pre-padding raw scenario counts.
+- **D28 DECOMP integration test** — end-to-end test case with
+  weekly+monthly stages, External scenarios, `recent_observations`, and
+  non-uniform scenario counts. Verifies training correctness, boundary cut
+  composition, and simulation completion.
+- **Python bindings parity** — D28 output file existence and convergence
+  metadata verified via Python bindings tests.
+
+### Changed
+
+- **JSON schemas** regenerated for `config.json` (added `BoundaryPolicy`
+  under `policy.boundary`) and `initial_conditions.json` (added
+  `recent_observations` array with `RawRecentObservation` definition).
+
 ## [0.4.4] - 2026-04-14
 
 ### Added

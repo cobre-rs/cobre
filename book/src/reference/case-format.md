@@ -209,16 +209,17 @@ Each entry has a `"type"` discriminator. Valid types:
 
 **`policy` section:**
 
-| Field                               | Type    | Default      | Description                                                            |
-| ----------------------------------- | ------- | ------------ | ---------------------------------------------------------------------- |
-| `path`                              | string  | `"./policy"` | Directory for policy data (cuts, states, vertices, basis)              |
-| `mode`                              | string  | `"fresh"`    | Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`          |
-| `validate_compatibility`            | boolean | `true`       | Verify entity and dimension compatibility when loading a stored policy |
-| `checkpointing.enabled`             | boolean | `null`       | Enable periodic checkpointing                                          |
-| `checkpointing.initial_iteration`   | integer | `null`       | First iteration to write a checkpoint                                  |
-| `checkpointing.interval_iterations` | integer | `null`       | Iterations between checkpoints                                         |
-| `checkpointing.store_basis`         | boolean | `null`       | Include LP basis in checkpoints                                        |
-| `checkpointing.compress`            | boolean | `null`       | Compress checkpoint files                                              |
+| Field                               | Type           | Default      | Description                                                            |
+| ----------------------------------- | -------------- | ------------ | ---------------------------------------------------------------------- |
+| `path`                              | string         | `"./policy"` | Directory for policy data (cuts, states, vertices, basis)              |
+| `mode`                              | string         | `"fresh"`    | Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`          |
+| `validate_compatibility`            | boolean        | `true`       | Verify entity and dimension compatibility when loading a stored policy |
+| `boundary`                          | object or null | `null`       | Terminal boundary cut config: `path` (string) + `source_stage` (int)   |
+| `checkpointing.enabled`             | boolean        | `null`       | Enable periodic checkpointing                                          |
+| `checkpointing.initial_iteration`   | integer        | `null`       | First iteration to write a checkpoint                                  |
+| `checkpointing.interval_iterations` | integer        | `null`       | Iterations between checkpoints                                         |
+| `checkpointing.store_basis`         | boolean        | `null`       | Include LP basis in checkpoints                                        |
+| `checkpointing.compress`            | boolean        | `null`       | Compress checkpoint files                                              |
 
 **`simulation` section:**
 
@@ -362,15 +363,65 @@ and policy graph horizon type.
 
 ### `initial_conditions.json`
 
-Initial reservoir storage values at the start of the study.
+Initial reservoir storage, past inflow lags, and recent observations at the
+start of the study.
 
-| Field             | Required | Description                                                                          |
-| ----------------- | -------- | ------------------------------------------------------------------------------------ |
-| `storage`         | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros |
-| `filling_storage` | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros   |
+| Field                 | Required | Description                                                                              |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `storage`             | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros     |
+| `filling_storage`     | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros       |
+| `past_inflows`        | No       | Array of `{ "hydro_id": integer, "values_m3s": [number] }` for PAR(p) lag initialization |
+| `recent_observations` | No       | Array of observed inflow entries for mid-season study starts (see below)                 |
 
-Each `hydro_id` must be unique within its array and must not appear in both arrays.
-All `value_hm3` values must be non-negative.
+Each `hydro_id` must be unique within its array and must not appear in both
+`storage` and `filling_storage`. All `value_hm3` values must be non-negative.
+
+**`past_inflows`** provides the most-recent inflow history for PAR(p) lag
+initialization. For each hydro, `values_m3s[0]` is the most recent past inflow
+(lag 1) and `values_m3s[p-1]` is the oldest (lag p). The array length must be
+
+> = the hydro's PAR order. Optional; defaults to an empty array when absent.
+
+**`recent_observations`** provides observed inflow data for partial periods
+before the study start. Used to seed the lag accumulator when a study begins
+mid-season (e.g., a DECOMP study starting on January 5 needs observed inflow
+for January 1--4). Each entry has:
+
+| Field        | Type    | Description                                                      |
+| ------------ | ------- | ---------------------------------------------------------------- |
+| `hydro_id`   | integer | Hydro plant identifier                                           |
+| `start_date` | string  | Start of the observation period (inclusive), ISO 8601 YYYY-MM-DD |
+| `end_date`   | string  | End of the observation period (exclusive), ISO 8601 YYYY-MM-DD   |
+| `value_m3s`  | number  | Average inflow observed during the period, in m³/s               |
+
+Date ranges for the same hydro must not overlap; adjacent ranges
+(`start_date == previous end_date`) are accepted. Values must be finite and
+non-negative. Optional; defaults to an empty array when absent. Existing cases
+without this field are unaffected.
+
+Example:
+
+```json
+{
+  "storage": [{ "hydro_id": 0, "value_hm3": 15000.0 }],
+  "filling_storage": [],
+  "past_inflows": [{ "hydro_id": 0, "values_m3s": [600.0, 500.0] }],
+  "recent_observations": [
+    {
+      "hydro_id": 0,
+      "start_date": "2026-04-01",
+      "end_date": "2026-04-04",
+      "value_m3s": 500.0
+    },
+    {
+      "hydro_id": 0,
+      "start_date": "2026-04-04",
+      "end_date": "2026-04-11",
+      "value_m3s": 480.0
+    }
+  ]
+}
+```
 
 ---
 

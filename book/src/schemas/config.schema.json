@@ -33,6 +33,26 @@
       },
       "type": "object"
     },
+    "BoundaryPolicy": {
+      "description": "Boundary-cut configuration for terminal-stage FCF coupling.\n\nWhen present, the solver loads cuts from a source Cobre policy\ncheckpoint and injects them as fixed boundary conditions at the\nterminal stage of the current study.",
+      "properties": {
+        "path": {
+          "description": "Path to the source policy checkpoint directory.",
+          "type": "string"
+        },
+        "source_stage": {
+          "description": "0-based stage index in the source checkpoint to load cuts from.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "source_stage"
+      ],
+      "type": "object"
+    },
     "CheckpointingConfig": {
       "description": "Checkpoint settings (`config.json → policy.checkpointing`).",
       "properties": {
@@ -94,6 +114,14 @@
             "enabled": null
           },
           "description": "Angular diversity pruning settings (stage 2 of the cut selection pipeline).\n\nUses cosine similarity clustering as a computational accelerator for\npointwise dominance verification. When absent from `config.json`, serde\napplies `AngularPruningConfig::default()` (all fields `None`), which\ndisables angular pruning."
+        },
+        "basis_padding": {
+          "default": null,
+          "description": "Enable basis padding for warm-start (Epic 05).\n\nWhen `Some(true)`, the forward pass applies informed basis status\nassignment for new cut rows before warm-starting the LP solver.\nThis can reduce the number of simplex pivots required after each\ncut addition.\n\nDisabled by default (`None` or `Some(false)`).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "check_frequency": {
           "default": null,
@@ -349,6 +377,18 @@
     "PolicyConfig": {
       "description": "Policy directory settings (`config.json → policy`).",
       "properties": {
+        "boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoundaryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional boundary-cut policy for terminal-stage coupling."
+        },
         "checkpointing": {
           "$ref": "#/$defs/CheckpointingConfig",
           "default": {
@@ -701,6 +741,7 @@
               "cosine_threshold": null,
               "enabled": null
             },
+            "basis_padding": null,
             "check_frequency": null,
             "cut_activity_tolerance": null,
             "domination_epsilon": null,
@@ -896,6 +937,7 @@
     "policy": {
       "$ref": "#/$defs/PolicyConfig",
       "default": {
+        "boundary": null,
         "checkpointing": {
           "compress": null,
           "enabled": null,

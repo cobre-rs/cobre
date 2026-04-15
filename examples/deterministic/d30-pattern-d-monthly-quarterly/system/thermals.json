@@ -1,0 +1,4 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/thermals.schema.json",
+  "thermals": []
+}

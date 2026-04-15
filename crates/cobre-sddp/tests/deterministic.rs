@@ -2908,6 +2908,136 @@ fn d29_pattern_c_weekly_par() {
     );
 }
 
+/// D30: Pattern D — monthly-to-quarterly resolution transition.
+///
+/// ## System
+///
+/// 1 bus, 1 hydro (H0), 6 monthly stages (Jan-Jun 2024, season_id 0-5) followed
+/// by 4 quarterly stages (Q3 2024 – Q2 2025, season_id 12-15). Custom SeasonMap
+/// with 12 monthly + 4 quarterly season definitions. PAR(1) with psi=0.5,
+/// OutOfSample noise, inflow_lags=true for all stages.
+///
+/// ## What this tests
+///
+/// - Case loads and trains without error on a Custom-cycle multi-resolution study.
+/// - Training completes at least 1 iteration with a positive lower bound.
+/// - `basis_padding = true` produces a near-identical lower bound to the baseline.
+///
+/// Full structural and downstream-lag-transition assertions are in the dedicated
+/// `pattern_d_integration.rs` test file, which verifies composition correctness
+/// including noise group IDs, accumulate_downstream flags, rebuild_from_downstream,
+/// and simulation.
+///
+/// D30 is excluded from the generic `basis_padding_regression_sweep` because that
+/// sweep uses `ScenarioSource::default()` (InSample), whereas D30 requires the
+/// OutOfSample PAR(1) noise source declared in its config. The padded assertion is
+/// inlined here using the same training_source — identical to the D29 pattern.
+#[test]
+fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
+    let case_dir = Path::new("../../examples/deterministic/d30-pattern-d-monthly-quarterly");
+
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    // Use the config's OutOfSample training source so PAR noise is correctly seeded.
+    let training_source = config
+        .training_scenario_source(&config_path)
+        .expect("training_scenario_source must parse");
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let pr = prepare_stochastic(system, case_dir, &config, 42, &training_source)
+        .expect("prepare_stochastic must succeed");
+    let system = pr.system;
+    let stochastic = pr.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut setup =
+        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+
+    let comm = StubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(
+        outcome.error.is_none(),
+        "D30: expected no training error, got: {:?}",
+        outcome.error
+    );
+    let result = outcome.result;
+
+    assert!(
+        result.iterations > 0,
+        "D30: must complete at least 1 iteration"
+    );
+    assert!(
+        result.final_lb > 0.0,
+        "D30: lower bound must be positive, got {}",
+        result.final_lb
+    );
+
+    // AC-4 (basis-padding): padded run must produce a near-identical lower bound
+    // to the baseline. D30 is excluded from the generic sweep because the sweep
+    // uses ScenarioSource::default(), which lacks the OutOfSample seed. Instead
+    // the assertion is inlined here using the same training_source built above.
+    let mut config_padded = config.clone();
+    config_padded.training.cut_selection.basis_padding = Some(true);
+
+    let system_padded = cobre_io::load_case(case_dir).expect("load_case (padded) must succeed");
+    let pr_padded = prepare_stochastic(
+        system_padded,
+        case_dir,
+        &config_padded,
+        42,
+        &training_source,
+    )
+    .expect("prepare_stochastic (padded) must succeed");
+    let system_padded = pr_padded.system;
+    let stochastic_padded = pr_padded.stochastic;
+    let hydro_models_padded = prepare_hydro_models(&system_padded, case_dir)
+        .expect("prepare_hydro_models (padded) must succeed");
+    let mut setup_padded = StudySetup::new(
+        &system_padded,
+        &config_padded,
+        stochastic_padded,
+        hydro_models_padded,
+    )
+    .expect("StudySetup (padded) must build");
+    let mut solver_padded = HighsSolver::new().expect("HighsSolver (padded) must succeed");
+    let outcome_padded = setup_padded
+        .train(&mut solver_padded, &comm, 1, HighsSolver::new, None, None)
+        .expect("train (padded) must return Ok");
+    assert!(
+        outcome_padded.error.is_none(),
+        "D30 padded: expected no training error, got: {:?}",
+        outcome_padded.error
+    );
+    let result_padded = outcome_padded.result;
+
+    let diff = (result_padded.final_lb - result.final_lb).abs();
+    let tol = 1e-9 * result.final_lb.abs().max(1.0);
+    assert!(
+        diff <= tol,
+        "D30: basis_padding lower bound differs from baseline beyond tolerance \
+         (baseline={}, padded={}, diff={:.2e}, tol={:.2e})",
+        result.final_lb,
+        result_padded.final_lb,
+        diff,
+        tol,
+    );
+
+    let stats_padded = solver_padded.statistics();
+    assert_eq!(
+        stats_padded.basis_rejections, 0,
+        "D30: expected 0 basis rejections with basis_padding=true, got {}",
+        stats_padded.basis_rejections,
+    );
+}
+
 // ===========================================================================
 // AC-4: Basis-padding regression sweep (P04)
 // ===========================================================================

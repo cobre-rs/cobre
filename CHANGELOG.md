@@ -42,6 +42,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python bindings parity** — D28 output file existence and convergence
   metadata verified via Python bindings tests.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **JSON schemas** regenerated for `config.json` (added `BoundaryPolicy`
@@ -81,6 +109,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (timing schema, solver stats, cut selection, metadata), configuration guide,
   crate developer docs (sddp, solver, overview), and JSON schemas.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **Cut selection Parquet schema** (breaking) — `cut_selection/iterations.parquet`
@@ -109,6 +165,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SeasonMap`-aware logic.
 - **SLURM MPI test infrastructure** — replaced `mpi_smoke.sh` with
   `mpi_slurm.sh` for Dockerized SLURM cluster testing.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -158,6 +242,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SolverInterface::solver_name_version()`** — new trait method for solver
   identity reporting.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **Metadata JSON schema** (breaking) — `mpi` object replaced by `distribution`
@@ -195,6 +307,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two-tier.
 - `python-quickstart.md` — documented all 11 result dict keys with `None` guard.
 - `error-codes.md` — replaced stale FPHA example with `linearized_head`.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -252,6 +392,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Stochastic provenance summary** -- New `stochastic_provenance.json` output
   file records PAR model fitting diagnostics, correlation estimation metadata,
   and sampler configuration for reproducibility auditing.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -357,6 +525,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inflow noise path computation, reducing duplication across forward,
   backward, and lower-bound evaluation passes.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **Policy checkpoint exports all cuts** -- Both active and inactive cuts
@@ -445,6 +641,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pre-study stage handling in estimation** -- PAR(p) estimation pipeline
   correctly handles pre-study stages with season fallback for lag statistics.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **`policy.mode` is now a validated enum** -- Invalid values (typos like
@@ -462,6 +686,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Production runs with large, numerically difficult LPs could previously hang
   indefinitely. HiGHS `time_limit` option is not used because HiGHS tracks
   time cumulatively from instance creation, not per-`run()` call.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -484,6 +736,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pool was unaffected (the `deactivate` guard prevented double-decrements), but
   the convergence record's `cuts_active` field systematically underestimated the
   true count.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -525,6 +805,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checker (`scripts/check_python_parity.py`), CLAUDE.md version currency checker
   (`scripts/check_claudemd_version.py`). Release checklist added to
   `CONTRIBUTING.md`.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -608,6 +916,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   balance constraints, replacing the fragile `n_state + h` offset that broke
   after the z-inflow row insertion.
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **LP column/row layout refactor** -- Z-inflow columns and rows relocated to
@@ -652,6 +988,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   simplex iteration counts for both training and simulation.
 - **Per-scenario simulation statistics** -- Individual scenario cost and LP
   solve metrics in simulation CLI summary output alongside aggregate results.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -705,6 +1069,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (block factor load scaling) and D15 (non-controllable source with
   stochastic pipeline, mean factor 0.5, std 0).
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **NCS entity promoted to Full** -- Non-controllable sources are no longer
@@ -738,6 +1130,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_factors.schema.json` to the schema reference. The schema generator now
   produces 13 schemas (up from 10).
 
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
+
 ### Changed
 
 - **Schema reference expanded** -- The JSON Schemas reference page now lists all
@@ -769,6 +1189,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when `inflow_lags: true` and PAR order > 0: entries must be non-empty
   (rule 22), per-hydro value count must meet the PAR order (rule 23), and
   all hydro IDs in past_inflows must exist in the registry (rule 24).
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -815,6 +1263,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evaporation, including hydro geometry data and production model configuration.
 - **JSON schemas** -- Added `correlation.schema.json`, `initial_conditions.schema.json`,
   and `production_models.schema.json` to the software book.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -867,6 +1343,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seasonal statistics, AR coefficients, correlation matrix, fitting report,
   noise openings, and load seasonal statistics. Controlled by
   `exports.stochastic` in `config.json`.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 
@@ -928,6 +1432,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generic PAR type aliases (`ParOrder`, `ParCoefficients`, `ParResidualStdRatio`)
   in cobre-stochastic for improved API clarity.
+
+- **Pattern C & D temporal resolution support** — multi-resolution
+  studies with sub-monthly and mixed-resolution stages are now fully
+  supported. This includes:
+  - **Noise sharing** — weekly stages within the same month share
+    identical PAR noise draws via `noise_group_id` precomputation.
+    `ForwardSampler` and opening tree generators reuse noise across
+    same-group stages. Uniform monthly studies are unaffected (each
+    stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season`
+    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
+    monthly) to coarser season boundaries (e.g., quarterly) using
+    duration-weighted averaging before PAR fitting. Enables quarterly
+    PAR models from monthly inflow history.
+  - **Past inflows temporal metadata** — `HydroPastInflows` gains an
+    optional `season_ids` field for lag-resolution validation against
+    the expected PAR resolution.
+  - **Multi-resolution PAR transition** — `StageLagTransition` gains
+    downstream accumulation fields. A ring buffer in `ScratchBuffers`
+    builds quarterly lag values during the monthly phase. At the
+    resolution boundary, the lag state is rebuilt from completed
+    quarterly lags. Zero overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1)
+  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
+  Verifies noise group sharing and pipeline composition.
+- **D30 Pattern D integration test** — monthly-to-quarterly
+  multi-resolution study with observation aggregation, downstream
+  lag transition, and `Custom` season cycle type.
 
 ### Changed
 

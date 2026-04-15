@@ -1,8 +1,8 @@
 # Temporal Resolution Debts & Design Gaps
 
 **Date:** 2026-04-11 (revised 2026-04-12, structural revision 2026-04-12,
-status update 2026-04-13, production-decomp update 2026-04-14)
-**Status:** Patterns A+B complete (v0.4.3 + production-decomp plan); Patterns C/D open
+status update 2026-04-13, production-decomp update 2026-04-14, temporal-resolution-cd closure 2026-04-15)
+**Status:** All patterns complete (v0.4.3 + production-decomp + temporal-resolution-cd)
 **Context:** Cobre supports variable-length stages, but the stochastic pipeline
 assumes uniform monthly resolution in several places. This document catalogs
 the known debts and design gaps that must be addressed before non-monthly
@@ -13,17 +13,17 @@ studies (weekly, quarterly, mixed-resolution DECOMP-like) can be supported.
 | Debt                          | Status                 | Version | Commit    | Notes                                                                               |
 | ----------------------------- | ---------------------- | ------- | --------- | ----------------------------------------------------------------------------------- |
 | 1 (month0 bug)                | **Resolved**           | v0.4.3  | `316feab` | SeasonMap three-tier fallback replaces month0()                                     |
-| 2 (observation alignment)     | **Partially resolved** | v0.4.3  | `316feab` | Layer 1 validation (rule 31) implemented; Layer 2 aggregation deferred to Pattern D |
-| 3 (past_inflows metadata)     | Open                   | —       | —         | Low priority                                                                        |
+| 2 (observation alignment)     | **Resolved**           | v0.4.5  | `0c1aace3` | Layer 2 aggregation implemented; observation-to-season aggregation for Pattern D    |
+| 3 (past_inflows metadata)     | **Resolved**           | v0.4.5  | `c149c738` | Optional season_ids field on HydroPastInflows for lag-resolution validation         |
 | 4 (season_id validation)      | **Resolved**           | v0.4.3  | `9c37529` | Rules 27–30 (range, coverage, consistency, contiguity)                              |
-| 5 (noise sharing)             | Open                   | —       | —         | Pattern C only                                                                      |
+| 5 (noise sharing)             | **Resolved**           | v0.4.5  | `7146930c` | Noise group precomputation + ForwardSampler + opening tree sharing                  |
 | 6 (lag accumulation)          | **Resolved**           | v0.4.5  | `97f9655` | StageLagTransition precomputation + accumulate_and_shift hot-path function          |
 | 7 (PAR behavior doc)          | **Resolved**           | v0.4.3  | `ae4403a` | mdBook page documents behavior and validation rules                                 |
 | 8 (historical residuals)      | **Resolved**           | v0.4.3  | `d4a604d` | NoiseMethod::HistoricalResiduals with hash-based window selection                   |
 | 9 (external standardization)  | **Resolved**           | v0.4.5  | `8f8cf73` | standardize_external_inflow uses StageLagTransition for frozen-lag + accumulation   |
 | 10 (recent_observations)      | **Resolved**           | v0.4.5  | `08c1a32` | RecentObservation type + IO parser + accumulator seeding for mid-season starts      |
 | 12 (terminal-stage FCF)       | **Resolved**           | v0.4.5  | `667c240` | BoundaryPolicy config + boundary cut loader + inject_boundary_cuts                  |
-| 13 (multi-res PAR transition) | Open                   | —       | —         | Pattern D                                                                           |
+| 13 (multi-res PAR transition) | **Resolved**           | v0.4.5  | `eaa1dd27` | StageLagTransition downstream fields + ring buffer + transition rebuild              |
 
 Additionally, a latent bug was discovered and fixed during implementation:
 window year normalization (`1aa6ed6`) — `build_observation_sequence` now
@@ -39,17 +39,17 @@ resolution handling. The work falls into four layers:
 1. **Production DECOMP critical path** (Debts ~~4~~→~~6~~→~~9~~→~~10~~→~~12~~):
    ~~lag accumulation~~, ~~external standardization~~, ~~mid-season starts~~,
    and ~~terminal-stage FCF~~. **All resolved** in the production-decomp plan.
-2. **Mixed-res PAR correctness** (Debts ~~1~~, 5, ~~8~~): noise sharing,
+2. **Mixed-res PAR correctness** (Debts ~~1~~, ~~5~~, ~~8~~): ~~noise sharing~~,
    ~~`month0` bug fix~~, and ~~historical residuals as opening tree noise~~.
 3. **Defense-in-depth validation** (Debts ~~2~~, ~~4~~): ~~observation-to-season
    alignment~~ with multi-resolution aggregation, and ~~season_id consistency
    enforcement~~ across heterogeneous season spaces.
-4. **Multi-resolution generalization** (Debt 13): monthly→quarterly PAR
-   transition with lag resolution conversion at the boundary.
+4. **Multi-resolution generalization** (Debt ~~13~~): ~~monthly→quarterly PAR
+   transition with lag resolution conversion at the boundary.~~
 
 **Pattern A (monthly uniform) is fully resolved as of v0.4.3.** Debts 1, 4,
-7, and 8 are closed. Debt 2 Layer 1 validation is implemented (Layer 2
-aggregation deferred to Pattern D).
+7, and 8 are closed. Debt 2 Layer 1 validation is implemented; Layer 2
+aggregation resolved in the temporal-resolution-cd plan.
 
 **Pattern B (production DECOMP) is fully resolved as of the production-decomp
 plan (2026-04-14).** Debts 6 (lag accumulation), 9 (external standardization),
@@ -57,7 +57,19 @@ plan (2026-04-14).** Debts 6 (lag accumulation), 9 (external standardization),
 DECOMP integration test verifies end-to-end correctness with weekly+monthly
 stages, External scenarios, recent_observations, and non-uniform scenario counts.
 
-Remaining open debts (Patterns C/D): 3, 5, 13, plus Debt 2 Layer 2.
+**Pattern C (generic mixed-resolution + PAR) is fully resolved as of the
+temporal-resolution-cd plan (2026-04-15).** Debts 5 (noise sharing) and 3
+(past_inflows metadata) are closed. D29 integration test verifies weekly
+stages with PAR(1) noise sharing.
+
+**Pattern D (monthly-to-quarterly multi-resolution) is fully resolved as of
+the temporal-resolution-cd plan (2026-04-15).** Debts 2 Layer 2 (observation
+aggregation), 13 (PAR lag transition), and 3 (past_inflows metadata) are
+closed. D30 integration test verifies monthly-to-quarterly multi-resolution
+with observation aggregation and lag transition.
+
+All debts are resolved. All four study patterns — A, B, C, and D — are fully
+functional as of v0.4.5.
 
 All proposed hot-path changes are zero-allocation with O(n_hydros) per-stage
 cost. The accumulator design degenerates to current behavior for uniform
@@ -132,27 +144,31 @@ Key characteristics:
 
 | Debt                          | A: Monthly uniform         | B: Production DECOMP                 | C: Mixed-res + PAR  | D: Multi-res (mo→qtr) |
 | ----------------------------- | -------------------------- | ------------------------------------ | ------------------- | --------------------- |
-| 1 (month0 bug)                | ~~N/A~~ ✅ v0.4.3          | N/A (no Historical sampling)         | **Critical**        | **Critical**          |
-| 2 (observation aggregation)   | ✅ L1 v0.4.3 (L2 deferred) | N/A (no PAR estimation from history) | **Yes**             | **Critical**          |
-| 3 (past_inflows metadata)     | Low priority               | Low priority                         | Medium              | Medium                |
-| 4 (season_id validation)      | ✅ v0.4.3                  | **Yes**                              | **Yes**             | **Critical**          |
-| 5 (noise sharing)             | N/A (monthly stages)       | N/A (External scenarios)             | **Critical**        | If sub-season stages  |
-| 6 (lag accumulation)          | N/A (monthly stages)       | ✅ production-decomp                 | **Critical**        | **Critical**          |
-| 7 (PAR behavior doc)          | ✅ v0.4.3                  | N/A                                  | **Yes**             | **Yes**               |
-| 8 (historical residuals)      | ✅ v0.4.3                  | N/A                                  | Maybe               | Maybe                 |
+| 1 (month0 bug)                | ~~N/A~~ ✅ v0.4.3          | N/A (no Historical sampling)         | ✅ v0.4.3           | ✅ v0.4.3             |
+| 2 (observation aggregation)   | ✅ L1 v0.4.3, L2 v0.4.5   | N/A (no PAR estimation from history) | ✅ v0.4.5           | ✅ v0.4.5             |
+| 3 (past_inflows metadata)     | Low priority               | Low priority                         | ✅ v0.4.5           | ✅ v0.4.5             |
+| 4 (season_id validation)      | ✅ v0.4.3                  | ✅ production-decomp                  | ✅ v0.4.3           | ✅ v0.4.3             |
+| 5 (noise sharing)             | N/A (monthly stages)       | N/A (External scenarios)             | ✅ v0.4.5           | ✅ v0.4.5             |
+| 6 (lag accumulation)          | N/A (monthly stages)       | ✅ production-decomp                 | ✅ production-decomp | ✅ production-decomp  |
+| 7 (PAR behavior doc)          | ✅ v0.4.3                  | N/A                                  | ✅ v0.4.3           | ✅ v0.4.3             |
+| 8 (historical residuals)      | ✅ v0.4.3                  | N/A                                  | ✅ v0.4.3           | ✅ v0.4.3             |
 | 9 (external standardization)  | N/A (no External)          | ✅ production-decomp                 | If External used    | If External used      |
 | 10 (recent_observations)      | N/A                        | ✅ production-decomp                 | If mid-season start | N/A                   |
 | 12 (terminal-stage FCF)       | N/A                        | ✅ production-decomp                 | If coupling needed  | If coupling needed    |
-| 13 (multi-res PAR transition) | N/A                        | N/A                                  | N/A                 | **Critical**          |
+| 13 (multi-res PAR transition) | N/A                        | N/A                                  | N/A                 | ✅ v0.4.5             |
 
 **Critical paths by pattern:**
 
 - **Pattern B (production DECOMP):** ✅ **Fully resolved.**
   ~~Debt 4 → Debt 6 → Debt 9 → Debt 10 → Debt 12~~ (all closed) +
   non-uniform scenario count support via V3.4 relaxation with padding.
-- **Pattern D (multi-resolution):**
-  Debt 2 → ~~Debt 4~~ → ~~Debt 6~~ → Debt 13 (lag resolution transition).
-  Debts 4 and 6 are resolved; Debt 2 Layer 2 and Debt 13 remain open.
+- **Pattern C (mixed-res + PAR):** ✅ **Fully resolved.**
+  ~~Debt 5 → Debt 6~~ (both closed). Noise group precomputation + ForwardSampler integration
+  + opening tree sharing. D29 integration test verifies end-to-end.
+- **Pattern D (multi-resolution):** ✅ **Fully resolved.**
+  ~~Debt 2 → Debt 4 → Debt 6 → Debt 13~~ (all closed). Observation aggregation,
+  lag accumulation, downstream ring buffer, and transition rebuild.
+  D30 integration test verifies monthly-to-quarterly multi-resolution.
 
 ---
 

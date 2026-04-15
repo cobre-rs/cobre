@@ -359,6 +359,63 @@ and policy graph horizon type.
 | `risk_measure`    | No       | Per-stage risk measure: `"expectation"` or CVaR config            |
 | `sampling_method` | No       | Noise method: `"saa"` or other variants                           |
 
+**`season_definitions` sub-object:**
+
+The optional `season_definitions` object maps season IDs to calendar periods for the PAR model.
+When absent, Cobre infers 12 monthly seasons from stage dates. When present, it controls
+how `season_id` values on stages translate to stochastic parameters.
+
+| Field        | Required | Description                                            |
+| ------------ | -------- | ------------------------------------------------------ |
+| `cycle_type` | Yes      | `"monthly"`, `"weekly"`, or `"custom"`                 |
+| `seasons`    | Yes      | Array of season entries (see below)                    |
+
+**`season_definitions.seasons[]` entry fields:**
+
+| Field         | Required              | Description                                                                     |
+| ------------- | --------------------- | ------------------------------------------------------------------------------- |
+| `id`          | Yes                   | Season identifier (0-based integer, unique within the season map)               |
+| `label`       | Yes                   | Human-readable label (e.g., `"January"`, `"Q1"`, `"Wet Season"`)               |
+| `month_start` | Yes                   | Calendar month where the season starts (1–12)                                   |
+| `day_start`   | Custom only           | Calendar day where the season starts (1–31). Required for `custom` cycle type.  |
+| `month_end`   | Custom only           | Calendar month where the season ends (1–12). Required for `custom` cycle type.  |
+| `day_end`     | Custom only           | Calendar day where the season ends (1–31). Required for `custom` cycle type.    |
+
+**Cycle types:**
+
+- `"monthly"` — seasons map to calendar months (12 seasons, 0 = January, ..., 11 = December).
+  Only `id`, `label`, and `month_start` are needed per entry.
+- `"weekly"` — seasons map to ISO calendar weeks (52 seasons). Only `id`, `label`,
+  and `month_start` are needed per entry.
+- `"custom"` — user-defined date ranges with explicit `month_start`/`day_start`/`month_end`/`day_end`.
+  All four boundary fields are required. Use this cycle type for mixed-resolution studies
+  where some stages are monthly (IDs 0–11) and others are quarterly (IDs 12–15).
+
+**Example — Custom cycle type with monthly and quarterly seasons:**
+
+```json
+{
+  "season_definitions": {
+    "cycle_type": "custom",
+    "seasons": [
+      { "id": 0,  "label": "January",   "month_start": 1,  "day_start": 1, "month_end": 2,  "day_end": 1 },
+      { "id": 1,  "label": "February",  "month_start": 2,  "day_start": 1, "month_end": 3,  "day_end": 1 },
+      { "id": 11, "label": "December",  "month_start": 12, "day_start": 1, "month_end": 1,  "day_end": 1 },
+      { "id": 12, "label": "Q1",        "month_start": 1,  "day_start": 1, "month_end": 4,  "day_end": 1 },
+      { "id": 13, "label": "Q2",        "month_start": 4,  "day_start": 1, "month_end": 7,  "day_end": 1 },
+      { "id": 14, "label": "Q3",        "month_start": 7,  "day_start": 1, "month_end": 10, "day_end": 1 },
+      { "id": 15, "label": "Q4",        "month_start": 10, "day_start": 1, "month_end": 1,  "day_end": 1 }
+    ]
+  }
+}
+```
+
+In this example, seasons 0–11 cover monthly PAR models for the near-term phase and seasons 12–15
+cover quarterly PAR models for the long-term phase. Each monthly stage assigns a `season_id` of 0–11;
+each quarterly stage assigns a `season_id` of 12–15. Rule 29 enforces that stages sharing the same
+`season_id` must have similar durations (within 7 days), so monthly and quarterly stages must use
+distinct season IDs.
+
 ---
 
 ### `initial_conditions.json`

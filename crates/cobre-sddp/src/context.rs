@@ -49,7 +49,6 @@ pub struct StageContext<'a> {
     /// Populated by [`crate::lag_transition::precompute_stage_lag_transitions`]
     /// at setup time. Used by the forward pass and simulation pipeline starting
     /// in Epic 2 ticket-006.
-    #[allow(dead_code)]
     pub stage_lag_transitions: &'a [StageLagTransition],
     /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
     ///
@@ -59,6 +58,16 @@ pub struct StageContext<'a> {
     /// [`StudySetup::noise_group_ids`] at setup time. Length equals the number
     /// of study stages.
     pub noise_group_ids: &'a [u32],
+    /// PAR order for the downstream (coarser-resolution) model.
+    ///
+    /// `0` for uniform-resolution studies — all downstream accumulation code paths
+    /// in `accumulate_and_shift_lag_state` are skipped. Non-zero for studies with a
+    /// monthly-to-quarterly transition (e.g., DECOMP hybrid studies).
+    ///
+    /// Used to size the downstream scratch buffers in the forward-pass workspace pool
+    /// (`train`) and to pass as `par_order` to [`crate::noise::DownstreamAccumState`].
+    /// Set from [`crate::setup::StudySetup::downstream_par_order`] at setup time.
+    pub downstream_par_order: usize,
 }
 
 impl StageContext<'_> {

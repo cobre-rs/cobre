@@ -38,23 +38,23 @@ use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
+    cut::CutRowMap,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
-    workspace::{BasisStore, WorkspacePool},
+    workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -405,11 +405,14 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let n_threads = n_fwd_threads.max(1);
     let mut fwd_pool = WorkspacePool::try_new(
         n_threads,
-        indexer.hydro_count,
-        indexer.max_par_order,
         n_state,
-        stage_ctx.n_load_buses,
-        max_blocks,
+        WorkspaceSizing {
+            hydro_count: indexer.hydro_count,
+            max_par_order: indexer.max_par_order,
+            n_load_buses: stage_ctx.n_load_buses,
+            max_blocks,
+            downstream_par_order: stage_ctx.downstream_par_order,
+        },
         solver_factory,
     )
     .map_err(SddpError::Solver)?;
@@ -1152,7 +1155,6 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1161,20 +1163,21 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig,
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
+        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
+        StoppingRule, StoppingRuleSet, TrainingConfig,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1615,6 +1618,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -1707,6 +1711,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -1817,6 +1822,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -1961,6 +1967,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2051,6 +2058,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2138,6 +2146,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2233,6 +2242,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2338,6 +2348,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2453,6 +2464,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2579,6 +2591,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2679,6 +2692,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -2788,6 +2802,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -2878,6 +2893,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -3055,6 +3071,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -3160,6 +3177,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -3283,6 +3301,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,

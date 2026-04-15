@@ -498,6 +498,7 @@ fn run_one_deterministic_pass(
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     train(
         &mut solver,
@@ -588,6 +589,7 @@ fn train_converges_with_mock_solver() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -692,6 +694,7 @@ fn train_lb_monotonically_nondecreasing() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     train(
         &mut solver,
@@ -784,6 +787,7 @@ fn train_emits_correct_event_sequence() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     train(
         &mut solver,
@@ -862,6 +866,7 @@ fn train_stops_at_iteration_limit() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -946,6 +951,7 @@ fn train_stops_on_graceful_shutdown() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -1020,6 +1026,7 @@ fn train_propagates_infeasible_error() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -1137,6 +1144,7 @@ fn d17_level1_cut_selection_convergence() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -1281,6 +1289,7 @@ fn d17_level1_cut_selection_with_basis_padding() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
 
     // Baseline run: cut selection enabled, padding disabled (same as D17).
@@ -1470,6 +1479,7 @@ fn d18_lml1_cut_selection_convergence() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -1718,6 +1728,7 @@ fn d18_lml1_cut_selection_with_basis_padding() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
 
     // Baseline run: Lml1 cut selection enabled, padding disabled (same as D18).

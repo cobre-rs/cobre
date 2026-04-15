@@ -258,14 +258,14 @@ mod tests {
         let quarters = [(1u32, 4u32), (4, 7), (7, 10), (10, 1)];
         let mut stages: Vec<Stage> = Vec::new();
         for year_offset in 0..n_years {
-            let year = base_year + year_offset as i32;
+            let year = base_year + i32::try_from(year_offset).unwrap_or(0);
             for (qidx, &(m_start, m_end_excl)) in quarters.iter().enumerate() {
                 let (end_year, end_month) = if m_end_excl == 1 {
                     (year + 1, 1u32)
                 } else {
                     (year, m_end_excl)
                 };
-                let stage_id = (year_offset * 4 + qidx as u32 + 1) as i32;
+                let stage_id = i32::try_from(year_offset * 4 + u32::try_from(qidx).unwrap_or(0) + 1).unwrap_or(0);
                 stages.push(make_stage(
                     stage_id,
                     stages.len(),
@@ -280,7 +280,7 @@ mod tests {
         stages
     }
 
-    /// Build a quarterly SeasonMap with 4 Custom seasons (Q1–Q4).
+    /// Build a quarterly `SeasonMap` with 4 Custom seasons (Q1–Q4).
     fn make_quarterly_season_map() -> SeasonMap {
         SeasonMap {
             cycle_type: SeasonCycleType::Custom,
@@ -321,7 +321,7 @@ mod tests {
         }
     }
 
-    /// Build a monthly SeasonMap (12 seasons, Monthly cycle).
+    /// Build a monthly `SeasonMap` (12 seasons, `Monthly` cycle).
     fn make_monthly_season_map() -> SeasonMap {
         let seasons = (1u32..=12)
             .map(|m| SeasonDefinition {

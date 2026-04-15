@@ -440,16 +440,38 @@ fn solve_simulation_stage<S: SolverInterface>(
             accumulate_weight: 1.0,
             spillover_weight: 0.0,
             finalize_period: true,
+            accumulate_downstream: false,
+            downstream_accumulate_weight: 0.0,
+            downstream_spillover_weight: 0.0,
+            downstream_finalize: false,
+            rebuild_from_downstream: false,
         },
     );
+    let downstream_par_order = {
+        let h = ws.scratch.lag_accumulator.len();
+        if h == 0 {
+            0
+        } else {
+            ws.scratch.downstream_completed_lags.len() / h
+        }
+    };
     crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         &unscaled_primal,
         indexer,
         &stage_lag,
-        &mut ws.scratch.lag_accumulator,
-        &mut ws.scratch.lag_weight_accum,
+        &mut crate::noise::LagAccumState {
+            accumulator: &mut ws.scratch.lag_accumulator,
+            weight_accum: &mut ws.scratch.lag_weight_accum,
+        },
+        &mut crate::noise::DownstreamAccumState {
+            accumulator: &mut ws.scratch.downstream_accumulator,
+            weight_accum: &mut ws.scratch.downstream_weight_accum,
+            completed_lags: &mut ws.scratch.downstream_completed_lags,
+            n_completed: &mut ws.scratch.downstream_n_completed,
+            par_order: downstream_par_order,
+        },
     );
 
     // Put the buffers back so they are reused on the next stage.
@@ -621,6 +643,17 @@ fn reset_scenario_state<S: SolverInterface>(
         ws.scratch.lag_accumulator[..recent_accum_seed.len()].copy_from_slice(recent_accum_seed);
         ws.scratch.lag_weight_accum = *recent_weight_seed;
     }
+    // Reset downstream accumulator at trajectory start.
+    ws.scratch
+        .downstream_accumulator
+        .iter_mut()
+        .for_each(|v| *v = 0.0);
+    ws.scratch.downstream_weight_accum = 0.0;
+    ws.scratch
+        .downstream_completed_lags
+        .iter_mut()
+        .for_each(|v| *v = 0.0);
+    ws.scratch.downstream_n_completed = 0;
 }
 
 fn process_scenario_stages<S: SolverInterface>(
@@ -1415,6 +1448,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }]
@@ -1467,6 +1504,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1576,6 +1614,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1675,6 +1714,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1772,6 +1812,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1871,6 +1912,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1967,6 +2009,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2063,6 +2106,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2156,6 +2200,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2220,6 +2265,10 @@ mod tests {
                     unscaled_dual: Vec::new(),
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
             })
@@ -2240,6 +2289,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2363,6 +2413,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2480,6 +2531,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2582,6 +2634,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2695,6 +2748,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2807,6 +2861,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2934,6 +2989,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3215,6 +3271,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }];
@@ -3243,6 +3303,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3390,6 +3451,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3518,6 +3580,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }];
@@ -3544,6 +3610,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3813,6 +3880,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }]
@@ -3882,6 +3953,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3993,6 +4065,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {

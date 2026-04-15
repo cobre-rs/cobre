@@ -263,6 +263,11 @@ pub(crate) fn compute_monthly_transition(
         accumulate_weight,
         spillover_weight,
         finalize_period: is_last_in_period,
+        accumulate_downstream: false,
+        downstream_accumulate_weight: 0.0,
+        downstream_spillover_weight: 0.0,
+        downstream_finalize: false,
+        rebuild_from_downstream: false,
     }
 }
 
@@ -282,8 +287,17 @@ pub(crate) fn compute_monthly_transition(
 ///
 /// # No-op stages
 ///
-/// Stages with `season_id = None` produce
-/// `StageLagTransition { accumulate_weight: 0.0, spillover_weight: 0.0, finalize_period: false }`.
+/// Stages with `season_id = None` produce a fully zeroed/false
+/// `StageLagTransition` including all downstream fields.
+///
+/// # Downstream accumulation
+///
+/// When `downstream_par_order > 0`, the function detects a resolution
+/// transition (stages whose `season_id` crosses from the monthly range into the
+/// quarterly range, i.e. `season_id >= 12`) and computes downstream fields for
+/// the `downstream_par_order * 3` monthly stages immediately before the
+/// transition. Passing `0` disables downstream computation entirely (all
+/// downstream fields are default).
 ///
 /// # Infallible
 ///
@@ -293,14 +307,20 @@ pub(crate) fn compute_monthly_transition(
 pub fn precompute_stage_lag_transitions(
     stages: &[Stage],
     season_map: &SeasonMap,
+    downstream_par_order: usize,
 ) -> Vec<StageLagTransition> {
     let noop = StageLagTransition {
         accumulate_weight: 0.0,
         spillover_weight: 0.0,
         finalize_period: false,
+        accumulate_downstream: false,
+        downstream_accumulate_weight: 0.0,
+        downstream_spillover_weight: 0.0,
+        downstream_finalize: false,
+        rebuild_from_downstream: false,
     };
 
-    stages
+    let mut result: Vec<StageLagTransition> = stages
         .iter()
         .map(|stage| {
             let Some(season_id) = stage.season_id else {
@@ -318,7 +338,149 @@ pub fn precompute_stage_lag_transitions(
                 SeasonCycleType::Weekly | SeasonCycleType::Custom => noop,
             }
         })
-        .collect()
+        .collect();
+
+    if downstream_par_order > 0 {
+        compute_downstream_transitions(stages, &mut result, downstream_par_order);
+    }
+
+    result
+}
+
+/// Detect a resolution transition in `stages` and populate downstream
+/// accumulation fields on the pre-transition window entries in `transitions`.
+///
+/// A transition is detected as the first stage whose `season_id` is `>= 12`
+/// (quarterly range). The pre-transition window covers the
+/// `downstream_par_order * 3` monthly stages immediately before that point.
+///
+/// For each stage in the window the downstream weights are computed using
+/// quarterly calendar boundaries: months 1–3 → Q1, 4–6 → Q2, 7–9 → Q3,
+/// 10–12 → Q4. `downstream_finalize` is set on the last monthly stage of
+/// each calendar quarter within the window.
+///
+/// No-ops (no transition found, window is empty, or `downstream_par_order`
+/// is 0) leave `transitions` unchanged.
+fn compute_downstream_transitions(
+    stages: &[Stage],
+    transitions: &mut [StageLagTransition],
+    downstream_par_order: usize,
+) {
+    // Find the index of the first quarterly stage (season_id >= 12).
+    let Some(transition_idx) = stages
+        .iter()
+        .position(|s| s.season_id.is_some_and(|id| id >= 12))
+    else {
+        // No quarterly stage found — nothing to do.
+        return;
+    };
+
+    let window_len = downstream_par_order * 3;
+    let window_start = transition_idx.saturating_sub(window_len);
+
+    for stage_idx in window_start..transition_idx {
+        let stage = &stages[stage_idx];
+        let Some(season_id) = stage.season_id else {
+            continue;
+        };
+
+        // Map the monthly season_id (0-based: 0=Jan … 11=Dec) to a
+        // 1-based calendar month for date arithmetic.
+        let month = u32::try_from(season_id % 12 + 1)
+            .unwrap_or_else(|_| unreachable!("season_id % 12 always fits in u32"));
+
+        // Determine which calendar quarter this month belongs to and
+        // compute its start/end boundaries.
+        let quarter_start_month: u32 = ((month - 1) / 3) * 3 + 1; // 1, 4, 7, or 10
+        let quarter_end_month: u32 = quarter_start_month + 2; // last month of quarter
+
+        let year = find_season_year_monthly(stage.start_date, stage.end_date, month);
+
+        // Compute the quarter's total hours (sum of the 3 constituent months).
+        let quarter_total_hours: f64 = (quarter_start_month..=quarter_end_month)
+            .map(|m| {
+                let (y, mo) = if m > 12 {
+                    (year + 1, m - 12)
+                } else {
+                    (year, m)
+                };
+                month_total_hours(y, mo)
+            })
+            .sum();
+
+        // Period boundaries for the entire quarter.
+        let quarter_period_start = NaiveDate::from_ymd_opt(year, quarter_start_month, 1)
+            .unwrap_or_else(|| unreachable!("quarter start date is always valid"));
+        let last_quarter_month_end = month_exclusive_end(year, quarter_end_month);
+
+        let days_current = days_in_period(
+            stage.start_date,
+            stage.end_date,
+            quarter_period_start,
+            last_quarter_month_end,
+        );
+        let downstream_accumulate_weight = f64::from(days_current) * 24.0 / quarter_total_hours;
+
+        // Spillover into the next quarter.
+        let next_quarter_start_month = quarter_end_month + 1; // may be 13 → wrap to next year
+        let (next_q_year, next_q_start_month) = if next_quarter_start_month > 12 {
+            (year + 1, next_quarter_start_month - 12)
+        } else {
+            (year, next_quarter_start_month)
+        };
+        let next_quarter_end_month = next_q_start_month + 2;
+        let next_quarter_start = NaiveDate::from_ymd_opt(next_q_year, next_q_start_month, 1)
+            .unwrap_or_else(|| unreachable!("next quarter start date is always valid"));
+        let (next_q_end_year, next_q_end_month_adj) = if next_quarter_end_month > 12 {
+            (next_q_year + 1, next_quarter_end_month - 12)
+        } else {
+            (next_q_year, next_quarter_end_month)
+        };
+        let next_quarter_end = month_exclusive_end(next_q_end_year, next_q_end_month_adj);
+        let next_quarter_total_hours: f64 = (next_q_start_month..=next_quarter_end_month)
+            .map(|m| {
+                let (y, mo) = if m > 12 {
+                    (next_q_year + 1, m - 12)
+                } else {
+                    (next_q_year, m)
+                };
+                month_total_hours(y, mo)
+            })
+            .sum();
+        let days_next = days_in_period(
+            stage.start_date,
+            stage.end_date,
+            next_quarter_start,
+            next_quarter_end,
+        );
+        let downstream_spillover_weight = if days_next > 0 {
+            f64::from(days_next) * 24.0 / next_quarter_total_hours
+        } else {
+            0.0
+        };
+
+        // downstream_finalize: true when this is the last monthly stage of
+        // its calendar quarter within the pre-transition window.
+        let is_last_of_quarter = stages[stage_idx + 1..transition_idx].iter().all(|later| {
+            let later_month = later.season_id.map_or(u32::MAX, |id| {
+                u32::try_from(id % 12 + 1).unwrap_or(u32::MAX)
+            });
+            let later_quarter_start = ((later_month.saturating_sub(1)) / 3) * 3 + 1;
+            later_quarter_start != quarter_start_month
+        });
+
+        transitions[stage_idx].accumulate_downstream = true;
+        transitions[stage_idx].downstream_accumulate_weight = downstream_accumulate_weight;
+        transitions[stage_idx].downstream_spillover_weight = downstream_spillover_weight;
+        transitions[stage_idx].downstream_finalize = is_last_of_quarter;
+    }
+
+    // Mark the transition stage (first quarterly stage) for lag-state rebuild.
+    // At this stage, the primary lag state is discarded and rebuilt from the
+    // completed quarterly lags in the downstream ring buffer.
+    if transition_idx < transitions.len() {
+        transitions[transition_idx].rebuild_from_downstream = true;
+    }
 }
 
 /// Precompute a noise group ID for each study stage.
@@ -453,7 +615,7 @@ mod tests {
             })
             .collect();
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
 
         assert_eq!(transitions.len(), 12);
         for (i, t) in transitions.iter().enumerate() {
@@ -498,7 +660,7 @@ mod tests {
             make_stage(5, d(2026, 5, 2), d(2026, 6, 1), Some(4)),
         ];
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
         assert_eq!(transitions.len(), 6);
 
         let april_hours = 30.0 * 24.0;
@@ -604,7 +766,7 @@ mod tests {
         let stage = make_stage(0, d(2026, 1, 28), d(2026, 2, 4), Some(0));
         let stages = vec![stage];
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
         assert_eq!(transitions.len(), 1);
 
         let t = transitions[0];
@@ -637,7 +799,7 @@ mod tests {
         let stage = make_stage(0, d(2026, 1, 1), d(2026, 2, 1), None);
         let stages = vec![stage];
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
         assert_eq!(transitions.len(), 1);
 
         let t = transitions[0];
@@ -658,7 +820,7 @@ mod tests {
             make_stage(1, d(2026, 2, 1), d(2026, 3, 1), Some(1)),
         ];
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
         assert_eq!(transitions.len(), 2);
         assert!(
             transitions[0].finalize_period,
@@ -684,7 +846,7 @@ mod tests {
             make_stage(3, d(2026, 1, 22), d(2026, 1, 29), Some(0)),
         ];
 
-        let transitions = precompute_stage_lag_transitions(&stages, &season_map);
+        let transitions = precompute_stage_lag_transitions(&stages, &season_map, 0);
         assert_eq!(transitions.len(), 4);
 
         let jan_hours = 31.0 * 24.0;
@@ -720,9 +882,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use cobre_core::{
-        EntityId,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         initial_conditions::RecentObservation,
+        EntityId,
     };
 
     fn make_hydro(id: i32) -> Hydro {

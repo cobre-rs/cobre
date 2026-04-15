@@ -38,10 +38,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
-    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
-    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-    ResolvedPenalties, ThermalStageBounds,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -49,16 +45,21 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
+    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
+    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+    ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
+    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
     RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
     StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
+    WorkspaceSizing,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext,
 };
 
 // ===========================================================================
@@ -518,6 +519,7 @@ fn train_fixture(
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     train(
         &mut solver,
@@ -586,10 +588,13 @@ fn simulate_fixture(
         HighsSolver::new().expect("HighsSolver::new must succeed"),
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
-        fx.indexer.hydro_count,
-        fx.indexer.max_par_order,
-        0,
-        0,
+        WorkspaceSizing {
+            hydro_count: fx.indexer.hydro_count,
+            max_par_order: fx.indexer.max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order: 0,
+        },
     )];
     let comm = StubComm;
 
@@ -616,6 +621,7 @@ fn simulate_fixture(
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         },
         fcf,
         &TrainingContext {

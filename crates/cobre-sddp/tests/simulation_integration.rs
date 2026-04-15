@@ -20,7 +20,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -28,23 +27,24 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 use cobre_io::{
-    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
-    write_policy_checkpoint, write_results,
+    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
+    SimulationOutput, StageCutsPayload,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    build_training_output, simulate, train,
+    build_training_output, simulate, train, EntityCounts, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext, WorkspaceSizing,
 };
 
 /// Single-rank communicator for testing.
@@ -586,6 +586,7 @@ fn train_simulate_write_cycle() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -730,10 +731,13 @@ fn train_simulate_write_cycle() {
         sim_solver,
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
-        fx.indexer.hydro_count,
-        fx.indexer.max_par_order,
-        0,
-        0,
+        WorkspaceSizing {
+            hydro_count: fx.indexer.hydro_count,
+            max_par_order: fx.indexer.max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order: 0,
+        },
     )];
 
     simulate(
@@ -752,6 +756,7 @@ fn train_simulate_write_cycle() {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         },
         &fcf,
         &TrainingContext {
@@ -852,11 +857,9 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(
-        output_dir
-            .join("training/timing/iterations.parquet")
-            .is_file()
-    );
+    assert!(output_dir
+        .join("training/timing/iterations.parquet")
+        .is_file());
 
     let metadata_path = output_dir.join("training/metadata.json");
     assert!(metadata_path.is_file());
@@ -1309,6 +1312,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
 
     let training_config = TrainingConfig {
@@ -1392,10 +1396,13 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         sim_solver,
         PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0),
         indexer.n_state,
-        indexer.hydro_count,
-        indexer.max_par_order,
-        0,
-        0,
+        WorkspaceSizing {
+            hydro_count: indexer.hydro_count,
+            max_par_order: indexer.max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order: 0,
+        },
     )];
 
     simulate(

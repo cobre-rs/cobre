@@ -1325,13 +1325,13 @@ pub(crate) fn select_planes(
 
         for remove_idx in 0..n {
             scratch.clear();
-            scratch.extend(
-                current.iter().enumerate().filter_map(
-                    |(i, &p)| {
-                        if i == remove_idx { None } else { Some(p) }
-                    },
-                ),
-            );
+            scratch.extend(current.iter().enumerate().filter_map(|(i, &p)| {
+                if i == remove_idx {
+                    None
+                } else {
+                    Some(p)
+                }
+            }));
 
             let errors = compute_grid_errors(&scratch, pf, bounds);
             let min_err = errors.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1426,7 +1426,11 @@ pub(crate) fn compute_kappa(
         }
     }
 
-    if found_valid { min_ratio } else { 1.0 }
+    if found_valid {
+        min_ratio
+    } else {
+        1.0
+    }
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -1643,10 +1647,10 @@ mod tests {
     use cobre_io::extensions::{FittingWindow, FphaColumnLayout, HydroGeometryRow};
 
     use super::{
-        FittingBounds, ForebayTable, FphaFittingError, ProductionFunction, RawHyperplane,
         compute_kappa, compute_tangent_plane, eliminate_redundant, evaluate_losses,
         evaluate_losses_factor, evaluate_tailrace, evaluate_tailrace_derivative, fit_fpha_planes,
-        resolve_fitting_bounds, sample_tangent_planes, validate_fitted_planes,
+        resolve_fitting_bounds, sample_tangent_planes, validate_fitted_planes, FittingBounds,
+        ForebayTable, FphaFittingError, ProductionFunction, RawHyperplane,
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -3745,8 +3749,8 @@ mod tests {
     /// The returned `bounds` has `n_volume_points=7`, `n_flow_points=5`,
     /// `n_spillage_points=5`, and `max_planes_per_hydro=10`, forcing the greedy
     /// step to reduce the set to 10.
-    fn non_redundant_planes_for_selection()
-    -> (Vec<RawHyperplane>, ProductionFunction, FittingBounds) {
+    fn non_redundant_planes_for_selection(
+    ) -> (Vec<RawHyperplane>, ProductionFunction, FittingBounds) {
         let pf = sampling_production_function();
         let bounds = FittingBounds {
             v_min: 0.0,

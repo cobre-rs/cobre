@@ -894,16 +894,38 @@ fn run_forward_stage<S: SolverInterface + Send>(
             accumulate_weight: 1.0,
             spillover_weight: 0.0,
             finalize_period: true,
+            accumulate_downstream: false,
+            downstream_accumulate_weight: 0.0,
+            downstream_spillover_weight: 0.0,
+            downstream_finalize: false,
+            rebuild_from_downstream: false,
         },
     );
+    let downstream_par_order = {
+        let h = ws.scratch.lag_accumulator.len();
+        if h == 0 {
+            0
+        } else {
+            ws.scratch.downstream_completed_lags.len() / h
+        }
+    };
     crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
         unscaled_primal,
         indexer,
         &stage_lag,
-        &mut ws.scratch.lag_accumulator,
-        &mut ws.scratch.lag_weight_accum,
+        &mut crate::noise::LagAccumState {
+            accumulator: &mut ws.scratch.lag_accumulator,
+            weight_accum: &mut ws.scratch.lag_weight_accum,
+        },
+        &mut crate::noise::DownstreamAccumState {
+            accumulator: &mut ws.scratch.downstream_accumulator,
+            weight_accum: &mut ws.scratch.downstream_weight_accum,
+            completed_lags: &mut ws.scratch.downstream_completed_lags,
+            n_completed: &mut ws.scratch.downstream_n_completed,
+            par_order: downstream_par_order,
+        },
     );
     rec.state.clear();
     rec.state.extend_from_slice(&ws.current_state);
@@ -1151,6 +1173,17 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                                 .copy_from_slice(recent_accum_seed);
                             ws.scratch.lag_weight_accum = recent_weight_seed;
                         }
+                        // Reset downstream accumulator at trajectory start.
+                        ws.scratch
+                            .downstream_accumulator
+                            .iter_mut()
+                            .for_each(|v| *v = 0.0);
+                        ws.scratch.downstream_weight_accum = 0.0;
+                        ws.scratch
+                            .downstream_completed_lags
+                            .iter_mut()
+                            .for_each(|v| *v = 0.0);
+                        ws.scratch.downstream_n_completed = 0;
                     }
 
                     let global_scenario = fwd_offset + m;
@@ -1768,6 +1801,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }
@@ -1861,6 +1898,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -1971,6 +2009,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2087,6 +2126,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -2498,6 +2538,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         run_forward_pass(
             std::slice::from_mut(ws),
@@ -2660,6 +2701,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
 
         // Run with 1 workspace.
@@ -2810,6 +2852,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let _result = run_forward_pass(
             &mut workspaces,
@@ -3100,6 +3143,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let stages = vec![Stage {
             index: 0,
@@ -3301,6 +3345,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3544,6 +3589,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = run_forward_pass(
             &mut workspaces,
@@ -3644,6 +3690,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         };
@@ -3673,6 +3723,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3768,6 +3819,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         };
@@ -3797,6 +3852,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),
@@ -3894,6 +3950,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let _fwd = run_forward_pass(
             std::slice::from_mut(&mut ws),

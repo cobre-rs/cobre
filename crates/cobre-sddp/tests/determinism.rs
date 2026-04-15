@@ -29,7 +29,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -37,18 +36,19 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId,
 };
 use cobre_sddp::{
-    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext, simulate, sync_forward, train,
+    simulate, sync_forward, train, EntityCounts, ForwardResult, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec,
+    SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext, WorkspaceSizing,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 // ===========================================================================
@@ -186,9 +186,9 @@ impl SolverInterface for MockSolver3H {
 /// Uses PAR(0) (no AR lags) and a single opening per stage so the fixture
 /// remains small while still exercising more code paths than a 1-hydro system.
 fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let zero_penalties = || HydroPenalties {
         spillage_cost: 0.0,
@@ -529,6 +529,7 @@ fn run_training(
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = pool
         .install(|| {
@@ -601,10 +602,13 @@ fn run_simulation(
                 MockSolver3H::new(100.0),
                 PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
                 fx.indexer.n_state,
-                fx.indexer.hydro_count,
-                fx.indexer.max_par_order,
-                0,
-                0,
+                WorkspaceSizing {
+                    hydro_count: fx.indexer.hydro_count,
+                    max_par_order: fx.indexer.max_par_order,
+                    n_load_buses: 0,
+                    max_blocks: 0,
+                    downstream_par_order: 0,
+                },
             )
         })
         .collect();
@@ -644,6 +648,7 @@ fn run_simulation(
                     cumulative_discount_factors: &[],
                     stage_lag_transitions: &[],
                     noise_group_ids: &[],
+                    downstream_par_order: 0,
                 },
                 fcf,
                 &TrainingContext {

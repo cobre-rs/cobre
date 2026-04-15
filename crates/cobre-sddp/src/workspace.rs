@@ -8,6 +8,29 @@ use cobre_solver::{Basis, SolverInterface};
 
 use crate::lp_builder::PatchBuffer;
 
+/// Sizing parameters shared by [`SolverWorkspace`], [`WorkspacePool`], and
+/// [`ScratchBuffers`] constructors.
+///
+/// Grouping these five dimensions into one struct keeps constructor argument
+/// counts within the clippy budget while making the sizing relationship
+/// explicit: every workspace allocates a [`PatchBuffer`] and [`ScratchBuffers`]
+/// from exactly these five values.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkspaceSizing {
+    /// Number of hydro plants in the study.
+    pub hydro_count: usize,
+    /// Maximum PAR order across all hydro plants.
+    pub max_par_order: usize,
+    /// Number of load buses (0 if no stochastic load).
+    pub n_load_buses: usize,
+    /// Maximum number of blocks per stage (0 if no stochastic load).
+    pub max_blocks: usize,
+    /// PAR order of the downstream (coarser) resolution for multi-resolution
+    /// studies. Pass `0` for uniform-resolution studies (no downstream
+    /// transition).
+    pub downstream_par_order: usize,
+}
+
 /// Pre-allocated scratch buffers for noise transformation and simulation.
 ///
 /// Grouped here for readability; individual fields are passed by `&mut`
@@ -29,11 +52,16 @@ pub(crate) struct ScratchBuffers {
     pub(crate) effective_eta_buf: Vec<f64>,
     pub(crate) unscaled_primal: Vec<f64>,
     pub(crate) unscaled_dual: Vec<f64>,
-    // Used by accumulate_and_shift_lag_state (ticket-004).
-    #[allow(dead_code)]
+    // Used by accumulate_and_shift_lag_state (ticket-004 / ticket-010).
     pub(crate) lag_accumulator: Vec<f64>,
-    #[allow(dead_code)]
     pub(crate) lag_weight_accum: f64,
+    // Downstream ring buffer for multi-resolution lag accumulation (ticket-010).
+    pub(crate) downstream_accumulator: Vec<f64>,
+    pub(crate) downstream_weight_accum: f64,
+    // Slot-major: `completed_lags[slot * hydro_count + hydro]`.
+    // Slot 0 = oldest completed quarter, slot n-1 = most recent.
+    pub(crate) downstream_completed_lags: Vec<f64>,
+    pub(crate) downstream_n_completed: usize,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -62,27 +90,19 @@ pub struct SolverWorkspace<S: SolverInterface> {
 impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
-    /// `hydro_count` and `max_par_order` determine the capacities of internal
-    /// scratch buffers for the inflow truncation path.  `n_load_buses` and
-    /// `max_blocks` determine the capacity of the load RHS scratch buffer.
+    /// `sizing` provides the five buffer-dimension parameters shared between the
+    /// [`PatchBuffer`] (which must be pre-constructed by the caller) and the
+    /// internal [`ScratchBuffers`] allocation.
     ///
     /// The `scratch_basis` starts empty. Call [`WorkspacePool::resize_scratch_bases`]
     /// after construction to pre-allocate for backward-pass padding.
     #[must_use]
-    pub fn new(
-        solver: S,
-        patch_buf: PatchBuffer,
-        n_state: usize,
-        hydro_count: usize,
-        max_par_order: usize,
-        n_load_buses: usize,
-        max_blocks: usize,
-    ) -> Self {
+    pub fn new(solver: S, patch_buf: PatchBuffer, n_state: usize, sizing: WorkspaceSizing) -> Self {
         Self {
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
-            scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+            scratch: ScratchBuffers::new(sizing),
             scratch_basis: Basis::new(0, 0),
         }
     }
@@ -94,12 +114,14 @@ impl ScratchBuffers {
     /// Extracted from the three `SolverWorkspace` construction sites
     /// (`SolverWorkspace::new`, `WorkspacePool::new`, `WorkspacePool::try_new`)
     /// to keep them in sync (F1-008 fix).
-    pub(crate) fn new(
-        hydro_count: usize,
-        max_par_order: usize,
-        n_load_buses: usize,
-        max_blocks: usize,
-    ) -> Self {
+    pub(crate) fn new(s: WorkspaceSizing) -> Self {
+        let WorkspaceSizing {
+            hydro_count,
+            max_par_order,
+            n_load_buses,
+            max_blocks,
+            downstream_par_order,
+        } = s;
         Self {
             noise_buf: Vec::with_capacity(hydro_count),
             inflow_m3s_buf: Vec::with_capacity(hydro_count),
@@ -118,6 +140,18 @@ impl ScratchBuffers {
             unscaled_dual: Vec::new(),
             lag_accumulator: vec![0.0_f64; hydro_count],
             lag_weight_accum: 0.0,
+            downstream_accumulator: if downstream_par_order > 0 {
+                vec![0.0_f64; hydro_count]
+            } else {
+                Vec::new()
+            },
+            downstream_weight_accum: 0.0,
+            downstream_completed_lags: if downstream_par_order > 0 {
+                vec![0.0_f64; hydro_count * downstream_par_order]
+            } else {
+                Vec::new()
+            },
+            downstream_n_completed: 0,
         }
     }
 }
@@ -140,25 +174,27 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// Each workspace receives a fresh solver instance, patch buffer, and state buffer.
     /// `solver_factory` is called once per thread.
     ///
-    /// `n_load_buses` and `max_blocks` size the load RHS scratch buffer and the
-    /// Category 4 region of each workspace's [`PatchBuffer`].  Pass `0` for both
-    /// when there is no stochastic load.
+    /// `sizing` provides all buffer-dimension parameters; pass
+    /// `WorkspaceSizing { n_load_buses: 0, max_blocks: 0, .. }` when there is
+    /// no stochastic load.
     #[must_use]
     pub fn new(
         n_threads: usize,
-        hydro_count: usize,
-        max_par_order: usize,
         n_state: usize,
-        n_load_buses: usize,
-        max_blocks: usize,
+        sizing: WorkspaceSizing,
         solver_factory: impl Fn() -> S,
     ) -> Self {
         let workspaces = (0..n_threads)
             .map(|_| SolverWorkspace {
                 solver: solver_factory(),
-                patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                patch_buf: PatchBuffer::new(
+                    sizing.hydro_count,
+                    sizing.max_par_order,
+                    sizing.n_load_buses,
+                    sizing.max_blocks,
+                ),
                 current_state: Vec::with_capacity(n_state),
-                scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                scratch: ScratchBuffers::new(sizing),
                 scratch_basis: Basis::new(0, 0),
             })
             .collect();
@@ -177,20 +213,22 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// Returns `Err(E)` if any call to `solver_factory` fails.
     pub fn try_new<E>(
         n_threads: usize,
-        hydro_count: usize,
-        max_par_order: usize,
         n_state: usize,
-        n_load_buses: usize,
-        max_blocks: usize,
+        sizing: WorkspaceSizing,
         solver_factory: impl Fn() -> Result<S, E>,
     ) -> Result<Self, E> {
         let mut workspaces = Vec::with_capacity(n_threads);
         for _ in 0..n_threads {
             workspaces.push(SolverWorkspace {
                 solver: solver_factory()?,
-                patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                patch_buf: PatchBuffer::new(
+                    sizing.hydro_count,
+                    sizing.max_par_order,
+                    sizing.n_load_buses,
+                    sizing.max_blocks,
+                ),
                 current_state: Vec::with_capacity(n_state),
-                scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                scratch: ScratchBuffers::new(sizing),
                 scratch_basis: Basis::new(0, 0),
             });
         }
@@ -387,10 +425,10 @@ impl BasisStoreSliceMut<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BasisStore, SolverWorkspace, WorkspacePool};
+    use super::{BasisStore, ScratchBuffers, SolverWorkspace, WorkspacePool, WorkspaceSizing};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.
@@ -434,9 +472,23 @@ mod tests {
         assert_send::<SolverWorkspace<MockSolver>>();
     }
 
+    fn sizing(
+        hydro_count: usize,
+        max_par_order: usize,
+        downstream_par_order: usize,
+    ) -> WorkspaceSizing {
+        WorkspaceSizing {
+            hydro_count,
+            max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order,
+        }
+    }
+
     #[test]
     fn test_workspace_pool_size() {
-        let pool = WorkspacePool::new(4, 3, 2, 9, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(4, 9, sizing(3, 2, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 4);
     }
 
@@ -444,7 +496,7 @@ mod tests {
     fn test_workspace_buffer_dimensions() {
         // N=3, L=2 → patch_buf length = 3*(2+2) + 3 (z-inflow) = 15
         // n_state=9 → current_state capacity = 9
-        let pool = WorkspacePool::new(4, 3, 2, 9, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(4, 9, sizing(3, 2, 0), || MockSolver);
         for ws in &pool.workspaces {
             assert_eq!(ws.patch_buf.indices.len(), 15, "patch_buf length");
             assert_eq!(ws.current_state.capacity(), 9, "current_state capacity");
@@ -454,13 +506,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_zero_threads() {
-        let pool = WorkspacePool::new(0, 3, 2, 9, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(0, 9, sizing(3, 2, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 0);
     }
 
     #[test]
     fn test_workspace_pool_single_thread() {
-        let pool = WorkspacePool::new(1, 0, 0, 0, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(1, 0, sizing(0, 0, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 1);
         assert_eq!(pool.workspaces[0].patch_buf.indices.len(), 0);
     }
@@ -470,8 +522,99 @@ mod tests {
         // Factory is called n_threads times; each workspace gets its own instance.
         // Verify by checking pool size matches factory call expectation.
         let n = 6;
-        let pool = WorkspacePool::new(n, 1, 0, 1, 0, 0, || MockSolver);
+        let pool = WorkspacePool::new(n, 1, sizing(1, 0, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), n);
+    }
+
+    #[test]
+    fn test_scratch_buffers_zero_downstream_par_order_empty_buffers() {
+        // AC: downstream_par_order=0 → all downstream fields are zero/empty.
+        let scratch = ScratchBuffers::new(WorkspaceSizing {
+            hydro_count: 5,
+            max_par_order: 2,
+            n_load_buses: 0,
+            max_blocks: 1,
+            downstream_par_order: 0,
+        });
+        assert!(
+            scratch.downstream_accumulator.is_empty(),
+            "downstream_accumulator must be empty when downstream_par_order=0"
+        );
+        assert!(
+            scratch.downstream_completed_lags.is_empty(),
+            "downstream_completed_lags must be empty when downstream_par_order=0"
+        );
+        assert_eq!(
+            scratch.downstream_weight_accum, 0.0,
+            "downstream_weight_accum must be 0.0"
+        );
+        assert_eq!(
+            scratch.downstream_n_completed, 0,
+            "downstream_n_completed must be 0"
+        );
+    }
+
+    #[test]
+    fn test_scratch_buffers_nonzero_downstream_par_order_allocates_correctly() {
+        // AC: downstream_par_order=2, hydro_count=3 → lengths 3 and 6, all 0.0.
+        let scratch = ScratchBuffers::new(WorkspaceSizing {
+            hydro_count: 3,
+            max_par_order: 2,
+            n_load_buses: 0,
+            max_blocks: 1,
+            downstream_par_order: 2,
+        });
+        assert_eq!(
+            scratch.downstream_accumulator.len(),
+            3,
+            "downstream_accumulator.len() must equal hydro_count"
+        );
+        assert_eq!(
+            scratch.downstream_completed_lags.len(),
+            6,
+            "downstream_completed_lags.len() must equal hydro_count * downstream_par_order"
+        );
+        assert!(
+            scratch.downstream_accumulator.iter().all(|&v| v == 0.0),
+            "downstream_accumulator must be initialized to 0.0"
+        );
+        assert!(
+            scratch.downstream_completed_lags.iter().all(|&v| v == 0.0),
+            "downstream_completed_lags must be initialized to 0.0"
+        );
+        assert_eq!(scratch.downstream_weight_accum, 0.0);
+        assert_eq!(scratch.downstream_n_completed, 0);
+    }
+
+    #[test]
+    fn test_workspace_pool_propagates_downstream_par_order() {
+        // AC: WorkspacePool propagates downstream_par_order=2, hydro_count=3.
+        let pool = WorkspacePool::new(
+            2,
+            6,
+            WorkspaceSizing {
+                hydro_count: 3,
+                max_par_order: 2,
+                n_load_buses: 0,
+                max_blocks: 1,
+                downstream_par_order: 2,
+            },
+            || MockSolver,
+        );
+        for ws in &pool.workspaces {
+            assert_eq!(
+                ws.scratch.downstream_accumulator.len(),
+                3,
+                "downstream_accumulator.len() per workspace"
+            );
+            assert_eq!(
+                ws.scratch.downstream_completed_lags.len(),
+                6,
+                "downstream_completed_lags.len() per workspace"
+            );
+            assert_eq!(ws.scratch.downstream_weight_accum, 0.0);
+            assert_eq!(ws.scratch.downstream_n_completed, 0);
+        }
     }
 
     // ---------------------------------------------------------------------------

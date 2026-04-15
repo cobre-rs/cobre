@@ -29,9 +29,9 @@
 use std::collections::HashSet;
 
 use cobre_core::{
-    EntityId, HydroPastInflows,
     scenario::{ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, LoadModel, NcsModel},
     temporal::{Stage, StageLagTransition},
+    EntityId, HydroPastInflows,
 };
 
 use crate::StochasticError;
@@ -933,7 +933,6 @@ pub fn pad_library_to_uniform(library: &mut ExternalScenarioLibrary) {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, HydroPastInflows,
         scenario::{
             ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowModel, LoadModel, NcsModel,
         },
@@ -941,11 +940,12 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageLagTransition,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId, HydroPastInflows,
     };
 
     use super::{
-        ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
-        standardize_external_ncs,
+        standardize_external_inflow, standardize_external_load, standardize_external_ncs,
+        ExternalScenarioLibrary,
     };
     use crate::par::{evaluate::evaluate_par, precompute::PrecomputedPar};
 
@@ -959,6 +959,11 @@ mod tests {
                 accumulate_weight: 1.0,
                 spillover_weight: 0.0,
                 finalize_period: true,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             };
             n_stages
         ]
@@ -1169,6 +1174,7 @@ mod tests {
     /// that stage's `solve_par_noise` call, since the shift happens after). The
     /// weighted average computed at finalize is: (200*0.4 + 160*0.4 + 120*0.2) = 168.0.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_inflow_ar1_weekly_frozen_lags() {
         let hydro_id = EntityId(1);
         let hydro_ids = vec![hydro_id];
@@ -1196,16 +1202,31 @@ mod tests {
                 accumulate_weight: 0.4,
                 spillover_weight: 0.0,
                 finalize_period: false,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: 0.4,
                 spillover_weight: 0.0,
                 finalize_period: false,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: 0.2,
                 spillover_weight: 0.0,
                 finalize_period: true,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
         ];
 
@@ -1321,11 +1342,21 @@ mod tests {
                 accumulate_weight: 0.7,
                 spillover_weight: 0.3,
                 finalize_period: true,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: 1.0,
                 spillover_weight: 0.0,
                 finalize_period: true,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
         ];
 
@@ -1771,26 +1802,51 @@ mod tests {
                 accumulate_weight: weight_w1,
                 spillover_weight: 0.0,
                 finalize_period: false,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: weight_weekly,
                 spillover_weight: 0.0,
                 finalize_period: false,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: weight_weekly,
                 spillover_weight: 0.0,
                 finalize_period: false,
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: weight_weekly,
                 spillover_weight: 0.0,
                 finalize_period: true, // last April stage → finalize the April period
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
             StageLagTransition {
                 accumulate_weight: weight_may,
                 spillover_weight: 0.0,
                 finalize_period: true, // only May stage → finalizes itself
+                accumulate_downstream: false,
+                downstream_accumulate_weight: 0.0,
+                downstream_spillover_weight: 0.0,
+                downstream_finalize: false,
+                rebuild_from_downstream: false,
             },
         ];
 

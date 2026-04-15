@@ -83,7 +83,6 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
     basis_padding::pad_basis_for_cuts,
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
@@ -92,9 +91,10 @@ use crate::{
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
+    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -914,13 +914,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BasisStore, SolverWorkspace},
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1173,6 +1173,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }]
@@ -1226,7 +1230,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1235,9 +1238,10 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
         use std::collections::BTreeMap;
 
@@ -1495,6 +1499,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -1592,6 +1597,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -1689,6 +1695,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -1782,6 +1789,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -1875,6 +1883,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -1966,6 +1975,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2101,6 +2111,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2214,6 +2225,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2332,6 +2344,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2437,6 +2450,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2551,6 +2565,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2660,6 +2675,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2763,6 +2779,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2873,6 +2890,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -2990,6 +3008,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         }];
@@ -3008,6 +3030,7 @@ mod tests {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
         let _ = run_backward_pass(
@@ -3080,6 +3103,10 @@ mod tests {
                     unscaled_dual: Vec::new(),
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
             })
@@ -3196,7 +3223,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
 
         let bus0 = Bus {
@@ -3426,6 +3453,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         };
@@ -3457,6 +3488,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -3585,6 +3617,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         };
@@ -3610,6 +3646,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -3739,6 +3776,10 @@ mod tests {
                 unscaled_dual: Vec::new(),
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
         };
@@ -3768,6 +3809,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -3888,6 +3930,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -4017,6 +4060,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
@@ -4160,6 +4204,10 @@ mod tests {
                     unscaled_dual: Vec::new(),
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
             })
@@ -4186,6 +4234,7 @@ mod tests {
                 cumulative_discount_factors: &[],
                 stage_lag_transitions: &[],
                 noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &mut fcf,
             &mut empty_cut_batches(templates.len()),

@@ -71,7 +71,7 @@ use crate::{
     FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
     SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
     StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
-    WorkspacePool,
+    WorkspacePool, WorkspaceSizing,
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -419,6 +419,14 @@ pub struct StudySetup {
     /// When `recent_observations` is empty, this is an all-zero seed and the
     /// behavior is identical to the previous zero-reset.
     recent_observation_seed: crate::lag_transition::RecentObservationSeed,
+
+    /// PAR order of the downstream (coarser) resolution model.
+    ///
+    /// Non-zero only when the study includes stages with `season_id >= 12` (quarterly
+    /// range), indicating a monthly-to-quarterly resolution transition. Set at setup
+    /// time and passed to `WorkspaceSizing` so that downstream scratch buffers are
+    /// allocated at the correct capacity. Zero for uniform-resolution studies.
+    downstream_par_order: usize,
 }
 
 impl StudySetup {
@@ -828,8 +836,23 @@ impl StudySetup {
             };
             &noop_season_map
         };
-        let stage_lag_transitions =
-            crate::lag_transition::precompute_stage_lag_transitions(&stages, season_map_ref);
+        // Compute downstream PAR order: non-zero when any stage has season_id >= 12
+        // (quarterly range), indicating a monthly-to-quarterly resolution transition.
+        // Use the global max_par_order from the stochastic context as a proxy for the
+        // quarterly PAR order until a separate quarterly stochastic context is available.
+        let has_quarterly_stages = stages
+            .iter()
+            .any(|s| s.season_id.is_some_and(|id| id >= 12));
+        let downstream_par_order = if has_quarterly_stages {
+            stochastic.par().max_order()
+        } else {
+            0
+        };
+        let stage_lag_transitions = crate::lag_transition::precompute_stage_lag_transitions(
+            &stages,
+            season_map_ref,
+            downstream_par_order,
+        );
         let noise_group_ids = crate::lag_transition::precompute_noise_groups(&stages);
 
         // Compute lag accumulator seed from recent_observations (if any).
@@ -1332,6 +1355,7 @@ impl StudySetup {
             stage_lag_transitions,
             noise_group_ids,
             recent_observation_seed,
+            downstream_par_order,
         })
     }
 
@@ -1566,6 +1590,7 @@ impl StudySetup {
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
             stage_lag_transitions: &self.stage_lag_transitions,
             noise_group_ids: &self.noise_group_ids,
+            downstream_par_order: self.downstream_par_order,
         }
     }
 
@@ -1708,6 +1733,7 @@ impl StudySetup {
             cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
             stage_lag_transitions: &self.stage_lag_transitions,
             noise_group_ids: &self.noise_group_ids,
+            downstream_par_order: self.downstream_par_order,
         };
 
         let training_ctx = TrainingContext {
@@ -1840,11 +1866,14 @@ impl StudySetup {
     ) -> Result<WorkspacePool<S>, SolverError> {
         let mut pool = WorkspacePool::try_new(
             n_threads,
-            self.indexer.hydro_count,
-            self.indexer.max_par_order,
             self.indexer.n_state,
-            self.stage_templates.n_load_buses,
-            self.max_blocks,
+            WorkspaceSizing {
+                hydro_count: self.indexer.hydro_count,
+                max_par_order: self.indexer.max_par_order,
+                n_load_buses: self.stage_templates.n_load_buses,
+                max_blocks: self.max_blocks,
+                downstream_par_order: self.downstream_par_order,
+            },
             solver_factory,
         )?;
         if self.basis_padding_enabled {

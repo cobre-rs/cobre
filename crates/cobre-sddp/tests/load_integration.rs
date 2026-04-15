@@ -453,6 +453,7 @@ fn test_stochastic_load_training_completes() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -555,6 +556,7 @@ fn test_deterministic_load_training_matches_baseline() {
         cumulative_discount_factors: &[],
         stage_lag_transitions: &[],
         noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -671,6 +673,7 @@ fn test_stochastic_load_seed_determinism() {
             cumulative_discount_factors: &[],
             stage_lag_transitions: &[],
             noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,

@@ -615,7 +615,7 @@ fn reset_scenario_state<S: SolverInterface>(
     // non-empty, copy it instead of zeroing — this pre-fills the partial
     // period with pre-study observed data.
     if recent_accum_seed.is_empty() {
-        ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+        ws.scratch.lag_accumulator.fill(0.0);
         ws.scratch.lag_weight_accum = 0.0;
     } else {
         ws.scratch.lag_accumulator[..recent_accum_seed.len()].copy_from_slice(recent_accum_seed);

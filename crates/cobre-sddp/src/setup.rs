@@ -4392,10 +4392,12 @@ mod tests {
             cobre_core::HydroPastInflows {
                 hydro_id: EntityId(1),
                 values_m3s: h1_past,
+                season_ids: None,
             },
             cobre_core::HydroPastInflows {
                 hydro_id: EntityId(2),
                 values_m3s: h2_past,
+                season_ids: None,
             },
         ];
 

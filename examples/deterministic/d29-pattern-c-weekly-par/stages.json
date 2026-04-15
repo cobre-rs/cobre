@@ -1,0 +1,94 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "season_definitions": {
+    "cycle_type": "monthly",
+    "seasons": [
+      { "id": 0, "month_start": 1, "label": "January" },
+      { "id": 1, "month_start": 2, "label": "February" },
+      { "id": 2, "month_start": 3, "label": "March" },
+      { "id": 3, "month_start": 4, "label": "April" },
+      { "id": 4, "month_start": 5, "label": "May" },
+      { "id": 5, "month_start": 6, "label": "June" },
+      { "id": 6, "month_start": 7, "label": "July" },
+      { "id": 7, "month_start": 8, "label": "August" },
+      { "id": 8, "month_start": 9, "label": "September" },
+      { "id": 9, "month_start": 10, "label": "October" },
+      { "id": 10, "month_start": 11, "label": "November" },
+      { "id": 11, "month_start": 12, "label": "December" }
+    ]
+  },
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "pre_study_stages": [
+    {
+      "id": -1,
+      "start_date": "2023-12-01",
+      "end_date": "2024-01-01",
+      "season_id": 11
+    }
+  ],
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-01-08",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 1,
+      "start_date": "2024-01-08",
+      "end_date": "2024-01-15",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 2,
+      "start_date": "2024-01-15",
+      "end_date": "2024-01-22",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 3,
+      "start_date": "2024-01-22",
+      "end_date": "2024-01-29",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    }
+  ]
+}

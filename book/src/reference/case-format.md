@@ -366,12 +366,12 @@ and policy graph horizon type.
 Initial reservoir storage, past inflow lags, and recent observations at the
 start of the study.
 
-| Field                 | Required | Description                                                                              |
-| --------------------- | -------- | ---------------------------------------------------------------------------------------- |
-| `storage`             | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros     |
-| `filling_storage`     | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros       |
-| `past_inflows`        | No       | Array of `{ "hydro_id": integer, "values_m3s": [number] }` for PAR(p) lag initialization |
-| `recent_observations` | No       | Array of observed inflow entries for mid-season study starts (see below)                 |
+| Field                 | Required | Description                                                                                                       |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `storage`             | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros                              |
+| `filling_storage`     | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros                                |
+| `past_inflows`        | No       | Array of `{ "hydro_id": integer, "values_m3s": [number], "season_ids": [integer] }` for PAR(p) lag initialization |
+| `recent_observations` | No       | Array of observed inflow entries for mid-season study starts (see below)                                          |
 
 Each `hydro_id` must be unique within its array and must not appear in both
 `storage` and `filling_storage`. All `value_hm3` values must be non-negative.
@@ -381,6 +381,18 @@ initialization. For each hydro, `values_m3s[0]` is the most recent past inflow
 (lag 1) and `values_m3s[p-1]` is the oldest (lag p). The array length must be
 
 > = the hydro's PAR order. Optional; defaults to an empty array when absent.
+
+Each `past_inflows` entry supports an optional `season_ids` field:
+
+| Field        | Type             | Description                                                                                                                                                                                                                            |
+| ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hydro_id`   | integer          | Hydro plant identifier                                                                                                                                                                                                                 |
+| `values_m3s` | array of number  | Past inflow values [m³/s], most recent first                                                                                                                                                                                           |
+| `season_ids` | array of integer | Optional. Season IDs corresponding to each lag entry. When present, length must equal `values_m3s.length`. Each value must reference a valid season ID from `season_definitions`. Absent from legacy JSON files (backward compatible). |
+
+When `season_ids` is present and a season ID is not defined in `season_definitions`, a
+`BusinessRuleViolation` is emitted during semantic validation (Rule 32) when the
+hydro has PAR order > 0 and a `SeasonMap` is available.
 
 **`recent_observations`** provides observed inflow data for partial periods
 before the study start. Used to seed the lag accumulator when a study begins

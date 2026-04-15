@@ -2508,6 +2508,7 @@ mod tests {
             vec![HydroPastInflows {
                 hydro_id,
                 values_m3s: vec![lag_value],
+                season_ids: None,
             }]
         } else {
             vec![]
@@ -2657,6 +2658,7 @@ mod tests {
             past_inflows: vec![HydroPastInflows {
                 hydro_id,
                 values_m3s: vec![500.0],
+                season_ids: None,
             }],
             recent_observations: vec![],
         };

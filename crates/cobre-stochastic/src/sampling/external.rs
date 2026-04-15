@@ -1124,6 +1124,7 @@ mod tests {
         let past_inflows = vec![HydroPastInflows {
             hydro_id,
             values_m3s: vec![110.0],
+            season_ids: None,
         }];
         let transitions = uniform_monthly_transitions(stages.len());
         standardize_external_inflow(
@@ -1256,6 +1257,7 @@ mod tests {
         let past_inflows = vec![HydroPastInflows {
             hydro_id,
             values_m3s: vec![110.0],
+            season_ids: None,
         }];
 
         standardize_external_inflow(
@@ -1379,6 +1381,7 @@ mod tests {
         let past_inflows = vec![HydroPastInflows {
             hydro_id,
             values_m3s: vec![110.0],
+            season_ids: None,
         }];
 
         standardize_external_inflow(
@@ -1903,6 +1906,7 @@ mod tests {
         let past_inflows = vec![HydroPastInflows {
             hydro_id,
             values_m3s: vec![past_lag],
+            season_ids: None,
         }];
 
         // Standardize: compute eta values for all (stage, scenario) pairs.

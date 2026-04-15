@@ -107,6 +107,9 @@ struct RawHydroPastInflows {
     hydro_id: i32,
     /// Past inflow values in m³/s, ordered from most recent (lag 1) to oldest.
     values_m3s: Vec<f64>,
+    /// Optional season IDs for each lag entry. Absent from legacy JSON files.
+    #[serde(default)]
+    season_ids: Option<Vec<u32>>,
 }
 
 /// Intermediate type for one recent-observation entry.
@@ -177,6 +180,7 @@ fn validate_raw(raw: &RawInitialConditions, path: &Path) -> Result<(), LoadError
     validate_mutual_exclusion(raw, path)?;
     validate_past_inflows_no_duplicates(&raw.past_inflows, path)?;
     validate_past_inflows_values(&raw.past_inflows, path)?;
+    validate_past_inflows_season_ids(&raw.past_inflows, path)?;
     validate_recent_observations_dates(&raw.recent_observations, path)?;
     validate_recent_observations_values(&raw.recent_observations, path)?;
     validate_recent_observations_no_overlap(&raw.recent_observations, path)?;
@@ -272,6 +276,32 @@ fn validate_past_inflows_values(
                     message: format!(
                         "past_inflows[{i}].values_m3s[{j}] is not finite (got {v}); \
                          all inflow values must be finite numbers"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check that when `season_ids` is present for a `past_inflows` entry, its
+/// length equals `values_m3s.len()`.
+fn validate_past_inflows_season_ids(
+    entries: &[RawHydroPastInflows],
+    path: &Path,
+) -> Result<(), LoadError> {
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some(season_ids) = &entry.season_ids {
+            if season_ids.len() != entry.values_m3s.len() {
+                return Err(LoadError::SchemaError {
+                    path: path.to_path_buf(),
+                    field: format!("past_inflows[{i}].season_ids"),
+                    message: format!(
+                        "past_inflows[{i}].season_ids has {} element(s) but \
+                         past_inflows[{i}].values_m3s has {} element(s); \
+                         season_ids length must equal values_m3s length",
+                        season_ids.len(),
+                        entry.values_m3s.len()
                     ),
                 });
             }
@@ -428,6 +458,7 @@ fn convert(raw: RawInitialConditions) -> InitialConditions {
         .map(|e| HydroPastInflows {
             hydro_id: EntityId(e.hydro_id),
             values_m3s: e.values_m3s,
+            season_ids: e.season_ids,
         })
         .collect();
     past_inflows.sort_by_key(|e| e.hydro_id.0);
@@ -1205,6 +1236,83 @@ mod tests {
         assert_eq!(
             ic1.recent_observations[0].start_date,
             chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+        );
+    }
+
+    // ── AC: past_inflows season_ids ───────────────────────────────────────────
+
+    /// Given a `past_inflows` entry with matching `season_ids` and `values_m3s`
+    /// lengths, `parse_initial_conditions` returns `Ok(ic)` with the season_ids
+    /// preserved.
+    #[test]
+    fn test_parse_past_inflows_with_valid_season_ids() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0], "season_ids": [3, 2] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let ic = parse_initial_conditions(f.path()).unwrap();
+        assert_eq!(ic.past_inflows.len(), 1);
+        assert_eq!(ic.past_inflows[0].hydro_id, EntityId(0));
+        assert_eq!(ic.past_inflows[0].values_m3s, vec![600.0, 500.0]);
+        assert_eq!(ic.past_inflows[0].season_ids, Some(vec![3, 2]));
+    }
+
+    /// Given a `past_inflows` entry where `season_ids` has length 3 but
+    /// `values_m3s` has length 2, `parse_initial_conditions` returns
+    /// `Err(LoadError::SchemaError)` with field containing `season_ids`.
+    #[test]
+    fn test_parse_past_inflows_season_ids_length_mismatch() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0], "season_ids": [3, 2, 1] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let err = parse_initial_conditions(f.path()).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("season_ids"),
+                    "field should contain 'season_ids', got: {field}"
+                );
+                assert!(
+                    field.contains("past_inflows[0]"),
+                    "field should reference 'past_inflows[0]', got: {field}"
+                );
+                assert!(
+                    message.contains("season_ids length must equal values_m3s length")
+                        || message.contains("3")
+                        || message.contains("2"),
+                    "message should describe the mismatch, got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// Given a `past_inflows` entry without a `season_ids` key (legacy JSON),
+    /// `parse_initial_conditions` returns `Ok(ic)` with `season_ids == None`.
+    #[test]
+    fn test_parse_past_inflows_without_season_ids_backward_compat() {
+        let json = r#"{
+          "storage": [],
+          "filling_storage": [],
+          "past_inflows": [
+            { "hydro_id": 0, "values_m3s": [600.0, 500.0] }
+          ]
+        }"#;
+        let f = write_json(json);
+        let ic = parse_initial_conditions(f.path()).unwrap();
+        assert_eq!(ic.past_inflows.len(), 1);
+        assert_eq!(
+            ic.past_inflows[0].season_ids, None,
+            "absent season_ids must deserialize as None"
         );
     }
 }

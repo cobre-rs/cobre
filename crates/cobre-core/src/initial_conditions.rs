@@ -22,7 +22,7 @@
 //!         HydroStorage { hydro_id: EntityId(10), value_hm3: 200.0 },
 //!     ],
 //!     past_inflows: vec![
-//!         HydroPastInflows { hydro_id: EntityId(0), values_m3s: vec![600.0, 500.0] },
+//!         HydroPastInflows { hydro_id: EntityId(0), values_m3s: vec![600.0, 500.0], season_ids: None },
 //!     ],
 //!     recent_observations: vec![],
 //! };
@@ -65,6 +65,17 @@ pub struct HydroPastInflows {
     /// Past inflow values in m³/s, ordered from most recent (index 0 = lag 1)
     /// to oldest (index p-1 = lag p).
     pub values_m3s: Vec<f64>,
+    /// Optional season IDs corresponding to each lag entry in `values_m3s`.
+    ///
+    /// When present, `season_ids.len()` must equal `values_m3s.len()`. Each
+    /// element is a season ID (as defined in `season_definitions`) identifying
+    /// the temporal period of the corresponding lag entry. When absent, no
+    /// temporal validation of lag entries is performed.
+    ///
+    /// In JSON: the field is optional (`serde(default)` fills `None` when the
+    /// key is absent). Backward-compatible with existing JSON files.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub season_ids: Option<Vec<u32>>,
 }
 
 /// Observed inflow for a single hydro plant over a specific date range.
@@ -168,6 +179,7 @@ mod tests {
             past_inflows: vec![HydroPastInflows {
                 hydro_id: EntityId(0),
                 values_m3s: vec![600.0, 500.0],
+                season_ids: None,
             }],
             recent_observations: vec![],
         };
@@ -211,6 +223,7 @@ mod tests {
         let hpi = HydroPastInflows {
             hydro_id: EntityId(3),
             values_m3s: vec![300.0, 200.0, 100.0],
+            season_ids: None,
         };
         let cloned = hpi.clone();
         assert_eq!(hpi, cloned);
@@ -239,6 +252,7 @@ mod tests {
             past_inflows: vec![HydroPastInflows {
                 hydro_id: EntityId(0),
                 values_m3s: vec![600.0, 500.0],
+                season_ids: None,
             }],
             recent_observations: vec![],
         };
@@ -351,5 +365,45 @@ mod tests {
         let json = r#"{"storage":[],"filling_storage":[]}"#;
         let ic: InitialConditions = serde_json::from_str(json).unwrap();
         assert!(ic.recent_observations.is_empty());
+    }
+
+    #[test]
+    fn test_hydro_past_inflows_with_season_ids() {
+        let hpi = HydroPastInflows {
+            hydro_id: EntityId(5),
+            values_m3s: vec![600.0, 500.0],
+            season_ids: Some(vec![3, 2]),
+        };
+        assert_eq!(hpi.hydro_id, EntityId(5));
+        assert_eq!(hpi.values_m3s, vec![600.0, 500.0]);
+        assert_eq!(hpi.season_ids, Some(vec![3, 2]));
+        // Clone preserves season_ids
+        let cloned = hpi.clone();
+        assert_eq!(cloned, hpi);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_hydro_past_inflows_serde_roundtrip_with_season_ids() {
+        let hpi = HydroPastInflows {
+            hydro_id: EntityId(5),
+            values_m3s: vec![600.0, 500.0],
+            season_ids: Some(vec![3, 2]),
+        };
+        let json = serde_json::to_string(&hpi).unwrap();
+        let deserialized: HydroPastInflows = serde_json::from_str(&json).unwrap();
+        assert_eq!(hpi, deserialized);
+        assert_eq!(deserialized.season_ids, Some(vec![3, 2]));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_hydro_past_inflows_serde_default_season_ids_absent() {
+        // When season_ids is absent from JSON, it defaults to None.
+        let json = r#"{"hydro_id":0,"values_m3s":[600.0,500.0]}"#;
+        let hpi: HydroPastInflows = serde_json::from_str(json).unwrap();
+        assert_eq!(hpi.hydro_id, EntityId(0));
+        assert_eq!(hpi.values_m3s, vec![600.0, 500.0]);
+        assert_eq!(hpi.season_ids, None);
     }
 }

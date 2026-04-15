@@ -57,6 +57,7 @@
 //! |29  | All stages sharing a `season_id` must have compatible durations (within 7d) | `stages.json`                        | `BusinessRuleViolation`  |
 //! |30  | Season defined in `season_definitions` but not referenced by any stage   | `stages.json`                                  | `ModelQuality` (warning) |
 //! |31  | Observation resolution must not be finer than season resolution          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
+//! |32  | Each `season_id` in `past_inflows[i].season_ids` must exist in `SeasonMap` | `initial_conditions.json`                    | `BusinessRuleViolation`  |
 
 use std::collections::{HashMap, HashSet};
 
@@ -490,6 +491,7 @@ pub(crate) fn validate_semantic_stages_penalties_scenarios(
     check_load_factor_consistency(data, ctx);
     check_estimation_prerequisites(data, ctx);
     check_past_inflows_coverage(data, ctx);
+    check_past_inflows_season_ids(data, ctx);
     check_season_id_consistency(data, ctx);
     check_observation_season_alignment(data, ctx);
 }
@@ -1475,6 +1477,65 @@ fn check_past_inflows_coverage(data: &ParsedData, ctx: &mut ValidationContext) {
                      remove the unknown hydro or add it to the registry"
                 ),
             );
+        }
+    }
+}
+
+// ── Rule 32: past_inflows season_ids against SeasonMap ───────────────────────
+
+/// Rule 32: when `past_inflows[i].season_ids` is `Some` and the hydro has
+/// PAR order > 0, each `season_id` value must exist in the `SeasonMap`.
+///
+/// Skips the check when `season_map` is `None` — the semantic layer cannot
+/// validate season IDs without a `SeasonMap`. Schema-layer length validation
+/// (matching `season_ids.len() == values_m3s.len()`) is handled in
+/// `cobre-io/src/initial_conditions.rs`.
+fn check_past_inflows_season_ids(data: &ParsedData, ctx: &mut ValidationContext) {
+    let Some(season_map) = &data.stages.policy_graph.season_map else {
+        return;
+    };
+
+    // Build per-hydro maximum PAR order from inflow_ar_coefficients.
+    let mut max_order_per_hydro: HashMap<i32, i32> = HashMap::new();
+    for row in &data.inflow_ar_coefficients {
+        let entry = max_order_per_hydro.entry(row.hydro_id.0).or_insert(0);
+        if row.lag > *entry {
+            *entry = row.lag;
+        }
+    }
+
+    let valid_ids: HashSet<usize> = season_map.seasons.iter().map(|s| s.id).collect();
+    let mut sorted_valid_ids: Vec<usize> = valid_ids.iter().copied().collect();
+    sorted_valid_ids.sort_unstable();
+
+    for pi in &data.initial_conditions.past_inflows {
+        let par_order = max_order_per_hydro
+            .get(&pi.hydro_id.0)
+            .copied()
+            .unwrap_or(0);
+        if par_order == 0 {
+            continue;
+        }
+
+        let Some(season_ids) = &pi.season_ids else {
+            continue;
+        };
+
+        for &sid in season_ids {
+            let sid_usize = sid as usize;
+            if !valid_ids.contains(&sid_usize) {
+                let entity_str = format!("Hydro {}", pi.hydro_id.0);
+                ctx.add_error(
+                    ErrorKind::BusinessRuleViolation,
+                    "initial_conditions.json",
+                    Some(&entity_str),
+                    format!(
+                        "Hydro {}: past_inflows.season_ids contains season_id {} which is \
+                         not defined in season_definitions; valid season IDs are {:?}",
+                        pi.hydro_id.0, sid, sorted_valid_ids,
+                    ),
+                );
+            }
         }
     }
 }
@@ -4427,6 +4488,7 @@ mod tests {
         let past = vec![cobre_core::HydroPastInflows {
             hydro_id: EntityId::from(1),
             values_m3s: vec![300.0, 200.0, 100.0], // 3 values >= PAR order 3
+            season_ids: None,
         }];
         let data = make_data_past_inflows(vec![make_hydro(1, None)], true, past, ar_rows);
         let mut ctx = ValidationContext::new();
@@ -4459,6 +4521,7 @@ mod tests {
         let past = vec![cobre_core::HydroPastInflows {
             hydro_id: EntityId::from(1),
             values_m3s: vec![200.0, 100.0], // only 2 values, need 3
+            season_ids: None,
         }];
         let data = make_data_past_inflows(vec![make_hydro(1, None)], true, past, ar_rows);
         let mut ctx = ValidationContext::new();
@@ -4531,10 +4594,12 @@ mod tests {
             cobre_core::HydroPastInflows {
                 hydro_id: EntityId::from(1),
                 values_m3s: vec![100.0],
+                season_ids: None,
             },
             cobre_core::HydroPastInflows {
                 hydro_id: EntityId::from(99), // unknown
                 values_m3s: vec![50.0],
+                season_ids: None,
             },
         ];
         // Provide enough AR rows so rule 22 and 23 are satisfied for hydro 1.
@@ -4559,6 +4624,129 @@ mod tests {
             !rule24_errors.is_empty(),
             "unknown hydro 99 in past_inflows should produce a BusinessRuleViolation; \
              got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    // ── Rule 32: past_inflows season_ids against SeasonMap ──────────────────
+
+    /// Build a `ParsedData` like `make_data_past_inflows` but with a SeasonMap
+    /// containing seasons with IDs `0..num_seasons`.
+    fn make_data_past_inflows_with_season_map(
+        hydros: Vec<Hydro>,
+        past_inflows: Vec<cobre_core::HydroPastInflows>,
+        inflow_ar_coefficients: Vec<InflowArCoefficientRow>,
+        num_seasons: usize,
+    ) -> ParsedData {
+        use cobre_core::temporal::{SeasonCycleType, SeasonDefinition, SeasonMap};
+
+        let seasons = (0..num_seasons)
+            .map(|i| SeasonDefinition {
+                id: i,
+                label: format!("Season{i}"),
+                month_start: (i % 12 + 1) as u32,
+                day_start: None,
+                month_end: None,
+                day_end: None,
+            })
+            .collect();
+        let season_map = SeasonMap {
+            cycle_type: SeasonCycleType::Monthly,
+            seasons,
+        };
+
+        let mut data = make_data_past_inflows(hydros, true, past_inflows, inflow_ar_coefficients);
+        data.stages.policy_graph.season_map = Some(season_map);
+        data
+    }
+
+    /// Rule 32: `past_inflows[i].season_ids` contains an ID not in the `SeasonMap`
+    /// -> `BusinessRuleViolation` mentioning the invalid season ID.
+    #[test]
+    fn test_past_inflows_season_ids_invalid_season() {
+        let past = vec![cobre_core::HydroPastInflows {
+            hydro_id: EntityId::from(1),
+            values_m3s: vec![300.0, 200.0],
+            season_ids: Some(vec![0, 99]), // season_id 99 is invalid (only 0..4 exist)
+        }];
+        let ar_rows = vec![make_ar_row(1, 0, 1), make_ar_row(1, 0, 2)];
+        let data = make_data_past_inflows_with_season_map(
+            vec![make_hydro(1, None)],
+            past,
+            ar_rows,
+            5, // seasons 0..4 exist
+        );
+        let mut ctx = ValidationContext::new();
+        check_past_inflows_season_ids(&data, &mut ctx);
+
+        let rule32_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("season_id")
+                    && e.message.contains("99")
+            })
+            .collect();
+        assert!(
+            !rule32_errors.is_empty(),
+            "invalid season_id 99 should produce a BusinessRuleViolation; \
+             got errors: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Rule 32: all `season_ids` are valid -> no `BusinessRuleViolation`.
+    #[test]
+    fn test_past_inflows_season_ids_valid() {
+        let past = vec![cobre_core::HydroPastInflows {
+            hydro_id: EntityId::from(1),
+            values_m3s: vec![300.0, 200.0],
+            season_ids: Some(vec![3, 2]), // both exist in seasons 0..4
+        }];
+        let ar_rows = vec![make_ar_row(1, 0, 1), make_ar_row(1, 0, 2)];
+        let data = make_data_past_inflows_with_season_map(
+            vec![make_hydro(1, None)],
+            past,
+            ar_rows,
+            5, // seasons 0..4 exist
+        );
+        let mut ctx = ValidationContext::new();
+        check_past_inflows_season_ids(&data, &mut ctx);
+
+        let rule32_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.file.to_string_lossy().contains("initial_conditions.json")
+                    && e.message.contains("season_id")
+            })
+            .collect();
+        assert!(
+            rule32_errors.is_empty(),
+            "valid season_ids should produce no rule-32 errors; got: {:?}",
+            ctx.errors()
+        );
+    }
+
+    /// Rule 32 is skipped when `season_map` is `None`.
+    #[test]
+    fn test_past_inflows_season_ids_no_season_map_skipped() {
+        let past = vec![cobre_core::HydroPastInflows {
+            hydro_id: EntityId::from(1),
+            values_m3s: vec![300.0],
+            season_ids: Some(vec![999]), // would be invalid if season_map were present
+        }];
+        let ar_rows = vec![make_ar_row(1, 0, 1)];
+        // make_data_past_inflows uses season_map: None
+        let data = make_data_past_inflows(vec![make_hydro(1, None)], true, past, ar_rows);
+        let mut ctx = ValidationContext::new();
+        check_past_inflows_season_ids(&data, &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "no season_map means rule 32 should be skipped; got: {:?}",
             ctx.errors()
         );
     }

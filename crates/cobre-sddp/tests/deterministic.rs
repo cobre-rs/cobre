@@ -2747,6 +2747,167 @@ fn d28_decomp_weekly_monthly_loads_and_trains() {
     );
 }
 
+/// D29: Pattern C — weekly stages with PAR(1) noise sharing.
+///
+/// ## System
+///
+/// 1 bus, 1 hydro (H0), 4 weekly stages in January 2024 (all season_id=0),
+/// PAR(1) with psi=0.5, OutOfSample noise, inflow_lags=true.
+///
+/// ## What this tests
+///
+/// - All 4 weekly stages share the same noise group ID (group 0).
+/// - Training with noise sharing completes without error.
+/// - Simulation completes with sensible costs.
+///
+/// This is the end-to-end verification that Epics 1-2 (noise group
+/// precomputation, ForwardSampler integration, opening tree integration,
+/// setup wiring) compose correctly for the Pattern C workflow.
+#[test]
+fn d29_pattern_c_weekly_par() {
+    let case_dir = Path::new("../../examples/deterministic/d29-pattern-c-weekly-par");
+
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    // Build the training scenario source from the config so the seed and
+    // OutOfSample scheme are propagated to the forward-pass noise generator.
+    let training_source = config
+        .training_scenario_source(&config_path)
+        .expect("training_scenario_source must parse");
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let pr = prepare_stochastic(system, case_dir, &config, 42, &training_source)
+        .expect("prepare_stochastic must succeed");
+    let system = pr.system;
+    let stochastic = pr.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut setup =
+        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+
+    // AC: All 4 weekly stages in January 2024 must share the same noise group ID.
+    let groups = setup.noise_group_ids();
+    assert_eq!(groups.len(), 4, "expected 4 study stages");
+    assert!(
+        groups.iter().all(|&g| g == groups[0]),
+        "all weekly stages in the same month must share the same group ID, got {groups:?}"
+    );
+
+    // Train.
+    let comm = StubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(
+        outcome.error.is_none(),
+        "D29: expected no training error, got: {:?}",
+        outcome.error
+    );
+    let result = outcome.result;
+
+    assert!(
+        result.iterations > 0,
+        "D29: must complete at least 1 iteration"
+    );
+    assert!(
+        result.final_lb > 0.0,
+        "D29: lower bound must be positive, got {}",
+        result.final_lb
+    );
+
+    // Simulate.
+    let mut pool = setup
+        .create_workspace_pool(1, HighsSolver::new)
+        .expect("simulation workspace pool must build");
+
+    let io_capacity = setup.io_channel_capacity().max(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
+
+    let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
+
+    let _local_costs = setup
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &result_tx,
+            None,
+            &result.basis_cache,
+        )
+        .expect("simulation must succeed");
+
+    drop(result_tx);
+    let scenario_results = drain_handle.join().expect("drain thread must not panic");
+
+    assert_eq!(
+        scenario_results.len(),
+        1,
+        "D29: expected 1 simulation scenario result"
+    );
+
+    // AC-4 (basis-padding): padded run must produce a near-identical lower bound
+    // to the baseline. D29 is excluded from the generic sweep because the sweep
+    // uses ScenarioSource::default(), which lacks the OutOfSample seed. Instead
+    // the assertion is inlined here using the same training_source built above.
+    let mut config_padded = config.clone();
+    config_padded.training.cut_selection.basis_padding = Some(true);
+
+    let system_padded = cobre_io::load_case(case_dir).expect("load_case (padded) must succeed");
+    let pr_padded = prepare_stochastic(
+        system_padded,
+        case_dir,
+        &config_padded,
+        42,
+        &training_source,
+    )
+    .expect("prepare_stochastic (padded) must succeed");
+    let system_padded = pr_padded.system;
+    let stochastic_padded = pr_padded.stochastic;
+    let hydro_models_padded = prepare_hydro_models(&system_padded, case_dir)
+        .expect("prepare_hydro_models (padded) must succeed");
+    let mut setup_padded = StudySetup::new(
+        &system_padded,
+        &config_padded,
+        stochastic_padded,
+        hydro_models_padded,
+    )
+    .expect("StudySetup (padded) must build");
+    let mut solver_padded = HighsSolver::new().expect("HighsSolver (padded) must succeed");
+    let outcome_padded = setup_padded
+        .train(&mut solver_padded, &comm, 1, HighsSolver::new, None, None)
+        .expect("train (padded) must return Ok");
+    assert!(
+        outcome_padded.error.is_none(),
+        "D29 padded: expected no training error, got: {:?}",
+        outcome_padded.error
+    );
+    let result_padded = outcome_padded.result;
+
+    let diff = (result_padded.final_lb - result.final_lb).abs();
+    let tol = 1e-9 * result.final_lb.abs().max(1.0);
+    assert!(
+        diff <= tol,
+        "D29: basis_padding lower bound differs from baseline beyond tolerance \
+         (baseline={}, padded={}, diff={:.2e}, tol={:.2e})",
+        result.final_lb,
+        result_padded.final_lb,
+        diff,
+        tol,
+    );
+
+    let stats_padded = solver_padded.statistics();
+    assert_eq!(
+        stats_padded.basis_rejections, 0,
+        "D29: expected 0 basis rejections with basis_padding=true, got {}",
+        stats_padded.basis_rejections,
+    );
+}
+
 // ===========================================================================
 // AC-4: Basis-padding regression sweep (P04)
 // ===========================================================================

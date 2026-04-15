@@ -34,6 +34,15 @@
             "type": "number"
           },
           "type": "array"
+        },
+        "season_ids": {
+          "description": "Optional season IDs corresponding to each lag entry in values_m3s, one per entry. When present, length must equal values_m3s.length. Each value must reference a season ID defined in season_definitions. Absent from legacy JSON files (backward compatible).",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
         }
       },
       "required": ["hydro_id", "values_m3s"],

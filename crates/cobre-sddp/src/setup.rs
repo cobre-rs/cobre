@@ -400,6 +400,15 @@ pub struct StudySetup {
     /// Exposed to the forward pass and simulation pipeline via [`StageContext`].
     stage_lag_transitions: Vec<StageLagTransition>,
 
+    /// Pre-computed noise group assignments for noise sharing in Pattern C.
+    ///
+    /// Stages with the same `(season_id, year)` share a noise group, so weekly
+    /// stages within the same month share the same noise draw. Computed at setup
+    /// time by [`crate::lag_transition::precompute_noise_groups`]. Indexed by stage.
+    /// Consumed by `ForwardSampler` and `generate_opening_tree` in Epic 2.
+    #[allow(dead_code)]
+    noise_group_ids: Vec<u32>,
+
     /// Pre-computed lag accumulator seed from `initial_conditions.recent_observations`.
     ///
     /// Computed once at setup time by
@@ -821,6 +830,7 @@ impl StudySetup {
         };
         let stage_lag_transitions =
             crate::lag_transition::precompute_stage_lag_transitions(&stages, season_map_ref);
+        let noise_group_ids = crate::lag_transition::precompute_noise_groups(&stages);
 
         // Compute lag accumulator seed from recent_observations (if any).
         // Uses the first study stage and the resolved season_map_ref. When there are
@@ -1320,6 +1330,7 @@ impl StudySetup {
             basis_padding_enabled: false,
             export_states: false,
             stage_lag_transitions,
+            noise_group_ids,
             recent_observation_seed,
         })
     }
@@ -1526,6 +1537,16 @@ impl StudySetup {
     #[must_use]
     pub fn stopping_rule_set(&self) -> &StoppingRuleSet {
         &self.stopping_rule_set
+    }
+
+    /// Return the precomputed noise group IDs, indexed by stage.
+    ///
+    /// Stages sharing the same `(season_id, year)` have the same group ID.
+    /// Consumed by `ForwardSampler` and `generate_opening_tree` in Epic 2
+    /// to share noise draws across weekly stages within the same monthly bucket.
+    #[must_use]
+    pub fn noise_group_ids(&self) -> &[u32] {
+        &self.noise_group_ids
     }
 
     /// Construct a [`StageContext`] borrowing from this setup.

@@ -12,6 +12,8 @@
 // Until then, suppress dead_code so the crate compiles cleanly with -D warnings.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 use chrono::{Datelike, NaiveDate};
 use cobre_core::{
     entities::hydro::Hydro,
@@ -317,6 +319,57 @@ pub fn precompute_stage_lag_transitions(
             }
         })
         .collect()
+}
+
+/// Precompute a noise group ID for each study stage.
+///
+/// Stages sharing the same `(season_id, year)` pair are assigned the same
+/// group ID, where `year` is derived from `stage.start_date.year()`. This
+/// allows the forward sampler to draw a single noise sample per group and
+/// broadcast it to all stages in that group (Pattern C: weekly stages with
+/// monthly PAR noise).
+///
+/// # Assignment rules
+///
+/// - Stages with `season_id = Some(id)` are grouped by the key
+///   `(id, start_date.year())`. The first stage encountered for a new key
+///   defines that key's group ID.
+/// - Stages with `season_id = None` each receive a unique group ID. No
+///   sharing occurs for unassigned stages.
+/// - Group IDs are consecutive integers starting from 0. The first distinct
+///   key encountered in stage-index order receives group 0.
+///
+/// # Backward compatibility
+///
+/// For uniform monthly studies — where every stage has a unique
+/// `(season_id, year)` pair — the returned vector is `[0, 1, 2, ..., n-1]`.
+/// This is equivalent to the existing per-stage indexing used by
+/// `derive_forward_seed`, so no behavioural change is triggered until the
+/// caller switches to `derive_forward_seed_grouped`.
+///
+/// # Infallible
+///
+/// Every stage receives exactly one group ID. The returned `Vec<u32>` has the
+/// same length as `stages`.
+pub fn precompute_noise_groups(stages: &[Stage]) -> Vec<u32> {
+    let mut group_map: HashMap<(usize, i32), u32> = HashMap::new();
+    let mut next_group_id: u32 = 0;
+    let mut result = Vec::with_capacity(stages.len());
+    for stage in stages {
+        if let Some(season_id) = stage.season_id {
+            let key = (season_id, stage.start_date.year());
+            let gid = *group_map.entry(key).or_insert_with(|| {
+                let id = next_group_id;
+                next_group_id += 1;
+                id
+            });
+            result.push(gid);
+        } else {
+            result.push(next_group_id);
+            next_group_id += 1;
+        }
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -889,5 +942,137 @@ mod tests {
 
         assert_eq!(seed.accum_seed[0], 0.0);
         assert_eq!(seed.weight_seed, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // precompute_noise_groups tests
+    // -----------------------------------------------------------------------
+
+    /// Test 1: 12 monthly stages each with a unique `(season_id, year)` pair
+    /// must produce 12 distinct group IDs `[0, 1, ..., 11]`.
+    #[test]
+    fn test_noise_groups_monthly_unique() {
+        let stages: Vec<Stage> = (0..12usize)
+            .map(|i| {
+                let month = u32::try_from(i + 1).unwrap();
+                let start = d(2024, month, 1);
+                let (ny, nm) = if month == 12 {
+                    (2025, 1u32)
+                } else {
+                    (2024, month + 1)
+                };
+                let end = d(ny, nm, 1);
+                make_stage(i, start, end, Some(i))
+            })
+            .collect();
+
+        let groups = precompute_noise_groups(&stages);
+
+        assert_eq!(groups.len(), 12);
+        let expected: Vec<u32> = (0..12u32).collect();
+        assert_eq!(groups, expected);
+    }
+
+    /// Test 2: 4 weekly stages (`season_id=0`) + 4 weekly stages (`season_id=1`),
+    /// all in year 2024. Stages 0-3 get group 0, stages 4-7 get group 1.
+    #[test]
+    fn test_noise_groups_weekly_shared() {
+        // Weekly stages in season 0 (e.g. weeks 1-4 of January)
+        let stages_s0: Vec<Stage> = (0..4usize)
+            .map(|i| {
+                let day_start = u32::try_from(i * 7 + 1).unwrap();
+                let day_end = u32::try_from(i * 7 + 8).unwrap();
+                let start = d(2024, 1, day_start);
+                let end = d(2024, 1, day_end);
+                make_stage(i, start, end, Some(0))
+            })
+            .collect();
+        // Weekly stages in season 1 (e.g. weeks 1-4 of February)
+        let stages_s1: Vec<Stage> = (0..4usize)
+            .map(|i| {
+                let day_start = u32::try_from(i * 7 + 1).unwrap();
+                let day_end = u32::try_from(i * 7 + 8).unwrap();
+                let start = d(2024, 2, day_start);
+                let end = d(2024, 2, day_end);
+                make_stage(i + 4, start, end, Some(1))
+            })
+            .collect();
+
+        let mut all_stages = stages_s0;
+        all_stages.extend(stages_s1);
+
+        let groups = precompute_noise_groups(&all_stages);
+
+        assert_eq!(groups.len(), 8);
+        // Stages 0-3 share group 0, stages 4-7 share group 1.
+        assert!(groups[0..4].iter().all(|&g| g == 0));
+        assert!(groups[4..8].iter().all(|&g| g == 1));
+    }
+
+    /// Test 3: 4 weekly stages (season 0, year 2024) + 1 monthly stage (season 0,
+    /// year 2024). All 5 stages share group 0 because they have the same key.
+    #[test]
+    fn test_noise_groups_mixed_weekly_monthly() {
+        let weekly: Vec<Stage> = (0..4usize)
+            .map(|i| {
+                let day_start = u32::try_from(i * 7 + 1).unwrap();
+                let day_end = u32::try_from(i * 7 + 8).unwrap();
+                let start = d(2024, 1, day_start);
+                let end = d(2024, 1, day_end);
+                make_stage(i, start, end, Some(0))
+            })
+            .collect();
+        // Monthly stage: same season_id=0 and start_date in 2024.
+        let monthly = make_stage(4, d(2024, 1, 1), d(2024, 2, 1), Some(0));
+
+        let mut stages = weekly;
+        stages.push(monthly);
+
+        let groups = precompute_noise_groups(&stages);
+
+        assert_eq!(groups.len(), 5);
+        assert!(
+            groups.iter().all(|&g| g == 0),
+            "all stages must share group 0"
+        );
+    }
+
+    /// Test 4: stages with `season_id = None` each get a unique group ID.
+    #[test]
+    fn test_noise_groups_none_season_id() {
+        let stages: Vec<Stage> = (0..3usize)
+            .map(|i| {
+                let start = d(2024, 1, u32::try_from(i + 1).unwrap());
+                let end = d(2024, 1, u32::try_from(i + 2).unwrap());
+                make_stage(i, start, end, None)
+            })
+            .collect();
+
+        let groups = precompute_noise_groups(&stages);
+
+        assert_eq!(groups.len(), 3);
+        // Each None-season stage gets a distinct group.
+        assert_eq!(groups[0], 0);
+        assert_eq!(groups[1], 1);
+        assert_eq!(groups[2], 2);
+    }
+
+    /// Test 5: same `season_id` but different years must produce different groups.
+    #[test]
+    fn test_noise_groups_cross_year() {
+        // Two weekly stages: season_id=0, year 2024 and year 2025.
+        let stage_2024 = make_stage(0, d(2024, 1, 1), d(2024, 1, 8), Some(0));
+        let stage_2025 = make_stage(1, d(2025, 1, 1), d(2025, 1, 8), Some(0));
+
+        let stages = vec![stage_2024, stage_2025];
+        let groups = precompute_noise_groups(&stages);
+
+        assert_eq!(groups.len(), 2);
+        assert_ne!(
+            groups[0], groups[1],
+            "different years must yield different groups"
+        );
+        assert_eq!(groups[0], 0);
+        assert_eq!(groups[1], 1);
     }
 }

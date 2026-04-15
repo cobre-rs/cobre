@@ -186,7 +186,7 @@ fn build_retry_histogram_batch(rows: &[SolverStatsRow]) -> Result<RecordBatch, O
 
     let n = iterations.len();
     let mut phase_builder = StringBuilder::with_capacity(n, n * 10);
-    for p in &phases {
+    for &p in &phases {
         phase_builder.append_value(p);
     }
 

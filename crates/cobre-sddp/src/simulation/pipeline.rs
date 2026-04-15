@@ -591,8 +591,11 @@ fn process_scenario_stages<S: SolverInterface>(
         indexer,
         stochastic,
         initial_state,
+        recent_accum_seed,
+        recent_weight_seed,
         ..
     } = training_ctx;
+    let recent_weight_seed = *recent_weight_seed;
     // Reset workspace state to the initial conditions for this scenario.
     ws.current_state.clear();
     ws.current_state.extend_from_slice(initial_state);
@@ -604,10 +607,17 @@ fn process_scenario_stages<S: SolverInterface>(
         total_scenarios: ids.total_scenarios,
     };
     sampler.apply_initial_state(&class_req, &mut ws.current_state, indexer.inflow_lags.start);
-    // Reset lag accumulator at trajectory start so it does not carry state
-    // across simulation scenarios.
-    ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
-    ws.scratch.lag_weight_accum = 0.0;
+    // Seed (or zero) the lag accumulator at trajectory start so it does not
+    // carry state across simulation scenarios. When recent_accum_seed is
+    // non-empty, copy it instead of zeroing — this pre-fills the partial
+    // period with pre-study observed data.
+    if recent_accum_seed.is_empty() {
+        ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+        ws.scratch.lag_weight_accum = 0.0;
+    } else {
+        ws.scratch.lag_accumulator[..recent_accum_seed.len()].copy_from_slice(recent_accum_seed);
+        ws.scratch.lag_weight_accum = recent_weight_seed;
+    }
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
@@ -1444,6 +1454,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1550,6 +1562,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1646,6 +1660,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1740,6 +1756,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1836,6 +1854,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1929,6 +1949,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2022,6 +2044,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2112,6 +2136,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2192,6 +2218,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2312,6 +2340,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2426,6 +2456,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2525,6 +2557,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2635,6 +2669,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2744,6 +2780,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2868,6 +2906,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3173,6 +3213,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3317,6 +3359,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3467,6 +3511,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3801,6 +3847,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3909,6 +3957,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {

@@ -29,24 +29,24 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{InflowModel, LoadModel, SamplingScheme},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageContext, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
-    train,
+    cut::fcf::FutureCostFunction, train, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    TrainingContext,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 // ===========================================================================
@@ -472,6 +472,8 @@ fn test_stochastic_load_training_completes() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &risk_measures,
@@ -587,6 +589,8 @@ fn test_deterministic_load_training_matches_baseline() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &risk_measures,
@@ -684,6 +688,8 @@ fn test_stochastic_load_seed_determinism() {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
                 stages: &[],
             },
             &risk_measures,

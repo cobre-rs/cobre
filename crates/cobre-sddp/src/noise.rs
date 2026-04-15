@@ -788,6 +788,8 @@ mod tests {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
         };
         let mut scratch = make_scratch(1);
 
@@ -855,6 +857,8 @@ mod tests {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
         };
         let mut scratch = make_scratch(1);
 
@@ -922,6 +926,8 @@ mod tests {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
         };
         let mut scratch = make_scratch(1);
 

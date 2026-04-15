@@ -13,9 +13,118 @@
 #![allow(dead_code)]
 
 use chrono::{Datelike, NaiveDate};
-use cobre_core::temporal::{
-    SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageLagTransition,
+use cobre_core::{
+    entities::hydro::Hydro,
+    initial_conditions::RecentObservation,
+    temporal::{SeasonCycleType, SeasonDefinition, SeasonMap, Stage, StageLagTransition},
 };
+
+/// Pre-computed seed values for the lag accumulator, derived from
+/// [`RecentObservation`] data in [`cobre_core::InitialConditions`].
+///
+/// Computed once at setup time by [`compute_recent_observation_seed`] and
+/// stored in [`crate::setup::StudySetup`]. Applied at every trajectory start
+/// (forward pass and simulation pipeline) instead of zero-filling the
+/// accumulator.
+///
+/// When `weight_seed == 0.0` (no observations or non-Monthly season cycle),
+/// the behavior is identical to the previous zero-reset.
+#[derive(Debug, Clone)]
+pub struct RecentObservationSeed {
+    /// Per-hydro accumulated `value_m3s * observation_hours` values.
+    ///
+    /// Length equals `hydro_count`. Zero for hydros without observations.
+    pub accum_seed: Vec<f64>,
+    /// Fraction of the lag period covered by pre-study observations.
+    ///
+    /// Computed as `total_observation_hours / total_period_hours`. A single
+    /// scalar because all observations share the same calendar period.
+    pub weight_seed: f64,
+}
+
+impl RecentObservationSeed {
+    /// Construct an all-zero seed for `hydro_count` hydros.
+    #[must_use]
+    pub fn zero(hydro_count: usize) -> Self {
+        Self {
+            accum_seed: vec![0.0_f64; hydro_count],
+            weight_seed: 0.0,
+        }
+    }
+}
+
+/// Compute the lag accumulator seed from pre-study [`RecentObservation`] data.
+///
+/// Runs once at setup time. Returns a [`RecentObservationSeed`] whose
+/// [`accum_seed`](RecentObservationSeed::accum_seed) and
+/// [`weight_seed`](RecentObservationSeed::weight_seed) values are applied at
+/// every trajectory start.
+///
+/// # Behavior by cycle type
+///
+/// - **`Monthly`**: lag-period boundaries are calendar month boundaries derived
+///   from the first study stage's `season_id` and `start_date`.
+/// - **`Weekly`** and **`Custom`**: not yet implemented; returns a zero seed.
+///
+/// Returns a zero seed when:
+/// - `recent_obs` is empty.
+/// - `first_stage.season_id` is `None`.
+/// - The season cycle type is not `Monthly`.
+/// - `hydros` is empty.
+///
+/// Unknown `hydro_id` values (not found in the `hydros` registry) are silently
+/// skipped, matching the pattern in `build_initial_state`.
+pub(crate) fn compute_recent_observation_seed(
+    recent_obs: &[RecentObservation],
+    first_stage: &Stage,
+    season_map: &SeasonMap,
+    hydros: &[Hydro],
+) -> RecentObservationSeed {
+    let hydro_count = hydros.len();
+    if recent_obs.is_empty() || hydro_count == 0 {
+        return RecentObservationSeed::zero(hydro_count);
+    }
+
+    let Some(season_id) = first_stage.season_id else {
+        return RecentObservationSeed::zero(hydro_count);
+    };
+
+    if !matches!(season_map.cycle_type, SeasonCycleType::Monthly) {
+        return RecentObservationSeed::zero(hydro_count);
+    }
+
+    let Some(season_def) = season_map.seasons.iter().find(|s| s.id == season_id) else {
+        return RecentObservationSeed::zero(hydro_count);
+    };
+
+    let season_month = season_def.month_start;
+    let year = find_season_year_monthly(first_stage.start_date, first_stage.end_date, season_month);
+    let total_period_hours = month_total_hours(year, season_month);
+
+    let mut accum_seed = vec![0.0_f64; hydro_count];
+    let mut total_obs_hours = 0.0_f64;
+
+    for obs in recent_obs {
+        // Silently skip unknown hydro IDs, same as build_initial_state.
+        let Ok(idx) = hydros.binary_search_by_key(&obs.hydro_id.0, |h| h.id.0) else {
+            continue;
+        };
+        let obs_days = (obs.end_date - obs.start_date).num_days();
+        let obs_hours = f64::from(
+            u32::try_from(obs_days)
+                .unwrap_or_else(|_| unreachable!("observation days always fit in u32")),
+        ) * 24.0;
+        accum_seed[idx] += obs.value_m3s * obs_hours;
+        total_obs_hours += obs_hours;
+    }
+
+    let weight_seed = total_obs_hours / total_period_hours;
+
+    RecentObservationSeed {
+        accum_seed,
+        weight_seed,
+    }
+}
 
 /// Compute the exclusive end date of the calendar month identified by
 /// `month` (1–12) and `year`.
@@ -559,5 +668,226 @@ mod tests {
             "W4 accumulate_weight wrong: {}",
             w4.accumulate_weight
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for compute_recent_observation_seed
+    // -----------------------------------------------------------------------
+
+    use cobre_core::{
+        entities::hydro::{HydroGenerationModel, HydroPenalties},
+        initial_conditions::RecentObservation,
+        EntityId,
+    };
+
+    fn make_hydro(id: i32) -> Hydro {
+        Hydro {
+            id: EntityId(id),
+            name: format!("H{id}"),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 100.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 0.95,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 100.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.0,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        }
+    }
+
+    fn make_observation(
+        hydro_id: i32,
+        y: i32,
+        m1: u32,
+        d1: u32,
+        m2: u32,
+        d2: u32,
+        val: f64,
+    ) -> RecentObservation {
+        RecentObservation {
+            hydro_id: EntityId(hydro_id),
+            start_date: d(y, m1, d1),
+            end_date: d(y, m2, d2),
+            value_m3s: val,
+        }
+    }
+
+    // April 2026: 30 days = 720 h.
+    const APRIL_2026_HOURS: f64 = 720.0;
+
+    /// Test 7: empty `recent_observations` — zero seed.
+    #[test]
+    fn test_seed_empty_observations_returns_zero() {
+        let season_map = monthly_season_map();
+        // First study stage: April 4 → May 2 (season_id = 3 → April).
+        let stage = make_stage(0, d(2026, 4, 4), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0)];
+
+        let seed = compute_recent_observation_seed(&[], &stage, &season_map, &hydros);
+
+        assert_eq!(seed.accum_seed.len(), 1);
+        assert_eq!(seed.accum_seed[0], 0.0);
+        assert_eq!(seed.weight_seed, 0.0);
+    }
+
+    /// Test 8: one observation for one hydro, 3 days (April 1–4) at 500.0 m3/s.
+    ///
+    /// Expected: `accum_seed[0] == 500.0 * 72.0`, `weight_seed == 72.0 / 720.0`.
+    #[test]
+    fn test_seed_one_observation_one_hydro() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 4), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0)];
+        let obs = vec![make_observation(0, 2026, 4, 1, 4, 4, 500.0)];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        let expected_accum = 500.0 * 72.0;
+        let expected_weight = 72.0 / APRIL_2026_HOURS;
+        let tol = 1e-10;
+        assert!(
+            (seed.accum_seed[0] - expected_accum).abs() < tol,
+            "accum_seed[0]: expected {expected_accum}, got {}",
+            seed.accum_seed[0]
+        );
+        assert!(
+            (seed.weight_seed - expected_weight).abs() < tol,
+            "weight_seed: expected {expected_weight}, got {}",
+            seed.weight_seed
+        );
+    }
+
+    /// Test 9: two observations for the same hydro (rv2 pattern: Apr 1–4 at 500.0 and
+    /// Apr 4–11 at 480.0) → additive accumulation.
+    ///
+    /// `accum_seed[0] == 500.0 * 72.0 + 480.0 * 168.0`
+    /// `weight_seed == (72.0 + 168.0) / 720.0`
+    #[test]
+    fn test_seed_two_observations_same_hydro_additive() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 11), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0)];
+        let obs = vec![
+            make_observation(0, 2026, 4, 1, 4, 4, 500.0),
+            make_observation(0, 2026, 4, 4, 4, 11, 480.0),
+        ];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        let expected_accum = 500.0 * 72.0 + 480.0 * 168.0;
+        let expected_weight = (72.0 + 168.0) / APRIL_2026_HOURS;
+        let tol = 1e-10;
+        assert!(
+            (seed.accum_seed[0] - expected_accum).abs() < tol,
+            "accum_seed[0]: expected {expected_accum}, got {}",
+            seed.accum_seed[0]
+        );
+        assert!(
+            (seed.weight_seed - expected_weight).abs() < tol,
+            "weight_seed: expected {expected_weight}, got {}",
+            seed.weight_seed
+        );
+    }
+
+    /// Test 10: observations for two different hydros → each slot is independent.
+    #[test]
+    fn test_seed_two_observations_different_hydros_independent() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 4), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0), make_hydro(1)];
+        let obs = vec![
+            make_observation(0, 2026, 4, 1, 4, 4, 500.0), // hydro 0: 3 days
+            make_observation(1, 2026, 4, 1, 4, 4, 300.0), // hydro 1: 3 days
+        ];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        let tol = 1e-10;
+        assert!(
+            (seed.accum_seed[0] - 500.0 * 72.0).abs() < tol,
+            "accum_seed[0]: expected {}, got {}",
+            500.0 * 72.0,
+            seed.accum_seed[0]
+        );
+        assert!(
+            (seed.accum_seed[1] - 300.0 * 72.0).abs() < tol,
+            "accum_seed[1]: expected {}, got {}",
+            300.0 * 72.0,
+            seed.accum_seed[1]
+        );
+        // weight counts both hydros' observation hours (same calendar period, so
+        // summing gives 2 * 72h, but the weight formula only divides by total_period_hours once
+        // per observation — two observations with the same date range double the weight).
+        let expected_weight = (72.0 + 72.0) / APRIL_2026_HOURS;
+        assert!(
+            (seed.weight_seed - expected_weight).abs() < tol,
+            "weight_seed: expected {expected_weight}, got {}",
+            seed.weight_seed
+        );
+    }
+
+    /// Test 11: observation for unknown `hydro_id` — silently skipped, zero seed.
+    #[test]
+    fn test_seed_unknown_hydro_id_silently_skipped() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 4), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0)];
+        // hydro_id = 99 is not in the registry.
+        let obs = vec![make_observation(99, 2026, 4, 1, 4, 4, 500.0)];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        assert_eq!(seed.accum_seed.len(), 1);
+        assert_eq!(seed.accum_seed[0], 0.0, "unknown hydro_id must be skipped");
+        assert_eq!(
+            seed.weight_seed, 0.0,
+            "weight must be 0 when all hydros unknown"
+        );
+    }
+
+    /// Test 12: first stage has `season_id` = None — zero seed returned.
+    #[test]
+    fn test_seed_no_season_id_returns_zero() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 1), d(2026, 5, 1), None);
+        let hydros = vec![make_hydro(0)];
+        let obs = vec![make_observation(0, 2026, 4, 1, 4, 4, 500.0)];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        assert_eq!(seed.accum_seed[0], 0.0);
+        assert_eq!(seed.weight_seed, 0.0);
     }
 }

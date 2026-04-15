@@ -23,14 +23,13 @@
 // External crate imports
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -38,18 +37,19 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageContext, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    cut::fcf::FutureCostFunction, train,
+    cut::fcf::FutureCostFunction, train, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+    SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext,
 };
 
 // ===========================================================================
@@ -257,9 +257,9 @@ impl SolverInterface for MockSolver {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),
@@ -533,6 +533,8 @@ fn run_one_deterministic_pass(
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -604,6 +606,8 @@ fn train_converges_with_mock_solver() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -705,6 +709,8 @@ fn train_lb_monotonically_nondecreasing() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -794,6 +800,8 @@ fn train_emits_correct_event_sequence() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -885,6 +893,8 @@ fn train_stops_at_iteration_limit() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -966,6 +976,8 @@ fn train_stops_on_graceful_shutdown() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -1037,6 +1049,8 @@ fn train_propagates_infeasible_error() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -1135,6 +1149,8 @@ fn d17_level1_cut_selection_convergence() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,
@@ -1292,6 +1308,8 @@ fn d18_lml1_cut_selection_convergence() {
             external_load_library: None,
             external_ncs_library: None,
             basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &fx.risk_measures,

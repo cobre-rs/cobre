@@ -554,6 +554,8 @@ fn train_fixture(
             external_ncs_library: None,
             basis_padding_enabled: false,
             stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
         },
         &fx.risk_measures,
         StoppingRuleSet {
@@ -629,6 +631,8 @@ fn simulate_fixture(
             external_ncs_library: None,
             basis_padding_enabled: false,
             stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
         },
         &SimulationConfig {
             n_scenarios: 20,

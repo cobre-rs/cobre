@@ -399,6 +399,17 @@ pub struct StudySetup {
     ///
     /// Exposed to the forward pass and simulation pipeline via [`StageContext`].
     stage_lag_transitions: Vec<StageLagTransition>,
+
+    /// Pre-computed lag accumulator seed from `initial_conditions.recent_observations`.
+    ///
+    /// Computed once at setup time by
+    /// [`crate::lag_transition::compute_recent_observation_seed`] from the parsed
+    /// `RecentObservation` entries. Applied at every trajectory start in the forward
+    /// pass and simulation pipeline instead of zero-filling the accumulator.
+    ///
+    /// When `recent_observations` is empty, this is an all-zero seed and the
+    /// behavior is identical to the previous zero-reset.
+    recent_observation_seed: crate::lag_transition::RecentObservationSeed,
 }
 
 impl StudySetup {
@@ -809,6 +820,20 @@ impl StudySetup {
         };
         let stage_lag_transitions =
             crate::lag_transition::precompute_stage_lag_transitions(&stages, season_map_ref);
+
+        // Compute lag accumulator seed from recent_observations (if any).
+        // Uses the first study stage and the resolved season_map_ref. When there are
+        // no recent observations the result is an all-zero seed (backward-compatible).
+        let recent_observation_seed = if stages.is_empty() {
+            crate::lag_transition::RecentObservationSeed::zero(system.hydros().len())
+        } else {
+            crate::lag_transition::compute_recent_observation_seed(
+                &system.initial_conditions().recent_observations,
+                &stages[0],
+                season_map_ref,
+                system.hydros(),
+            )
+        };
 
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
@@ -1294,6 +1319,7 @@ impl StudySetup {
             basis_padding_enabled: false,
             export_states: false,
             stage_lag_transitions,
+            recent_observation_seed,
         })
     }
 
@@ -1538,6 +1564,8 @@ impl StudySetup {
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
             basis_padding_enabled: self.basis_padding_enabled,
+            recent_accum_seed: &self.recent_observation_seed.accum_seed,
+            recent_weight_seed: self.recent_observation_seed.weight_seed,
         }
     }
 
@@ -1595,6 +1623,8 @@ impl StudySetup {
             external_load_library,
             external_ncs_library,
             basis_padding_enabled: false,
+            recent_accum_seed: &self.recent_observation_seed.accum_seed,
+            recent_weight_seed: self.recent_observation_seed.weight_seed,
         }
     }
 
@@ -1671,6 +1701,8 @@ impl StudySetup {
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
             basis_padding_enabled: self.basis_padding_enabled,
+            recent_accum_seed: &self.recent_observation_seed.accum_seed,
+            recent_weight_seed: self.recent_observation_seed.weight_seed,
         };
 
         crate::train(
@@ -4292,6 +4324,7 @@ mod tests {
                 storage: vec![],
                 filling_storage: vec![],
                 past_inflows,
+                recent_observations: vec![],
             })
             .build()
             .expect("minimal_system_2_hydros_with_past_inflows: valid")

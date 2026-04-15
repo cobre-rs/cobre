@@ -1012,9 +1012,12 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         stochastic,
         initial_state,
         basis_padding_enabled,
+        recent_accum_seed,
+        recent_weight_seed,
         ..
     } = training_ctx;
     let basis_padding_enabled = *basis_padding_enabled;
+    let recent_weight_seed = *recent_weight_seed;
     let ForwardPassBatch {
         local_forward_passes,
         total_forward_passes,
@@ -1117,11 +1120,19 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     };
                     ws.current_state.extend_from_slice(src);
 
-                    // Reset lag accumulator at trajectory start so it does not
-                    // carry state across scenarios or training iterations.
+                    // Seed (or zero) the lag accumulator at trajectory start so it
+                    // does not carry state across scenarios or training iterations.
+                    // When recent_accum_seed is non-empty, copy it instead of
+                    // zeroing — this pre-fills the partial period with observed data.
                     if t == 0 {
-                        ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
-                        ws.scratch.lag_weight_accum = 0.0;
+                        if recent_accum_seed.is_empty() {
+                            ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+                            ws.scratch.lag_weight_accum = 0.0;
+                        } else {
+                            ws.scratch.lag_accumulator[..recent_accum_seed.len()]
+                                .copy_from_slice(recent_accum_seed);
+                            ws.scratch.lag_weight_accum = recent_weight_seed;
+                        }
                     }
 
                     let global_scenario = fwd_offset + m;
@@ -1850,6 +1861,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -1957,6 +1970,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2070,6 +2085,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2478,6 +2495,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -2642,6 +2661,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2680,6 +2701,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -2782,6 +2805,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3091,6 +3116,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3267,6 +3294,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: config.forward_passes as usize,
@@ -3507,6 +3536,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: n_scenarios,
@@ -3632,6 +3663,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3752,6 +3785,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,
@@ -3846,6 +3881,8 @@ mod tests {
                 external_load_library: None,
                 external_ncs_library: None,
                 basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
                 local_forward_passes: 1,

@@ -551,6 +551,8 @@ fn run_training(
                     external_ncs_library: None,
                     basis_padding_enabled: false,
                     stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
                 },
                 &fx.risk_measures,
                 iteration_limit(n_iterations),
@@ -657,6 +659,8 @@ fn run_simulation(
                     external_ncs_library: None,
                     basis_padding_enabled: false,
                     stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
                 },
                 &sim_config,
                 SimulationOutputSpec {

@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
+use cobre_core::{scenario::SamplingScheme, temporal::StageLagTransition, Stage};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
@@ -95,4 +95,16 @@ pub struct TrainingContext<'a> {
     pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,
     /// Whether basis-aware warm-start padding is enabled (config-gated).
     pub basis_padding_enabled: bool,
+    /// Per-hydro accumulated `value_m3s * hours` seed values from pre-study
+    /// `RecentObservation` data.
+    ///
+    /// Copied into `ws.scratch.lag_accumulator` at every trajectory start
+    /// instead of zero-filling. Empty slice when there are no observations
+    /// (backward-compatible: the zero-fill path is taken instead).
+    pub recent_accum_seed: &'a [f64],
+    /// Fraction of the lag period covered by pre-study observations.
+    ///
+    /// Set into `ws.scratch.lag_weight_accum` at every trajectory start.
+    /// `0.0` when there are no observations.
+    pub recent_weight_seed: f64,
 }

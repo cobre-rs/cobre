@@ -463,6 +463,7 @@ impl StudySetup {
             &simulation_source,
         )?;
         setup.budget = budget;
+        setup.basis_padding_enabled = params.basis_padding_enabled;
         Ok(setup)
     }
 
@@ -1814,7 +1815,7 @@ impl StudySetup {
         n_threads: usize,
         solver_factory: impl Fn() -> Result<S, SolverError>,
     ) -> Result<WorkspacePool<S>, SolverError> {
-        WorkspacePool::try_new(
+        let mut pool = WorkspacePool::try_new(
             n_threads,
             self.indexer.hydro_count,
             self.indexer.max_par_order,
@@ -1822,7 +1823,25 @@ impl StudySetup {
             self.stage_templates.n_load_buses,
             self.max_blocks,
             solver_factory,
-        )
+        )?;
+        if self.basis_padding_enabled {
+            let max_cols = self
+                .stage_templates
+                .templates
+                .iter()
+                .map(|t| t.num_cols)
+                .max()
+                .unwrap_or(0);
+            let max_rows = self
+                .stage_templates
+                .templates
+                .iter()
+                .map(|t| t.num_rows)
+                .max()
+                .unwrap_or(0);
+            pool.resize_scratch_bases(max_cols, max_rows);
+        }
+        Ok(pool)
     }
 
     /// Build a [`SimulationConfig`] from the stored `n_scenarios` and

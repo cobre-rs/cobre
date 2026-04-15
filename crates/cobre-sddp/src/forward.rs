@@ -805,9 +805,26 @@ fn run_forward_stage<S: SolverInterface + Send>(
 
     let view = match basis_slice.get_mut(m, t) {
         &mut Some(ref mut rb) => {
+            let active_count = pool.active_count();
+            let expected_rows = ctx.templates[t].num_rows + active_count;
+
+            // Truncate if the active cut set changed since this basis was stored.
+            // This happens when cut selection deactivates or reactivates cuts between
+            // iterations: the stored row statuses map to a different slot ordering than
+            // the current LP, so applying them verbatim would feed HiGHS a misaligned
+            // basis (wrong pivot selection or an outright rejection). Truncating to the
+            // template rows drops the stale cut-row statuses; padding (if enabled) then
+            // re-evaluates all active cuts at the current state and fills with informed
+            // statuses, and without padding HiGHS fills missing rows with BASIC (correct
+            // default — all cuts assumed slack). Template row statuses are preserved
+            // because the template structure never changes across iterations.
+            if rb.row_status.len() != expected_rows {
+                rb.row_status.truncate(ctx.templates[t].num_rows);
+            }
+
             if basis_padding_enabled {
                 let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
-                pad_basis_for_cuts(
+                let (tight, slack) = pad_basis_for_cuts(
                     rb,
                     pool,
                     &ws.current_state[..indexer.n_state],
@@ -815,6 +832,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
                     ctx.templates[t].num_rows,
                     1e-7,
                 );
+                ws.solver.record_padding_stats(tight as u64, slack as u64);
             }
             ws.solver.solve_with_basis(rb)
         }
@@ -1749,6 +1767,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }
     }
 
@@ -3615,6 +3634,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -3737,6 +3757,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];

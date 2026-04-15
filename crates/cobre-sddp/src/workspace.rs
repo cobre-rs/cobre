@@ -50,6 +50,13 @@ pub struct SolverWorkspace<S: SolverInterface> {
     pub current_state: Vec<f64>,
     /// Pre-allocated scratch buffers for noise transformation and simulation.
     pub(crate) scratch: ScratchBuffers,
+    /// Pre-allocated scratch basis for backward-pass padding (P03).
+    ///
+    /// Used to copy-then-pad a read-only basis from `BasisStore` before
+    /// passing it to `solve_with_basis`. Sized after construction via
+    /// [`WorkspacePool::resize_scratch_bases`] to the maximum LP dimensions
+    /// so that `Basis::clone_from` never reallocates on the hot path.
+    pub(crate) scratch_basis: Basis,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
@@ -58,6 +65,9 @@ impl<S: SolverInterface> SolverWorkspace<S> {
     /// `hydro_count` and `max_par_order` determine the capacities of internal
     /// scratch buffers for the inflow truncation path.  `n_load_buses` and
     /// `max_blocks` determine the capacity of the load RHS scratch buffer.
+    ///
+    /// The `scratch_basis` starts empty. Call [`WorkspacePool::resize_scratch_bases`]
+    /// after construction to pre-allocate for backward-pass padding.
     #[must_use]
     pub fn new(
         solver: S,
@@ -73,6 +83,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             patch_buf,
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+            scratch_basis: Basis::new(0, 0),
         }
     }
 }
@@ -148,6 +159,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
                 scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                scratch_basis: Basis::new(0, 0),
             })
             .collect();
         Self { workspaces }
@@ -159,18 +171,6 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// Identical to [`WorkspacePool::new`] except that `solver_factory` returns
     /// `Result<S, E>`. The first error from any factory call is returned
     /// immediately and no partial pool is produced.
-    ///
-    /// # Arguments
-    ///
-    /// - `n_threads`: number of worker threads (determines pool size).
-    /// - `hydro_count`: number of operating hydro plants (N in the LP layout).
-    /// - `max_par_order`: maximum PAR order across all hydros (L in the layout).
-    /// - `n_state`: capacity for the `current_state` scratch buffer.
-    /// - `n_load_buses`: number of buses with stochastic load noise (M).
-    ///   Pass `0` when there is no stochastic load.
-    /// - `max_blocks`: maximum block count across all stages.
-    ///   Pass `0` when there is no stochastic load.
-    /// - `solver_factory`: called once per thread; returns `Result<S, E>`.
     ///
     /// # Errors
     ///
@@ -191,9 +191,21 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 patch_buf: PatchBuffer::new(hydro_count, max_par_order, n_load_buses, max_blocks),
                 current_state: Vec::with_capacity(n_state),
                 scratch: ScratchBuffers::new(hydro_count, max_par_order, n_load_buses, max_blocks),
+                scratch_basis: Basis::new(0, 0),
             });
         }
         Ok(Self { workspaces })
+    }
+
+    /// Pre-allocate each workspace's `scratch_basis` to the given LP dimensions.
+    ///
+    /// Call after construction when backward-pass basis padding is enabled.
+    /// The allocation happens once during setup; `Basis::clone_from` on the
+    /// hot path then reuses the existing capacity without reallocating.
+    pub(crate) fn resize_scratch_bases(&mut self, max_cols: usize, max_rows: usize) {
+        for ws in &mut self.workspaces {
+            ws.scratch_basis = Basis::new(max_cols, max_rows);
+        }
     }
 }
 

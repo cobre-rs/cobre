@@ -1225,6 +1225,11 @@ impl SolverInterface for HighsSolver {
     fn statistics(&self) -> SolverStatistics {
         self.stats.clone()
     }
+
+    fn record_padding_stats(&mut self, tight: u64, slack: u64) {
+        self.stats.basis_padding_tight += tight;
+        self.stats.basis_padding_slack += slack;
+    }
 }
 
 /// Test-support accessors for integration tests that need to set raw `HiGHS` options.

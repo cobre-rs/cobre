@@ -1388,6 +1388,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }]
     }
 
@@ -2184,6 +2185,7 @@ mod tests {
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
                 },
+                scratch_basis: Basis::new(0, 0),
             })
             .collect();
         let result_4 = simulate(
@@ -3171,6 +3173,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3471,6 +3474,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -3764,6 +3768,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }]
     }
 

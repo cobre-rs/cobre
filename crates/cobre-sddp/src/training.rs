@@ -413,6 +413,21 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         solver_factory,
     )
     .map_err(SddpError::Solver)?;
+    if training_ctx.basis_padding_enabled {
+        let max_cols = stage_ctx
+            .templates
+            .iter()
+            .map(|t| t.num_cols)
+            .max()
+            .unwrap_or(0);
+        let max_rows = stage_ctx
+            .templates
+            .iter()
+            .map(|t| t.num_rows)
+            .max()
+            .unwrap_or(0);
+        fwd_pool.resize_scratch_bases(max_cols, max_rows);
+    }
 
     // Per-scenario, per-stage basis store. Sized for the maximum local forward
     // passes so that scenario indices are stable across iterations. The store

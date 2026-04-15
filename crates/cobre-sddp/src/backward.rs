@@ -83,7 +83,9 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    basis_padding::pad_basis_for_cuts,
     context::{StageContext, TrainingContext},
+    cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
     forward::build_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
@@ -290,6 +292,10 @@ struct SuccessorSpec<'a> {
     /// Populated count of the successor's cut pool. Used to size the
     /// `slot_increments` Vec for O(1) indexed binding tracking.
     successor_populated_count: usize,
+    /// Cut pool at the successor stage. Used by the backward-pass padding path
+    /// (P03) to evaluate cuts at the trial point state and extend `scratch_basis`
+    /// with informed row statuses before `solve_with_basis`.
+    successor_pool: &'a CutPool,
 }
 
 /// Per-trial-point mutable accumulators reused across openings.
@@ -446,12 +452,48 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
         // Opening 0: use forward-pass basis from BasisStore for warm start.
+        // When basis padding is enabled, copy the stored basis into
+        // `scratch_basis`, apply truncation if the active cut set changed, pad
+        // with informed row statuses for the successor cut pool evaluated at the
+        // trial point state, then solve with the scratch copy.  The stored basis
+        // in BasisStore is never modified (it is read-only; multiple trial points
+        // may share it in the same parallel stage).
+        //
         // Openings 1+: HiGHS retains internal factorization from the previous
         // solve — only bounds/RHS changed via `patch_opening_bounds`, so
         // `solve()` hot-starts without redundant refactorization (P3b).
         let view = if omega == 0 {
             if let Some(rb) = succ.basis_store.get(m, s) {
-                ws.solver.solve_with_basis(rb)
+                if training_ctx.basis_padding_enabled {
+                    // Copy stored basis into scratch (reuses pre-allocated capacity).
+                    ws.scratch_basis.clone_from(rb);
+
+                    // Truncate stale cut-row statuses if the active set changed.
+                    // The expected row count is template rows + currently active cuts.
+                    let expected_rows = succ.template_num_rows + succ.successor_pool.active_count();
+                    if ws.scratch_basis.row_status.len() != expected_rows {
+                        ws.scratch_basis.row_status.truncate(succ.template_num_rows);
+                    }
+
+                    // Pad with informed statuses for the successor cut pool
+                    // evaluated at the trial point state (x_hat is the incoming
+                    // state for stage t+1, matching the forward-pass semantics).
+                    let theta_value = succ.successor_pool.evaluate_at_state(x_hat);
+                    let (tight, slack) = pad_basis_for_cuts(
+                        &mut ws.scratch_basis,
+                        succ.successor_pool,
+                        x_hat,
+                        theta_value,
+                        succ.template_num_rows,
+                        1e-7,
+                    );
+                    ws.solver.record_padding_stats(tight as u64, slack as u64);
+
+                    ws.solver.solve_with_basis(&ws.scratch_basis)
+                } else {
+                    // Padding disabled: use the stored basis directly.
+                    ws.solver.solve_with_basis(rb)
+                }
             } else {
                 ws.solver.solve()
             }
@@ -742,6 +784,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,
             successor_populated_count: fcf.pools[successor].populated_count,
+            successor_pool: &fcf.pools[successor],
         };
         let process_start = Instant::now();
         let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
@@ -1131,6 +1174,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }]
     }
 
@@ -2933,6 +2977,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -3021,6 +3066,7 @@ mod tests {
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
                 },
+                scratch_basis: Basis::new(0, 0),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -3366,6 +3412,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         };
         let mut workspaces = vec![ws];
 
@@ -3523,6 +3570,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3675,6 +3723,7 @@ mod tests {
                 lag_accumulator: vec![],
                 lag_weight_accum: 0.0,
             },
+            scratch_basis: Basis::new(0, 0),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -4092,6 +4141,7 @@ mod tests {
                     lag_accumulator: vec![],
                     lag_weight_accum: 0.0,
                 },
+                scratch_basis: Basis::new(0, 0),
             })
             .collect();
 

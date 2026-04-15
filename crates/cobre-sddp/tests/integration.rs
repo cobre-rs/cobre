@@ -1231,6 +1231,178 @@ fn d17_level1_cut_selection_convergence() {
     }
 }
 
+/// D17 with `basis_padding: true`: truncation guard does not corrupt convergence.
+///
+/// Runs the same Level1 cut-selection scenario as `d17_level1_cut_selection_convergence`
+/// but with `basis_padding_enabled: true` in both `TrainingConfig` and `TrainingContext`.
+///
+/// ## What this tests (AC-3 of ticket P02)
+///
+/// With cut selection active, the stored basis row count diverges from
+/// `base_row_count + active_count` whenever a cut is deactivated.  The truncation
+/// guard (added in P02) must:
+///
+/// - Detect the mismatch and truncate to template rows before padding.
+/// - Produce bit-identical lower bounds to the baseline D17 run (the truncation
+///   plus padding must not change the optimal solution, only the warm-start path).
+/// - Record zero basis rejections (the padded/truncated basis must be accepted
+///   by the mock solver on every call).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn d17_level1_cut_selection_with_basis_padding() {
+    use cobre_sddp::cut_selection::CutSelectionStrategy;
+
+    let fx = Fixture::new(2);
+    let mut fcf_baseline = make_fcf(fx.n_stages);
+    let mut fcf_padded = make_fcf(fx.n_stages);
+    let mut solver_baseline = MockSolver::with_fixed(100.0);
+    let mut solver_padded = MockSolver::with_fixed(100.0);
+    let comm = StubComm;
+
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
+        discount_factors: &[],
+        cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+    };
+
+    // Baseline run: cut selection enabled, padding disabled (same as D17).
+    let result_baseline = train(
+        &mut solver_baseline,
+        TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+        },
+        &mut fcf_baseline,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            stages: &[],
+        },
+        &fx.risk_measures,
+        iteration_limit(10),
+        &comm,
+        || Ok(MockSolver::with_fixed(100.0)),
+    )
+    .unwrap();
+
+    // Padded run: same scenario but with basis_padding_enabled: true.
+    let result_padded = train(
+        &mut solver_padded,
+        TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: true,
+        },
+        &mut fcf_padded,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            basis_padding_enabled: true,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            stages: &[],
+        },
+        &fx.risk_measures,
+        iteration_limit(10),
+        &comm,
+        || Ok(MockSolver::with_fixed(100.0)),
+    )
+    .unwrap();
+
+    // AC-3: bit-identical lower bounds — truncation + padding must not change
+    // the optimal solution, only the warm-start path.
+    assert_eq!(
+        result_baseline.result.final_lb, result_padded.result.final_lb,
+        "D17+basis_padding: lower bound must be bit-identical to baseline \
+         (baseline={}, padded={})",
+        result_baseline.result.final_lb, result_padded.result.final_lb,
+    );
+
+    // Same iteration count — the truncation guard must not affect convergence.
+    assert_eq!(
+        result_baseline.result.iterations, result_padded.result.iterations,
+        "D17+basis_padding: iteration count must match baseline \
+         (baseline={}, padded={})",
+        result_baseline.result.iterations, result_padded.result.iterations,
+    );
+
+    // AC-3 (zero rejections): the mock solver always accepts offered bases
+    // (basis_rejections is always 0 for MockSolver). This assertion documents
+    // the invariant so it would catch degradation if the mock is ever upgraded
+    // to track rejections.
+    let stats = solver_padded.statistics();
+    assert_eq!(
+        stats.basis_rejections, 0,
+        "D17+basis_padding: expected 0 basis rejections, got {}",
+        stats.basis_rejections,
+    );
+}
+
 /// D18: Lml1 cut selection produces convergent results with bounded pool.
 ///
 /// Verifies that enabling `CutSelectionStrategy::Lml1 { memory_window: 3,
@@ -1372,5 +1544,296 @@ fn d18_lml1_cut_selection_convergence() {
         result.result.iterations,
         fcf.pools[0].active_count(),
         fcf.pools[0].populated_count,
+    );
+}
+
+/// Verify that enabling `basis_padding` is correctly wired end-to-end and
+/// produces bit-identical results to the default (padding-disabled) run.
+///
+/// ## What this tests
+///
+/// Before the fix in `StudySetup::new`, `StudyParams::basis_padding_enabled`
+/// was read from the config but never assigned to `StudySetup`. This test
+/// confirms:
+///
+/// 1. The config flag reaches the training loop (AC-1/AC-2 of ticket P01).
+/// 2. The resulting lower bound is bit-identical to D01's reference value of
+///    182,500 $ (AC-3: padding changes the simplex warm-start path, not the
+///    optimal solution).
+/// 3. Zero `basis_rejections` are recorded (AC-4: the solver accepts every
+///    padded basis without falling back to a cold start).
+#[test]
+fn test_d01_with_basis_padding_enabled() {
+    use std::path::Path;
+
+    use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+    use cobre_core::scenario::ScenarioSource;
+    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+    use cobre_solver::highs::HighsSolver;
+    use cobre_solver::SolverInterface;
+
+    struct LocalStubComm;
+
+    impl Communicator for LocalStubComm {
+        fn allgatherv<T: CommData>(
+            &self,
+            send: &[T],
+            recv: &mut [T],
+            _counts: &[usize],
+            _displs: &[usize],
+        ) -> Result<(), CommError> {
+            recv[..send.len()].clone_from_slice(send);
+            Ok(())
+        }
+
+        fn allreduce<T: CommData>(
+            &self,
+            send: &[T],
+            recv: &mut [T],
+            _op: ReduceOp,
+        ) -> Result<(), CommError> {
+            recv.clone_from_slice(send);
+            Ok(())
+        }
+
+        fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
+            Ok(())
+        }
+
+        fn barrier(&self) -> Result<(), CommError> {
+            Ok(())
+        }
+
+        fn rank(&self) -> usize {
+            0
+        }
+
+        fn size(&self) -> usize {
+            1
+        }
+
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
+        }
+    }
+
+    let case_dir = Path::new("../../examples/deterministic/d01-thermal-dispatch");
+    let config_path = case_dir.join("config.json");
+    let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    // Enable basis padding programmatically — no new fixture directory needed.
+    config.training.cut_selection.basis_padding = Some(true);
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let prepare_result =
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
+    let system = prepare_result.system;
+    let stochastic = prepare_result.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut setup =
+        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+
+    let comm = LocalStubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+
+    let result = outcome.result;
+
+    // AC-3: bit-identical lower bound to D01 reference (182,500 $).
+    let diff = (result.final_lb - 182_500.0_f64).abs();
+    assert!(
+        diff <= 1e-6,
+        "D01+basis_padding: expected lower bound 182500.0, got {} (diff={:.2e})",
+        result.final_lb,
+        diff
+    );
+
+    // AC-4: zero basis rejections — padded bases must be accepted by the solver.
+    let stats = solver.statistics();
+    assert_eq!(
+        stats.basis_rejections, 0,
+        "D01+basis_padding: expected 0 basis rejections, got {}",
+        stats.basis_rejections
+    );
+}
+
+/// D18 with `basis_padding: true`: Lml1 cut selection + padding do not corrupt
+/// convergence.
+///
+/// Runs the same Lml1 cut-selection scenario as `d18_lml1_cut_selection_convergence`
+/// but with `basis_padding_enabled: true` in both `TrainingConfig` and `TrainingContext`.
+///
+/// ## What this tests (AC-5 of ticket P04)
+///
+/// With Lml1 cut selection active, cuts are periodically deactivated after
+/// `memory_window` iterations. The stored basis row count then diverges from
+/// `base_row_count + active_count`. The truncation guard must:
+///
+/// - Detect the mismatch and truncate to template rows before padding.
+/// - Produce bit-identical lower bounds to the baseline D18 run (truncation
+///   plus padding must not change the optimal solution, only the warm-start path).
+/// - Record zero basis rejections (the mock solver always accepts offered bases).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn d18_lml1_cut_selection_with_basis_padding() {
+    use cobre_sddp::cut_selection::CutSelectionStrategy;
+
+    let fx = Fixture::new(2);
+    let mut fcf_baseline = make_fcf(fx.n_stages);
+    let mut fcf_padded = make_fcf(fx.n_stages);
+    let mut solver_baseline = MockSolver::with_fixed(100.0);
+    let mut solver_padded = MockSolver::with_fixed(100.0);
+    let comm = StubComm;
+
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1usize, 1],
+        ncs_max_gen: &[],
+        discount_factors: &[],
+        cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+    };
+
+    // Baseline run: Lml1 cut selection enabled, padding disabled (same as D18).
+    let result_baseline = train(
+        &mut solver_baseline,
+        TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: Some(CutSelectionStrategy::Lml1 {
+                memory_window: 3,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+        },
+        &mut fcf_baseline,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            stages: &[],
+        },
+        &fx.risk_measures,
+        iteration_limit(10),
+        &comm,
+        || Ok(MockSolver::with_fixed(100.0)),
+    )
+    .unwrap();
+
+    // Padded run: same scenario but with basis_padding_enabled: true.
+    let result_padded = train(
+        &mut solver_padded,
+        TrainingConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            checkpoint_interval: None,
+            warm_start_cuts: 0,
+            event_sender: None,
+            cut_activity_tolerance: 0.0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            cut_selection: Some(CutSelectionStrategy::Lml1 {
+                memory_window: 3,
+                check_frequency: 2,
+            }),
+            shutdown_flag: None,
+            start_iteration: 0,
+            export_states: false,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: true,
+        },
+        &mut fcf_padded,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            basis_padding_enabled: true,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            stages: &[],
+        },
+        &fx.risk_measures,
+        iteration_limit(10),
+        &comm,
+        || Ok(MockSolver::with_fixed(100.0)),
+    )
+    .unwrap();
+
+    // AC-5: bit-identical lower bounds — truncation + padding must not change
+    // the optimal solution, only the warm-start path.
+    assert_eq!(
+        result_baseline.result.final_lb, result_padded.result.final_lb,
+        "D18+basis_padding: lower bound must be bit-identical to baseline \
+         (baseline={}, padded={})",
+        result_baseline.result.final_lb, result_padded.result.final_lb,
+    );
+
+    // Same iteration count — the truncation guard must not affect convergence.
+    assert_eq!(
+        result_baseline.result.iterations, result_padded.result.iterations,
+        "D18+basis_padding: iteration count must match baseline \
+         (baseline={}, padded={})",
+        result_baseline.result.iterations, result_padded.result.iterations,
+    );
+
+    // AC-5 (zero rejections): the mock solver always accepts offered bases
+    // (basis_rejections is always 0 for MockSolver). This assertion documents
+    // the invariant so it would catch degradation if the mock is ever upgraded
+    // to track rejections.
+    let stats = solver_padded.statistics();
+    assert_eq!(
+        stats.basis_rejections, 0,
+        "D18+basis_padding: expected 0 basis rejections, got {}",
+        stats.basis_rejections,
     );
 }

@@ -249,6 +249,8 @@ fn delta_to_stats_row(
         add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        basis_padding_tight: delta.basis_padding_tight,
+        basis_padding_slack: delta.basis_padding_slack,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }

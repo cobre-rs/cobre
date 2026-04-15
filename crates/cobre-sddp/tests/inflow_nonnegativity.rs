@@ -38,10 +38,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
-    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
-    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-    ResolvedPenalties, ThermalStageBounds,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -49,16 +45,20 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
+    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
+    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+    ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
+    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
     EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
     RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
     StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext,
 };
 
 // ===========================================================================
@@ -554,8 +554,8 @@ fn train_fixture(
             external_ncs_library: None,
             basis_padding_enabled: false,
             stages: &[],
-                    recent_accum_seed: &[],
-                    recent_weight_seed: 0.0,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
         },
         &fx.risk_measures,
         StoppingRuleSet {
@@ -631,8 +631,8 @@ fn simulate_fixture(
             external_ncs_library: None,
             basis_padding_enabled: false,
             stages: &[],
-                    recent_accum_seed: &[],
-                    recent_weight_seed: 0.0,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
         },
         &SimulationConfig {
             n_scenarios: 20,

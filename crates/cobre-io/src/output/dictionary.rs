@@ -653,6 +653,12 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "add_rows_time_ms") => "Cumulative add_rows call time",
         ("solver_iterations", "set_bounds_time_ms") => "Cumulative set_bounds call time",
         ("solver_iterations", "basis_set_time_ms") => "Cumulative set_basis call time",
+        ("solver_iterations", "basis_padding_tight") => {
+            "Cut rows assigned NONBASIC_LOWER during basis padding"
+        }
+        ("solver_iterations", "basis_padding_slack") => {
+            "Cut rows assigned BASIC during basis padding"
+        }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
         ("retry_histogram", "phase") => "Solver phase (forward, backward, lower_bound, simulation)",
@@ -1409,8 +1415,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 188,
-            "variables.csv must have exactly 188 data rows (one per column across all 16 schemas)"
+            row_count, 190,
+            "variables.csv must have exactly 190 data rows (one per column across all 18 solver_iterations columns + rest of schemas)"
         );
     }
 

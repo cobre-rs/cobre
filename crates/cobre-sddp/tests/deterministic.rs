@@ -32,13 +32,13 @@ use std::sync::mpsc;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
+    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
 };
 use cobre_sddp::{
-    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
 };
-use cobre_solver::SolverInterface;
 use cobre_solver::highs::HighsSolver;
+use cobre_solver::SolverInterface;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;
@@ -2719,5 +2719,28 @@ fn d27_per_stage_thermal_cost() {
          ({} > {})",
         result.final_lb,
         uniform_baseline
+    );
+}
+
+/// D28: DECOMP-style mixed-resolution case (5 weekly + 1 monthly stages).
+///
+/// Smoke test that verifies the full pipeline loads and trains without error
+/// on a case with:
+/// - Non-uniform `num_scenarios` (1 per weekly stage, 5 for the monthly stage)
+/// - `season_definitions` with monthly cycle (12 seasons)
+/// - External inflow scenario source
+/// - `recent_observations` in initial conditions
+///
+/// The test only checks that training completes at least 1 iteration; no
+/// expected cost is asserted here — correctness is validated in ticket-017.
+#[test]
+fn d28_decomp_weekly_monthly_loads_and_trains() {
+    let case_dir = Path::new("../../examples/deterministic/d28-decomp-weekly-monthly");
+
+    let result = run_deterministic(case_dir);
+
+    assert!(
+        result.iterations > 0,
+        "D28: must complete at least 1 iteration"
     );
 }

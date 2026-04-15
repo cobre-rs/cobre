@@ -499,6 +499,20 @@ impl std::fmt::Display for PolicyMode {
     }
 }
 
+/// Boundary-cut configuration for terminal-stage FCF coupling.
+///
+/// When present, the solver loads cuts from a source Cobre policy
+/// checkpoint and injects them as fixed boundary conditions at the
+/// terminal stage of the current study.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BoundaryPolicy {
+    /// Path to the source policy checkpoint directory.
+    pub path: String,
+    /// 0-based stage index in the source checkpoint to load cuts from.
+    pub source_stage: u32,
+}
+
 /// Policy directory settings (`config.json → policy`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -515,6 +529,10 @@ pub struct PolicyConfig {
 
     /// Checkpoint settings.
     pub checkpointing: CheckpointingConfig,
+
+    /// Optional boundary-cut policy for terminal-stage coupling.
+    #[serde(default)]
+    pub boundary: Option<BoundaryPolicy>,
 }
 
 impl Default for PolicyConfig {
@@ -524,6 +542,7 @@ impl Default for PolicyConfig {
             mode: PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
+            boundary: None,
         }
     }
 }
@@ -1766,5 +1785,98 @@ mod tests {
             cfg.training.cut_selection.max_active_per_stage.is_none(),
             "max_active_per_stage must be None when absent from config.json"
         );
+    }
+
+    /// AC (ticket-013): `policy.boundary` with `path` and `source_stage` deserializes
+    /// to `Some(BoundaryPolicy { .. })` with the correct field values.
+    #[test]
+    fn test_boundary_policy_present() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": {
+                "mode": "fresh",
+                "boundary": {
+                    "path": "../monthly/policy",
+                    "source_stage": 2
+                }
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let boundary = cfg.policy.boundary.unwrap();
+        assert_eq!(boundary.path, "../monthly/policy");
+        assert_eq!(boundary.source_stage, 2);
+    }
+
+    /// AC (ticket-013): `policy` without a `boundary` key deserializes to `None`.
+    #[test]
+    fn test_boundary_policy_absent() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": {}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.policy.boundary.is_none(),
+            "boundary must be None when the key is absent"
+        );
+    }
+
+    /// AC (ticket-013): `"boundary": null` deserializes to `None`.
+    #[test]
+    fn test_boundary_policy_explicit_null() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": { "boundary": null }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.policy.boundary.is_none(),
+            "boundary must be None when explicitly null"
+        );
+    }
+
+    /// AC (ticket-013): `PolicyConfig::default()` has `boundary` set to `None`.
+    #[test]
+    fn test_policy_config_default_boundary_is_none() {
+        assert!(
+            PolicyConfig::default().boundary.is_none(),
+            "default PolicyConfig must have boundary = None"
+        );
+    }
+
+    /// AC (ticket-013): round-trip: serialize `PolicyConfig` with `Some(BoundaryPolicy)`
+    /// to JSON and deserialize back; values are preserved.
+    #[test]
+    fn test_boundary_policy_round_trip() {
+        let original = PolicyConfig {
+            path: "./policy".to_string(),
+            mode: PolicyMode::Fresh,
+            validate_compatibility: true,
+            checkpointing: CheckpointingConfig::default(),
+            boundary: Some(BoundaryPolicy {
+                path: "../monthly/policy".to_string(),
+                source_stage: 5,
+            }),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: PolicyConfig = serde_json::from_str(&json).unwrap();
+        let boundary = restored.boundary.unwrap();
+        assert_eq!(boundary.path, "../monthly/policy");
+        assert_eq!(boundary.source_stage, 5);
     }
 }

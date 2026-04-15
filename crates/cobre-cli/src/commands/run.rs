@@ -445,6 +445,28 @@ fn apply_training_policy(
         }
         cobre_io::PolicyMode::Fresh => {}
     }
+
+    // Boundary cuts — orthogonal to policy mode. Runs after the match block so
+    // that warm-start and boundary cuts compose correctly: warm-start replaces the
+    // entire FCF first, then boundary cuts overwrite only the terminal pool.
+    if let Some(bp) = root_config.and_then(|c| c.policy.boundary.as_ref()) {
+        let boundary_path = ctx.output_dir.join(&bp.path);
+        #[allow(clippy::cast_possible_truncation)]
+        let state_dim = setup.fcf().state_dimension as u32;
+        let boundary_records =
+            cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
+                .map_err(CliError::from)?;
+        cobre_sddp::inject_boundary_cuts(setup, &boundary_records);
+        if ctx.is_root && !ctx.quiet {
+            let _ = ctx.stderr.write_line(&format!(
+                "Boundary cuts: loaded {} cuts from stage {} of {}",
+                boundary_records.len(),
+                bp.source_stage,
+                boundary_path.display()
+            ));
+        }
+    }
+
     Ok(())
 }
 

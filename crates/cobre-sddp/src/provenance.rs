@@ -210,7 +210,7 @@ mod tests {
 
     use crate::estimation::{EstimationPath, EstimationReport, HydroEstimationEntry};
 
-    use super::{ProvenanceSource, build_provenance_report};
+    use super::{build_provenance_report, ProvenanceSource};
 
     // Helper: StochasticProvenance with all Generated.
     fn prov_all_generated() -> StochasticProvenance {

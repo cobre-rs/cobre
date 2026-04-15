@@ -398,6 +398,7 @@ fn make_config() -> Config {
             mode: cobre_io::PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
+            boundary: None,
         },
         simulation: IoSimulationConfig {
             enabled: false,

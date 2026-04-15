@@ -151,7 +151,7 @@ pub fn pad_basis_for_cuts(
 mod tests {
     use cobre_solver::Basis;
 
-    use super::{HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER, pad_basis_for_cuts};
+    use super::{pad_basis_for_cuts, HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER};
     use crate::cut::pool::CutPool;
 
     // -----------------------------------------------------------------------

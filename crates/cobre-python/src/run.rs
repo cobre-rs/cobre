@@ -595,6 +595,19 @@ fn run_inner(
             setup.set_start_iteration(completed);
         }
 
+        // Boundary cuts — orthogonal to policy mode. Runs after warm-start/resume
+        // so that both compose correctly: warm-start replaces the entire FCF first,
+        // then boundary cuts overwrite only the terminal pool.
+        if let Some(ref bp) = config.policy.boundary {
+            let boundary_path = output_dir.join(&bp.path);
+            #[allow(clippy::cast_possible_truncation)]
+            let state_dim = setup.fcf().state_dimension as u32;
+            let boundary_records =
+                cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
+                    .map_err(|e| format!("boundary cut error: {e}"))?;
+            cobre_sddp::inject_boundary_cuts(&mut setup, &boundary_records);
+        }
+
         let training = run_training_phase_py(&mut setup, n_threads)?;
 
         write_training_artifacts(

@@ -16,12 +16,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use cobre_core::{
-    EntityId,
     scenario::{InflowModel, LoadModel},
+    EntityId,
 };
 
-use crate::LoadError;
 use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
+use crate::LoadError;
 
 /// Assemble `Vec<InflowModel>` by joining seasonal stats with AR coefficients.
 ///

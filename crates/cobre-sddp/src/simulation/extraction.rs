@@ -20,9 +20,12 @@
 //! [theta+1, ...)     equipment    — turbine, spillage, thermal, lines, deficit, excess
 //! ```
 //!
-//! Equipment columns (thermals, buses, lines) are read when the indexer was
-//! constructed via [`StageIndexer::with_equipment`]. Stub entity types
-//! (pumping stations, contracts, non-controllables) that contribute zero LP
+//! The full column layout — including turbine, spillage, diversion, thermal,
+//! line, deficit, excess, inflow-slack, FPHA generation, evaporation,
+//! withdrawal slacks, operational violation slacks (outflow/turbine/generation
+//! min/max), NCS generation, and generic constraint slacks — is defined by
+//! [`StageIndexer`] and [`crate::lp_builder::layout::StageLayout`].
+//! Stub entity types (pumping stations, contracts) that contribute zero LP
 //! variables remain as zero-valued placeholders.
 
 use std::collections::HashMap;

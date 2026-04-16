@@ -8,10 +8,6 @@
 //!
 //! See [Design Doc — Temporal Resolution Debts §6](../../docs/design/temporal-resolution-debts.md).
 
-// All public items in this module are used starting in Epic 2 (ticket-003).
-// Until then, suppress dead_code so the crate compiles cleanly with -D warnings.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use chrono::{Datelike, NaiveDate};
@@ -104,7 +100,11 @@ pub(crate) fn compute_recent_observation_seed(
     let total_period_hours = month_total_hours(year, season_month);
 
     let mut accum_seed = vec![0.0_f64; hydro_count];
-    let mut total_obs_hours = 0.0_f64;
+    // Accumulate observation hours per hydro so that the weight reflects the
+    // calendar coverage of a single hydro, not the sum across all hydros.
+    // A hydro may have multiple non-overlapping observations (rolling revisions),
+    // so we sum hours within each hydro, then take the maximum across hydros.
+    let mut per_hydro_hours: HashMap<i32, f64> = HashMap::new();
 
     for obs in recent_obs {
         // Silently skip unknown hydro IDs, same as build_initial_state.
@@ -117,9 +117,14 @@ pub(crate) fn compute_recent_observation_seed(
                 .unwrap_or_else(|_| unreachable!("observation days always fit in u32")),
         ) * 24.0;
         accum_seed[idx] += obs.value_m3s * obs_hours;
-        total_obs_hours += obs_hours;
+        *per_hydro_hours.entry(obs.hydro_id.0).or_insert(0.0) += obs_hours;
     }
 
+    // The weight is the fraction of the season period covered by observations.
+    // All hydros observe the same calendar period, so the max per-hydro total
+    // is the canonical coverage. Summing across hydros would inflate the weight
+    // linearly with hydro count (N * h/H instead of h/H).
+    let total_obs_hours = per_hydro_hours.values().copied().fold(0.0_f64, f64::max);
     let weight_seed = total_obs_hours / total_period_hours;
 
     RecentObservationSeed {
@@ -882,9 +887,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use cobre_core::{
-        EntityId,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         initial_conditions::RecentObservation,
+        EntityId,
     };
 
     fn make_hydro(id: i32) -> Hydro {
@@ -1054,14 +1059,48 @@ mod tests {
             300.0 * 72.0,
             seed.accum_seed[1]
         );
-        // weight counts both hydros' observation hours (same calendar period, so
-        // summing gives 2 * 72h, but the weight formula only divides by total_period_hours once
-        // per observation — two observations with the same date range double the weight).
-        let expected_weight = (72.0 + 72.0) / APRIL_2026_HOURS;
+        // Both hydros observe the same 3-day (72 h) calendar window, so the
+        // weight must reflect that single window's coverage — not doubled by
+        // hydro count. The correct weight is max(72, 72) / total_period_hours.
+        let expected_weight = 72.0 / APRIL_2026_HOURS;
         assert!(
             (seed.weight_seed - expected_weight).abs() < tol,
             "weight_seed: expected {expected_weight}, got {}",
             seed.weight_seed
+        );
+    }
+
+    /// Test 10b: regression — weight must not scale with hydro count.
+    ///
+    /// Four hydros each provide a 72-hour observation in a 720-hour (April)
+    /// stage. The correct weight is 72/720 = 0.10, not 4*72/720 = 0.40.
+    #[test]
+    fn test_seed_weight_independent_of_hydro_count() {
+        let season_map = monthly_season_map();
+        let stage = make_stage(0, d(2026, 4, 4), d(2026, 5, 2), Some(3));
+        let hydros = vec![make_hydro(0), make_hydro(1), make_hydro(2), make_hydro(3)];
+        let obs = vec![
+            make_observation(0, 2026, 4, 1, 4, 4, 100.0), // hydro 0: 3 days = 72 h
+            make_observation(1, 2026, 4, 1, 4, 4, 200.0), // hydro 1: 3 days = 72 h
+            make_observation(2, 2026, 4, 1, 4, 4, 300.0), // hydro 2: 3 days = 72 h
+            make_observation(3, 2026, 4, 1, 4, 4, 400.0), // hydro 3: 3 days = 72 h
+        ];
+
+        let seed = compute_recent_observation_seed(&obs, &stage, &season_map, &hydros);
+
+        let tol = 1e-10;
+        // Each hydro's accumulator is independent.
+        assert!((seed.accum_seed[0] - 100.0 * 72.0).abs() < tol, "accum[0]");
+        assert!((seed.accum_seed[1] - 200.0 * 72.0).abs() < tol, "accum[1]");
+        assert!((seed.accum_seed[2] - 300.0 * 72.0).abs() < tol, "accum[2]");
+        assert!((seed.accum_seed[3] - 400.0 * 72.0).abs() < tol, "accum[3]");
+        // Weight must equal 72/720, not 4*72/720.
+        let expected_weight = 72.0 / APRIL_2026_HOURS;
+        assert!(
+            (seed.weight_seed - expected_weight).abs() < tol,
+            "weight_seed: expected {expected_weight} (= 72/720), got {} (= {}*72/720 would be the buggy value)",
+            seed.weight_seed,
+            hydros.len(),
         );
     }
 

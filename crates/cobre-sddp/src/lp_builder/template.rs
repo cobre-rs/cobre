@@ -11,7 +11,7 @@ use crate::indexer::StageIndexer;
 use crate::inflow_method::InflowNonNegativityMethod;
 
 use super::layout::{StageLayout, TemplateBuildCtx};
-use super::{COST_SCALE_FACTOR, GenericConstraintRowEntry, matrix, scaling};
+use super::{matrix, scaling, GenericConstraintRowEntry, COST_SCALE_FACTOR};
 
 /// Outcome of [`build_stage_templates`]: one [`StageTemplate`] per study stage
 /// plus the per-stage `base_rows` offsets needed by `PatchBuffer`.
@@ -276,13 +276,13 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// Key dimensions for a stage with N hydros, T thermals, Lines lines,
 /// B buses, K blocks per stage, and F FPHA hydros each with M planes:
 ///
-/// - `num_cols = N*(2+L) + 1 + N*K*2 + T*K + Lines*K*2 + B*K*2 + [N penalty] + F*K`
-///   (FPHA generation columns added after inflow-slack columns)
-/// - `num_rows = N*(1+L) + N + B*K + F*K*M`
-///   (FPHA constraint rows added after load-balance rows)
+/// - `num_cols` and `num_rows` are computed by `layout::StageLayout` —
+///   see `layout.rs` for the authoritative column and row counts
 /// - `n_state  = N*(1+L)`
 /// - `n_transfer = N*L`  (storage + all lags except the oldest)
-/// - `n_dual_relevant = N*(1+L)`  (unchanged: FPHA rows are structural, not dual-relevant)
+/// - `n_dual_relevant = N*(1+L)`  (`z_inflow` definition, water balance, load balance, FPHA,
+///   evaporation, operational violation, and generic constraint rows are all structural and
+///   non-dual-relevant; only the state-fixing rows contribute to cut gradients)
 ///
 /// ## PAR order and `max_par_order`
 ///
@@ -7593,13 +7593,13 @@ mod tests {
     #[allow(clippy::cast_possible_wrap)]
     fn generic_constraint_two_hydros_sum_csc_entries() {
         use chrono::NaiveDate;
-        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::scenario::{InflowModel, LoadModel};
         use cobre_core::temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         };
+        use cobre_core::ResolvedGenericConstraintBounds;
         use cobre_core::{
             ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig,
             VariableRef,

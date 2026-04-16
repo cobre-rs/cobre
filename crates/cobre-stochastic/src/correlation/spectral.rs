@@ -157,14 +157,14 @@ impl SpectralFactor {
     /// Panics in debug builds if `independent.len() != self.dim` or
     /// `correlated.len() != self.dim`.
     pub fn transform(&self, independent: &[f64], correlated: &mut [f64]) {
-        debug_assert_eq!(
+        assert_eq!(
             independent.len(),
             self.dim,
             "SpectralFactor::transform: independent.len()={} != dim={}",
             independent.len(),
             self.dim
         );
-        debug_assert_eq!(
+        assert_eq!(
             correlated.len(),
             self.dim,
             "SpectralFactor::transform: correlated.len()={} != dim={}",

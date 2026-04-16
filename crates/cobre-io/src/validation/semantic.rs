@@ -1721,9 +1721,26 @@ fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationCon
 
     // Detect missing (hydro, season, year) groups: the hydro has history in
     // that year, but the counts map has no entry for that (hydro, season, year).
+    //
+    // Boundary years (the first and last calendar year each hydro has any
+    // observation) are excluded from this check. Partial coverage in a boundary
+    // year is expected — real-world history commonly starts in April and ends in
+    // September, giving incomplete first/last calendar years.  Interior years
+    // that are missing a season ARE genuine coarser-than-season indicators and
+    // are still reported.
+    //
+    // Edge case: a hydro with only 1 or 2 years of data has no interior years at
+    // all, so the check is skipped entirely for that hydro.  Other validation
+    // rules (minimum observation count) will surface insufficient data.
     let mut coarser_violations: Vec<(i32, usize, i32)> = Vec::new();
     for (&hid, years) in &hydro_years {
+        let min_yr = years.iter().copied().min().unwrap_or(0);
+        let max_yr = years.iter().copied().max().unwrap_or(0);
         for &yr in years {
+            // Skip boundary years — partial coverage is expected there.
+            if yr == min_yr || yr == max_yr {
+                continue;
+            }
             for &sid in &defined_season_ids {
                 if !counts.contains_key(&(hid, sid, yr)) {
                     coarser_violations.push((hid, sid, yr));
@@ -6041,6 +6058,14 @@ mod tests {
     /// Given quarterly observations (1 obs per quarter) with a monthly SeasonMap
     /// (12 seasons), a `BusinessRuleViolation` error is emitted stating that
     /// coarser-than-season observations cannot be disaggregated.
+    ///
+    /// The coarser-than-season check only applies to interior years (not the
+    /// first or last calendar year a hydro has observations).  We therefore
+    /// provide observations in three calendar years (2018, 2019, 2020) so that
+    /// 2019 is an interior year.  Only 2019 gets the quarterly (coarse) pattern;
+    /// the boundary years 2018 and 2020 each get exactly one full-month
+    /// observation so they are recognised as boundary years without themselves
+    /// triggering the check.
     #[test]
     fn test_observation_alignment_coarser_than_season() {
         // Build 12 monthly stages covering 2020, season_map present (12 seasons).
@@ -6056,29 +6081,45 @@ mod tests {
             stage.end_date = chrono::NaiveDate::from_ymd_opt(end_year, end_month, 1).unwrap();
         }
 
-        // Only 4 quarterly observations (one per quarter mid-point), not 12.
-        // This simulates coarser-than-season data: the hydro has observations
-        // in 2020 but many (season, year) groups have no observations.
+        // History spans 2018-2020 so that 2019 is an interior year.
+        // - 2018 (min year / boundary): one observation in January only.
+        // - 2019 (interior year): only 4 quarterly observations — coarser than monthly.
+        // - 2020 (max year / boundary): one observation in January only.
+        // Observations outside the stage range (2018-2019) fall back to the
+        // season_map for season assignment, which assigns season by month index.
         let history = vec![
+            // Boundary year 2018 — one observation, not checked.
             InflowHistoryRow {
                 hydro_id: EntityId::from(1),
-                date: chrono::NaiveDate::from_ymd_opt(2020, 2, 15).unwrap(), // Feb → season 1
+                date: chrono::NaiveDate::from_ymd_opt(2018, 1, 15).unwrap(), // Jan → season 0
+                value_m3s: 50.0,
+            },
+            // Interior year 2019 — quarterly (coarse), should trigger error.
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2019, 2, 15).unwrap(), // Feb → season 1
                 value_m3s: 100.0,
             },
             InflowHistoryRow {
                 hydro_id: EntityId::from(1),
-                date: chrono::NaiveDate::from_ymd_opt(2020, 5, 15).unwrap(), // May → season 4
+                date: chrono::NaiveDate::from_ymd_opt(2019, 5, 15).unwrap(), // May → season 4
                 value_m3s: 200.0,
             },
             InflowHistoryRow {
                 hydro_id: EntityId::from(1),
-                date: chrono::NaiveDate::from_ymd_opt(2020, 8, 15).unwrap(), // Aug → season 7
+                date: chrono::NaiveDate::from_ymd_opt(2019, 8, 15).unwrap(), // Aug → season 7
                 value_m3s: 300.0,
             },
             InflowHistoryRow {
                 hydro_id: EntityId::from(1),
-                date: chrono::NaiveDate::from_ymd_opt(2020, 11, 15).unwrap(), // Nov → season 10
+                date: chrono::NaiveDate::from_ymd_opt(2019, 11, 15).unwrap(), // Nov → season 10
                 value_m3s: 400.0,
+            },
+            // Boundary year 2020 — one observation, not checked.
+            InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, 1, 15).unwrap(), // Jan → season 0
+                value_m3s: 50.0,
             },
         ];
         let data = make_data_estimation(vec![make_hydro(1, None)], stages_2020, history);
@@ -6157,6 +6198,122 @@ mod tests {
             ctx.errors().is_empty(),
             "rule 31 must be skipped when estimation is inactive; got errors: {:?}",
             ctx.errors()
+        );
+    }
+
+    /// Given a monthly study (12 seasons) where inflow history runs from April
+    /// 1990 through September 2020, the boundary years 1990 and 2020 are
+    /// partial (missing Jan-Mar 1990 and Oct-Dec 2020 respectively). The
+    /// coarser-than-season check must produce no errors for those years.
+    #[test]
+    fn test_observation_alignment_partial_boundary_years_no_error() {
+        // Build a 12-season monthly stage set covering all 12 months (the
+        // season map assigns season ids 0-11 by month index).
+        let stages = make_stages_with_seasons(12, /*with_season_map=*/ true);
+
+        // Build history: April 1990 – September 2020 (inclusive).
+        // 1990: seasons 3-11 (Apr-Dec), 9 months.
+        // 1991-2019: all 12 seasons each — 29 complete years.
+        // 2020: seasons 0-8 (Jan-Sep), 9 months.
+        let mut history: Vec<InflowHistoryRow> = Vec::new();
+
+        // Partial first year: April–December 1990 (seasons 3–11).
+        for month in 4u32..=12 {
+            history.push(InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(1990, month, 15).unwrap(),
+                value_m3s: 100.0,
+            });
+        }
+        // Complete interior years: 1991 through 2019.
+        for year in 1991i32..=2019 {
+            for month in 1u32..=12 {
+                history.push(InflowHistoryRow {
+                    hydro_id: EntityId::from(1),
+                    date: chrono::NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
+                    value_m3s: 100.0,
+                });
+            }
+        }
+        // Partial last year: January–September 2020 (seasons 0–8).
+        for month in 1u32..=9 {
+            history.push(InflowHistoryRow {
+                hydro_id: EntityId::from(1),
+                date: chrono::NaiveDate::from_ymd_opt(2020, month, 15).unwrap(),
+                value_m3s: 100.0,
+            });
+        }
+
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        let coarser_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("coarser-than-season")
+            })
+            .collect();
+        assert!(
+            coarser_errors.is_empty(),
+            "partial boundary years must not produce coarser-than-season errors; got: \
+             {coarser_errors:?}"
+        );
+    }
+
+    /// Given a monthly study (12 seasons) where inflow history spans complete
+    /// calendar years (1991-2019) but season 6 (July) is missing for the
+    /// interior year 2005, a coarser-than-season error IS produced for that
+    /// missing (hydro, season, year) group.
+    #[test]
+    fn test_observation_alignment_missing_interior_season_produces_error() {
+        let stages = make_stages_with_seasons(12, /*with_season_map=*/ true);
+
+        // Build history: 1991-2019, all months, except July 2005 (season 6).
+        let mut history: Vec<InflowHistoryRow> = Vec::new();
+        for year in 1991i32..=2019 {
+            for month in 1u32..=12 {
+                // Skip July 2005 to simulate a missing interior-year season.
+                if year == 2005 && month == 7 {
+                    continue;
+                }
+                history.push(InflowHistoryRow {
+                    hydro_id: EntityId::from(1),
+                    date: chrono::NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
+                    value_m3s: 100.0,
+                });
+            }
+        }
+
+        let data = make_data_estimation(vec![make_hydro(1, None)], stages, history);
+
+        let mut ctx = ValidationContext::new();
+        check_observation_season_alignment(&data, &mut ctx);
+
+        let coarser_errors: Vec<_> = ctx
+            .errors()
+            .into_iter()
+            .filter(|e| {
+                e.kind == ErrorKind::BusinessRuleViolation
+                    && e.message.contains("coarser-than-season")
+            })
+            .collect();
+        assert!(
+            !coarser_errors.is_empty(),
+            "a missing season in an interior year must produce a coarser-than-season error"
+        );
+        // The error must specifically reference hydro 1, season 6, year 2005.
+        let target = coarser_errors.iter().find(|e| {
+            e.message.contains("hydro 1")
+                && e.message.contains("season 6")
+                && e.message.contains("year 2005")
+        });
+        assert!(
+            target.is_some(),
+            "expected an error for hydro 1 season 6 year 2005; got: {coarser_errors:?}"
         );
     }
 }

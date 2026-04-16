@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
+use cobre_core::{scenario::SamplingScheme, temporal::StageLagTransition, Stage};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
@@ -75,10 +75,16 @@ impl StageContext<'_> {
     #[inline]
     #[must_use]
     pub fn noise_group_id_at(&self, t: usize) -> u32 {
-        self.noise_group_ids
-            .get(t)
-            .copied()
-            .unwrap_or(u32::try_from(t).unwrap_or(u32::MAX))
+        if self.noise_group_ids.is_empty() {
+            #[allow(clippy::cast_possible_truncation)]
+            return t as u32;
+        }
+        debug_assert!(
+            t < self.noise_group_ids.len(),
+            "stage index {t} out of bounds for noise_group_ids (len={})",
+            self.noise_group_ids.len()
+        );
+        self.noise_group_ids[t]
     }
 }
 

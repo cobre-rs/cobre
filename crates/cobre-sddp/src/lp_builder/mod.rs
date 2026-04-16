@@ -26,19 +26,24 @@
 //! [N*(2+L), N*(3+L))   incoming storage      (fixed by storage-fixing rows)
 //! N*(3+L)              theta                 (future cost, scalar)
 //! N*(3+L)+1 ..         decision variables:
-//!   hydro turbine:   N*K columns
-//!   hydro spillage:  N*K columns
-//!   thermal gen:     T*K columns
-//!   line fwd flow:   Lines*K columns
-//!   line rev flow:   Lines*K columns
-//!   bus deficit:     B*S*K columns  (S = max_deficit_segments across all buses)
-//!   bus excess:      B*K columns
-//!   inflow slack:    N columns (sigma_inf_h, only when penalty method is active)
-//!   FPHA generation: N_fpha*K columns (one per FPHA hydro per block)
-//!   evaporation:     N_evap*3 columns (Q_ev, f_evap_plus, f_evap_minus per evap hydro)
-//!   withdrawal slack: N columns (sigma^r_h, one per hydro when hydro_count > 0)
-//!   NCS generation:  n_active_ncs*K columns  (VARIES per stage)
-//!   generic slack:   n_generic_slack columns  (VARIES per stage)
+//!   hydro turbine:       N*K columns
+//!   hydro spillage:      N*K columns
+//!   hydro diversion:     N*K columns (zero-bounded for non-diverting hydros)
+//!   thermal gen:         T*K columns
+//!   line fwd flow:       Lines*K columns
+//!   line rev flow:       Lines*K columns
+//!   bus deficit:         B*S*K columns  (S = max_deficit_segments across all buses)
+//!   bus excess:          B*K columns
+//!   inflow slack:        N columns (sigma_inf_h, only when penalty method is active)
+//!   FPHA generation:     N_fpha*K columns (one per FPHA hydro per block)
+//!   evaporation:         N_evap*3 columns (Q_ev, f_evap_plus, f_evap_minus per evap hydro)
+//!   withdrawal slack:    2*N columns (under-withdrawal neg, over-withdrawal pos; one per hydro each)
+//!   outflow_below slack: N*K columns (min-outflow violation, one per hydro per block)
+//!   outflow_above slack: N*K columns (max-outflow violation, one per hydro per block)
+//!   turbine_below slack: N*K columns (min-turbine violation, one per hydro per block)
+//!   gen_below slack:     N*K columns (min-generation violation, one per hydro per block)
+//!   NCS generation:      n_active_ncs*K columns  (VARIES per stage)
+//!   generic slack:       n_generic_slack columns  (VARIES per stage)
 //! ```
 //!
 //! ### Row layout (contiguous regions)
@@ -48,11 +53,15 @@
 //! [N,  N*(1+L))        AR lag-fixing constraints
 //! [N*(1+L), N*(2+L))   z_inflow definition constraints (structural, equality)
 //! N*(2+L) ..           structural constraints (non-dual region):
-//!   water balance:   N rows   (one per hydro)
-//!   load balance:    B*K rows (one per bus per block)
-//!   FPHA:            n_fpha_rows
-//!   evaporation:     n_evap rows
-//!   generic:         n_generic_rows  (VARIES per stage)
+//!   water balance:       N rows   (one per hydro)
+//!   load balance:        B*K rows (one per bus per block)
+//!   FPHA:                n_fpha_rows
+//!   evaporation:         n_evap rows
+//!   min-outflow:         N*K rows (one per hydro per block)
+//!   max-outflow:         N*K rows (one per hydro per block)
+//!   min-turbine:         N*K rows (one per hydro per block)
+//!   min-generation:      N*K rows (one per hydro per block)
+//!   generic:             n_generic_rows  (VARIES per stage)
 //! ```
 //!
 //! The AR dynamics (noise patch target) rows are the water balance constraints

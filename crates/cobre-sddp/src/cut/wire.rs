@@ -220,7 +220,7 @@ pub fn serialize_cuts_to_buffer(cuts: &[(u32, u32, u32, f64, &[f64])], n_state: 
 /// `0` or a multiple of `cut_wire_size(n_state)`. Returns a `Vec` of
 /// `(header, coefficients)` pairs in the same order they appear in the buffer.
 ///
-/// # Panics (debug builds only)
+/// # Panics
 ///
 /// Panics if `buf.len()` is not a multiple of `cut_wire_size(n_state)` (when
 /// `n_state > 0`).
@@ -231,7 +231,7 @@ pub fn deserialize_cuts_from_buffer(buf: &[u8], n_state: usize) -> Vec<(CutWireH
     }
 
     let record_size = cut_wire_size(n_state);
-    debug_assert!(
+    assert!(
         buf.len() % record_size == 0,
         "buffer length {} is not a multiple of record size {record_size}",
         buf.len()
@@ -255,8 +255,8 @@ mod tests {
     )]
 
     use super::{
-        CutWireHeader, cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer, serialize_cut,
-        serialize_cuts_to_buffer,
+        cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer, serialize_cut,
+        serialize_cuts_to_buffer, CutWireHeader,
     };
 
     #[test]

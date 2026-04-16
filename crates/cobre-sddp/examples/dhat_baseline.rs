@@ -44,7 +44,7 @@ use std::path::Path;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{config::StoppingRuleConfig, parse_config};
-use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank stub communicator — mirrors the one in `tests/deterministic.rs`.

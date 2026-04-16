@@ -44,13 +44,18 @@
 //!
 //! ## LP rebuild sequence
 //!
-//! For each `(worker, stage)` pair:
+//! For each `(worker, scenario)` pair (iterating over scenarios in the outer
+//! loop and stages in the inner loop):
 //!
-//! 1. `solver.load_model(template)` — reset to the structural LP.
+//! 1. `solver.load_model(template)` — reset to the structural LP for this
+//!    stage (per-scenario reload, not per-stage).
 //! 2. `solver.add_rows(cut_batch)` — append active Benders cuts.
-//!
-//! For each scenario within that stage, only row bounds are patched:
 //! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
+//!
+//! Reloading the full model per scenario (rather than reusing the model across
+//! scenarios within the same stage) ensures deterministic LP state regardless
+//! of thread assignment: no residual warm-start artefacts or bound mutations
+//! carry over between scenarios processed by the same worker.
 //!
 //! ## Hot-path allocation discipline
 //!
@@ -1147,7 +1152,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                     .unwrap_or(1.0);
 
                 for (local_m, m) in (start_m..end_m).enumerate() {
-                    // Reload model per scenario for determinism investigation.
+                    // Reload model per scenario to ensure deterministic LP state across thread assignments.
                     ws.solver.load_model(&ctx.templates[t]);
                     if cut_batches[t].num_rows > 0 {
                         ws.solver.add_rows(&cut_batches[t]);

@@ -29,9 +29,9 @@
 use std::collections::HashSet;
 
 use cobre_core::{
-    EntityId, HydroPastInflows,
     scenario::{ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, LoadModel, NcsModel},
     temporal::{Stage, StageLagTransition},
+    EntityId, HydroPastInflows,
 };
 
 use crate::StochasticError;
@@ -333,6 +333,14 @@ pub fn standardize_external_inflow(
 
     #[allow(clippy::cast_sign_loss)]
     for row in external_rows {
+        debug_assert!(
+            row.stage_id >= 0,
+            "negative stage_id in external scenario row"
+        );
+        debug_assert!(
+            row.scenario_id >= 0,
+            "negative scenario_id in external scenario row"
+        );
         let stage_idx = row.stage_id as usize;
         let scenario_idx = row.scenario_id as usize;
         if let Some(&h_idx) = hydro_index.get(&row.hydro_id) {
@@ -933,7 +941,6 @@ pub fn pad_library_to_uniform(library: &mut ExternalScenarioLibrary) {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId, HydroPastInflows,
         scenario::{
             ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowModel, LoadModel, NcsModel,
         },
@@ -941,11 +948,12 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageLagTransition,
             StageRiskConfig, StageStateConfig,
         },
+        EntityId, HydroPastInflows,
     };
 
     use super::{
-        ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
-        standardize_external_ncs,
+        standardize_external_inflow, standardize_external_load, standardize_external_ncs,
+        ExternalScenarioLibrary,
     };
     use crate::par::{evaluate::evaluate_par, precompute::PrecomputedPar};
 

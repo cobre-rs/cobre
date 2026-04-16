@@ -227,10 +227,10 @@ pub enum TrainingEvent {
         /// Total number of cuts deactivated across all stages.
         cuts_deactivated: u32,
         /// Total number of angular clusters formed across all stages.
-        clusters_formed: u32,
+        clusters_formed: u64,
         /// Total number of within-cluster dominance checks performed across all
         /// stages.
-        dominance_checks: u32,
+        dominance_checks: u64,
         /// Number of stages processed (stages 1..num_stages-1; stage 0 is
         /// exempt).
         stages_processed: u32,

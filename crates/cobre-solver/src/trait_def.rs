@@ -165,7 +165,7 @@ pub trait SolverInterface: Send {
 
     /// Record application-level basis padding statistics.
     ///
-    /// Called by the SDDP algorithm after each `pad_basis_for_cuts` call.
+    /// Called after each basis padding operation to record padding statistics.
     /// Default implementation is a no-op; solvers that track statistics
     /// should override to increment their internal counters.
     ///

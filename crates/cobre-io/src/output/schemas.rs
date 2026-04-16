@@ -1,8 +1,6 @@
 //! Arrow schema definitions for all Parquet output files per output-schemas spec
 //! (SS5.1–5.11 and SS6.1–6.3).
 
-#![allow(dead_code)]
-
 use arrow::datatypes::{DataType, Field, Schema};
 
 /// Schema for `simulation/costs/` — stage and block-level cost breakdown.

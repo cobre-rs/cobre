@@ -359,6 +359,46 @@ pub struct RowBatch {
     pub row_upper: Vec<f64>,
 }
 
+impl StageTemplate {
+    /// Creates an empty [`StageTemplate`] with zero-sized fields and empty `Vec`s.
+    ///
+    /// Intended for use as a reusable output buffer passed to
+    /// [`crate::baking::bake_rows_into_template`]. The caller constructs one
+    /// `StageTemplate::empty()` and passes it on every baking call; the function
+    /// clears and refills the buffer without calling `shrink_to_fit`, so the
+    /// allocated capacity grows to its steady-state peak and then stabilises.
+    ///
+    /// An empty template is **not** a valid model for `load_model` (it has
+    /// `num_cols == 0` and `num_rows == 0`). Only pass it to `load_model` after
+    /// a successful `bake_rows_into_template` call has populated it.
+    ///
+    /// A `Default` impl is intentionally omitted: an empty template is a
+    /// surprising default and invites misuse. Use this constructor explicitly.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            num_cols: 0,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: Vec::new(),
+            row_indices: Vec::new(),
+            values: Vec::new(),
+            col_lower: Vec::new(),
+            col_upper: Vec::new(),
+            objective: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        }
+    }
+}
+
 impl RowBatch {
     /// Reset all buffers to empty without deallocating.
     ///

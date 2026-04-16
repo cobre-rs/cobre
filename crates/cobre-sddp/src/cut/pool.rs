@@ -294,6 +294,43 @@ impl CutPool {
             })
     }
 
+    /// Iterate over active cuts generated in a specific training iteration.
+    ///
+    /// Yields `(slot_index, intercept, coefficient_slice)` for every slot
+    /// where `active[slot]` is `true` AND
+    /// `metadata[slot].iteration_generated == current_iteration`.
+    ///
+    /// Warm-start cuts (whose `iteration_generated` is
+    /// [`WARM_START_ITERATION`]) are always excluded, even if
+    /// `current_iteration` were to equal the sentinel numerically — the
+    /// sentinel is chosen as `u64::MAX` to make such a collision impossible
+    /// in practice, but the explicit guard is retained for clarity.
+    ///
+    /// Only scans up to `populated_count` to avoid touching uninitialized
+    /// slots. Iterates in insertion order, preserving declaration-order
+    /// invariance.
+    pub(crate) fn active_delta_cuts(
+        &self,
+        current_iteration: u64,
+    ) -> impl Iterator<Item = (usize, f64, &[f64])> {
+        self.active[..self.populated_count]
+            .iter()
+            .enumerate()
+            .filter(move |&(slot, &is_active)| {
+                is_active
+                    && self.metadata[slot].iteration_generated == current_iteration
+                    && self.metadata[slot].iteration_generated != WARM_START_ITERATION
+            })
+            .map(|(i, _)| {
+                let start = i * self.state_dimension;
+                (
+                    i,
+                    self.intercepts[i],
+                    &self.coefficients[start..start + self.state_dimension],
+                )
+            })
+    }
+
     /// Count the number of active cuts.
     ///
     /// Returns the cached count in O(1). A debug assertion verifies consistency

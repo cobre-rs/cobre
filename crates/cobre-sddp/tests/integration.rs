@@ -848,7 +848,9 @@ fn train_lb_monotonically_nondecreasing() {
 }
 
 /// Verify the exact event sequence emitted by `train` for 3 iterations:
-/// 1 `TrainingStarted` + 3 * 6 per-iteration events + 1 `TrainingFinished` = 20 total.
+/// 1 `TrainingStarted` + 3 * 7 per-iteration events + 1 `TrainingFinished` = 23 total.
+/// Per-iteration events: ForwardPassComplete, ForwardSyncComplete, BackwardPassComplete,
+/// CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary.
 #[test]
 fn train_emits_correct_event_sequence() {
     let fx = Fixture::new(2);
@@ -930,21 +932,22 @@ fn train_emits_correct_event_sequence() {
 
     let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-    assert_eq!(events.len(), 20);
+    assert_eq!(events.len(), 23);
     assert!(matches!(events[0], TrainingEvent::TrainingStarted { .. }));
-    assert!(matches!(events[19], TrainingEvent::TrainingFinished { .. }));
+    assert!(matches!(events[22], TrainingEvent::TrainingFinished { .. }));
 
     let per_iter_types: &[fn(&TrainingEvent) -> bool] = &[
         |e| matches!(e, TrainingEvent::ForwardPassComplete { .. }),
         |e| matches!(e, TrainingEvent::ForwardSyncComplete { .. }),
         |e| matches!(e, TrainingEvent::BackwardPassComplete { .. }),
         |e| matches!(e, TrainingEvent::CutSyncComplete { .. }),
+        |e| matches!(e, TrainingEvent::TemplateBakeComplete { .. }),
         |e| matches!(e, TrainingEvent::ConvergenceUpdate { .. }),
         |e| matches!(e, TrainingEvent::IterationSummary { .. }),
     ];
 
     for iter_idx in 0..3usize {
-        let offset = 1 + iter_idx * 6;
+        let offset = 1 + iter_idx * 7;
         for (step, &check_fn) in per_iter_types.iter().enumerate() {
             assert!(check_fn(&events[offset + step]));
         }
@@ -2213,5 +2216,784 @@ fn test_angular_pruning_stage_0() {
         result.result.final_lb >= 0.0,
         "final lower bound must be non-negative after angular pruning at stage 0, got {}",
         result.result.final_lb,
+    );
+}
+
+// ===========================================================================
+// ticket-010: Baked-template forward-pass integration test
+// ===========================================================================
+
+/// Mock solver that tracks `add_rows_count` cumulatively and exposes it via
+/// `statistics()`. Used to verify that the baked-template path calls `add_rows`
+/// zero times on iteration 2.
+struct TrackingMockSolver {
+    /// Cumulative count of `add_rows` calls since construction.
+    add_rows_count: u64,
+    /// Cumulative count of `load_model` calls since construction.
+    load_model_count: u64,
+    /// Current total row count (base + added cuts).
+    current_num_rows: usize,
+    /// Dual buffer, sized to `current_num_rows`.
+    dual_buf: Vec<f64>,
+    /// Primal buffer — 4 columns for the minimal 1-hydro template.
+    primal_buf: Vec<f64>,
+}
+
+impl TrackingMockSolver {
+    fn new() -> Self {
+        Self {
+            add_rows_count: 0,
+            load_model_count: 0,
+            current_num_rows: 0,
+            dual_buf: vec![0.0_f64; 64],
+            primal_buf: vec![0.0_f64; 4],
+        }
+    }
+}
+
+impl SolverInterface for TrackingMockSolver {
+    fn solver_name_version(&self) -> String {
+        "TrackingMockSolver 0.0.0".to_string()
+    }
+
+    fn load_model(&mut self, template: &StageTemplate) {
+        self.current_num_rows = template.num_rows;
+        self.load_model_count += 1;
+    }
+
+    fn add_rows(&mut self, cuts: &RowBatch) {
+        self.current_num_rows += cuts.num_rows;
+        self.add_rows_count += 1;
+        if self.dual_buf.len() < self.current_num_rows {
+            self.dual_buf.resize(self.current_num_rows, 0.0);
+        }
+    }
+
+    fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+    fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+
+    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        if self.dual_buf.len() < self.current_num_rows {
+            self.dual_buf.resize(self.current_num_rows, 0.0);
+        }
+        Ok(cobre_solver::SolutionView {
+            objective: 0.0,
+            primal: &self.primal_buf,
+            dual: &self.dual_buf[..self.current_num_rows],
+            reduced_costs: &self.primal_buf,
+            iterations: 0,
+            solve_time_seconds: 0.0,
+        })
+    }
+
+    fn reset(&mut self) {}
+
+    fn get_basis(&mut self, _out: &mut Basis) {}
+
+    fn solve_with_basis(
+        &mut self,
+        _basis: &Basis,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        self.solve()
+    }
+
+    fn statistics(&self) -> SolverStatistics {
+        SolverStatistics {
+            add_rows_count: self.add_rows_count,
+            load_model_count: self.load_model_count,
+            ..SolverStatistics::default()
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "TrackingMock"
+    }
+}
+
+/// Verify that baked templates skip `add_rows` calls in iteration 2.
+///
+/// Setup: 3-stage, 4 forward-pass scenarios, 1 active cut per stage.
+/// Iteration 1: legacy path calls `add_rows`.
+/// After baking: merge active cuts into templates.
+/// Iteration 2: baked path calls `add_rows` zero times.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn forward_pass_uses_baked_template_on_iter_2() {
+    use cobre_sddp::{
+        BakedTemplates, BasisStore, ForwardPassBatch, FutureCostFunction, HorizonMode,
+        InflowNonNegativityMethod, PatchBuffer, SolverWorkspace, StageContext, StageIndexer,
+        TrainingContext, WorkspaceSizing, build_cut_row_batch_into, run_forward_pass,
+    };
+    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
+
+    // ── System parameters ───────────────────────────────────────────────────
+    let n_stages = 3;
+    let n_fwd = 4; // forward-pass scenarios
+
+    // StageIndexer: N=1, L=0 → n_state=1, theta=3, num_cols=4
+    let indexer = StageIndexer::new(1, 0);
+
+    // Base templates: minimal 1-row LP (storage_fixing row only).
+    let base_template = minimal_template();
+    let base_templates: Vec<StageTemplate> = vec![base_template.clone(); n_stages];
+
+    // Stages matching the 3-stage stochastic context.
+    let stochastic = make_stochastic_context(3, 1);
+    let stages: Vec<Stage> = (0..n_stages)
+        .map(|i| Stage {
+            index: i,
+            id: i as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        })
+        .collect();
+
+    // FCF: capacity=50, n_state=1. Add 1 cut per stage so `add_rows` fires.
+    let mut fcf = FutureCostFunction::new(n_stages, indexer.n_state, 2, 50, &vec![0; n_stages]);
+    for t in 0..n_stages {
+        // One Benders cut per stage: intercept=10.0, coeff=[1.0] (state_dim=1).
+        fcf.add_cut(t, 1, 0, 10.0, &[1.0]);
+    }
+
+    let horizon = HorizonMode::Finite {
+        num_stages: n_stages,
+    };
+    let initial_state = vec![0.0_f64; indexer.n_state];
+    let base_rows = vec![2usize; n_stages]; // matches minimal_template() in integration.rs
+
+    let stage_ctx = StageContext {
+        templates: &base_templates,
+        base_rows: &base_rows,
+        noise_scale: &[],
+        // n_hydros=0 suppresses the noise-transform path (same convention used
+        // by all forward.rs unit tests that call run_forward_pass directly).
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &vec![1usize; n_stages],
+        ncs_max_gen: &[],
+        discount_factors: &[],
+        cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
+    };
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &InflowNonNegativityMethod::None,
+        stochastic: &stochastic,
+        initial_state: &initial_state,
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        stages: &stages,
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        basis_padding_enabled: false,
+        recent_accum_seed: &[],
+        recent_weight_seed: 0.0,
+    };
+
+    // Helper: build empty RowBatch.
+    let empty_batch = || RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+
+    // Helper: build a SolverWorkspace for TrackingMockSolver.
+    let make_workspace = || {
+        let sizing = WorkspaceSizing {
+            // hydro_count=0 matches n_hydros=0 in stage_ctx (noise path is suppressed).
+            hydro_count: 0,
+            max_par_order: 0,
+            n_load_buses: 0,
+            max_blocks: 1,
+            downstream_par_order: 0,
+            max_openings: 0,
+            initial_pool_capacity: 0,
+            n_state: indexer.n_state,
+        };
+        SolverWorkspace::new(
+            TrackingMockSolver::new(),
+            PatchBuffer::new(0, 0, 0, 0),
+            indexer.n_state,
+            sizing,
+        )
+    };
+
+    // Records buffer: n_fwd * n_stages entries.
+    let make_records = || {
+        (0..n_fwd * n_stages)
+            .map(|_| cobre_sddp::TrajectoryRecord {
+                primal: Vec::new(),
+                dual: Vec::new(),
+                stage_cost: 0.0,
+                state: Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // ── Iteration 1: legacy path (baked.ready = false) ──────────────────────
+    let mut workspaces_iter1 = vec![make_workspace()];
+    let mut basis_store_iter1 = BasisStore::new(n_fwd, n_stages);
+    let mut cut_batches: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
+    let mut records_iter1 = make_records();
+
+    let not_baked = BakedTemplates {
+        templates: &[],
+        ready: false,
+    };
+    let fwd_batch_iter1 = ForwardPassBatch {
+        local_forward_passes: n_fwd,
+        total_forward_passes: n_fwd,
+        iteration: 1,
+        fwd_offset: 0,
+    };
+
+    let add_rows_before_iter1 = workspaces_iter1[0].solver.add_rows_count;
+    let _ = run_forward_pass(
+        &mut workspaces_iter1,
+        &mut basis_store_iter1,
+        &stage_ctx,
+        &not_baked,
+        &fcf,
+        &mut cut_batches,
+        &training_ctx,
+        &fwd_batch_iter1,
+        &mut records_iter1,
+    )
+    .expect("iteration 1 forward pass must not error");
+    let add_rows_delta_iter1 = workspaces_iter1[0].solver.add_rows_count - add_rows_before_iter1;
+
+    assert!(
+        add_rows_delta_iter1 > 0,
+        "iteration 1 (legacy path) must call add_rows at least once; \
+         got add_rows_delta={add_rows_delta_iter1}"
+    );
+
+    // ── Bake step: simulate step 4d from training.rs ────────────────────────
+    // Build cut row batches (one per stage) and bake them into copies of the
+    // base template. This mirrors what the training loop does after iteration 1.
+    let mut bake_batches: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
+    let mut baked_templates: Vec<StageTemplate> =
+        (0..n_stages).map(|_| StageTemplate::empty()).collect();
+
+    for t in 0..n_stages {
+        build_cut_row_batch_into(
+            &mut bake_batches[t],
+            &fcf,
+            t,
+            &indexer,
+            &base_templates[t].col_scale,
+        );
+        bake_rows_into_template(
+            &base_templates[t],
+            &bake_batches[t],
+            &mut baked_templates[t],
+        );
+    }
+
+    // Verify: baked template has more rows than the base template.
+    for t in 0..n_stages {
+        assert!(
+            baked_templates[t].num_rows > base_templates[t].num_rows,
+            "stage {t}: baked template must have more rows than base; \
+             base={} baked={}",
+            base_templates[t].num_rows,
+            baked_templates[t].num_rows,
+        );
+    }
+
+    // ── Iteration 2: baked path (baked.ready = true) ────────────────────────
+    let mut workspaces_iter2 = vec![make_workspace()];
+    let mut basis_store_iter2 = BasisStore::new(n_fwd, n_stages);
+    // cut_batches still holds the per-stage batches from the pre-loop build.
+    let mut records_iter2 = make_records();
+
+    let is_baked = BakedTemplates {
+        templates: &baked_templates,
+        ready: true,
+    };
+    let fwd_batch_iter2 = ForwardPassBatch {
+        local_forward_passes: n_fwd,
+        total_forward_passes: n_fwd,
+        iteration: 2,
+        fwd_offset: 0,
+    };
+
+    let add_rows_before_iter2 = workspaces_iter2[0].solver.add_rows_count;
+    let _ = run_forward_pass(
+        &mut workspaces_iter2,
+        &mut basis_store_iter2,
+        &stage_ctx,
+        &is_baked,
+        &fcf,
+        &mut cut_batches,
+        &training_ctx,
+        &fwd_batch_iter2,
+        &mut records_iter2,
+    )
+    .expect("iteration 2 forward pass must not error");
+    let add_rows_delta_iter2 = workspaces_iter2[0].solver.add_rows_count - add_rows_before_iter2;
+
+    assert_eq!(
+        add_rows_delta_iter2, 0,
+        "iteration 2 (baked path) must not call add_rows; \
+         got add_rows_delta={add_rows_delta_iter2}"
+    );
+
+    // ── Verify basis_row_capacity uses baked template num_rows ───────────────
+    // Each record was produced with baked.ready=true. The forward pass
+    // sets basis_row_capacity = baked.templates[t].num_rows. We verify
+    // indirectly that load_model was called with the baked template by
+    // confirming that the solver's current_num_rows after each stage-loop
+    // iteration equals the baked template's num_rows. Since all stages use
+    // the same template structure, we can read current_num_rows at end of pass.
+    assert_eq!(
+        workspaces_iter2[0].solver.current_num_rows,
+        baked_templates[n_stages - 1].num_rows,
+        "after iteration 2 the solver's current_num_rows must equal \
+         baked_templates[last].num_rows = {}; got {}",
+        baked_templates[n_stages - 1].num_rows,
+        workspaces_iter2[0].solver.current_num_rows,
+    );
+}
+
+/// Verify that baked backward pass uses delta batch with no new iteration 2 cuts.
+///
+/// Setup: 3-stage, 4 scenarios, 1 cut per stage from iteration 1.
+/// After baking, iteration 2's backward pass appends delta batch (0 new cuts).
+/// On baked path `add_rows` is skipped; legacy path would call it per trial-point.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn backward_pass_uses_delta_batch_on_iter_2() {
+    use cobre_sddp::{
+        BackwardPassSpec, BakedTemplates, BasisStore, CutSyncBuffers, ExchangeBuffers,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure,
+        SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
+        build_cut_row_batch_into, run_backward_pass,
+    };
+    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
+
+    // ── System parameters ──────────────────────────────────────────────────
+    let n_stages = 3;
+    let n_fwd = 4;
+
+    let indexer = StageIndexer::new(1, 0);
+    let base_template = minimal_template();
+    let base_templates: Vec<StageTemplate> = vec![base_template.clone(); n_stages];
+
+    let stochastic = make_stochastic_context(n_stages, 1);
+    let stages: Vec<Stage> = (0..n_stages)
+        .map(|i| Stage {
+            index: i,
+            id: i as i32,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        })
+        .collect();
+
+    // Helper: create a fresh FCF pre-populated with n_fwd cuts per stage at
+    // iteration 0. Slots 0..n_fwd-1 are occupied; iteration=1 backward pass
+    // uses slots n_fwd..2*n_fwd-1; iteration=2 uses slots 2*n_fwd..3*n_fwd-1.
+    let make_fcf_iter0 = || {
+        let mut fcf = FutureCostFunction::new(
+            n_stages,
+            indexer.n_state,
+            n_fwd as u32,
+            50,
+            &vec![0_u32; n_stages],
+        );
+        for t in 0..n_stages {
+            for fp in 0..n_fwd {
+                fcf.add_cut(t, 0, fp as u32, 10.0, &[1.0]);
+            }
+        }
+        fcf
+    };
+
+    // Separate FCF for the baked run: the baked templates are built from this
+    // FCF's iter-0 cuts. The baked backward pass uses the same FCF with exactly
+    // those cuts active — no extra cuts are added between baking and the pass.
+    let mut fcf_baked_run = make_fcf_iter0();
+
+    let horizon = HorizonMode::Finite {
+        num_stages: n_stages,
+    };
+    let base_rows = vec![2usize; n_stages];
+
+    let stage_ctx = StageContext {
+        templates: &base_templates,
+        base_rows: &base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &vec![1usize; n_stages],
+        ncs_max_gen: &[],
+        discount_factors: &[],
+        cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
+    };
+    let training_ctx = TrainingContext {
+        horizon: &horizon,
+        indexer: &indexer,
+        inflow_method: &InflowNonNegativityMethod::None,
+        stochastic: &stochastic,
+        initial_state: &vec![0.0_f64; indexer.n_state],
+        inflow_scheme: SamplingScheme::InSample,
+        load_scheme: SamplingScheme::InSample,
+        ncs_scheme: SamplingScheme::InSample,
+        stages: &stages,
+        historical_library: None,
+        external_inflow_library: None,
+        external_load_library: None,
+        external_ncs_library: None,
+        basis_padding_enabled: false,
+        recent_accum_seed: &[],
+        recent_weight_seed: 0.0,
+    };
+
+    let empty_batch = || RowBatch {
+        num_rows: 0,
+        row_starts: Vec::new(),
+        col_indices: Vec::new(),
+        values: Vec::new(),
+        row_lower: Vec::new(),
+        row_upper: Vec::new(),
+    };
+
+    let make_workspace = || {
+        let sizing = WorkspaceSizing {
+            hydro_count: 0,
+            max_par_order: 0,
+            n_load_buses: 0,
+            max_blocks: 1,
+            downstream_par_order: 0,
+            max_openings: 1,
+            initial_pool_capacity: 0,
+            n_state: indexer.n_state,
+        };
+        SolverWorkspace::new(
+            TrackingMockSolver::new(),
+            PatchBuffer::new(0, 0, 0, 0),
+            indexer.n_state,
+            sizing,
+        )
+    };
+
+    // Helper: build exchange buffers pre-populated with n_fwd state vectors.
+    let make_exchange = || {
+        use cobre_comm::LocalBackend;
+        use cobre_sddp::TrajectoryRecord;
+        let mut bufs = ExchangeBuffers::new(indexer.n_state, n_fwd, 1);
+        let records: Vec<TrajectoryRecord> = (0..n_fwd)
+            .map(|i| TrajectoryRecord {
+                primal: Vec::new(),
+                dual: Vec::new(),
+                stage_cost: 0.0,
+                state: vec![i as f64 * 10.0],
+            })
+            .collect();
+        bufs.exchange(&records, 0, 1, &LocalBackend).unwrap();
+        bufs
+    };
+
+    // ── Bake step: build baked templates from iter-0 cuts ──────────────────
+    // Baked templates capture all currently-active cuts in fcf_baked_run so
+    // that the backward pass can call load_model(baked) + add_rows(delta_only).
+    let mut bake_batches: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
+    let mut baked_templates: Vec<StageTemplate> =
+        (0..n_stages).map(|_| StageTemplate::empty()).collect();
+
+    for t in 0..n_stages {
+        build_cut_row_batch_into(
+            &mut bake_batches[t],
+            &fcf_baked_run,
+            t,
+            &indexer,
+            &base_templates[t].col_scale,
+        );
+        bake_rows_into_template(
+            &base_templates[t],
+            &bake_batches[t],
+            &mut baked_templates[t],
+        );
+    }
+
+    // Sanity: baked templates have more rows than base.
+    for t in 0..n_stages {
+        assert!(
+            baked_templates[t].num_rows > base_templates[t].num_rows,
+            "stage {t}: baked template must have more rows"
+        );
+    }
+
+    // ── Legacy path (iter 1): measure add_rows_count delta ─────────────────
+    // Uses a separate FCF instance so that cuts added by the legacy pass do
+    // not pollute the baked FCF. The baked pass's FCF (fcf_baked_run) must
+    // contain exactly the cuts that are baked into the templates.
+    let mut fcf_legacy_run = make_fcf_iter0();
+    let mut workspaces_legacy = vec![make_workspace()];
+    let mut exchange_legacy = make_exchange();
+    let mut cut_batches_legacy: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
+    let mut csb_legacy = CutSyncBuffers::new(indexer.n_state, 64, 1);
+    let basis_store_legacy = BasisStore::new(n_fwd, n_stages);
+
+    let not_baked = BakedTemplates {
+        templates: &[],
+        ready: false,
+    };
+    let add_rows_before_legacy = workspaces_legacy[0].solver.add_rows_count;
+    let _ = run_backward_pass(
+        &mut workspaces_legacy,
+        &basis_store_legacy,
+        &stage_ctx,
+        &not_baked,
+        &mut fcf_legacy_run,
+        &mut cut_batches_legacy,
+        &training_ctx,
+        &mut BackwardPassSpec {
+            exchange: &mut exchange_legacy,
+            records: &[],
+            iteration: 1,
+            local_work: n_fwd,
+            fwd_offset: 0,
+            risk_measures: &vec![RiskMeasure::Expectation; n_stages],
+            cut_activity_tolerance: 0.0,
+            cut_sync_bufs: &mut csb_legacy,
+            probabilities_buf: &mut Vec::new(),
+            successor_active_slots_buf: &mut Vec::new(),
+            visited_archive: None,
+            metadata_sync_buf: &mut Vec::new(),
+            global_increments_buf: &mut Vec::new(),
+            real_states_buf: &mut Vec::new(),
+        },
+        &StubComm,
+    )
+    .expect("legacy backward pass must not error");
+    let add_rows_delta_legacy = workspaces_legacy[0].solver.add_rows_count - add_rows_before_legacy;
+
+    // Legacy path adds rows each time (once per worker pre-loop + once per
+    // trial-point reload × stages with a successor).
+    assert!(
+        add_rows_delta_legacy > 0,
+        "legacy path must call add_rows; got {add_rows_delta_legacy}"
+    );
+
+    // ── Baked path (iter 2): delta = 0 for the first successor, > 0 for the second ──
+    // At the start of the baked pass, fcf_baked_run has only iter-0 cuts. The
+    // baked templates were built from those same cuts, so the first successor
+    // (stage 2, processed at t=1) has no delta cuts and add_rows is not called.
+    // After t=1 finishes, iter-2 cuts are added to stage 1. These become the
+    // delta for t=0 (successor=1), so add_rows IS called for that stage.
+    //
+    // Key invariant: baked path total add_rows calls < legacy total add_rows
+    // calls, because the baked path skips add_rows entirely for stages with
+    // zero delta. In this 3-stage, n_fwd=4 scenario, the legacy path calls
+    // add_rows 10 times (5 per successor) while the baked path calls it only
+    // 5 times (0 for successor=2, 5 for successor=1).
+    let mut workspaces_baked = vec![make_workspace()];
+    let mut exchange_baked = make_exchange();
+    let mut cut_batches_baked: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
+    let mut csb_baked = CutSyncBuffers::new(indexer.n_state, 64, 1);
+    let basis_store_baked = BasisStore::new(n_fwd, n_stages);
+
+    let is_baked = BakedTemplates {
+        templates: &baked_templates,
+        ready: true,
+    };
+    let add_rows_before_baked = workspaces_baked[0].solver.add_rows_count;
+    let _ = run_backward_pass(
+        &mut workspaces_baked,
+        &basis_store_baked,
+        &stage_ctx,
+        &is_baked,
+        &mut fcf_baked_run,
+        &mut cut_batches_baked,
+        &training_ctx,
+        &mut BackwardPassSpec {
+            exchange: &mut exchange_baked,
+            records: &[],
+            iteration: 2,
+            local_work: n_fwd,
+            fwd_offset: 0,
+            risk_measures: &vec![RiskMeasure::Expectation; n_stages],
+            cut_activity_tolerance: 0.0,
+            cut_sync_bufs: &mut csb_baked,
+            probabilities_buf: &mut Vec::new(),
+            successor_active_slots_buf: &mut Vec::new(),
+            visited_archive: None,
+            metadata_sync_buf: &mut Vec::new(),
+            global_increments_buf: &mut Vec::new(),
+            real_states_buf: &mut Vec::new(),
+        },
+        &StubComm,
+    )
+    .expect("baked backward pass must not error");
+    let add_rows_delta_baked = workspaces_baked[0].solver.add_rows_count - add_rows_before_baked;
+
+    // Baked path must call add_rows FEWER times than the legacy path.
+    // The legacy path adds the full active cut set for every stage; the baked
+    // path skips add_rows entirely for stages with zero delta cuts.
+    assert!(
+        add_rows_delta_baked < add_rows_delta_legacy,
+        "baked path must call add_rows fewer times than legacy; \
+         baked={add_rows_delta_baked}, legacy={add_rows_delta_legacy}"
+    );
+    // Baked path must still have called load_model (for each trial-point reload).
+    assert!(
+        workspaces_baked[0].solver.load_model_count > 0,
+        "baked path must still call load_model"
+    );
+    // Legacy path must have called add_rows for EVERY stage with a successor.
+    // (n_successors × (1 pre-loop + n_fwd trial-point reloads) = 2 × 5 = 10)
+    let expected_legacy_add_rows = 2 * (1 + n_fwd) as u64;
+    assert_eq!(
+        add_rows_delta_legacy, expected_legacy_add_rows,
+        "legacy path must call add_rows {expected_legacy_add_rows} times; \
+         got {add_rows_delta_legacy}"
+    );
+}
+
+/// AC (ticket-011): smoke test that the baked-template backward pass does not
+/// diverge or panic over multiple iterations.
+///
+/// Smoke test: baking activates on iteration 2 and completes 5 iterations.
+/// Verifies training completes, lower bound is non-negative, and iteration count matches.
+#[test]
+fn baked_backward_pass_smoke_test() {
+    let n_iter = 5_u64;
+    let fx = Fixture::new(3);
+    let mut fcf = make_fcf(fx.n_stages);
+    // ExpandingMockSolver tracks current_num_rows (updated on load_model/add_rows)
+    // and returns a dual slice of that length, which is required once cuts are
+    // added on iteration 2+ (baked path). MockSolver has a hardcoded 2-element
+    // dual and would panic with an out-of-bounds slice access.
+    let mut solver = ExpandingMockSolver::with_objectives(vec![50.0]);
+    let stage_ctx = StageContext {
+        templates: &fx.templates,
+        base_rows: &fx.base_rows,
+        noise_scale: &[],
+        n_hydros: 0,
+        n_load_buses: 0,
+        load_balance_row_starts: &[],
+        load_bus_indices: &[],
+        block_counts_per_stage: &[1_usize, 1, 1],
+        ncs_max_gen: &[],
+        discount_factors: &[],
+        cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
+    };
+
+    let outcome = train(
+        &mut solver,
+        TrainingConfig {
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: n_iter,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(n_iter),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
+        },
+        &mut fcf,
+        &stage_ctx,
+        &TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            stages: &[],
+        },
+        &StubComm,
+        || Ok(ExpandingMockSolver::with_objectives(vec![50.0])),
+    )
+    .expect("baked backward pass smoke: train must not error");
+
+    // Training ran to the requested iteration limit.
+    assert_eq!(
+        outcome.result.iterations, n_iter,
+        "expected {n_iter} iterations, got {}",
+        outcome.result.iterations
+    );
+
+    // Lower bound from MockSolver (fixed obj=50) must be non-negative.
+    assert!(
+        outcome.result.final_lb >= 0.0,
+        "final lower bound must be non-negative; got {}",
+        outcome.result.final_lb
     );
 }

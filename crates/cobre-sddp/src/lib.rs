@@ -80,7 +80,7 @@ pub use angular_pruning::{
 };
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
-pub use context::{StageContext, TrainingContext};
+pub use context::{BakedTemplates, StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};
 pub use cut_selection::{
@@ -91,7 +91,10 @@ pub use error::SddpError;
 pub use estimation::{
     EstimationError, EstimationPath, EstimationReport, LagScaleWarning, StdRatioDivergence,
 };
-pub use forward::{ForwardResult, SyncResult, run_forward_pass, sync_forward};
+pub use forward::{
+    ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch_into, run_forward_pass,
+    sync_forward,
+};
 pub use horizon_mode::HorizonMode;
 pub use hydro_models::{
     EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,

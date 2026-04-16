@@ -249,6 +249,7 @@ pub fn run_progress_thread(
                     | TrainingEvent::CutSelectionComplete { .. }
                     | TrainingEvent::AngularPruningComplete { .. }
                     | TrainingEvent::BudgetEnforcementComplete { .. }
+                    | TrainingEvent::TemplateBakeComplete { .. }
                     | TrainingEvent::ConvergenceUpdate { .. }
                     | TrainingEvent::CheckpointComplete { .. } => {}
                 }

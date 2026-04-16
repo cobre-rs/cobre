@@ -84,7 +84,7 @@ use rayon::iter::{
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     basis_padding::pad_basis_for_cuts,
-    context::{StageContext, TrainingContext},
+    context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
@@ -448,6 +448,118 @@ pub fn build_cut_row_batch(
     };
     build_cut_row_batch_into(&mut batch, fcf, stage, indexer, col_scale);
     batch
+}
+
+/// Fill a pre-allocated [`RowBatch`] with only the Benders cut rows generated
+/// in `current_iteration`.
+///
+/// Clears `batch` and repopulates it with the subset of active cuts from
+/// `fcf.pools[stage]` whose `iteration_generated` metadata field equals
+/// `current_iteration`. Warm-start cuts (sentinel `iteration_generated ==
+/// u64::MAX`) are always excluded.
+///
+/// Delta-cut variant of [`build_cut_row_batch_into`] for use with baked templates.
+///
+/// When a baked template contains all cuts from previous iterations, this
+/// function builds only the new cuts from `current_iteration` for appending
+/// via `add_rows`. The CSR layout and coefficient transformation are identical
+/// to [`build_cut_row_batch_into`]; when the pool contains only cuts from
+/// `current_iteration`, both functions produce byte-identical output.
+///
+/// # Panics
+///
+/// Panics if total non-zeros exceeds `i32::MAX` (`HiGHS` API limit).
+pub fn build_delta_cut_row_batch_into(
+    batch: &mut RowBatch,
+    fcf: &FutureCostFunction,
+    stage: usize,
+    indexer: &StageIndexer,
+    col_scale: &[f64],
+    current_iteration: u64,
+) {
+    batch.clear();
+
+    let n_state = indexer.n_state;
+    let theta_col = indexer.theta;
+    let mask = &indexer.nonzero_state_indices;
+    let is_sparse = !mask.is_empty();
+
+    // Count delta cuts with a lightweight scan to avoid double-iteration
+    // overhead in the common case of zero delta cuts (early return).
+    let num_cuts: usize = fcf.pools[stage]
+        .active_delta_cuts(current_iteration)
+        .count();
+
+    if num_cuts == 0 {
+        batch.row_starts.push(0_i32);
+        return;
+    }
+
+    // Sparse path: NNZ = mask.len() + 1 (nonzero state entries + theta).
+    // Dense path: NNZ = n_state + 1 (all state entries + theta).
+    let nnz_per_cut = if is_sparse {
+        mask.len() + 1
+    } else {
+        n_state + 1
+    };
+    let total_nnz = num_cuts * nnz_per_cut;
+
+    let mut nz_offset = 0;
+
+    for (_slot, intercept, coefficients) in fcf.pools[stage].active_delta_cuts(current_iteration) {
+        debug_assert_eq!(
+            coefficients.len(),
+            n_state,
+            "cut coefficients length {got} != n_state {expected}",
+            got = coefficients.len(),
+            expected = n_state,
+        );
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        batch.row_starts.push(nz_offset as i32);
+
+        // Unified state coefficient loop: sparse iterates over the nonzero
+        // mask, dense iterates over all state indices. Both yield (col_index,
+        // coefficient) pairs and share the same push logic.
+        //
+        // state_to_lp_column remaps outgoing-state indices to LP columns.
+        if is_sparse {
+            for &j in mask {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, coefficients[j], col_scale);
+            }
+        } else {
+            for (j, &c) in coefficients.iter().enumerate() {
+                let lp_col = indexer.state_to_lp_column(j);
+                push_scaled_coefficient(batch, lp_col, c, col_scale);
+            }
+        }
+
+        debug_assert!(
+            i32::try_from(theta_col).is_ok(),
+            "theta_col={theta_col} exceeds i32::MAX"
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        batch.col_indices.push(theta_col as i32);
+        let d_theta = if col_scale.is_empty() {
+            1.0
+        } else {
+            col_scale[theta_col]
+        };
+        batch.values.push(d_theta);
+
+        batch.row_lower.push(intercept);
+        batch.row_upper.push(f64::INFINITY);
+
+        nz_offset += nnz_per_cut;
+    }
+
+    #[allow(clippy::expect_used)]
+    batch.row_starts.push(
+        i32::try_from(total_nnz).expect("total_nnz exceeds i32::MAX; LP exceeds HiGHS API limit"),
+    );
+
+    batch.num_rows = num_cuts;
 }
 
 /// Append only the newly active cuts (not yet in the LP) to a live solver.
@@ -827,19 +939,22 @@ fn run_forward_stage<S: SolverInterface + Send>(
 
     let view = match basis_slice.get_mut(m, t) {
         &mut Some(ref mut rb) => {
-            let active_count = pool.active_count();
-            let expected_rows = ctx.templates[t].num_rows + active_count;
+            // `basis_row_capacity` equals the total LP row count for the current
+            // iteration at stage `t`: `baked.templates[t].num_rows` when baked
+            // templates are ready (cut rows are structural), or
+            // `ctx.templates[t].num_rows + pool.active_count()` on the legacy path.
+            let expected_rows = basis_row_capacity;
 
             // Truncate if the active cut set changed since this basis was stored.
             // This happens when cut selection deactivates or reactivates cuts between
             // iterations: the stored row statuses map to a different slot ordering than
             // the current LP, so applying them verbatim would feed HiGHS a misaligned
             // basis (wrong pivot selection or an outright rejection). Truncating to the
-            // template rows drops the stale cut-row statuses; padding (if enabled) then
-            // re-evaluates all active cuts at the current state and fills with informed
-            // statuses, and without padding HiGHS fills missing rows with BASIC (correct
-            // default — all cuts assumed slack). Template row statuses are preserved
-            // because the template structure never changes across iterations.
+            // base template rows drops the stale cut-row statuses; padding (if enabled)
+            // then re-evaluates all active cuts at the current state and fills with
+            // informed statuses, and without padding HiGHS fills missing rows with
+            // BASIC (correct default — all cuts assumed slack). Template row statuses
+            // are preserved because the template structure never changes across iterations.
             if rb.row_status.len() != expected_rows {
                 rb.row_status.truncate(ctx.templates[t].num_rows);
             }
@@ -1062,6 +1177,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
     ctx: &StageContext<'_>,
+    baked: &BakedTemplates<'_>,
     fcf: &FutureCostFunction,
     cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
@@ -1090,6 +1206,14 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
     debug_assert_eq!(records.len(), forward_passes * num_stages);
     debug_assert_eq!(initial_state.len(), indexer.n_state);
+    if baked.ready {
+        debug_assert_eq!(
+            baked.templates.len(),
+            num_stages,
+            "baked templates length mismatch: expected {num_stages}, got {}",
+            baked.templates.len()
+        );
+    }
 
     let start = Instant::now();
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
@@ -1167,9 +1291,15 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
                 for (local_m, m) in (start_m..end_m).enumerate() {
                     // Reload model per scenario to ensure deterministic LP state across thread assignments.
-                    ws.solver.load_model(&ctx.templates[t]);
-                    if cut_batches[t].num_rows > 0 {
-                        ws.solver.add_rows(&cut_batches[t]);
+                    // When baked templates are ready, the active cut rows are already structural rows
+                    // in the baked template — no add_rows call is needed.
+                    if baked.ready {
+                        ws.solver.load_model(&baked.templates[t]);
+                    } else {
+                        ws.solver.load_model(&ctx.templates[t]);
+                        if cut_batches[t].num_rows > 0 {
+                            ws.solver.add_rows(&cut_batches[t]);
+                        }
                     }
                     ws.current_state.clear();
                     let src: &[f64] = if t == 0 {
@@ -1242,7 +1372,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         num_stages,
                         iteration: *iteration,
                         raw_noise,
-                        basis_row_capacity: ctx.templates[t].num_rows + cut_batches[t].num_rows,
+                        basis_row_capacity: if baked.ready {
+                            baked.templates[t].num_rows
+                        } else {
+                            ctx.templates[t].num_rows + cut_batches[t].num_rows
+                        },
                         terminal_has_boundary_cuts,
                         pool: &fcf.pools[t],
                         basis_padding_enabled,
@@ -1367,16 +1501,27 @@ mod tests {
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch,
+        build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
     };
     use crate::{
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
         StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{StageContext, TrainingContext},
+        context::{BakedTemplates, StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
+
+    /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
+    ///
+    /// Used by unit tests that call `run_forward_pass` directly and do not
+    /// exercise baked-template behaviour.
+    fn not_baked() -> BakedTemplates<'static> {
+        BakedTemplates {
+            templates: &[],
+            ready: false,
+        }
+    }
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -2155,6 +2300,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2279,6 +2425,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2409,6 +2556,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2848,6 +2996,7 @@ mod tests {
             std::slice::from_mut(ws),
             basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3016,6 +3165,7 @@ mod tests {
             std::slice::from_mut(&mut ws1),
             &mut basis_store1,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3056,6 +3206,7 @@ mod tests {
             &mut workspaces4,
             &mut basis_store4,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3162,6 +3313,7 @@ mod tests {
             &mut workspaces,
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3475,6 +3627,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3668,6 +3821,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3912,6 +4066,7 @@ mod tests {
             &mut workspaces,
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4047,6 +4202,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4177,6 +4333,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4275,6 +4432,7 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
+            &not_baked(),
             &fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4722,5 +4880,235 @@ mod tests {
 
         assert_eq!(count, 0);
         assert_eq!(solver.set_row_bounds_count, 0);
+    }
+
+    // ── Tests for build_delta_cut_row_batch_into ─────────────────────────
+
+    fn empty_delta_batch() -> RowBatch {
+        RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_build_delta_empty_pool() {
+        // Empty pool → num_rows == 0, row_starts == [0], col_indices empty.
+        let fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let indexer = StageIndexer::new(1, 0);
+        let mut batch = empty_delta_batch();
+
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+
+        assert_eq!(batch.num_rows, 0);
+        assert_eq!(batch.row_starts, vec![0_i32]);
+        assert!(batch.col_indices.is_empty());
+        assert!(batch.values.is_empty());
+        assert!(batch.row_lower.is_empty());
+        assert!(batch.row_upper.is_empty());
+    }
+
+    #[test]
+    fn test_build_delta_single_iteration_filter() {
+        // Pool has cuts at iterations 1, 2, 3; calling with current_iteration=2
+        // emits only the iteration-2 cut.
+        //
+        // FCF: 2 stages, 1 state dimension, 1 forward pass, 10 max iterations,
+        // 0 warm-start cuts per stage.
+        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        // iteration=1, fwd_idx=0: slot = 0 + 1*1 + 0 = 1
+        fcf.add_cut(0, 1, 0, 10.0, &[1.0]);
+        // iteration=2, fwd_idx=0: slot = 0 + 2*1 + 0 = 2
+        fcf.add_cut(0, 2, 0, 20.0, &[2.0]);
+        // iteration=3, fwd_idx=0: slot = 0 + 3*1 + 0 = 3
+        fcf.add_cut(0, 3, 0, 30.0, &[3.0]);
+
+        let indexer = StageIndexer::new(1, 0);
+        let mut batch = empty_delta_batch();
+
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 2);
+
+        assert_eq!(batch.num_rows, 1);
+        assert_eq!(batch.row_lower, vec![20.0]);
+        assert_eq!(batch.row_starts, vec![0_i32, 2_i32]);
+        // The cut emitted must carry iteration-2's coefficient (-2.0).
+        assert_eq!(batch.values[0], -2.0);
+    }
+
+    #[test]
+    fn test_build_delta_skips_deactivated_cuts() {
+        // Pool has cuts at iteration 1, some deactivated; only active
+        // iteration-1 cuts are emitted.
+        let mut fcf = FutureCostFunction::new(2, 1, 2, 10, &[0; 2]);
+        // iteration=1, fwd_idx=0: slot = 0 + 1*2 + 0 = 2
+        fcf.add_cut(0, 1, 0, 10.0, &[1.0]);
+        // iteration=1, fwd_idx=1: slot = 0 + 1*2 + 1 = 3
+        fcf.add_cut(0, 1, 1, 20.0, &[2.0]);
+
+        // Deactivate slot 2 (the first iteration-1 cut).
+        fcf.pools[0].deactivate(&[2]);
+
+        let indexer = StageIndexer::new(1, 0);
+        let mut batch = empty_delta_batch();
+
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+
+        // Only slot 3 (intercept=20.0) should appear.
+        assert_eq!(batch.num_rows, 1);
+        assert_eq!(batch.row_lower, vec![20.0]);
+    }
+
+    #[test]
+    fn test_build_delta_excludes_warm_start_cuts() {
+        // Pool seeded with a warm-start cut AND one training iteration cut.
+        // Delta call with current_iteration=1 must exclude the warm-start row.
+        use cobre_io::OwnedPolicyCutRecord;
+
+        let warm_record = OwnedPolicyCutRecord {
+            cut_id: 0,
+            slot_index: 0,
+            coefficients: vec![5.0],
+            intercept: 99.0,
+            iteration: 0,
+            forward_pass_index: 0,
+            is_active: true,
+            domination_count: 0,
+        };
+        let mut pool = crate::cut::pool::CutPool::new_with_warm_start(1, 2, 10, &[warm_record]);
+        // Now add a training cut at iteration=1, fwd_idx=0:
+        // slot = warm_start_count(1) + 1*2 + 0 = 3
+        pool.add_cut(1, 0, 7.0, &[1.0]);
+
+        // Build an FCF with 2 stages (n_state=1, 2 fwd passes, 10 max iters).
+        let mut fcf = FutureCostFunction::new(2, 1, 2, 10, &[0; 2]);
+        fcf.pools[0] = pool;
+
+        let indexer = StageIndexer::new(1, 0);
+        let mut batch = empty_delta_batch();
+
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+
+        // Warm-start cut (intercept=99.0) must be excluded; training cut
+        // (intercept=7.0) must be present.
+        assert_eq!(batch.num_rows, 1);
+        assert_eq!(batch.row_lower, vec![7.0]);
+    }
+
+    #[test]
+    fn test_build_delta_matches_full_batch_when_pool_has_only_current_iter() {
+        // When the pool contains only cuts from current_iteration, delta and
+        // full builders must produce byte-identical output.
+        let mut fcf = FutureCostFunction::new(2, 1, 2, 10, &[0; 2]);
+        // iteration=1, fwd_idx=0: slot = 1*2+0 = 2
+        fcf.add_cut(0, 1, 0, 10.0, &[1.0]);
+        // iteration=1, fwd_idx=1: slot = 1*2+1 = 3
+        fcf.add_cut(0, 1, 1, 20.0, &[3.0]);
+
+        let indexer = StageIndexer::new(1, 0);
+
+        let mut batch_full = empty_delta_batch();
+        super::build_cut_row_batch_into(&mut batch_full, &fcf, 0, &indexer, &[]);
+
+        let mut batch_delta = empty_delta_batch();
+        build_delta_cut_row_batch_into(&mut batch_delta, &fcf, 0, &indexer, &[], 1);
+
+        assert_eq!(batch_delta.num_rows, batch_full.num_rows);
+        assert_eq!(batch_delta.row_starts, batch_full.row_starts);
+        assert_eq!(batch_delta.col_indices, batch_full.col_indices);
+        assert_eq!(batch_delta.values, batch_full.values);
+        assert_eq!(batch_delta.row_lower, batch_full.row_lower);
+        assert_eq!(batch_delta.row_upper, batch_full.row_upper);
+    }
+
+    #[test]
+    fn test_build_delta_sparse_path() {
+        // StageIndexer with non-empty nonzero_state_indices (sparse path).
+        // Verify that the emitted col_indices for the cut contain exactly
+        // nonzero_state_indices.len() + 1 entries (mask entries plus theta).
+        //
+        // StageIndexer::new(n_hydro, n_lag): n_state = n_hydro * (1 + n_lag)
+        // With n_hydro=2, n_lag=0: n_state=2, no lags, sparse mask is empty.
+        // We need a lag to get a nonzero_state_indices mask.
+        // With n_hydro=1, n_lag=1: n_state=2, nonzero_state_indices=[0,1] (len=2)
+        // for a cut that touches both state components.
+        //
+        // Actually we verify against the existing build_cut_row_batch_into for
+        // correctness, which already tests the sparse path thoroughly.
+        // Here we just verify col_indices.len() == mask.len() + 1 per row.
+
+        // n_hydro=1, n_lag=1: n_state=2 (vol + lag).
+        // nonzero_state_indices should be non-empty (check via indexer).
+        let indexer = StageIndexer::new(1, 1);
+        // nonzero_state_indices is the mask for non-trivially-zero state dims.
+        let mask_len = indexer.nonzero_state_indices.len();
+
+        // Only proceed if this indexer actually uses the sparse path.
+        if mask_len == 0 {
+            // Sparse path not active for this indexer; skip the assertion.
+            return;
+        }
+
+        let mut fcf = FutureCostFunction::new(2, indexer.n_state, 1, 10, &[0; 2]);
+        fcf.add_cut(0, 1, 0, 5.0, &vec![1.0; indexer.n_state]);
+
+        let mut batch = empty_delta_batch();
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+
+        assert_eq!(batch.num_rows, 1);
+        // Each row: mask_len state entries + 1 theta entry.
+        assert_eq!(batch.col_indices.len(), mask_len + 1);
+    }
+
+    #[test]
+    fn test_build_delta_reuses_out_buffer() {
+        // Call twice; second call must produce correct output even when `batch`
+        // had stale data from the first call.
+        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        fcf.add_cut(0, 1, 0, 11.0, &[1.0]);
+        fcf.add_cut(0, 2, 0, 22.0, &[2.0]);
+
+        let indexer = StageIndexer::new(1, 0);
+        let mut batch = empty_delta_batch();
+
+        // First call: iteration 1 → should yield the iteration-1 cut.
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+        assert_eq!(batch.num_rows, 1);
+        assert_eq!(batch.row_lower, vec![11.0]);
+
+        // Second call: iteration 2 → stale data from first call must be gone.
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 2);
+        assert_eq!(batch.num_rows, 1);
+        assert_eq!(batch.row_lower, vec![22.0]);
+        assert_eq!(batch.row_starts.len(), 2); // [0, 2]
+    }
+
+    #[test]
+    fn test_build_delta_clears_row_starts() {
+        // batch.row_starts[0] must be 0 regardless of prior state.
+        let mut fcf = FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        fcf.add_cut(0, 1, 0, 5.0, &[1.0]);
+
+        let indexer = StageIndexer::new(1, 0);
+
+        // Pre-populate batch with garbage.
+        let mut batch = RowBatch {
+            num_rows: 5,
+            row_starts: vec![0_i32, 2, 4, 6, 8, 10],
+            col_indices: vec![0_i32; 10],
+            values: vec![99.0_f64; 10],
+            row_lower: vec![0.0_f64; 5],
+            row_upper: vec![0.0_f64; 5],
+        };
+
+        build_delta_cut_row_batch_into(&mut batch, &fcf, 0, &indexer, &[], 1);
+
+        assert_eq!(batch.row_starts[0], 0_i32);
+        assert_eq!(batch.num_rows, 1);
+        // Prior garbage must be gone.
+        assert_eq!(batch.row_starts.len(), 2);
     }
 }

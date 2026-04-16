@@ -45,6 +45,9 @@ pub use types::{
     Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
 };
 
+pub mod baking;
+pub use baking::bake_rows_into_template;
+
 #[cfg(feature = "highs")]
 pub mod highs;
 #[cfg(feature = "highs")]

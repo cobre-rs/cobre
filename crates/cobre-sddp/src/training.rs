@@ -35,19 +35,20 @@ use cobre_core::{StageSelectionRecord, TrainingEvent};
 use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
+use cobre_solver::StageTemplate;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     SddpError, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
-    context::{StageContext, TrainingContext},
+    context::{BakedTemplates, StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
     cut::CutRowMap,
     cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
@@ -547,6 +548,25 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         row_upper: Vec::new(),
     };
 
+    // Epic-03 template baking: per-stage baked templates + reusable cut row
+    // batches. The baked template at index t has num_rows =
+    // stage_ctx.templates[t].num_rows + fcf.pools[t].active_count() after
+    // every bake. `baked_templates_ready` starts false because no bake has
+    // run yet; set true after the first bake in step 4d.
+    let mut baked_templates: Vec<StageTemplate> =
+        (0..num_stages).map(|_| StageTemplate::empty()).collect();
+    let mut bake_row_batches: Vec<RowBatch> = (0..num_stages)
+        .map(|_| RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        })
+        .collect();
+    let mut baked_templates_ready: bool = false;
+
     // CutRowMap for the lower bound solver's incremental cut management.
     // The LB solver is dedicated to stage 0 and persists across iterations,
     // so it benefits from incremental cut append (S2 optimization).
@@ -637,10 +657,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let fwd_stats_before =
             aggregate_solver_statistics(fwd_pool.workspaces.iter().map(|w| w.solver.statistics()));
 
+        let fwd_baked = BakedTemplates {
+            templates: &baked_templates,
+            ready: baked_templates_ready,
+        };
         let forward_result = match run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
             stage_ctx,
+            &fwd_baked,
             fcf,
             &mut cut_batches,
             training_ctx,
@@ -715,6 +740,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &mut fwd_pool.workspaces,
             &basis_store,
             stage_ctx,
+            &fwd_baked,
             fcf,
             &mut cut_batches,
             training_ctx,
@@ -983,6 +1009,48 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 },
             );
         }
+
+        // Step 4d: Template baking.
+        // Rebuild per-stage baked templates from the current active cut set.
+        // Iteration i+1's forward and backward passes will consume these
+        // baked templates (wired in tickets 010 and 011). Sequential over
+        // stages: per-stage memory allocation is ~10s of MB and parallelism
+        // here would contend with the solver workspace pools already in use
+        // by the LB evaluation that follows.
+        let bake_start = Instant::now();
+        let mut total_cut_rows_baked: u64 = 0;
+        for t in 0..num_stages {
+            build_cut_row_batch_into(
+                &mut bake_row_batches[t],
+                fcf,
+                t,
+                indexer,
+                &stage_ctx.templates[t].col_scale,
+            );
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                total_cut_rows_baked += bake_row_batches[t].num_rows as u64;
+            }
+            cobre_solver::bake_rows_into_template(
+                &stage_ctx.templates[t],
+                &bake_row_batches[t],
+                &mut baked_templates[t],
+            );
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let bake_time_ms = bake_start.elapsed().as_millis() as u64;
+        #[allow(clippy::cast_possible_truncation)]
+        let stages_processed_bake = num_stages as u32;
+        emit(
+            event_sender.as_ref(),
+            TrainingEvent::TemplateBakeComplete {
+                iteration,
+                stages_processed: stages_processed_bake,
+                total_cut_rows_baked,
+                bake_time_ms,
+            },
+        );
+        baked_templates_ready = true;
 
         // Periodic rebuild check for the lower bound solver.
         // When too many phantom (bound-zeroed) rows accumulate, reset the LP
@@ -1777,10 +1845,10 @@ mod tests {
     ///
     /// - 1 `TrainingStarted`
     /// - 2 × (`ForwardPassComplete`, `ForwardSyncComplete`, `BackwardPassComplete`,
-    ///   `CutSyncComplete`, `ConvergenceUpdate`, `IterationSummary`)
+    ///   `CutSyncComplete`, `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
     /// - 1 `TrainingFinished`
     ///
-    /// = 1 + 12 + 1 = 14 events.
+    /// = 1 + 14 + 1 = 16 events.
     #[test]
     fn ac_train_emits_correct_event_sequence() {
         let n_stages = 2;
@@ -1874,11 +1942,14 @@ mod tests {
         drop(fcf); // not needed; just for clarity
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-        // 1 TrainingStarted + 2*(6 per-iteration) + 1 TrainingFinished = 14
+        // 1 TrainingStarted + 2*(7 per-iteration) + 1 TrainingFinished = 16
+        // Per-iteration: ForwardPassComplete, ForwardSyncComplete,
+        //   BackwardPassComplete, CutSyncComplete, TemplateBakeComplete,
+        //   ConvergenceUpdate, IterationSummary
         assert_eq!(
             events.len(),
-            14,
-            "expected 14 events, got {} ({events:?})",
+            16,
+            "expected 16 events, got {} ({events:?})",
             events.len()
         );
 
@@ -1891,7 +1962,7 @@ mod tests {
             "last event must be TrainingFinished"
         );
 
-        // Check per-iteration event pattern for iteration 1 (events[1..7])
+        // Check per-iteration event pattern for iteration 1 (events[1..8])
         assert!(matches!(
             events[1],
             TrainingEvent::ForwardPassComplete { .. }
@@ -1905,28 +1976,36 @@ mod tests {
             TrainingEvent::BackwardPassComplete { .. }
         ));
         assert!(matches!(events[4], TrainingEvent::CutSyncComplete { .. }));
-        assert!(matches!(events[5], TrainingEvent::ConvergenceUpdate { .. }));
-        assert!(matches!(events[6], TrainingEvent::IterationSummary { .. }));
-
-        // Iteration 2 (events[7..13]) follows the same pattern.
         assert!(matches!(
-            events[7],
+            events[5],
+            TrainingEvent::TemplateBakeComplete { .. }
+        ));
+        assert!(matches!(events[6], TrainingEvent::ConvergenceUpdate { .. }));
+        assert!(matches!(events[7], TrainingEvent::IterationSummary { .. }));
+
+        // Iteration 2 (events[8..15]) follows the same pattern.
+        assert!(matches!(
+            events[8],
             TrainingEvent::ForwardPassComplete { .. }
         ));
         assert!(matches!(
-            events[8],
+            events[9],
             TrainingEvent::ForwardSyncComplete { .. }
         ));
         assert!(matches!(
-            events[9],
+            events[10],
             TrainingEvent::BackwardPassComplete { .. }
         ));
-        assert!(matches!(events[10], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(events[11], TrainingEvent::CutSyncComplete { .. }));
         assert!(matches!(
-            events[11],
+            events[12],
+            TrainingEvent::TemplateBakeComplete { .. }
+        ));
+        assert!(matches!(
+            events[13],
             TrainingEvent::ConvergenceUpdate { .. }
         ));
-        assert!(matches!(events[12], TrainingEvent::IterationSummary { .. }));
+        assert!(matches!(events[14], TrainingEvent::IterationSummary { .. }));
     }
 
     /// AC: `train_result_fields_populated`
@@ -3430,6 +3509,149 @@ mod tests {
             prune_pos < sel_pos,
             "AngularPruningComplete (pos={prune_pos}) must appear before \
              CutSelectionComplete (pos={sel_pos})"
+        );
+    }
+
+    /// AC: `template_bake_event_emitted`
+    ///
+    /// Verify that `TemplateBakeComplete` is emitted exactly once per iteration
+    /// with the correct `stages_processed` count. Also verifies that
+    /// `total_cut_rows_baked > 0` on iteration 2 (because the backward pass on
+    /// iteration 1 generates cuts before step 4d runs on that same iteration).
+    #[test]
+    fn template_bake_event_emitted() {
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+
+        // Collect all TemplateBakeComplete events.
+        let bake_events: Vec<&TrainingEvent> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::TemplateBakeComplete { .. }))
+            .collect();
+
+        // Exactly one per iteration (2 iterations).
+        assert_eq!(
+            bake_events.len(),
+            2,
+            "expected exactly 2 TemplateBakeComplete events, got {}",
+            bake_events.len()
+        );
+
+        // Each event must report stages_processed == n_stages.
+        for event in &bake_events {
+            let TrainingEvent::TemplateBakeComplete {
+                stages_processed, ..
+            } = event
+            else {
+                panic!("wrong variant")
+            };
+            assert_eq!(
+                *stages_processed, n_stages as u32,
+                "stages_processed must equal num_stages"
+            );
+        }
+
+        // On iteration 2, the backward pass from iteration 1 will have added
+        // cuts, so total_cut_rows_baked must be > 0.
+        let second_bake = bake_events[1];
+        let TrainingEvent::TemplateBakeComplete {
+            total_cut_rows_baked,
+            ..
+        } = second_bake
+        else {
+            panic!("wrong variant")
+        };
+        assert!(
+            *total_cut_rows_baked > 0,
+            "iteration 2 bake must have baked at least one cut row (backward pass \
+             generated cuts on iteration 1)"
         );
     }
 }

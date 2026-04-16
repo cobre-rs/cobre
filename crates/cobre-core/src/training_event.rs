@@ -94,10 +94,10 @@ pub struct StageSelectionRecord {
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
 ///
-/// The enum has 14 variants: 10 per-iteration events (one per lifecycle step)
+/// The enum has 15 variants: 11 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c + 4d)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
@@ -108,6 +108,7 @@ pub struct StageSelectionRecord {
 /// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
 /// | 4b   | [`Self::AngularPruningComplete`] | Angular dominance pruning done (conditional on `should_run`) |
 /// | 4c   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
+/// | 4d   | [`Self::TemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
@@ -265,6 +266,25 @@ pub enum TrainingEvent {
         stages_processed: u32,
         /// Wall-clock time for the budget enforcement pass, in milliseconds.
         enforcement_time_ms: u64,
+    },
+
+    /// Step 4d: Template baking completed.
+    ///
+    /// Emitted every iteration after all per-stage baked templates have been
+    /// rebuilt from the current active cut set (after Steps 4a–4c). Baking
+    /// runs sequentially over stages and is outside the forward/backward hot
+    /// paths. The baked templates will be consumed by the forward pass
+    /// (ticket-010) and backward pass (ticket-011) in the *next* iteration.
+    TemplateBakeComplete {
+        /// Iteration number (1-based).
+        iteration: u64,
+        /// Number of stages for which baked templates were rebuilt.
+        stages_processed: u32,
+        /// Total number of cut rows baked across all stages
+        /// (sum of `active_count()` over all stage pools at the emit instant).
+        total_cut_rows_baked: u64,
+        /// Wall-clock time for the baking pass across all stages, in milliseconds.
+        bake_time_ms: u64,
     },
 
     /// Step 5: Convergence check completed.
@@ -476,6 +496,12 @@ mod tests {
                 stages_processed: 12,
                 enforcement_time_ms: 1,
             },
+            TrainingEvent::TemplateBakeComplete {
+                iteration: 10,
+                stages_processed: 12,
+                total_cut_rows_baked: 48,
+                bake_time_ms: 2,
+            },
             TrainingEvent::ConvergenceUpdate {
                 iteration: 1,
                 lower_bound: 100.0,
@@ -543,12 +569,12 @@ mod tests {
     }
 
     #[test]
-    fn all_fourteen_variants_construct() {
+    fn all_fifteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            14,
-            "expected exactly 14 TrainingEvent variants"
+            15,
+            "expected exactly 15 TrainingEvent variants"
         );
     }
 
@@ -794,5 +820,28 @@ mod tests {
         assert_eq!(cuts_evicted, 5);
         assert_eq!(stages_processed, 12);
         assert_eq!(enforcement_time_ms, 3);
+    }
+
+    #[test]
+    fn template_bake_complete_fields_accessible() {
+        let event = TrainingEvent::TemplateBakeComplete {
+            iteration: 5,
+            stages_processed: 12,
+            total_cut_rows_baked: 96,
+            bake_time_ms: 3,
+        };
+        let TrainingEvent::TemplateBakeComplete {
+            iteration,
+            stages_processed,
+            total_cut_rows_baked,
+            bake_time_ms,
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(iteration, 5);
+        assert_eq!(stages_processed, 12);
+        assert_eq!(total_cut_rows_baked, 96);
+        assert_eq!(bake_time_ms, 3);
     }
 }

@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
     setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
-    provenance::ComponentProvenance,
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -1433,12 +1433,7 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
     CliError,
 > {
     // ── Part A: summary allreduce (F1-002) ────────────────────────────────────
-    let local_agg = cobre_sddp::SolverStatsDelta::aggregate(
-        &local_stats
-            .iter()
-            .map(|(_, d)| d.clone())
-            .collect::<Vec<_>>(),
-    );
+    let local_agg = cobre_sddp::SolverStatsDelta::aggregate(local_stats.iter().map(|(_, d)| d));
     let send_scalars = cobre_sddp::pack_delta_scalars(&local_agg);
     let mut recv_scalars = [0.0_f64; cobre_sddp::SOLVER_STATS_DELTA_SCALAR_FIELDS];
     comm.allreduce(&send_scalars, &mut recv_scalars, ReduceOp::Sum)

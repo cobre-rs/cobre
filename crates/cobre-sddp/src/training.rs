@@ -38,23 +38,23 @@ use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::fcf::FutureCostFunction,
     cut::CutRowMap,
+    cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
+    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
-    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
+    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -624,14 +624,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         };
 
         // Snapshot pool stats before forward pass.
-        let fwd_stats_before = {
-            let pool_stats: Vec<_> = fwd_pool
-                .workspaces
-                .iter()
-                .map(|w| w.solver.statistics())
-                .collect();
-            aggregate_solver_statistics(&pool_stats)
-        };
+        let fwd_stats_before =
+            aggregate_solver_statistics(fwd_pool.workspaces.iter().map(|w| w.solver.statistics()));
 
         let forward_result = match run_forward_pass(
             &mut fwd_pool.workspaces,
@@ -649,12 +643,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         // Snapshot pool stats after forward pass and compute delta.
         let fwd_delta = {
-            let pool_stats: Vec<_> = fwd_pool
-                .workspaces
-                .iter()
-                .map(|w| w.solver.statistics())
-                .collect();
-            let fwd_stats_after = aggregate_solver_statistics(&pool_stats);
+            let fwd_stats_after = aggregate_solver_statistics(
+                fwd_pool.workspaces.iter().map(|w| w.solver.statistics()),
+            );
             SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
         };
         let fwd_solve_time_ms = fwd_delta.solve_time_ms;
@@ -729,12 +720,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         // Store per-stage backward deltas and compute aggregate solve time.
         let bwd_solve_time_ms = {
-            let deltas: Vec<_> = backward_result
-                .stage_stats
-                .iter()
-                .map(|(_, d)| d.clone())
-                .collect();
-            let agg = SolverStatsDelta::aggregate(&deltas);
+            let agg =
+                SolverStatsDelta::aggregate(backward_result.stage_stats.iter().map(|(_, d)| d));
             let total_ms = agg.solve_time_ms;
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             for (stage_idx, delta) in &backward_result.stage_stats {
@@ -1155,6 +1142,7 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
+        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1163,21 +1151,20 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
     };
 
     use super::train;
     use crate::{
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
         HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
         StoppingRule, StoppingRuleSet, TrainingConfig,
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.

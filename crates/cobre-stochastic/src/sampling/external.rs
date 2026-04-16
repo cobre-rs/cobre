@@ -29,9 +29,9 @@
 use std::collections::HashSet;
 
 use cobre_core::{
+    EntityId, HydroPastInflows,
     scenario::{ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, LoadModel, NcsModel},
     temporal::{Stage, StageLagTransition},
-    EntityId, HydroPastInflows,
 };
 
 use crate::StochasticError;
@@ -941,6 +941,7 @@ pub fn pad_library_to_uniform(library: &mut ExternalScenarioLibrary) {
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId, HydroPastInflows,
         scenario::{
             ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowModel, LoadModel, NcsModel,
         },
@@ -948,12 +949,11 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageLagTransition,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId, HydroPastInflows,
     };
 
     use super::{
-        standardize_external_inflow, standardize_external_load, standardize_external_ncs,
-        ExternalScenarioLibrary,
+        ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
+        standardize_external_ncs,
     };
     use crate::par::{evaluate::evaluate_par, precompute::PrecomputedPar};
 

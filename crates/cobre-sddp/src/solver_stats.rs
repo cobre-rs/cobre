@@ -125,11 +125,11 @@ impl SolverStatsDelta {
         }
     }
 
-    /// Sum a slice of deltas element-wise into a single aggregate.
+    /// Sum an iterator of deltas element-wise into a single aggregate.
     ///
-    /// Returns `Default` (all zeros) for an empty slice.
+    /// Returns `Default` (all zeros) for an empty iterator.
     #[must_use]
-    pub fn aggregate(deltas: &[Self]) -> Self {
+    pub fn aggregate<'a>(deltas: impl Iterator<Item = &'a Self>) -> Self {
         let mut result = Self::default();
         for d in deltas {
             result.lp_solves += d.lp_solves;
@@ -164,11 +164,13 @@ impl SolverStatsDelta {
 
 /// Aggregate [`SolverStatistics`] from all solver instances in a workspace pool.
 ///
-/// Sums all scalar counters across the given slice of statistics. This is used
+/// Sums all scalar counters across the given iterator of statistics. This is used
 /// to get a single snapshot before/after a phase that distributes work across
 /// multiple solver instances.
 #[must_use]
-pub fn aggregate_solver_statistics(stats: &[SolverStatistics]) -> SolverStatistics {
+pub fn aggregate_solver_statistics(
+    stats: impl Iterator<Item = SolverStatistics>,
+) -> SolverStatistics {
     let mut result = SolverStatistics::default();
     for s in stats {
         result.solve_count += s.solve_count;
@@ -450,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_aggregate_empty_returns_default() {
-        let agg = SolverStatsDelta::aggregate(&[]);
+        let agg = SolverStatsDelta::aggregate(std::iter::empty());
         assert_eq!(agg.lp_solves, 0);
         assert_eq!(agg.solve_time_ms, 0.0);
     }
@@ -498,7 +500,7 @@ mod tests {
             retry_level_histogram: vec![0; 12],
         };
 
-        let agg = SolverStatsDelta::aggregate(&[d1, d2]);
+        let agg = SolverStatsDelta::aggregate([d1, d2].iter());
         assert_eq!(agg.lp_solves, 30);
         assert_eq!(agg.lp_successes, 28);
         assert_eq!(agg.first_try_successes, 25);
@@ -561,7 +563,7 @@ mod tests {
             retry_level_histogram: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
-        let agg = aggregate_solver_statistics(&[s1, s2]);
+        let agg = aggregate_solver_statistics([s1, s2].into_iter());
         assert_eq!(agg.solve_count, 30);
         assert_eq!(agg.success_count, 27);
         assert_eq!(agg.failure_count, 3);

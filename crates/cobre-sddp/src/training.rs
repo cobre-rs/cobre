@@ -866,7 +866,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             }
         }
 
-        // Step 4b: Angular dominance pruning (stage 1..num_stages-1, stage 0 and last stage exempt).
+        // Step 4b: Angular dominance pruning (stage 0..num_stages-2, last stage exempt).
+        // Stage 0 is included because angular pruning only removes geometrically dominated
+        // cuts (safe for lower bound monotonicity). Activity-based selection (step 4a)
+        // still exempts stage 0 because binding activity is never tracked there.
         if let Some(params) = angular_pruning {
             if params.should_run(iteration) {
                 let prune_start = Instant::now();
@@ -874,7 +877,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 let archive_ref = visited_archive.as_ref();
 
                 let pruning_results: Vec<(usize, crate::angular_pruning::AngularPruningResult)> =
-                    (1..num_prune_stages)
+                    (0..num_prune_stages)
                         .into_par_iter()
                         .map(|stage| {
                             let pool = &fcf.pools[stage];
@@ -906,10 +909,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     // Annotate per-stage records from Step 4a with post-angular counts.
                     if let Some((ref mut per_stage, _, _, _)) = sel_state {
                         let active_now = fcf.pools[stage].active_count() as u32;
-                        // per_stage is indexed by insertion order: stage 0 is at index 0,
-                        // stages 1..num_sel_stages-1 are at indices 1, 2, ...
-                        // The pruning loop covers stages 1..num_prune_stages-1, matching
-                        // the selection loop range, so the record index is `stage`.
                         if let Some(rec) = per_stage.get_mut(stage) {
                             rec.active_after_angular = Some(active_now);
                         }
@@ -919,7 +918,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 #[allow(clippy::cast_possible_truncation)]
                 let pruning_time_ms = prune_start.elapsed().as_millis() as u64;
                 #[allow(clippy::cast_possible_truncation)]
-                let stages_processed = num_prune_stages.saturating_sub(1) as u32;
+                let stages_processed = num_prune_stages as u32;
 
                 emit(
                     event_sender.as_ref(),

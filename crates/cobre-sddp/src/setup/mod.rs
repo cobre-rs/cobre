@@ -4,8 +4,8 @@
 //! It builds LP templates, indexer, initial state, FCF, horizon mode, risk measures,
 //! and entity counts from a validated [`System`] and [`cobre_io::Config`].
 //!
-//! **Ownership**: `StudySetup` owns all data; callers borrow for [`TrainingContext`]
-//! and [`StageContext`] construction. The [`StochasticContext`] lifetime matches setup.
+//! **Ownership**: `StudySetup` owns all data; callers borrow for [`TrainingContext`](crate::TrainingContext)
+//! and [`StageContext`](crate::StageContext) construction. The [`StochasticContext`] lifetime matches setup.
 //!
 //! **Not included**: MPI communication (in CLI/Python), solver instances (caller-created),
 //! progress bars, event channels (caller-managed).
@@ -72,7 +72,7 @@ use crate::{
 /// [`cobre_io::Config`]. Owns all data so it can be held across async
 /// boundaries (e.g., Python GIL release) without lifetime issues.
 ///
-/// Callers build [`TrainingContext`] and [`StageContext`] by borrowing
+/// Callers build [`TrainingContext`](crate::TrainingContext) and [`StageContext`](crate::StageContext) by borrowing
 /// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {

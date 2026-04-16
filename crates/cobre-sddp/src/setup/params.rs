@@ -24,8 +24,8 @@ pub const DEFAULT_SEED: u64 = 42;
 
 /// Scalar parameters extracted from a [`cobre_io::Config`].
 ///
-/// Centralises config-to-domain conversion for both [`cobre_sddp::setup::StudySetup::new`]
-/// and [`crate::commands::broadcast::BroadcastConfig::from_config`]. The struct owns all
+/// Centralises config-to-domain conversion for both [`StudySetup::new`](super::StudySetup::new)
+/// and `BroadcastConfig::from_config`. The struct owns all
 /// values so it can be passed by value without lifetime dependencies.
 #[derive(Debug, Clone)]
 pub struct StudyParams {
@@ -184,10 +184,10 @@ impl StudyParams {
         })
     }
 
-    /// Convert into a [`ConstructionConfig`] for [`StudySetup::from_broadcast_params`].
+    /// Convert into a [`ConstructionConfig`] for [`StudySetup::from_broadcast_params`](super::StudySetup::from_broadcast_params).
     ///
     /// Sets `export_states = false`; callers should use
-    /// [`StudySetup::set_export_states`] to enable state export after construction.
+    /// [`StudySetup::set_export_states`](super::StudySetup::set_export_states) to enable state export after construction.
     #[must_use]
     pub fn into_construction_config(self) -> ConstructionConfig {
         ConstructionConfig {
@@ -212,7 +212,7 @@ impl StudyParams {
 // ConstructionConfig
 // ---------------------------------------------------------------------------
 
-/// Scalar and config parameters bundled for [`StudySetup::from_broadcast_params`].
+/// Scalar and config parameters bundled for [`StudySetup::from_broadcast_params`](super::StudySetup::from_broadcast_params).
 ///
 /// Groups parameters to reduce argument count. Construct via
 /// [`StudyParams::into_construction_config`] from a [`cobre_io::Config`],

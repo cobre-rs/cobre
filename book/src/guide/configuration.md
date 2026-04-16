@@ -430,6 +430,110 @@ for a full explanation of the coupling workflow.
 
 ---
 
+## Temporal Resolution
+
+Cobre does not have dedicated `config.json` fields for temporal resolution. The
+resolution of each stage is determined entirely by the date boundaries in
+`stages.json`. However, when `stages.json` defines stages at different temporal
+resolutions — for example, four weekly stages within a month followed by monthly
+stages, or monthly stages transitioning to quarterly stages — three mechanisms
+activate automatically that users should understand.
+
+### Noise Group Sharing
+
+When multiple SDDP stages share the same `season_id` within the same calendar
+period (for example, four weekly stages all assigned `season_id: 0` for
+January), they receive identical PAR noise draws. This ensures that sub-monthly
+stages present an inflow trajectory consistent with the monthly PAR model they
+were fitted from, rather than fabricating independent weekly variability that
+the historical record does not support.
+
+### Observation Aggregation
+
+When the study includes stages at different resolutions (for example, monthly
+and quarterly), Cobre automatically aggregates fine-grained historical
+observations into coarser season buckets before PAR fitting. A user supplying
+monthly `inflow_history.parquet` for a study that includes quarterly stages does
+not need to pre-aggregate the data; Cobre derives one observation per
+(entity, season, year) at the appropriate coarser resolution. Aggregating in the
+opposite direction (disaggregating coarser observations to a finer resolution)
+is not supported and will produce a validation error at case load time.
+
+### Lag Resolution Transition
+
+For studies that transition from monthly to quarterly stages, the PAR lag state
+changes resolution at the boundary. During the monthly phase, each monthly
+inflow is accumulated into a ring buffer indexed by the downstream (quarterly)
+lag. When the first quarterly stage is reached, the ring buffer contains a
+complete set of duration-weighted monthly contributions, and the lag state is
+rebuilt automatically. This transition is transparent to the LP and the cut
+representation; it introduces no additional LP variables.
+
+### Example: Weekly Stages Within a Month
+
+The following `stages.json` excerpt shows four weekly stages within January
+(stages 0-3, all with `season_id: 0`) followed by a normal monthly stage for
+February (`season_id: 1`). Stages 0-3 share the same `season_id` and will
+therefore receive identical PAR noise draws during training:
+
+```json
+[
+  {
+    "id": 0,
+    "start_date": "2024-01-01",
+    "end_date": "2024-01-08",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 1,
+    "start_date": "2024-01-08",
+    "end_date": "2024-01-15",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 2,
+    "start_date": "2024-01-15",
+    "end_date": "2024-01-22",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 3,
+    "start_date": "2024-01-22",
+    "end_date": "2024-02-01",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 4,
+    "start_date": "2024-02-01",
+    "end_date": "2024-03-01",
+    "season_id": 1,
+    "num_scenarios": 50
+  }
+]
+```
+
+### Recommended Alternative: Weekly Blocks Within a Monthly Stage
+
+When weekly dispatch granularity is needed but true weekly-resolution noise
+data is unavailable, the recommended approach is to use a single monthly SDDP
+stage with chronological blocks rather than four separate weekly SDDP stages.
+This provides weekly LP granularity while keeping one noise realization per
+month — consistent with the data resolution — and avoids the lag-accumulation
+complications that arise with multiple independent weekly stages. See
+[Stochastic Modeling — Temporal Resolution and PAR](./stochastic-modeling.md#temporal-resolution-and-par)
+for the full explanation and a `stages.json` example of the block pattern.
+
+### See Also (Temporal Resolution)
+
+- [Stochastic Modeling — Multi-Resolution Studies](./stochastic-modeling.md#multi-resolution-studies) — detailed mechanism descriptions including the noise group precomputation algorithm, observation aggregation internals, and lag ring buffer design
+- [Stochastic Modeling — Temporal Resolution and PAR](./stochastic-modeling.md#temporal-resolution-and-par) — the honest representation principle, the recommended weekly-block pattern, and validation rules 27-31
+
+---
+
 ## `exports`
 
 Controls which outputs are written to the results directory.
@@ -533,3 +637,4 @@ and their types, see the `Config` struct in the
 - [Case Directory Format](../reference/case-format.md) — full schema for all input files
 - [Running Studies](./running-studies.md) — end-to-end workflow guide
 - [Error Codes](../reference/error-codes.md) — validation errors including `SchemaError` for config fields
+- [Stochastic Modeling — Temporal Resolution](./stochastic-modeling.md#temporal-resolution-and-par) — how stage resolution affects PAR noise sharing and validation rules

@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
+use cobre_core::{scenario::SamplingScheme, temporal::StageLagTransition, Stage};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
@@ -46,7 +46,7 @@ pub struct StageContext<'a> {
     /// Precomputed lag accumulation weights and period-finalization flags, one
     /// entry per study stage. Indexed by stage: `stage_lag_transitions[t]`.
     ///
-    /// Populated by [`crate::lag_transition::precompute_stage_lag_transitions`]
+    /// Populated by `crate::lag_transition::precompute_stage_lag_transitions`
     /// at setup time. Used by the forward pass and simulation pipeline starting
     /// in Epic 2 ticket-006.
     pub stage_lag_transitions: &'a [StageLagTransition],
@@ -55,8 +55,8 @@ pub struct StageContext<'a> {
     /// Stages with the same group ID share the same noise draw in the opening
     /// tree and forward pass. For uniform monthly studies every stage has a
     /// unique group ID, so no sharing is triggered. Populated from
-    /// [`StudySetup::noise_group_ids`] at setup time. Length equals the number
-    /// of study stages.
+    /// [`StudySetup::noise_group_ids`](crate::setup::StudySetup::noise_group_ids)
+    /// at setup time. Length equals the number of study stages.
     pub noise_group_ids: &'a [u32],
     /// PAR order for the downstream (coarser-resolution) model.
     ///
@@ -65,8 +65,8 @@ pub struct StageContext<'a> {
     /// monthly-to-quarterly transition (e.g., DECOMP hybrid studies).
     ///
     /// Used to size the downstream scratch buffers in the forward-pass workspace pool
-    /// (`train`) and to pass as `par_order` to [`crate::noise::DownstreamAccumState`].
-    /// Set from [`crate::setup::StudySetup::downstream_par_order`] at setup time.
+    /// (`train`) and to pass as `par_order` to `crate::noise::DownstreamAccumState`.
+    /// Set from `crate::setup::StudySetup::downstream_par_order` at setup time.
     pub downstream_par_order: usize,
 }
 

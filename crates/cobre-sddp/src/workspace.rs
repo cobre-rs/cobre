@@ -10,16 +10,16 @@ use crate::lp_builder::PatchBuffer;
 use crate::risk_measure::BackwardOutcome;
 
 /// Sizing parameters shared by [`SolverWorkspace`], [`WorkspacePool`], and
-/// [`ScratchBuffers`] constructors.
+/// `ScratchBuffers` constructors.
 ///
 /// Grouping these eight dimensions into one struct keeps constructor argument
 /// counts within the clippy budget while making the sizing relationship
-/// explicit: every workspace allocates a [`PatchBuffer`], [`ScratchBuffers`],
-/// and [`BackwardAccumulators`] from exactly these values.
+/// explicit: every workspace allocates a [`PatchBuffer`], `ScratchBuffers`,
+/// and `BackwardAccumulators` from exactly these values.
 ///
 /// Set `max_openings`, `initial_pool_capacity`, and `n_state` to `0` for
 /// simulation-only workspaces that do not participate in the backward pass.
-/// The [`BackwardAccumulators`] buffers will then start empty and grow
+/// The `BackwardAccumulators` buffers will then start empty and grow
 /// on-demand via the growth-only resize semantics in the backward pass.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WorkspaceSizing {
@@ -36,15 +36,15 @@ pub struct WorkspaceSizing {
     /// transition).
     pub downstream_par_order: usize,
     /// Maximum number of openings across all successor stages. Used to
-    /// pre-size [`BackwardAccumulators::outcomes`]. Pass `0` for
+    /// pre-size `BackwardAccumulators::outcomes`. Pass `0` for
     /// simulation-only workspaces.
     pub max_openings: usize,
     /// Initial cut pool capacity for pre-sizing
-    /// [`BackwardAccumulators::slot_increments`]. Pass `0` for
+    /// `BackwardAccumulators::slot_increments`. Pass `0` for
     /// simulation-only workspaces.
     pub initial_pool_capacity: usize,
     /// State dimension `n_state` for pre-sizing
-    /// [`BackwardAccumulators::agg_coefficients`]. Pass `0` for
+    /// `BackwardAccumulators::agg_coefficients`. Pass `0` for
     /// simulation-only workspaces.
     pub n_state: usize,
 }
@@ -170,12 +170,12 @@ impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
     /// `sizing` provides the buffer-dimension parameters shared between the
-    /// [`PatchBuffer`], the internal [`ScratchBuffers`], and the
-    /// [`BackwardAccumulators`] allocation. Pass `max_openings = 0`,
+    /// [`PatchBuffer`], the internal `ScratchBuffers`, and the
+    /// `BackwardAccumulators` allocation. Pass `max_openings = 0`,
     /// `initial_pool_capacity = 0`, and `n_state = 0` in `sizing` for
     /// simulation-only workspaces that do not participate in the backward pass.
     ///
-    /// The `scratch_basis` starts empty. Call [`WorkspacePool::resize_scratch_bases`]
+    /// The `scratch_basis` starts empty. Call `WorkspacePool::resize_scratch_bases`
     /// after construction to pre-allocate for backward-pass padding.
     #[must_use]
     pub fn new(solver: S, patch_buf: PatchBuffer, n_state: usize, sizing: WorkspaceSizing) -> Self {
@@ -525,8 +525,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, ScratchBuffers, SolverWorkspace, WorkspacePool, WorkspaceSizing};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.

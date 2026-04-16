@@ -38,10 +38,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
-    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
-    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-    ResolvedPenalties, ThermalStageBounds,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -49,17 +45,21 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
+    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
+    NcsStagePenalties, PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+    ResolvedPenalties, ThermalStageBounds,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    WorkspaceSizing, hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates,
-    simulate, train,
+    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
+    CutManagementConfig, EntityCounts, EventConfig, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, PrecomputedPar, StochasticContext,
 };
 
 // ===========================================================================
@@ -524,21 +524,32 @@ fn train_fixture(
     train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: iterations }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -559,11 +570,6 @@ fn train_fixture(
             stages: &[],
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,
-        },
-        &fx.risk_measures,
-        StoppingRuleSet {
-            rules: vec![StoppingRule::IterationLimit { limit: iterations }],
-            mode: StoppingMode::Any,
         },
         &comm,
         HighsSolver::new,

@@ -41,36 +41,38 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use cobre_comm::Communicator;
 use cobre_core::{
-    EntityId, Stage, System, TrainingEvent,
     entities::hydro::HydroGenerationModel,
     scenario::{SamplingScheme, ScenarioSource},
     temporal::StageLagTransition,
+    EntityId, Stage, System, TrainingEvent,
 };
 use cobre_solver::{SolverError, SolverInterface};
 use cobre_stochastic::{
-    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
     context::OpeningTree, discover_historical_windows, pad_library_to_uniform,
     standardize_external_inflow, standardize_external_load, standardize_external_ncs,
     standardize_historical_windows, validate_external_library, validate_historical_library,
+    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
 };
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
-    SimulationConfig, SimulationError, SimulationScenarioResult, SolverWorkspace, StageContext,
-    StageIndexer, StageTemplates, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult,
-    WorkspacePool, WorkspaceSizing, build_stage_templates,
-    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    build_stage_templates,
+    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     lp_builder,
     simulation::{EntityCounts, SimulationOutputSpec},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
+    CutManagementConfig, EventConfig, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
+    LoopConfig, RiskMeasure, SddpError, SimulationConfig, SimulationError,
+    SimulationScenarioResult, SolverWorkspace, StageContext, StageIndexer, StageTemplates,
+    TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
+    WorkspaceSizing,
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -528,8 +530,8 @@ impl StudySetup {
         simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
         use crate::scaling_report::{
-            LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
-            summarize_scale_factors,
+            build_scaling_report, compute_coefficient_range, summarize_scale_factors, LpDimensions,
+            StageScalingReport,
         };
 
         let mut stage_templates = build_stage_templates(
@@ -1700,21 +1702,29 @@ impl StudySetup {
         shutdown_flag: Option<&Arc<AtomicBool>>,
     ) -> Result<TrainingOutcome, SddpError> {
         let training_config = TrainingConfig {
-            forward_passes: self.forward_passes,
-            max_iterations: self.max_iterations,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender,
-            cut_activity_tolerance: self.cut_activity_tolerance,
-            n_fwd_threads: n_threads,
-            max_blocks: self.max_blocks,
-            cut_selection: self.cut_selection.clone(),
-            shutdown_flag: shutdown_flag.map(Arc::clone),
-            start_iteration: self.start_iteration,
-            export_states: self.export_states,
-            angular_pruning: self.angular_pruning,
-            budget: self.budget,
-            basis_padding_enabled: self.basis_padding_enabled,
+            loop_config: LoopConfig {
+                forward_passes: self.forward_passes,
+                max_iterations: self.max_iterations,
+                start_iteration: self.start_iteration,
+                n_fwd_threads: n_threads,
+                max_blocks: self.max_blocks,
+                stopping_rules: self.stopping_rule_set.clone(),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: self.cut_selection.clone(),
+                angular_pruning: self.angular_pruning,
+                budget: self.budget,
+                basis_padding_enabled: self.basis_padding_enabled,
+                cut_activity_tolerance: self.cut_activity_tolerance,
+                warm_start_cuts: 0,
+                risk_measures: self.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender,
+                checkpoint_interval: None,
+                shutdown_flag: shutdown_flag.map(Arc::clone),
+                export_states: self.export_states,
+            },
         };
 
         // Inline context construction to allow &mut self.fcf (borrow checker requirements).
@@ -1760,8 +1770,6 @@ impl StudySetup {
             &mut self.fcf,
             &stage_ctx,
             &training_ctx,
-            &self.risk_measures,
-            self.stopping_rule_set.clone(),
             comm,
             solver_factory,
         )
@@ -2520,17 +2528,10 @@ pub fn prepare_stochastic(
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
-    use crate::StageIndexer;
     use crate::hydro_models::PrepareHydroModelsResult;
+    use crate::StageIndexer;
 
     use cobre_core::{
-        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
-        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
-        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
-        ResolvedPenalties, ThermalStageBounds,
-    };
-    use cobre_core::{
-        EntityId, SystemBuilder,
         entities::{
             bus::{Bus, DeficitSegment},
             hydro::{Hydro, HydroGenerationModel, HydroPenalties},
@@ -2541,6 +2542,13 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId, SystemBuilder,
+    };
+    use cobre_core::{
+        BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,
+        HydroStagePenalties, LineStageBounds, LineStagePenalties, NcsStagePenalties,
+        PenaltiesCountsSpec, PenaltiesDefaults, PumpingStageBounds, ResolvedBounds,
+        ResolvedPenalties, ThermalStageBounds,
     };
     use cobre_io::config::{
         Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -2548,7 +2556,7 @@ mod tests {
         SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig,
         TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
-    use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
+    use cobre_stochastic::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
 
     /// Build a minimal system with 1 bus, 1 thermal, 1 hydro, and `n_stages`
     /// study stages (each with 1 block). All bounds and penalties are set to
@@ -3499,7 +3507,7 @@ mod tests {
     /// default values for all fields.
     #[test]
     fn study_params_from_config_defaults() {
-        use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
+        use super::{StudyParams, DEFAULT_FORWARD_PASSES, DEFAULT_SEED};
         use crate::stopping_rule::StoppingMode;
         use cobre_io::config::{
             Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
@@ -5495,9 +5503,9 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::scenario::InflowModel as CoreInflowModel;
         use cobre_core::{
-            NonControllableSource,
             scenario::{ExternalNcsRow, NcsModel},
             system::SystemBuilder,
+            NonControllableSource,
         };
 
         let bus = Bus {

@@ -525,8 +525,8 @@ impl BasisStoreSliceMut<'_> {
 mod tests {
     use super::{BasisStore, ScratchBuffers, SolverWorkspace, WorkspacePool, WorkspaceSizing};
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.

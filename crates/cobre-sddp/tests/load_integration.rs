@@ -29,24 +29,24 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{InflowModel, LoadModel, SamplingScheme},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageContext, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
-    train,
+    cut::fcf::FutureCostFunction, train, CutManagementConfig, EventConfig, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, RiskMeasure, StageContext, StageIndexer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 // ===========================================================================
@@ -414,21 +414,29 @@ fn test_stochastic_load_training_completes() {
     // Collect convergence events to verify we get one LB per iteration.
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(3),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     // load_balance_row_starts: one per stage, pointing past the base rows.
@@ -478,8 +486,6 @@ fn test_stochastic_load_training_completes() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &risk_measures,
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -561,21 +567,29 @@ fn test_deterministic_load_training_matches_baseline() {
     let result = train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(3),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -597,8 +611,6 @@ fn test_deterministic_load_training_matches_baseline() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &risk_measures,
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -638,21 +650,29 @@ fn test_stochastic_load_seed_determinism() {
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(3),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let load_balance_row_starts = vec![1usize; n_stages];
@@ -698,8 +718,6 @@ fn test_stochastic_load_seed_determinism() {
                 recent_weight_seed: 0.0,
                 stages: &[],
             },
-            &risk_measures,
-            iteration_limit(3),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )

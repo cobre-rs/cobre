@@ -23,14 +23,13 @@
 // External crate imports
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -38,18 +37,19 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 use cobre_sddp::{
-    HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageContext, StageIndexer,
+    cut::fcf::FutureCostFunction, train, CutManagementConfig, EventConfig, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, RiskMeasure, SddpError, StageContext, StageIndexer,
     StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -257,9 +257,9 @@ impl SolverInterface for MockSolver {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),
@@ -503,21 +503,29 @@ fn run_one_deterministic_pass(
     train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(limit),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -539,8 +547,6 @@ fn run_one_deterministic_pass(
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(limit),
         &StubComm,
         || Ok(MockSolver::with_fixed(50.0)),
     )
@@ -558,21 +564,29 @@ fn train_converges_with_mock_solver() {
     let comm = StubComm;
 
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: None,
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(10),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: None,
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let stage_ctx = StageContext {
@@ -614,8 +628,6 @@ fn train_converges_with_mock_solver() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -663,21 +675,29 @@ fn train_lb_monotonically_nondecreasing() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 20,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 20,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(6),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let stage_ctx = StageContext {
@@ -719,8 +739,6 @@ fn train_lb_monotonically_nondecreasing() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(6),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -756,21 +774,30 @@ fn train_emits_correct_event_sequence() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            // Limit to exactly 3 iterations.
+            stopping_rules: iteration_limit(3),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let stage_ctx = StageContext {
@@ -812,9 +839,6 @@ fn train_emits_correct_event_sequence() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        // Limit to exactly 3 iterations.
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -871,21 +895,29 @@ fn train_stops_at_iteration_limit() {
     let result = train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(3),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -907,8 +939,6 @@ fn train_stops_at_iteration_limit() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -956,21 +986,29 @@ fn train_stops_on_graceful_shutdown() {
     let result = train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 20,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: Some(Arc::clone(&shutdown_flag)),
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 20,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: rules,
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: Some(Arc::clone(&shutdown_flag)),
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -992,8 +1030,6 @@ fn train_stops_on_graceful_shutdown() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        rules,
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1031,21 +1067,29 @@ fn train_propagates_infeasible_error() {
     let result = train(
         &mut solver,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(10),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf,
         &stage_ctx,
@@ -1067,8 +1111,6 @@ fn train_propagates_infeasible_error() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::infeasible_on_first()),
     );
@@ -1110,24 +1152,32 @@ fn d17_level1_cut_selection_convergence() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: Some(CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 2,
-        }),
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(10),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: Some(CutSelectionStrategy::Level1 {
+                threshold: 0,
+                check_frequency: 2,
+            }),
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let stage_ctx = StageContext {
@@ -1169,8 +1219,6 @@ fn d17_level1_cut_selection_convergence() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1296,24 +1344,32 @@ fn d17_level1_cut_selection_with_basis_padding() {
     let result_baseline = train(
         &mut solver_baseline,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(10),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 2,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf_baseline,
         &stage_ctx,
@@ -1335,8 +1391,6 @@ fn d17_level1_cut_selection_with_basis_padding() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1346,24 +1400,32 @@ fn d17_level1_cut_selection_with_basis_padding() {
     let result_padded = train(
         &mut solver_padded,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: true,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(10),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 2,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: true,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf_padded,
         &stage_ctx,
@@ -1385,8 +1447,6 @@ fn d17_level1_cut_selection_with_basis_padding() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1445,24 +1505,32 @@ fn d18_lml1_cut_selection_convergence() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: Some(CutSelectionStrategy::Lml1 {
-            memory_window: 3,
-            check_frequency: 2,
-        }),
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(10),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: Some(CutSelectionStrategy::Lml1 {
+                memory_window: 3,
+                check_frequency: 2,
+            }),
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let stage_ctx = StageContext {
@@ -1504,8 +1572,6 @@ fn d18_lml1_cut_selection_convergence() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1588,9 +1654,9 @@ fn test_d01_with_basis_padding_enabled() {
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::scenario::ScenarioSource;
-    use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
-    use cobre_solver::SolverInterface;
+    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
     use cobre_solver::highs::HighsSolver;
+    use cobre_solver::SolverInterface;
 
     struct LocalStubComm;
 
@@ -1735,24 +1801,32 @@ fn d18_lml1_cut_selection_with_basis_padding() {
     let result_baseline = train(
         &mut solver_baseline,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Lml1 {
-                memory_window: 3,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(10),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Lml1 {
+                    memory_window: 3,
+                    check_frequency: 2,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf_baseline,
         &stage_ctx,
@@ -1774,8 +1848,6 @@ fn d18_lml1_cut_selection_with_basis_padding() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -1785,24 +1857,32 @@ fn d18_lml1_cut_selection_with_basis_padding() {
     let result_padded = train(
         &mut solver_padded,
         TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Lml1 {
-                memory_window: 3,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: true,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit(10),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Lml1 {
+                    memory_window: 3,
+                    check_frequency: 2,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: true,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: fx.risk_measures.clone(),
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         },
         &mut fcf_padded,
         &stage_ctx,
@@ -1824,8 +1904,6 @@ fn d18_lml1_cut_selection_with_basis_padding() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(10),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )

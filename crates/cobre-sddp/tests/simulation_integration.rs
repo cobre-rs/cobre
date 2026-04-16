@@ -20,7 +20,6 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -28,23 +27,25 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 use cobre_io::{
-    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
-    write_policy_checkpoint, write_results,
+    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
+    SimulationOutput, StageCutsPayload,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+    build_training_output, simulate, train, CutManagementConfig, EntityCounts, EventConfig,
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, LoopConfig, PatchBuffer,
     RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
     StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    WorkspaceSizing, build_training_output, simulate, train,
+    WorkspaceSizing,
 };
 
 /// Single-rank communicator for testing.
@@ -554,21 +555,29 @@ fn train_simulate_write_cycle() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let training_config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(3),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -611,8 +620,6 @@ fn train_simulate_write_cycle() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -858,11 +865,9 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(
-        output_dir
-            .join("training/timing/iterations.parquet")
-            .is_file()
-    );
+    assert!(output_dir
+        .join("training/timing/iterations.parquet")
+        .is_file());
 
     let metadata_path = output_dir.join("training/metadata.json");
     assert!(metadata_path.is_file());
@@ -1319,24 +1324,30 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     };
 
     let training_config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 1,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: None,
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 1,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(1),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: vec![RiskMeasure::Expectation; n_stages],
+        },
+        events: EventConfig {
+            event_sender: None,
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
-
-    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
     train(
         &mut solver,
@@ -1361,8 +1372,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             recent_weight_seed: 0.0,
             stages: &[],
         },
-        &risk_measures,
-        iteration_limit(1),
         &StubComm,
         || Ok(SizedMockSolver::new(t0.num_cols, t0.num_rows)),
     )

@@ -74,21 +74,21 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     basis_padding::pad_basis_for_cuts,
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -1308,20 +1308,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
-        run_forward_pass, sync_forward,
+        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
+        ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
-        TrajectoryRecord,
+        config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1858,21 +1859,32 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &[0; 3]);
         let config = TrainingConfig {
-            forward_passes: 2,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 2,
+                max_iterations: 100,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1888,7 +1900,8 @@ mod tests {
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
+        let mut basis_store =
+            BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
         let ctx = StageContext {
             templates: &templates,
@@ -1931,8 +1944,8 @@ mod tests {
                 recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
-                local_forward_passes: config.forward_passes as usize,
-                total_forward_passes: config.forward_passes as usize,
+                local_forward_passes: config.loop_config.forward_passes as usize,
+                total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -1969,21 +1982,32 @@ mod tests {
         let solver = MockSolver::infeasible_on(solution, 2);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &[0; 3]);
         let config = TrainingConfig {
-            forward_passes: 2,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 2,
+                max_iterations: 100,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -1999,7 +2023,8 @@ mod tests {
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
+        let mut basis_store =
+            BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
         let ctx = StageContext {
             templates: &templates,
@@ -2042,8 +2067,8 @@ mod tests {
                 recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
-                local_forward_passes: config.forward_passes as usize,
-                total_forward_passes: config.forward_passes as usize,
+                local_forward_passes: config.loop_config.forward_passes as usize,
+                total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2086,21 +2111,32 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &[0; 3]);
         let config = TrainingConfig {
-            forward_passes: 2,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 2,
+                max_iterations: 100,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2116,7 +2152,8 @@ mod tests {
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
+        let mut basis_store =
+            BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
         let ctx = StageContext {
             templates: &templates,
@@ -2159,8 +2196,8 @@ mod tests {
                 recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
-                local_forward_passes: config.forward_passes as usize,
-                total_forward_passes: config.forward_passes as usize,
+                local_forward_passes: config.loop_config.forward_passes as usize,
+                total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -2500,21 +2537,32 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 1, 100, &[0; 3]);
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 100,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -2571,8 +2619,8 @@ mod tests {
                 recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
-                local_forward_passes: config.forward_passes as usize,
-                total_forward_passes: config.forward_passes as usize,
+                local_forward_passes: config.loop_config.forward_passes as usize,
+                total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },
@@ -3306,21 +3354,32 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let fcf = FutureCostFunction::new(3, indexer.n_state, 2, 100, &[0; 3]);
         let config = TrainingConfig {
-            forward_passes: 2,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 2,
+                max_iterations: 100,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: StoppingRuleSet {
+                    rules: vec![StoppingRule::IterationLimit { limit: 100 }],
+                    mode: StoppingMode::Any,
+                },
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let horizon = HorizonMode::Finite { num_stages: 3 };
@@ -3335,7 +3394,8 @@ mod tests {
         let stochastic = make_stochastic_context_1_hydro_3_stages();
         let stages = make_stages_3();
         let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(config.forward_passes as usize, templates.len());
+        let mut basis_store =
+            BasisStore::new(config.loop_config.forward_passes as usize, templates.len());
 
         let ctx = StageContext {
             templates: &templates,
@@ -3378,8 +3438,8 @@ mod tests {
                 recent_weight_seed: 0.0,
             },
             &ForwardPassBatch {
-                local_forward_passes: config.forward_passes as usize,
-                total_forward_passes: config.forward_passes as usize,
+                local_forward_passes: config.loop_config.forward_passes as usize,
+                total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
             },

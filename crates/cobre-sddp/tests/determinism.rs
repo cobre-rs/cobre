@@ -39,7 +39,7 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
+    CutManagementConfig, EntityCounts, EventConfig, ForwardResult, FutureCostFunction, LoopConfig, HorizonMode, InflowNonNegativityMethod,
     PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
     StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
     TrainingContext, WorkspaceSizing, simulate, sync_forward, train,
@@ -490,22 +490,30 @@ fn run_training(
     let mut primary_solver = MockSolver3H::new(100.0);
     let comm = StubComm;
 
-    let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: n_iterations,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: None,
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+    let config =     TrainingConfig {
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: n_iterations,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(n_iterations),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            angular_pruning: None,
+            budget: None,
+            basis_padding_enabled: false,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: None,
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     // Use an isolated thread pool so that tests with different workspace counts
@@ -556,8 +564,7 @@ fn run_training(
                     recent_accum_seed: &[],
                     recent_weight_seed: 0.0,
                 },
-                &fx.risk_measures,
-                iteration_limit(n_iterations),
+                
                 &comm,
                 || Ok(MockSolver3H::new(100.0)),
             )

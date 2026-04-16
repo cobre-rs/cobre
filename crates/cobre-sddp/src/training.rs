@@ -38,23 +38,22 @@ use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
+    cut::CutRowMap,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
+    forward::{run_forward_pass, sync_forward, ForwardPassBatch},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
-    risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    SddpError, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -325,24 +324,22 @@ fn broadcast_basis_cache<C: Communicator>(
 /// # Examples
 ///
 /// ```rust,ignore
-/// use cobre_sddp::{train, TrainingConfig, FutureCostFunction, StageIndexer};
+/// use cobre_sddp::{train, TrainingConfig, LoopConfig, CutManagementConfig, EventConfig};
 /// use cobre_sddp::{StoppingRuleSet, StoppingRule, RiskMeasure, HorizonMode};
-/// use cobre_sddp::lp_builder::StageTemplate;
 ///
 /// let mut solver = HiggsBackend::new();
-/// let config = TrainingConfig { forward_passes: 100, ..Default::default() };
+/// let config = TrainingConfig {
+///     loop_config: LoopConfig { forward_passes: 100, max_iterations: 100, ..LoopConfig::default() },
+///     cut_management: CutManagementConfig {
+///         risk_measures: vec![RiskMeasure::Expectation; num_stages],
+///         ..CutManagementConfig::default()
+///     },
+///     events: EventConfig::default(),
+/// };
 /// let mut fcf = FutureCostFunction::new(num_stages - 1, n_state, capacity);
-/// let stopping = StoppingRuleSet::any(vec![
-///     StoppingRule::iteration_limit(100),
-///     StoppingRule::relative_gap(0.01),
-/// ]);
-/// let risk = vec![RiskMeasure::Expectation; num_stages];
-/// let horizon = HorizonMode::finite(num_stages);
 ///
 /// let result = train(
-///     &mut solver, config, &mut fcf, &templates, &base_rows,
-///     &indexer, &initial_state, &stochastic,
-///     &horizon, &risk, stopping, &comm,
+///     &mut solver, config, &mut fcf, &stage_ctx, &training_ctx, &comm,
 ///     || HiggsBackend::new(),
 /// )?;
 ///
@@ -352,34 +349,30 @@ fn broadcast_basis_cache<C: Communicator>(
 /// # Panics (debug builds only)
 ///
 /// Panics if `templates.len() != horizon.num_stages()` or if
-/// `risk_measures.len() != horizon.num_stages()` or if
+/// `config.cut_management.risk_measures.len() != horizon.num_stages()` or if
 /// `training_ctx.stochastic.opening_tree().n_openings(0) == 0`.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::similar_names
-)]
+#[allow(clippy::too_many_lines, clippy::similar_names)]
 pub fn train<S: SolverInterface + Send, C: Communicator>(
     solver: &mut S,
     config: TrainingConfig,
     fcf: &mut FutureCostFunction,
     stage_ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    risk_measures: &[RiskMeasure],
-    stopping_rules: StoppingRuleSet,
     comm: &C,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
 ) -> Result<TrainingOutcome, SddpError> {
-    let cut_activity_tolerance = config.cut_activity_tolerance;
-    let n_fwd_threads = config.n_fwd_threads;
-    let max_blocks = config.max_blocks;
+    let cut_activity_tolerance = config.cut_management.cut_activity_tolerance;
+    let n_fwd_threads = config.loop_config.n_fwd_threads;
+    let max_blocks = config.loop_config.max_blocks;
+    let risk_measures = &config.cut_management.risk_measures;
+    let stopping_rules = config.loop_config.stopping_rules.clone();
     let horizon = training_ctx.horizon;
     let indexer = training_ctx.indexer;
     let initial_state = training_ctx.initial_state;
     let num_stages = horizon.num_stages();
     let num_ranks = comm.size();
     let my_rank = comm.rank();
-    let total_forward_passes = config.forward_passes as usize;
+    let total_forward_passes = config.loop_config.forward_passes as usize;
     let n_state = indexer.n_state;
 
     // forward_passes is the TOTAL across all ranks. Distribute with
@@ -465,15 +458,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // pruning (which also reads visited states), or when the caller requests
     // state export to the policy checkpoint.
     let needs_archive = matches!(
-        config.cut_selection,
+        config.cut_management.cut_selection,
         Some(crate::cut_selection::CutSelectionStrategy::Dominated { .. })
-    ) || config.angular_pruning.is_some()
-        || config.export_states;
+    ) || config.cut_management.angular_pruning.is_some()
+        || config.events.export_states;
     let mut visited_archive = if needs_archive {
         Some(crate::visited_states::VisitedStatesArchive::new(
             num_stages,
             n_state,
-            config.max_iterations,
+            config.loop_config.max_iterations,
             total_forward_passes,
         ))
     } else {
@@ -483,15 +476,26 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let start_time = Instant::now();
 
     let TrainingConfig {
-        forward_passes: config_forward_passes,
-        max_iterations,
-        event_sender,
-        cut_selection,
-        shutdown_flag,
-        start_iteration,
-        angular_pruning,
-        budget,
-        ..
+        loop_config:
+            crate::config::LoopConfig {
+                forward_passes: config_forward_passes,
+                max_iterations,
+                start_iteration,
+                ..
+            },
+        cut_management:
+            crate::config::CutManagementConfig {
+                cut_selection,
+                angular_pruning,
+                budget,
+                ..
+            },
+        events:
+            crate::config::EventConfig {
+                event_sender,
+                shutdown_flag,
+                ..
+            },
     } = config;
     let cut_selection = cut_selection.as_ref();
     let shutdown_flag = shutdown_flag.as_ref();
@@ -1148,7 +1152,6 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1157,20 +1160,22 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig,
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
+        CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
+        RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+        TrainingConfig,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1573,25 +1578,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1636,8 +1648,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1666,25 +1676,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1729,8 +1746,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::infeasible()),
         );
@@ -1775,27 +1790,34 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1840,8 +1862,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1922,25 +1942,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1985,8 +2012,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2013,25 +2038,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 2,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 2,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2076,8 +2108,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         );
@@ -2101,25 +2131,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 1,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 1,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(1),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2164,8 +2201,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(1),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2195,27 +2230,34 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2260,8 +2302,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2298,30 +2338,37 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 3,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 3,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2366,8 +2413,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2414,30 +2459,37 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 2,
+                }),
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2482,8 +2534,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2546,25 +2596,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 3,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 3,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(3),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2609,8 +2666,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(3),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2641,27 +2696,34 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2710,8 +2772,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::infeasible()),
         )
@@ -2757,25 +2817,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 3,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 3,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2820,8 +2887,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2848,25 +2913,32 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 5,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 5,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2911,8 +2983,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -3024,27 +3094,34 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: None,
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3089,8 +3166,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -3127,30 +3202,37 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: Some(AngularPruningParams {
-                cosine_threshold: 0.999,
-                check_frequency: 3,
-            }),
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                angular_pruning: Some(AngularPruningParams {
+                    cosine_threshold: 0.999,
+                    check_frequency: 3,
+                }),
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3195,8 +3277,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -3248,33 +3328,40 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 3,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: Some(AngularPruningParams {
-                cosine_threshold: 0.999,
-                check_frequency: 3,
-            }),
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 3,
+                }),
+                angular_pruning: Some(AngularPruningParams {
+                    cosine_threshold: 0.999,
+                    check_frequency: 3,
+                }),
+                budget: None,
+                basis_padding_enabled: false,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3319,8 +3406,6 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )

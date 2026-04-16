@@ -88,6 +88,7 @@ use crate::{
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
+    solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
@@ -115,10 +116,26 @@ pub struct ForwardResult {
     /// Number of LP solves performed during this forward pass.
     pub lp_solves: u64,
 
-    /// Estimated rayon barrier + scheduling overhead for the forward pass
-    /// parallel region, in milliseconds. Computed as
-    /// `parallel_wall_ms - (total_solve_time_ms / n_workers)`.
-    pub rayon_overhead_ms: u64,
+    /// Aggregate non-solve work inside the parallel region summed across all
+    /// workers, in milliseconds.
+    ///
+    /// Computed as the sum across all workers of
+    /// `load_model_time_ms + add_rows_time_ms + set_bounds_time_ms + basis_set_time_ms`.
+    pub setup_time_ms: u64,
+
+    /// Load-imbalance component of parallel overhead, in milliseconds.
+    ///
+    /// Computed as `max_worker_total_ms - avg_worker_total_ms`, where
+    /// `worker_total_ms = solve + load_model + add_rows + set_bounds + basis_set`
+    /// for each worker.  Measures how much the slowest worker exceeds the average.
+    pub load_imbalance_ms: u64,
+
+    /// True rayon scheduling overhead, in milliseconds.
+    ///
+    /// Computed as `parallel_wall_ms - max_worker_total_ms`, clamped to zero.
+    /// Represents rayon barrier, thread wake-up, and work-stealing dispatch costs
+    /// after accounting for all measured per-worker work.
+    pub scheduling_overhead_ms: u64,
 }
 
 /// Global upper bound statistics from forward synchronisation step.
@@ -1118,11 +1135,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     let terminal_has_boundary_cuts =
         num_stages > 0 && fcf.pools[num_stages - 1].warm_start_count > 0;
 
-    // Snapshot solve time across all workers before the parallel region.
-    let solve_seconds_before: f64 = workspaces
-        .iter()
-        .map(|ws| ws.solver.statistics().total_solve_time_seconds)
-        .sum();
+    // Collect per-worker snapshots before the parallel region (needed for overhead decomposition).
+    let worker_stats_before: Vec<_> = workspaces.iter().map(|ws| ws.solver.statistics()).collect();
 
     // Each worker collects per-scenario costs in local scenario index order.
     let parallel_start = Instant::now();
@@ -1254,20 +1268,53 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     #[allow(clippy::cast_possible_truncation)]
     let parallel_wall_ms = parallel_start.elapsed().as_millis() as u64;
 
-    // Compute rayon overhead: parallel wall-clock minus average per-worker
-    // LP solve time. This upper-bounds barrier wait + non-solve parallel work.
-    let solve_seconds_after: f64 = workspaces
+    // Collect per-worker snapshots after the parallel region and decompose overhead.
+    let worker_stats_after: Vec<_> = workspaces.iter().map(|ws| ws.solver.statistics()).collect();
+
+    let worker_deltas: Vec<SolverStatsDelta> = worker_stats_before
         .iter()
-        .map(|ws| ws.solver.statistics().total_solve_time_seconds)
+        .zip(&worker_stats_after)
+        .map(|(b, a)| SolverStatsDelta::from_snapshots(b, a))
+        .collect();
+
+    // setup_time_ms: total non-solve work (load_model + add_rows + set_bounds + basis_set).
+    let fwd_setup_ms: f64 = worker_deltas
+        .iter()
+        .map(|d| {
+            d.load_model_time_ms + d.add_rows_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
+        })
         .sum();
+
+    // Per-worker elapsed: solve + setup phases.
+    let worker_totals: Vec<f64> = worker_deltas
+        .iter()
+        .map(|d| {
+            d.solve_time_ms
+                + d.load_model_time_ms
+                + d.add_rows_time_ms
+                + d.set_bounds_time_ms
+                + d.basis_set_time_ms
+        })
+        .collect();
+
     #[allow(clippy::cast_precision_loss)]
     let n_workers_f = n_workers as f64;
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let rayon_overhead_ms = {
-        let total_solve_ms = (solve_seconds_after - solve_seconds_before) * 1000.0;
-        let avg_solve_ms = (total_solve_ms / n_workers_f) as u64;
-        parallel_wall_ms.saturating_sub(avg_solve_ms)
+    let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+    let avg_worker_ms = if worker_totals.is_empty() {
+        0.0_f64
+    } else {
+        worker_totals.iter().sum::<f64>() / n_workers_f
     };
+
+    // load_imbalance_ms: slowest worker minus average.
+    let fwd_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
+    // scheduling_overhead_ms: residual wall time beyond slowest worker.
+    #[allow(
+        clippy::cast_precision_loss,      // parallel_wall_ms as f64: safe at HPC scale
+        clippy::cast_possible_truncation, // f64 as u64: clamped non-negative
+        clippy::cast_sign_loss            // f64 as u64: clamped non-negative
+    )]
+    let fwd_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
 
     // Merge per-worker cost vectors in global scenario index order (canonical).
     let mut scenario_costs = Vec::with_capacity(forward_passes);
@@ -1281,11 +1328,17 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    #[allow(
+        clippy::cast_possible_truncation, // f64 as u64: non-negative values, sub-ms precision loss acceptable
+        clippy::cast_sign_loss            // f64 as u64: all values are non-negative after .max(0.0)
+    )]
     Ok(ForwardResult {
         scenario_costs,
         elapsed_ms,
         lp_solves,
-        rayon_overhead_ms,
+        setup_time_ms: fwd_setup_ms as u64,
+        load_imbalance_ms: fwd_imbalance_ms as u64,
+        scheduling_overhead_ms: fwd_scheduling_ms as u64,
     })
 }
 
@@ -1685,7 +1738,9 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 123,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         assert_eq!(r.scenario_costs.len(), 4);
         assert_eq!(r.scenario_costs[0], 60.0);
@@ -1698,13 +1753,189 @@ mod tests {
             scenario_costs: vec![1.0, 2.0],
             elapsed_ms: 5,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let c = r.clone();
         assert_eq!(c.scenario_costs.len(), r.scenario_costs.len());
         assert_eq!(c.scenario_costs[0].to_bits(), r.scenario_costs[0].to_bits());
         let s = format!("{r:?}");
         assert!(s.contains("ForwardResult"));
+    }
+
+    // ── Unit tests: forward overhead decomposition ───────────────────────────
+
+    /// Verify the three-component decomposition: 4 workers with solve times
+    /// 500/600/550/580 ms and setup times 50/60/45/55 ms yields setup=210,
+    /// imbalance=50, scheduling varies by parallel_wall_ms.
+    #[test]
+    fn forward_overhead_decomposition_four_workers() {
+        use cobre_solver::SolverStatistics;
+
+        use crate::solver_stats::SolverStatsDelta;
+
+        fn make_stats(
+            solve_s: f64,
+            load_model_s: f64,
+            add_rows_s: f64,
+            set_bounds_s: f64,
+            basis_set_s: f64,
+        ) -> SolverStatistics {
+            SolverStatistics {
+                total_solve_time_seconds: solve_s,
+                total_load_model_time_seconds: load_model_s,
+                total_add_rows_time_seconds: add_rows_s,
+                total_set_bounds_time_seconds: set_bounds_s,
+                total_basis_set_time_seconds: basis_set_s,
+                ..SolverStatistics::default()
+            }
+        }
+
+        // Solve times (s): 0.5, 0.6, 0.55, 0.58; setup times (s): 0.05, 0.06, 0.045, 0.055
+        let befores = [
+            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
+        ];
+        let afters = [
+            make_stats(0.500, 0.050, 0.0, 0.0, 0.0),
+            make_stats(0.600, 0.060, 0.0, 0.0, 0.0),
+            make_stats(0.550, 0.045, 0.0, 0.0, 0.0),
+            make_stats(0.580, 0.055, 0.0, 0.0, 0.0),
+        ];
+
+        let deltas: Vec<SolverStatsDelta> = befores
+            .iter()
+            .zip(&afters)
+            .map(|(b, a)| SolverStatsDelta::from_snapshots(b, a))
+            .collect();
+
+        // setup_time_ms: sum of all workers' setup phases.
+        let setup_ms: f64 = deltas
+            .iter()
+            .map(|d| {
+                d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .sum();
+
+        // Per-worker totals: solve + setup.
+        let worker_totals: Vec<f64> = deltas
+            .iter()
+            .map(|d| {
+                d.solve_time_ms
+                    + d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .collect();
+
+        let n_workers_f = 4.0_f64;
+        let max_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+        let avg_ms = worker_totals.iter().sum::<f64>() / n_workers_f;
+        let imbalance_ms = (max_ms - avg_ms).max(0.0);
+        let parallel_wall_ms = 700_u64; // 40 ms above the slowest worker
+        #[allow(clippy::cast_precision_loss)]
+        let scheduling_ms = (parallel_wall_ms as f64 - max_ms).max(0.0);
+
+        // setup_time_ms = 50 + 60 + 45 + 55 = 210
+        assert!(
+            (setup_ms - 210.0).abs() < 0.001,
+            "setup_time_ms should be 210, got {setup_ms}"
+        );
+        // max_worker total = 660 (worker 1: 600+60)
+        assert!(
+            (max_ms - 660.0).abs() < 0.001,
+            "max_worker_ms should be 660, got {max_ms}"
+        );
+        // avg = (550+660+595+635)/4 = 610
+        assert!(
+            (avg_ms - 610.0).abs() < 0.001,
+            "avg_worker_ms should be 610, got {avg_ms}"
+        );
+        // imbalance = 660 - 610 = 50
+        assert!(
+            (imbalance_ms - 50.0).abs() < 0.001,
+            "load_imbalance_ms should be 50, got {imbalance_ms}"
+        );
+        // scheduling = 700 - 660 = 40
+        assert!(
+            (scheduling_ms - 40.0).abs() < 0.001,
+            "scheduling_overhead_ms should be 40, got {scheduling_ms}"
+        );
+    }
+
+    /// Edge case: single worker — load imbalance must be exactly zero.
+    #[test]
+    fn forward_overhead_decomposition_single_worker_zero_imbalance() {
+        use cobre_solver::SolverStatistics;
+
+        use crate::solver_stats::SolverStatsDelta;
+
+        let before = SolverStatistics::default();
+        let after = SolverStatistics {
+            total_solve_time_seconds: 1.0,
+            total_load_model_time_seconds: 0.1,
+            ..SolverStatistics::default()
+        };
+
+        let deltas = vec![SolverStatsDelta::from_snapshots(&before, &after)];
+        let worker_totals: Vec<f64> = deltas
+            .iter()
+            .map(|d| {
+                d.solve_time_ms
+                    + d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .collect();
+
+        let n_workers_f = 1.0_f64;
+        let max_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+        let avg_ms = worker_totals.iter().sum::<f64>() / n_workers_f;
+        let imbalance_ms = (max_ms - avg_ms).max(0.0);
+
+        assert_eq!(
+            imbalance_ms, 0.0,
+            "load_imbalance_ms must be 0.0 for a single worker"
+        );
+    }
+
+    /// Edge case: scheduling overhead is clamped to zero when parallel wall
+    /// time is less than the max worker total (clock-skew scenario).
+    #[test]
+    fn forward_overhead_scheduling_clamped_to_zero_on_clock_skew() {
+        use cobre_solver::SolverStatistics;
+
+        use crate::solver_stats::SolverStatsDelta;
+
+        let before = SolverStatistics::default();
+        let after = SolverStatistics {
+            total_solve_time_seconds: 1.0, // 1000 ms
+            ..SolverStatistics::default()
+        };
+
+        let deltas = vec![SolverStatsDelta::from_snapshots(&before, &after)];
+        let max_ms = deltas
+            .iter()
+            .map(|d| d.solve_time_ms)
+            .fold(0.0_f64, f64::max);
+
+        // Wall time (800 ms) < max worker total (1000 ms) — clock skew.
+        let parallel_wall_ms = 800_u64;
+        #[allow(clippy::cast_precision_loss)]
+        let scheduling_ms = (parallel_wall_ms as f64 - max_ms).max(0.0);
+
+        assert_eq!(
+            scheduling_ms, 0.0,
+            "scheduling_overhead_ms must clamp to 0.0 on clock skew"
+        );
     }
 
     // ── Unit tests: build_cut_row_batch ──────────────────────────────────────
@@ -2266,7 +2497,9 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2305,7 +2538,9 @@ mod tests {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2332,7 +2567,9 @@ mod tests {
             scenario_costs: vec![1.0, 2.0, 3.0, 4.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result_single = sync_forward(&single_rank, &comm, 4).unwrap();
@@ -2371,7 +2608,9 @@ mod tests {
             scenario_costs: vec![500.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 1).unwrap();
@@ -2405,7 +2644,9 @@ mod tests {
             scenario_costs: vec![v, v],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2432,7 +2673,9 @@ mod tests {
             scenario_costs: vec![420.0, 420.0],
             elapsed_ms: 5,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2451,7 +2694,9 @@ mod tests {
             scenario_costs: vec![50.0, 50.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2517,7 +2762,9 @@ mod tests {
             scenario_costs: vec![100.0],
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         };
         let comm = FailingComm;
         let err = sync_forward(&local, &comm, 1).unwrap_err();

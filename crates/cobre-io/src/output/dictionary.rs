@@ -425,7 +425,12 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "io_write_ms"
         | "state_exchange_ms"
         | "cut_batch_build_ms"
-        | "rayon_overhead_ms"
+        | "bwd_setup_ms"
+        | "bwd_load_imbalance_ms"
+        | "bwd_scheduling_overhead_ms"
+        | "fwd_setup_ms"
+        | "fwd_load_imbalance_ms"
+        | "fwd_scheduling_overhead_ms"
         | "overhead_ms"
         | "forward_time_ms"
         | "backward_time_ms"
@@ -605,18 +610,31 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("convergence", "lp_solves") => "Total LP solves in iteration",
         // ── iteration_timing ──────────────────────────────────────────────
         ("iteration_timing", "iteration") => "Iteration number (1-based)",
-        ("iteration_timing", "forward_solve_ms") => "Forward solve time",
-        ("iteration_timing", "forward_sample_ms") => "Forward sampling time",
-        ("iteration_timing", "backward_solve_ms") => "Backward solve time",
-        ("iteration_timing", "backward_cut_ms") => "Cut construction time",
+        ("iteration_timing", "forward_wall_ms") => "Forward pass wall-clock time",
+        ("iteration_timing", "backward_wall_ms") => "Backward pass wall-clock time",
         ("iteration_timing", "cut_selection_ms") => "Cut selection time",
         ("iteration_timing", "mpi_allreduce_ms") => "MPI allreduce time",
-        ("iteration_timing", "mpi_broadcast_ms") => "MPI broadcast time",
-        ("iteration_timing", "io_write_ms") => "I/O write time",
+        ("iteration_timing", "cut_sync_ms") => "Per-stage cut sync allgatherv time",
+        ("iteration_timing", "lower_bound_ms") => "Lower bound evaluation time",
         ("iteration_timing", "state_exchange_ms") => "State exchange allgatherv time",
         ("iteration_timing", "cut_batch_build_ms") => "Cut batch assembly time",
-        ("iteration_timing", "rayon_overhead_ms") => "Rayon barrier/scheduling overhead",
-        ("iteration_timing", "overhead_ms") => "Overhead time",
+        ("iteration_timing", "bwd_setup_ms") => "Thread-pool setup time before backward pass",
+        ("iteration_timing", "bwd_load_imbalance_ms") => {
+            "Estimated load imbalance across backward pass worker threads"
+        }
+        ("iteration_timing", "bwd_scheduling_overhead_ms") => {
+            "Scheduling and synchronisation overhead in the backward pass"
+        }
+        ("iteration_timing", "fwd_setup_ms") => "Thread-pool setup time before forward pass",
+        ("iteration_timing", "fwd_load_imbalance_ms") => {
+            "Estimated load imbalance across forward pass worker threads"
+        }
+        ("iteration_timing", "fwd_scheduling_overhead_ms") => {
+            "Scheduling and synchronisation overhead in the forward pass"
+        }
+        ("iteration_timing", "overhead_ms") => {
+            "Residual iteration time not attributed to any phase"
+        }
         // ── rank_timing ────────────────────────────────────────────────────
         ("rank_timing", "iteration") => "Iteration number (1-based)",
         ("rank_timing", "rank") => "MPI rank",
@@ -1415,8 +1433,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 190,
-            "variables.csv must have exactly 190 data rows (one per column across all 18 solver_iterations columns + rest of schemas)"
+            row_count, 194,
+            "variables.csv must have exactly 194 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
         );
     }
 

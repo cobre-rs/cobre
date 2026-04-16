@@ -214,8 +214,12 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
     let mut lower_bound_ms = Int64Builder::with_capacity(n);
     let mut state_exchange_ms = Int64Builder::with_capacity(n);
     let mut cut_batch_build_ms = Int64Builder::with_capacity(n);
-    let mut bwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
-    let mut fwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
+    let mut bwd_setup_ms = Int64Builder::with_capacity(n);
+    let mut bwd_load_imbalance_ms = Int64Builder::with_capacity(n);
+    let mut bwd_scheduling_overhead_ms = Int64Builder::with_capacity(n);
+    let mut fwd_setup_ms = Int64Builder::with_capacity(n);
+    let mut fwd_load_imbalance_ms = Int64Builder::with_capacity(n);
+    let mut fwd_scheduling_overhead_ms = Int64Builder::with_capacity(n);
     let mut overhead_ms = Int64Builder::with_capacity(n);
 
     for rec in records {
@@ -228,8 +232,12 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
         lower_bound_ms.append_value(rec.time_lower_bound_ms as i64);
         state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
         cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
-        bwd_rayon_overhead_ms.append_value(rec.time_bwd_rayon_overhead_ms as i64);
-        fwd_rayon_overhead_ms.append_value(rec.time_fwd_rayon_overhead_ms as i64);
+        bwd_setup_ms.append_value(rec.time_bwd_setup_ms as i64);
+        bwd_load_imbalance_ms.append_value(rec.time_bwd_load_imbalance_ms as i64);
+        bwd_scheduling_overhead_ms.append_value(rec.time_bwd_scheduling_overhead_ms as i64);
+        fwd_setup_ms.append_value(rec.time_fwd_setup_ms as i64);
+        fwd_load_imbalance_ms.append_value(rec.time_fwd_load_imbalance_ms as i64);
+        fwd_scheduling_overhead_ms.append_value(rec.time_fwd_scheduling_overhead_ms as i64);
         overhead_ms.append_value(rec.time_overhead_ms as i64);
     }
 
@@ -245,8 +253,12 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
             Arc::new(lower_bound_ms.finish()),
             Arc::new(state_exchange_ms.finish()),
             Arc::new(cut_batch_build_ms.finish()),
-            Arc::new(bwd_rayon_overhead_ms.finish()),
-            Arc::new(fwd_rayon_overhead_ms.finish()),
+            Arc::new(bwd_setup_ms.finish()),
+            Arc::new(bwd_load_imbalance_ms.finish()),
+            Arc::new(bwd_scheduling_overhead_ms.finish()),
+            Arc::new(fwd_setup_ms.finish()),
+            Arc::new(fwd_load_imbalance_ms.finish()),
+            Arc::new(fwd_scheduling_overhead_ms.finish()),
             Arc::new(overhead_ms.finish()),
         ],
     )
@@ -391,8 +403,12 @@ mod tests {
             time_lower_bound_ms: 0,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_bwd_rayon_overhead_ms: 0,
-            time_fwd_rayon_overhead_ms: 0,
+            time_bwd_setup_ms: 0,
+            time_bwd_load_imbalance_ms: 0,
+            time_bwd_scheduling_overhead_ms: 0,
+            time_fwd_setup_ms: 0,
+            time_fwd_load_imbalance_ms: 0,
+            time_fwd_scheduling_overhead_ms: 0,
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
@@ -475,8 +491,8 @@ mod tests {
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            12,
-            "iteration_timing schema has 12 columns"
+            16,
+            "iteration_timing schema has 16 columns"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -485,6 +501,117 @@ mod tests {
             expected_schema.fields(),
             "schema must match iteration_timing_schema()"
         );
+    }
+
+    #[test]
+    fn iteration_timing_columns_six_decomposed_overhead() {
+        use arrow::array::Int64Array;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        std::fs::create_dir_all(tmp.path().join("training/timing")).unwrap();
+        let config = ParquetWriterConfig::default();
+
+        // Build 3 records with distinct non-zero overhead component values so we
+        // can verify each column carries the right field.
+        let records: Vec<IterationRecord> = (1u32..=3)
+            .map(|i| IterationRecord {
+                iteration: i,
+                lower_bound: f64::from(i) * 10.0,
+                upper_bound_mean: f64::from(i) * 11.0,
+                upper_bound_std: 0.5,
+                gap_percent: Some(5.0),
+                cuts_added: 5,
+                cuts_removed: 1,
+                cuts_active: 4,
+                time_forward_ms: 100,
+                time_backward_ms: 200,
+                time_total_ms: 300,
+                time_forward_wall_ms: 100,
+                time_backward_wall_ms: 200,
+                time_cut_selection_ms: 0,
+                time_mpi_allreduce_ms: 0,
+                time_cut_sync_ms: 0,
+                time_lower_bound_ms: 0,
+                time_state_exchange_ms: 0,
+                time_cut_batch_build_ms: 0,
+                time_bwd_setup_ms: u64::from(i) * 10,
+                time_bwd_load_imbalance_ms: u64::from(i) * 20,
+                time_bwd_scheduling_overhead_ms: u64::from(i) * 30,
+                time_fwd_setup_ms: u64::from(i) * 40,
+                time_fwd_load_imbalance_ms: u64::from(i) * 50,
+                time_fwd_scheduling_overhead_ms: u64::from(i) * 60,
+                time_overhead_ms: 0,
+                forward_passes: 4,
+                lp_solves: 40,
+                solve_time_ms: 0.0,
+            })
+            .collect();
+
+        let training = make_training_output(records.clone());
+        let writer = TrainingParquetWriter::new(tmp.path(), &config).expect("new must succeed");
+        writer.write(&training).expect("write must succeed");
+
+        let timing_path = tmp.path().join("training/timing/iterations.parquet");
+        assert!(timing_path.exists(), "iterations.parquet must exist");
+
+        let file = std::fs::File::open(&timing_path).expect("file must open");
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("builder")
+            .build()
+            .expect("reader");
+        let batch = reader.next().expect("must have rows").expect("batch Ok");
+
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 16, "must have 16 columns");
+
+        // Verify that old column names are absent.
+        assert!(
+            batch.column_by_name("bwd_rayon_overhead_ms").is_none(),
+            "bwd_rayon_overhead_ms must not exist"
+        );
+        assert!(
+            batch.column_by_name("fwd_rayon_overhead_ms").is_none(),
+            "fwd_rayon_overhead_ms must not exist"
+        );
+
+        // Verify that all six new columns are present with Int64 type and correct values.
+        let expected_schema = iteration_timing_schema();
+        assert_eq!(
+            batch.schema().fields(),
+            expected_schema.fields(),
+            "schema must match iteration_timing_schema()"
+        );
+
+        for (col_name, expected_row1_val) in &[
+            ("bwd_setup_ms", 10_i64),
+            ("bwd_load_imbalance_ms", 20_i64),
+            ("bwd_scheduling_overhead_ms", 30_i64),
+            ("fwd_setup_ms", 40_i64),
+            ("fwd_load_imbalance_ms", 50_i64),
+            ("fwd_scheduling_overhead_ms", 60_i64),
+        ] {
+            let col = batch
+                .column_by_name(col_name)
+                .unwrap_or_else(|| panic!("column {col_name} must exist"));
+            let arr = col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap_or_else(|| panic!("{col_name} must be Int64Array"));
+            // Row 0 corresponds to iteration=1, multiplier=1.
+            assert_eq!(
+                arr.value(0),
+                *expected_row1_val,
+                "{col_name} row 0 must be {expected_row1_val}"
+            );
+            // Row 1: iteration=2, multiplier=2.
+            assert_eq!(
+                arr.value(1),
+                expected_row1_val * 2,
+                "{col_name} row 1 must be {}",
+                expected_row1_val * 2
+            );
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -671,7 +798,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 12);
+        assert_eq!(batch.num_columns(), 16);
     }
 
     #[test]

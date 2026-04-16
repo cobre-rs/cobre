@@ -130,19 +130,41 @@ pub struct IterationRecord {
     /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
     pub time_cut_batch_build_ms: u64,
 
-    /// Estimated rayon overhead in the backward pass (ms).
+    /// Thread-pool setup time before the parallel backward pass loop began (ms).
     ///
-    /// Computed as `parallel_wall - (solve_cpu / n_workers)`. Captures load
-    /// imbalance, non-solve parallel work, and scheduling overhead.
     /// Sub-component of the backward pass wall-clock.
-    /// Maps to `bwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
-    pub time_bwd_rayon_overhead_ms: u64,
+    /// Maps to `bwd_setup_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_setup_ms: u64,
 
-    /// Estimated rayon overhead in the forward pass (ms).
+    /// Estimated load imbalance across worker threads in the backward pass (ms).
     ///
-    /// Same formula as backward. Sub-component of the forward pass wall-clock.
-    /// Maps to `fwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
-    pub time_fwd_rayon_overhead_ms: u64,
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `bwd_load_imbalance_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_load_imbalance_ms: u64,
+
+    /// Scheduling and synchronisation overhead in the backward pass (ms).
+    ///
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `bwd_scheduling_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_scheduling_overhead_ms: u64,
+
+    /// Thread-pool setup time before the forward pass parallel loop began (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_setup_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_setup_ms: u64,
+
+    /// Estimated load imbalance across worker threads in the forward pass (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_load_imbalance_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_load_imbalance_ms: u64,
+
+    /// Scheduling and synchronisation overhead in the forward pass (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_scheduling_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_scheduling_overhead_ms: u64,
 
     /// Residual wall-clock time not attributed to any specific phase (ms).
     ///
@@ -442,8 +464,12 @@ mod tests {
                 time_lower_bound_ms: 0,
                 time_state_exchange_ms: 0,
                 time_cut_batch_build_ms: 0,
-                time_bwd_rayon_overhead_ms: 0,
-                time_fwd_rayon_overhead_ms: 0,
+                time_bwd_setup_ms: 0,
+                time_bwd_load_imbalance_ms: 0,
+                time_bwd_scheduling_overhead_ms: 0,
+                time_fwd_setup_ms: 0,
+                time_fwd_load_imbalance_ms: 0,
+                time_fwd_scheduling_overhead_ms: 0,
                 time_overhead_ms: 0,
                 solve_time_ms: 0.0,
             })
@@ -502,8 +528,12 @@ mod tests {
             time_lower_bound_ms: 4,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_bwd_rayon_overhead_ms: 0,
-            time_fwd_rayon_overhead_ms: 0,
+            time_bwd_setup_ms: 0,
+            time_bwd_load_imbalance_ms: 0,
+            time_bwd_scheduling_overhead_ms: 0,
+            time_fwd_setup_ms: 0,
+            time_fwd_load_imbalance_ms: 0,
+            time_fwd_scheduling_overhead_ms: 0,
             // overhead = 400 - (150 + 250 + 5 + 3 + 4) = 0 (saturating)
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 4),
             solve_time_ms: 0.0,

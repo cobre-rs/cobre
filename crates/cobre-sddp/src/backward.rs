@@ -85,7 +85,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
-use cobre_solver::{RowBatch, SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverError, SolverInterface, SolverStatistics};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
@@ -97,7 +97,7 @@ use crate::{
     forward::build_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
 };
@@ -131,10 +131,28 @@ pub struct BackwardResult {
     /// all stages, in milliseconds.
     pub cut_batch_build_time_ms: u64,
 
-    /// Estimated rayon barrier + scheduling overhead accumulated across all
-    /// stages, in milliseconds. Computed per-stage as
-    /// `process_stage_wall_ms - (solve_time_ms / n_workers)`.
-    pub rayon_overhead_time_ms: u64,
+    /// Aggregate non-solve work inside the parallel region accumulated across
+    /// all stages, in milliseconds.
+    ///
+    /// Computed per-stage as the sum over all workers of
+    /// `load_model_time_ms + add_rows_time_ms + set_bounds_time_ms + basis_set_time_ms`.
+    pub setup_time_ms: u64,
+
+    /// Load-imbalance component of parallel overhead accumulated across all
+    /// stages, in milliseconds.
+    ///
+    /// Computed per-stage as `max_worker_total_ms - avg_worker_total_ms`, where
+    /// `worker_total_ms = solve + load_model + add_rows + set_bounds + basis_set`
+    /// for each worker. Measures how much the slowest worker exceeds the average.
+    pub load_imbalance_ms: u64,
+
+    /// True rayon scheduling overhead accumulated across all stages, in
+    /// milliseconds.
+    ///
+    /// Computed per-stage as `parallel_wall_ms - max_worker_total_ms`. Represents
+    /// rayon barrier, thread wake-up, and work-stealing dispatch costs after
+    /// accounting for all measured per-worker work.
+    pub scheduling_overhead_ms: u64,
 
     /// Wall-clock time for per-stage cut synchronization (`allgatherv`)
     /// accumulated across all stages, in milliseconds.
@@ -729,12 +747,20 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
     let mut state_exchange_ms: u64 = 0;
     let mut cut_batch_build_ms: u64 = 0;
-    let mut rayon_overhead_ms: u64 = 0;
+    let mut setup_ms: u64 = 0;
+    let mut imbalance_ms: u64 = 0;
+    let mut scheduling_ms: u64 = 0;
     let mut cut_sync_ms: u64 = 0;
     #[allow(clippy::cast_precision_loss)]
     let n_workers = workspaces.len() as f64;
     let tree_view = stochastic.tree_view();
     let mut staged_cuts_buf: Vec<StagedCut> = Vec::new();
+    // Pre-allocate per-worker snapshot buffers; reused across all stage iterations.
+    let mut worker_stats_before: Vec<SolverStatistics> = Vec::with_capacity(workspaces.len());
+    let mut worker_stats_after: Vec<SolverStatistics> = Vec::with_capacity(workspaces.len());
+    // Pre-allocate per-worker delta and total buffers; reused via clear()+extend() each stage.
+    let mut worker_deltas: Vec<SolverStatsDelta> = Vec::with_capacity(workspaces.len());
+    let mut worker_totals: Vec<f64> = Vec::with_capacity(workspaces.len());
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
         // When the caller supplies forward-pass records, perform the per-stage
@@ -762,9 +788,9 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
 
         let successor = t + 1;
 
-        // Snapshot pool stats before this stage's solves.
-        let stage_stats_before =
-            aggregate_solver_statistics(workspaces.iter().map(|w| w.solver.statistics()));
+        // Collect per-worker snapshots before solves (needed for overhead decomposition).
+        worker_stats_before.clear();
+        worker_stats_before.extend(workspaces.iter().map(|w| w.solver.statistics()));
 
         let n_openings = tree_view.n_openings(successor);
         spec.probabilities_buf.clear();
@@ -892,18 +918,70 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             }
         }
 
-        // Snapshot pool stats after this stage's solves and compute delta.
-        let stage_stats_after =
-            aggregate_solver_statistics(workspaces.iter().map(|w| w.solver.statistics()));
-        let stage_delta = SolverStatsDelta::from_snapshots(&stage_stats_before, &stage_stats_after);
+        // Collect per-worker statistics snapshots after this stage's solves.
+        worker_stats_after.clear();
+        worker_stats_after.extend(workspaces.iter().map(|w| w.solver.statistics()));
 
-        // Rayon overhead: wall-clock of the parallel region minus the average
-        // per-worker solve time. This is an upper bound on barrier + scheduling.
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        // Compute per-worker deltas and decompose parallel overhead.
+        // Reuse pre-allocated buffers (clear+extend avoids per-stage allocation on the hot path).
+        worker_deltas.clear();
+        worker_deltas.extend(
+            worker_stats_before
+                .iter()
+                .zip(&worker_stats_after)
+                .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after)),
+        );
+
+        // setup_time_ms: total non-solve work (load_model + add_rows + set_bounds + basis_set).
+        let stage_setup_ms: f64 = worker_deltas
+            .iter()
+            .map(|d| {
+                d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .sum();
+
+        // Per-worker elapsed: solve + setup phases.
+        // Reuse pre-allocated buffer (clear+extend avoids per-stage allocation on the hot path).
+        worker_totals.clear();
+        worker_totals.extend(worker_deltas.iter().map(|d| {
+            d.solve_time_ms
+                + d.load_model_time_ms
+                + d.add_rows_time_ms
+                + d.set_bounds_time_ms
+                + d.basis_set_time_ms
+        }));
+
+        let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+        let avg_worker_ms = if worker_totals.is_empty() {
+            0.0_f64
+        } else {
+            worker_totals.iter().sum::<f64>() / n_workers
+        };
+
+        // load_imbalance_ms: slowest worker minus average.
+        let stage_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
+        // scheduling_overhead_ms: residual wall time beyond slowest worker.
+        #[allow(
+            clippy::cast_precision_loss,      // parallel_wall_ms as f64: safe at HPC scale
+            clippy::cast_possible_truncation, // f64 as u64: clamped non-negative
+            clippy::cast_sign_loss            // f64 as u64: clamped non-negative
+        )]
+        let stage_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
+
+        #[allow(
+            clippy::cast_possible_truncation, // f64 as u64: clamped non-negative
+            clippy::cast_sign_loss            // f64 as u64: clamped non-negative
+        )]
         {
-            let avg_solve_ms = (stage_delta.solve_time_ms / n_workers) as u64;
-            rayon_overhead_ms += parallel_wall_ms.saturating_sub(avg_solve_ms);
+            setup_ms += stage_setup_ms as u64;
+            imbalance_ms += stage_imbalance_ms as u64;
+            scheduling_ms += stage_scheduling_ms as u64;
         }
+
+        let stage_delta = SolverStatsDelta::aggregate(worker_deltas.iter());
 
         stage_stats.push((successor, stage_delta));
     }
@@ -922,7 +1000,9 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         stage_stats,
         state_exchange_time_ms: state_exchange_ms,
         cut_batch_build_time_ms: cut_batch_build_ms,
-        rayon_overhead_time_ms: rayon_overhead_ms,
+        setup_time_ms: setup_ms,
+        load_imbalance_ms: imbalance_ms,
+        scheduling_overhead_ms: scheduling_ms,
         cut_sync_time_ms: cut_sync_ms,
     })
 }
@@ -1417,7 +1497,9 @@ mod tests {
             stage_stats: Vec::new(),
             state_exchange_time_ms: 0,
             cut_batch_build_time_ms: 0,
-            rayon_overhead_time_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
             cut_sync_time_ms: 0,
         };
         assert_eq!(r.cuts_generated, 6);
@@ -1425,7 +1507,9 @@ mod tests {
         assert!(r.stage_stats.is_empty());
         assert_eq!(r.state_exchange_time_ms, 0);
         assert_eq!(r.cut_batch_build_time_ms, 0);
-        assert_eq!(r.rayon_overhead_time_ms, 0);
+        assert_eq!(r.setup_time_ms, 0);
+        assert_eq!(r.load_imbalance_ms, 0);
+        assert_eq!(r.scheduling_overhead_ms, 0);
         assert_eq!(r.cut_sync_time_ms, 0);
     }
 
@@ -1438,7 +1522,9 @@ mod tests {
             stage_stats: Vec::new(),
             state_exchange_time_ms: 0,
             cut_batch_build_time_ms: 0,
-            rayon_overhead_time_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
             cut_sync_time_ms: 0,
         };
         let c = r.clone();
@@ -4360,5 +4446,190 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Parallel overhead decomposition unit tests ────────────────────────────
+
+    /// Build a `SolverStatistics` snapshot with the given cumulative times (in seconds).
+    fn make_stats(
+        solve_s: f64,
+        load_s: f64,
+        add_rows_s: f64,
+        set_bounds_s: f64,
+        basis_set_s: f64,
+    ) -> SolverStatistics {
+        SolverStatistics {
+            total_solve_time_seconds: solve_s,
+            total_load_model_time_seconds: load_s,
+            total_add_rows_time_seconds: add_rows_s,
+            total_set_bounds_time_seconds: set_bounds_s,
+            total_basis_set_time_seconds: basis_set_s,
+            ..SolverStatistics::default()
+        }
+    }
+
+    /// Decompose parallel overhead into (setup_ms, imbalance_ms, scheduling_ms)
+    /// from per-worker before/after snapshots.
+    fn decompose_overhead(
+        pairs: &[(SolverStatistics, SolverStatistics)],
+        parallel_wall_ms: u64,
+    ) -> (u64, u64, u64) {
+        use crate::solver_stats::SolverStatsDelta;
+
+        let n_workers = pairs.len() as f64;
+
+        let worker_deltas: Vec<SolverStatsDelta> = pairs
+            .iter()
+            .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after))
+            .collect();
+
+        let stage_setup_ms: f64 = worker_deltas
+            .iter()
+            .map(|d| {
+                d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .sum();
+
+        let worker_totals: Vec<f64> = worker_deltas
+            .iter()
+            .map(|d| {
+                d.solve_time_ms
+                    + d.load_model_time_ms
+                    + d.add_rows_time_ms
+                    + d.set_bounds_time_ms
+                    + d.basis_set_time_ms
+            })
+            .collect();
+
+        let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+        let avg_worker_ms = if worker_totals.is_empty() {
+            0.0_f64
+        } else {
+            worker_totals.iter().sum::<f64>() / n_workers
+        };
+
+        let stage_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
+        let stage_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
+
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            stage_setup_ms as u64,
+            stage_imbalance_ms as u64,
+            stage_scheduling_ms as u64,
+        )
+    }
+
+    /// 4 workers with different solve times: imbalance equals
+    /// `trunc(max - mean_f64)` of worker totals, scheduling equals
+    /// `parallel_wall - max`.
+    ///
+    /// Worker solve times: 100 ms, 200 ms, 150 ms, 180 ms.
+    /// Setup per worker: 0 (this sub-test isolates solve imbalance).
+    /// Mean of totals (f64) = 630.0 / 4 = 157.5.
+    /// Imbalance = trunc(200.0 - 157.5) = trunc(42.5) = 42.
+    /// Scheduling = 250 - 200 = 50.
+    #[test]
+    fn decompose_four_workers_different_solve_times() {
+        // All setup times are zero; use only solve time to isolate imbalance.
+        let zero = SolverStatistics::default();
+        let pairs = vec![
+            (zero.clone(), make_stats(0.1, 0.0, 0.0, 0.0, 0.0)), // 100 ms solve
+            (zero.clone(), make_stats(0.2, 0.0, 0.0, 0.0, 0.0)), // 200 ms solve
+            (zero.clone(), make_stats(0.15, 0.0, 0.0, 0.0, 0.0)), // 150 ms solve
+            (zero.clone(), make_stats(0.18, 0.0, 0.0, 0.0, 0.0)), // 180 ms solve
+        ];
+        let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 250);
+
+        assert_eq!(setup_ms, 0, "no setup work expected");
+        // f64 mean = 157.5; imbalance = trunc(200.0 - 157.5) = trunc(42.5) = 42
+        assert_eq!(
+            imbalance_ms, 42,
+            "imbalance = trunc(max(200.0) - avg(157.5)) = trunc(42.5) = 42"
+        );
+        // scheduling = 250 - 200 = 50
+        assert_eq!(scheduling_ms, 50, "scheduling overhead = wall - max_worker");
+    }
+
+    /// Acceptance criterion: setup_time_ms is the sum of all workers' non-solve
+    /// work, matching the ticket spec example.
+    ///
+    /// Workers have setup costs (load+add+bounds+basis): 20, 25, 15, 22 ms.
+    /// Expected setup_ms = 20 + 25 + 15 + 22 = 82.
+    #[test]
+    fn decompose_setup_time_is_aggregate_non_solve_work() {
+        let zero = SolverStatistics::default();
+        // Each worker: 0 solve + known setup split across the four sub-timers.
+        // Worker setup totals: 20, 25, 15, 22 ms (split evenly among the 4 timers).
+        let pairs = vec![
+            (zero.clone(), make_stats(0.0, 0.005, 0.005, 0.005, 0.005)), // 20 ms total setup
+            (
+                zero.clone(),
+                make_stats(0.0, 0.00625, 0.00625, 0.00625, 0.00625),
+            ), // 25 ms
+            (
+                zero.clone(),
+                make_stats(0.0, 0.00375, 0.00375, 0.00375, 0.00375),
+            ), // 15 ms
+            (
+                zero.clone(),
+                make_stats(0.0, 0.0055, 0.0055, 0.0055, 0.0055),
+            ), // 22 ms
+        ];
+        let (setup_ms, _imbalance_ms, _scheduling_ms) = decompose_overhead(&pairs, 300);
+        assert_eq!(
+            setup_ms, 82,
+            "aggregate setup must sum all workers' non-solve work"
+        );
+    }
+
+    /// Edge case: all workers have identical timing → imbalance must be 0.
+    #[test]
+    fn decompose_identical_workers_zero_imbalance() {
+        let zero = SolverStatistics::default();
+        let after = make_stats(0.1, 0.01, 0.005, 0.002, 0.001);
+        let pairs = vec![
+            (zero.clone(), after.clone()),
+            (zero.clone(), after.clone()),
+            (zero.clone(), after.clone()),
+        ];
+        let (_, imbalance_ms, _) = decompose_overhead(&pairs, 200);
+        assert_eq!(
+            imbalance_ms, 0,
+            "identical workers must have zero imbalance"
+        );
+    }
+
+    /// Edge case: single worker → imbalance is 0, setup equals that worker's
+    /// setup, scheduling is the residual.
+    #[test]
+    fn decompose_single_worker() {
+        let zero = SolverStatistics::default();
+        // 100 ms solve + 20 ms setup = 120 ms worker total.
+        let after = make_stats(0.1, 0.005, 0.005, 0.005, 0.005);
+        let pairs = vec![(zero.clone(), after)];
+        let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 150);
+
+        assert_eq!(setup_ms, 20, "single worker: setup = 20 ms");
+        assert_eq!(imbalance_ms, 0, "single worker: imbalance must be 0");
+        // scheduling = 150 - 120 = 30
+        assert_eq!(
+            scheduling_ms, 30,
+            "single worker: scheduling = wall - worker_total"
+        );
+    }
+
+    /// Edge case: scheduling_overhead_ms is clamped to 0 when max_worker_total
+    /// exceeds parallel_wall_ms (clock skew or measurement granularity).
+    #[test]
+    fn decompose_scheduling_clamped_when_worker_exceeds_wall() {
+        let zero = SolverStatistics::default();
+        // Worker total = 200 ms, but wall = 180 ms → scheduling would be negative.
+        let after = make_stats(0.2, 0.0, 0.0, 0.0, 0.0);
+        let pairs = vec![(zero.clone(), after)];
+        let (_, _, scheduling_ms) = decompose_overhead(&pairs, 180);
+        assert_eq!(scheduling_ms, 0, "negative scheduling must be clamped to 0");
     }
 }

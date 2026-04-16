@@ -752,7 +752,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 elapsed_ms: backward_elapsed_ms,
                 state_exchange_time_ms: backward_result.state_exchange_time_ms,
                 cut_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
-                rayon_overhead_time_ms: backward_result.rayon_overhead_time_ms,
+                setup_time_ms: backward_result.setup_time_ms,
+                load_imbalance_ms: backward_result.load_imbalance_ms,
+                scheduling_overhead_ms: backward_result.scheduling_overhead_ms,
             },
         );
         // Cut sync now happens per-stage inside `run_backward_pass`. The
@@ -1075,7 +1077,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
                 solve_time_ms: fwd_solve_time_ms + bwd_solve_time_ms + lb_solve_time_ms,
                 lower_bound_eval_ms: lb_wall_ms,
-                fwd_rayon_overhead_ms: forward_result.rayon_overhead_ms,
+                fwd_setup_time_ms: forward_result.setup_time_ms,
+                fwd_load_imbalance_ms: forward_result.load_imbalance_ms,
+                fwd_scheduling_overhead_ms: forward_result.scheduling_overhead_ms,
             },
         );
 

@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{scenario::SamplingScheme, temporal::StageLagTransition, Stage};
+use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 

@@ -238,11 +238,13 @@ pub(crate) fn convergence_schema() -> Schema {
 
 /// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
 ///
-/// 13 fields. Top-level non-overlapping phases: `forward_wall_ms`,
+/// 16 fields. Top-level non-overlapping phases: `forward_wall_ms`,
 /// `backward_wall_ms`, `cut_selection_ms`, `mpi_allreduce_ms`,
 /// `lower_bound_ms`. Sub-components of backward: `cut_sync_ms`,
-/// `state_exchange_ms`, `cut_batch_build_ms`, `bwd_rayon_overhead_ms`.
-/// Sub-component of forward: `fwd_rayon_overhead_ms`. Residual: `overhead_ms`.
+/// `state_exchange_ms`, `cut_batch_build_ms`, `bwd_setup_ms`,
+/// `bwd_load_imbalance_ms`, `bwd_scheduling_overhead_ms`.
+/// Sub-components of forward: `fwd_setup_ms`, `fwd_load_imbalance_ms`,
+/// `fwd_scheduling_overhead_ms`. Residual: `overhead_ms`.
 pub(crate) fn iteration_timing_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
@@ -254,8 +256,12 @@ pub(crate) fn iteration_timing_schema() -> Schema {
         Field::new("lower_bound_ms", DataType::Int64, false),
         Field::new("state_exchange_ms", DataType::Int64, false),
         Field::new("cut_batch_build_ms", DataType::Int64, false),
-        Field::new("bwd_rayon_overhead_ms", DataType::Int64, false),
-        Field::new("fwd_rayon_overhead_ms", DataType::Int64, false),
+        Field::new("bwd_setup_ms", DataType::Int64, false),
+        Field::new("bwd_load_imbalance_ms", DataType::Int64, false),
+        Field::new("bwd_scheduling_overhead_ms", DataType::Int64, false),
+        Field::new("fwd_setup_ms", DataType::Int64, false),
+        Field::new("fwd_load_imbalance_ms", DataType::Int64, false),
+        Field::new("fwd_scheduling_overhead_ms", DataType::Int64, false),
         Field::new("overhead_ms", DataType::Int64, false),
     ])
 }
@@ -717,8 +723,8 @@ mod tests {
         let schema = iteration_timing_schema();
         assert_eq!(
             schema.fields().len(),
-            12,
-            "iteration_timing schema must have 12 fields"
+            16,
+            "iteration_timing schema must have 16 fields"
         );
     }
 
@@ -836,7 +842,7 @@ mod tests {
             ("inflow_lags", 4),
             ("generic_violations", 5),
             ("convergence", 13),
-            ("iteration_timing", 12),
+            ("iteration_timing", 16),
             ("rank_timing", 8),
             ("cut_selection", 10),
             ("solver_iterations", 18),

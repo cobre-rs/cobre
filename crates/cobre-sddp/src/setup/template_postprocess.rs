@@ -3,10 +3,10 @@
 use cobre_core::System;
 
 use crate::scaling_report::{
-    build_scaling_report, compute_coefficient_range, summarize_scale_factors, LpDimensions,
-    StageScalingReport,
+    LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
+    summarize_scale_factors,
 };
-use crate::{lp_builder, StageIndexer, StageTemplates};
+use crate::{StageIndexer, StageTemplates, lp_builder};
 
 /// Apply discount factors, LP scaling, and noise pre-scaling to stage templates.
 ///

@@ -25,17 +25,29 @@ use crate::{FutureCostFunction, TrainingResult};
 /// before the final [`IterationRecord`] is assembled.
 #[derive(Default)]
 struct PartialRecord {
+    /// Lower bound from [`TrainingEvent::IterationSummary`].
     lower_bound: f64,
+    /// Upper bound mean from [`TrainingEvent::ForwardSyncComplete`].
     upper_bound_mean: f64,
+    /// Upper bound std from [`TrainingEvent::ForwardSyncComplete`].
     upper_bound_std: f64,
+    /// Gap from [`TrainingEvent::IterationSummary`].
     gap: f64,
+    /// Forward pass wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     forward_ms: u64,
+    /// Backward pass wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     backward_ms: u64,
+    /// Iteration total wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     iteration_time_ms: u64,
+    /// LP solve count from [`TrainingEvent::IterationSummary`].
     lp_solves: u64,
+    /// Forward passes from [`TrainingEvent::ForwardPassComplete`].
     forward_passes: u32,
+    /// Cuts generated from [`TrainingEvent::BackwardPassComplete`].
     cuts_added: u32,
+    /// Cuts removed from [`TrainingEvent::CutSyncComplete`].
     cuts_removed: u32,
+    /// Active cuts from [`TrainingEvent::CutSyncComplete`].
     cuts_active: u32,
     /// Wall-clock time for the `allreduce` bound-statistic reduction
     /// from [`TrainingEvent::ForwardSyncComplete`] (ms).
@@ -55,12 +67,20 @@ struct PartialRecord {
     state_exchange_ms: u64,
     /// Cut batch build time from [`TrainingEvent::BackwardPassComplete`] (ms).
     cut_batch_build_ms: u64,
-    /// Rayon overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
-    rayon_overhead_ms: u64,
+    /// Thread-pool setup time from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_setup_ms: u64,
+    /// Load imbalance from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_load_imbalance_ms: u64,
+    /// Scheduling overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_scheduling_overhead_ms: u64,
     /// Lower bound evaluation wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     lower_bound_eval_ms: u64,
-    /// Forward pass rayon overhead from [`TrainingEvent::IterationSummary`] (ms).
-    fwd_rayon_overhead_ms: u64,
+    /// Forward pass setup time from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_setup_ms: u64,
+    /// Forward pass load imbalance from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_load_imbalance_ms: u64,
+    /// Forward pass scheduling overhead from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_scheduling_overhead_ms: u64,
 }
 
 /// Accumulate per-iteration partial records from the event log.
@@ -87,7 +107,9 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 lp_solves,
                 solve_time_ms,
                 lower_bound_eval_ms,
-                fwd_rayon_overhead_ms,
+                fwd_setup_time_ms,
+                fwd_load_imbalance_ms,
+                fwd_scheduling_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
@@ -100,7 +122,9 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.lp_solves = *lp_solves;
                 record.solve_time_ms = *solve_time_ms;
                 record.lower_bound_eval_ms = *lower_bound_eval_ms;
-                record.fwd_rayon_overhead_ms = *fwd_rayon_overhead_ms;
+                record.fwd_setup_ms = *fwd_setup_time_ms;
+                record.fwd_load_imbalance_ms = *fwd_load_imbalance_ms;
+                record.fwd_scheduling_overhead_ms = *fwd_scheduling_overhead_ms;
             }
 
             TrainingEvent::ForwardSyncComplete {
@@ -128,14 +152,18 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 cuts_generated,
                 state_exchange_time_ms,
                 cut_batch_build_time_ms,
-                rayon_overhead_time_ms,
+                setup_time_ms,
+                load_imbalance_ms,
+                scheduling_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
                 record.cuts_added = *cuts_generated;
                 record.state_exchange_ms = *state_exchange_time_ms;
                 record.cut_batch_build_ms = *cut_batch_build_time_ms;
-                record.rayon_overhead_ms = *rayon_overhead_time_ms;
+                record.bwd_setup_ms = *setup_time_ms;
+                record.bwd_load_imbalance_ms = *load_imbalance_ms;
+                record.bwd_scheduling_overhead_ms = *scheduling_overhead_ms;
             }
 
             TrainingEvent::CutSyncComplete {
@@ -223,8 +251,12 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
         time_lower_bound_ms: partial.lower_bound_eval_ms,
         time_state_exchange_ms: partial.state_exchange_ms,
         time_cut_batch_build_ms: partial.cut_batch_build_ms,
-        time_bwd_rayon_overhead_ms: partial.rayon_overhead_ms,
-        time_fwd_rayon_overhead_ms: partial.fwd_rayon_overhead_ms,
+        time_bwd_setup_ms: partial.bwd_setup_ms,
+        time_bwd_load_imbalance_ms: partial.bwd_load_imbalance_ms,
+        time_bwd_scheduling_overhead_ms: partial.bwd_scheduling_overhead_ms,
+        time_fwd_setup_ms: partial.fwd_setup_ms,
+        time_fwd_load_imbalance_ms: partial.fwd_load_imbalance_ms,
+        time_fwd_scheduling_overhead_ms: partial.fwd_scheduling_overhead_ms,
         time_overhead_ms: overhead_ms,
         solve_time_ms: partial.solve_time_ms,
     }
@@ -268,7 +300,9 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     lp_solves: 60,
 ///     solve_time_ms: 0.0,
 ///     lower_bound_eval_ms: 0,
-///     fwd_rayon_overhead_ms: 0,
+///     fwd_setup_time_ms: 0,
+///     fwd_load_imbalance_ms: 0,
+///     fwd_scheduling_overhead_ms: 0,
 /// }];
 ///
 /// let fcf = FutureCostFunction::new(2, 1, 4, 1, &[0; 2]);
@@ -400,7 +434,9 @@ mod tests {
             lp_solves: 60,
             solve_time_ms: 0.0,
             lower_bound_eval_ms: 0,
-            fwd_rayon_overhead_ms: 0,
+            fwd_setup_time_ms: 0,
+            fwd_load_imbalance_ms: 0,
+            fwd_scheduling_overhead_ms: 0,
         }
     }
 
@@ -601,7 +637,9 @@ mod tests {
                 elapsed_ms: 80,
                 state_exchange_time_ms: 0,
                 cut_batch_build_time_ms: 0,
-                rayon_overhead_time_ms: 0,
+                setup_time_ms: 0,
+                load_imbalance_ms: 0,
+                scheduling_overhead_ms: 0,
             },
             TrainingEvent::CutSyncComplete {
                 iteration: 1,
@@ -693,7 +731,9 @@ mod tests {
                 lp_solves: 60,
                 solve_time_ms: 0.0,
                 lower_bound_eval_ms: 0,
-                fwd_rayon_overhead_ms: 0,
+                fwd_setup_time_ms: 0,
+                fwd_load_imbalance_ms: 0,
+                fwd_scheduling_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -768,7 +808,9 @@ mod tests {
                 lp_solves: 60,
                 solve_time_ms: 0.0,
                 lower_bound_eval_ms: 3,
-                fwd_rayon_overhead_ms: 0,
+                fwd_setup_time_ms: 0,
+                fwd_load_imbalance_ms: 0,
+                fwd_scheduling_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -823,7 +865,9 @@ mod tests {
             lp_solves: 5,
             solve_time_ms: 0.0,
             lower_bound_eval_ms: 0,
-            fwd_rayon_overhead_ms: 0,
+            fwd_setup_time_ms: 0,
+            fwd_load_imbalance_ms: 0,
+            fwd_scheduling_overhead_ms: 0,
         }];
         let fcf = make_empty_fcf();
 

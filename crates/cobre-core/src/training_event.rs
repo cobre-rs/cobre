@@ -171,9 +171,21 @@ pub enum TrainingEvent {
         /// Wall-clock time for cut batch assembly (`build_cut_row_batch_into`)
         /// across all stages, in milliseconds.
         cut_batch_build_time_ms: u64,
-        /// Estimated rayon barrier + scheduling overhead across all stages,
-        /// in milliseconds.
-        rayon_overhead_time_ms: u64,
+        /// Aggregate non-solve work inside the parallel region accumulated across
+        /// all stages and all workers, in milliseconds.
+        ///
+        /// Computed per stage as the sum over all workers of
+        /// `load_model + add_rows + set_bounds + basis_set` times. Because it
+        /// sums across workers, this value can exceed `parallel_wall_ms` when
+        /// there are multiple workers. It is an aggregate cost metric, not a
+        /// wall-time slice.
+        setup_time_ms: u64,
+        /// Estimated load imbalance across worker threads (wall minus ideal
+        /// parallel work), in milliseconds.
+        load_imbalance_ms: u64,
+        /// Scheduling and synchronisation overhead not attributable to solve
+        /// work or load imbalance, in milliseconds.
+        scheduling_overhead_ms: u64,
     },
 
     /// Step 4: Cut synchronization (allgatherv) completed.
@@ -314,8 +326,21 @@ pub enum TrainingEvent {
         solve_time_ms: f64,
         /// Wall-clock time for lower bound evaluation, in milliseconds.
         lower_bound_eval_ms: u64,
-        /// Estimated rayon overhead in the forward pass, in milliseconds.
-        fwd_rayon_overhead_ms: u64,
+        /// Aggregate non-solve work inside the forward pass parallel region
+        /// accumulated across all workers, in milliseconds.
+        ///
+        /// Computed as the sum over all workers of
+        /// `load_model + add_rows + set_bounds + basis_set` times. Because it
+        /// sums across workers, this value can exceed `forward_ms` when there
+        /// are multiple workers. It is an aggregate cost metric, not a
+        /// wall-time slice.
+        fwd_setup_time_ms: u64,
+        /// Estimated load imbalance across worker threads in the forward pass,
+        /// in milliseconds.
+        fwd_load_imbalance_ms: u64,
+        /// Scheduling and synchronisation overhead in the forward pass not
+        /// attributable to solve work or load imbalance, in milliseconds.
+        fwd_scheduling_overhead_ms: u64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -418,7 +443,9 @@ mod tests {
                 elapsed_ms: 87,
                 state_exchange_time_ms: 0,
                 cut_batch_build_time_ms: 0,
-                rayon_overhead_time_ms: 0,
+                setup_time_ms: 0,
+                load_imbalance_ms: 0,
+                scheduling_overhead_ms: 0,
             },
             TrainingEvent::CutSyncComplete {
                 iteration: 1,
@@ -478,7 +505,9 @@ mod tests {
                 lp_solves: 240,
                 solve_time_ms: 45.2,
                 lower_bound_eval_ms: 10,
-                fwd_rayon_overhead_ms: 5,
+                fwd_setup_time_ms: 2,
+                fwd_load_imbalance_ms: 2,
+                fwd_scheduling_overhead_ms: 1,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),

@@ -321,7 +321,9 @@ mod tests {
             lp_solves: 240,
             solve_time_ms: 0.0,
             lower_bound_eval_ms: 0,
-            fwd_rayon_overhead_ms: 0,
+            fwd_setup_time_ms: 0,
+            fwd_load_imbalance_ms: 0,
+            fwd_scheduling_overhead_ms: 0,
         }
     }
 
@@ -569,7 +571,9 @@ mod tests {
             elapsed_ms: 87,
             state_exchange_time_ms: 0,
             cut_batch_build_time_ms: 0,
-            rayon_overhead_time_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
         })
         .unwrap();
         tx.send(make_iteration_summary(1)).unwrap();

@@ -348,12 +348,6 @@ pub(crate) fn accumulate_and_shift_lag_state(
             let offset = slot * n_h;
             ds.completed_lags[offset..offset + n_h].copy_from_slice(&ds.accumulator[..n_h]);
             *ds.n_completed = (*ds.n_completed + 1).min(ds.par_order);
-            debug_assert!(
-                *ds.n_completed <= ds.par_order,
-                "downstream ring-buffer overflow: n_completed={} > par_order={}",
-                *ds.n_completed,
-                ds.par_order
-            );
 
             // Reset downstream accumulator, optionally seeding spillover.
             if stage_lag.downstream_spillover_weight > 0.0 {

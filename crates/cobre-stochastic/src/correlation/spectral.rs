@@ -154,7 +154,7 @@ impl SpectralFactor {
     ///
     /// # Panics
     ///
-    /// Panics in debug builds if `independent.len() != self.dim` or
+    /// Panics if `independent.len() != self.dim` or
     /// `correlated.len() != self.dim`.
     pub fn transform(&self, independent: &[f64], correlated: &mut [f64]) {
         assert_eq!(

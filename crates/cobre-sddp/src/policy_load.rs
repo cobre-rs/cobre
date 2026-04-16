@@ -10,9 +10,9 @@
 use cobre_io::PolicyCheckpointMetadata;
 use cobre_solver::Basis;
 
+use crate::SddpError;
 use crate::cut::pool::CutPool;
 use crate::setup::StudySetup;
-use crate::SddpError;
 
 /// Resolve the per-stage warm-start cut counts from a loaded policy checkpoint.
 ///

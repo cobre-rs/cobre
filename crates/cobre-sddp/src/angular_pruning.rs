@@ -436,7 +436,7 @@ pub fn parse_angular_pruning_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_angular_pruning_config, AngularPruningParams};
+    use super::{AngularPruningParams, parse_angular_pruning_config};
     use cobre_io::config::AngularPruningConfig;
 
     // ── Disabled paths ───────────────────────────────────────────────────────

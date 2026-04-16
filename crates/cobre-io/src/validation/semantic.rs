@@ -61,7 +61,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 pub(crate) fn validate_semantic_hydro_thermal(data: &ParsedData, ctx: &mut ValidationContext) {
     check_cascade_acyclic(data, ctx);
@@ -1317,11 +1317,7 @@ fn check_estimation_prerequisites(data: &ParsedData, ctx: &mut ValidationContext
             let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
             let season_id = if pos > 0 {
                 let (_, end_date, sid) = stage_index[pos - 1];
-                if row.date < end_date {
-                    Some(sid)
-                } else {
-                    None
-                }
+                if row.date < end_date { Some(sid) } else { None }
             } else {
                 None
             };
@@ -1679,11 +1675,7 @@ fn check_observation_season_alignment(data: &ParsedData, ctx: &mut ValidationCon
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date {
-                Some(sid)
-            } else {
-                None
-            }
+            if row.date < end_date { Some(sid) } else { None }
         } else {
             None
         }
@@ -1801,11 +1793,7 @@ fn check_season_observation_coverage(
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date {
-                Some(sid)
-            } else {
-                None
-            }
+            if row.date < end_date { Some(sid) } else { None }
         } else {
             None
         };
@@ -1879,6 +1867,7 @@ fn check_season_contiguity(
 mod tests {
     use super::*;
     use cobre_core::{
+        EntityId,
         entities::{Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal},
         initial_conditions::InitialConditions,
         penalty::GlobalPenaltyDefaults,
@@ -1886,14 +1875,13 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{schema::ParsedData, ErrorKind, ValidationContext},
+        validation::{ErrorKind, ValidationContext, schema::ParsedData},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────

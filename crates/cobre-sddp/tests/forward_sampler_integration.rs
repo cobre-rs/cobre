@@ -31,6 +31,11 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
+    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
+    NcsStagePenalties, NonControllableSource, PenaltiesCountsSpec, PenaltiesDefaults,
+    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ScenarioSource, SystemBuilder,
+    ThermalStageBounds,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, ExternalLoadRow,
@@ -41,18 +46,13 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    BoundsCountsSpec, BoundsDefaults, Bus, BusStagePenalties, ContractStageBounds, DeficitSegment,
-    EntityId, HydroStageBounds, HydroStagePenalties, LineStageBounds, LineStagePenalties,
-    NcsStagePenalties, NonControllableSource, PenaltiesCountsSpec, PenaltiesDefaults,
-    PumpingStageBounds, ResolvedBounds, ResolvedPenalties, ScenarioSource, SystemBuilder,
-    ThermalStageBounds,
 };
 use cobre_sddp::{
-    hydro_models::PrepareHydroModelsResult, setup::prepare_stochastic, InflowNonNegativityMethod,
-    StoppingMode, StoppingRule, StoppingRuleSet, StudySetup,
+    InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet, StudySetup,
+    hydro_models::PrepareHydroModelsResult, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
-use cobre_stochastic::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
+use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure

@@ -255,8 +255,8 @@ mod tests {
     )]
 
     use super::{
-        cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer, serialize_cut,
-        serialize_cuts_to_buffer, CutWireHeader,
+        CutWireHeader, cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer, serialize_cut,
+        serialize_cuts_to_buffer,
     };
 
     #[test]

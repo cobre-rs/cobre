@@ -36,9 +36,16 @@ authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]
 unsafe_code = "forbid"
 missing_docs = "warn"
 
+[profile.release]
+# Retain line-number debug info so DHAT and flamegraph profiles resolve to
+# source locations.  Does not change optimisation level but increases unstripped
+# binary size; [profile.dist] strips symbols for release artifacts.
+debug = 1
+
 [profile.dist]
 inherits = "release"
 lto = "thin"
+strip = "symbols"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

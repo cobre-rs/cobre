@@ -2,17 +2,16 @@
 
 ## Implementation Status
 
-**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+**IMPLEMENTED** — v0.4.4, branch `feat/tier1-tier2-correctness-and-performance`
 
-| Component | Status |
-| --- | --- |
-| Config: `max_active_per_stage: Option<u32>` in `CutSelectionConfig` | DONE |
-| `CutPool::enforce_budget` with eviction by `(last_active_iter ASC, active_count ASC)` | DONE |
-| Current-iteration cut protection | DONE |
-| Training loop integration (runs every iteration, after strategy selection) | DONE |
+| Component                                                                             | Status |
+| ------------------------------------------------------------------------------------- | ------ |
+| Config: `max_active_per_stage: Option<u32>` in `CutSelectionConfig`                   | DONE   |
+| `CutPool::enforce_budget` with eviction by `(last_active_iter ASC, active_count ASC)` | DONE   |
+| Current-iteration cut protection                                                      | DONE   |
+| Training loop integration (runs every iteration, after strategy selection)            | DONE   |
 
 ---
-
 
 ## Problem
 
@@ -266,7 +265,7 @@ Add a column to `cut_selection/iterations.parquet`:
 
 ### 5. Validation — regression tests
 
-All 26 deterministic regression tests (D01–D26) must pass unchanged when
+All 30 deterministic regression tests (D01–D16, D19–D30) must pass unchanged when
 `max_active_per_stage` is `null` (the default). A new test case should
 exercise the budget with a small value (e.g., `max_active_per_stage: 3`)
 and verify:
@@ -322,5 +321,5 @@ and verify:
 
 ## Status
 
-**IMPLEMENTED** (v0.5.0). See `lp-scalability-cut-management.md` for the
+**IMPLEMENTED** (v0.4.4). See `lp-scalability-cut-management.md` for the
 composite pipeline context (S2 runs after S1 angular pruning).

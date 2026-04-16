@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+**IMPLEMENTED** — v0.4.4, branch `feat/tier1-tier2-correctness-and-performance`
 
 > **IMPORTANT DESIGN CHANGE — S1 Angular Pruning**: The original design
 > ("cluster by cosine similarity, keep tightest at a reference point") was
@@ -16,18 +16,18 @@
 > `docs/design/angular-pruning-mathematical-background.md` for the
 > mathematical analysis.
 
-| Strategy | Status | Config key | Default |
-| --- | --- | --- | --- |
-| S1: Angular-accelerated dominance (`angular_pruning.rs`, `select_angular_dominated`) | DONE | `angular_pruning.enabled`, `cosine_threshold`, `check_frequency` | disabled |
-| S2: Active cut budget (`CutPool::enforce_budget`) | DONE | `max_active_per_stage: Option<u32>` | disabled |
-| S3: Basis-aware warm-start padding (`basis_padding.rs`, `pad_basis_for_cuts`) | DONE | `basis_padding: Option<bool>` | disabled |
+| Strategy                                                                             | Status | Config key                                                       | Default  |
+| ------------------------------------------------------------------------------------ | ------ | ---------------------------------------------------------------- | -------- |
+| S1: Angular-accelerated dominance (`angular_pruning.rs`, `select_angular_dominated`) | DONE   | `angular_pruning.enabled`, `cosine_threshold`, `check_frequency` | disabled |
+| S2: Active cut budget (`CutPool::enforce_budget`)                                    | DONE   | `max_active_per_stage: Option<u32>`                              | disabled |
+| S3: Basis-aware warm-start padding (`basis_padding.rs`, `pad_basis_for_cuts`)        | DONE   | `basis_padding: Option<bool>`                                    | disabled |
 
 References:
+
 - `angular-prunning-research-report.md` (repo root) — mathematical analysis of pruning safety
 - `docs/design/angular-pruning-mathematical-background.md` — formal propositions
 
 ---
-
 
 ## Problem
 
@@ -351,8 +351,8 @@ inconsistent bases and repairs them internally before starting simplex.
 The repair is typically O(1) per inconsistency. This is cheaper than
 the 50 discovery pivots it replaces.
 
-**Alternative**: Only change rows to NONBASIC_LOWER when the cut is
-_very_ tight (`slack < -tolerance`, i.e., violated). Violated cuts must
+**Alternative**: Only change rows to NONBASIC*LOWER when the cut is
+\_very* tight (`slack < -tolerance`, i.e., violated). Violated cuts must
 be NONBASIC_LOWER to be dual-feasible. Nearly-tight cuts can remain
 BASIC with less basis disruption. This is more conservative but safer.
 
@@ -1009,5 +1009,5 @@ solve time, orthogonal to selection.
 
 ## Status
 
-**IMPLEMENTED** (v0.5.0). Supersedes and incorporates
+**IMPLEMENTED** (v0.4.4). Supersedes and incorporates
 `docs/design/cut-budget-per-stage.md` (S2).

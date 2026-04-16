@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-**IMPLEMENTED** — v0.5.0, branch `feat/tier1-tier2-correctness-and-performance`
+**IMPLEMENTED** — v0.4.4, branch `feat/tier1-tier2-correctness-and-performance`
 
 | Component                                                                                                | Status |
 | -------------------------------------------------------------------------------------------------------- | ------ |

@@ -193,41 +193,54 @@ fn cluster_by_angular_similarity(
         .filter(|&k| pool.active[k] && pool.metadata[k].iteration_generated < current_iteration)
         .collect();
 
-    let unit_normals: Vec<Option<Vec<f64>>> = eligible
-        .iter()
-        .map(|&k| {
-            let start = k * n_state;
-            let coeffs = &pool.coefficients[start..start + n_state];
-            let norm_sq: f64 = coeffs.iter().map(|&c| c * c).sum();
-            let norm = norm_sq.sqrt();
-            if norm < 1e-12 {
-                None
-            } else {
-                let inv = 1.0 / norm;
-                Some(coeffs.iter().map(|&c| c * inv).collect())
+    let n_eligible = eligible.len();
+
+    // Flat buffer for unit normals: element (i, j) at index i * n_state + j.
+    // Replaces Vec<Option<Vec<f64>>> to eliminate n_eligible individual heap
+    // allocations and improve spatial locality for the clustering inner loop.
+    let mut normals_flat = vec![0.0_f64; n_eligible * n_state];
+    let mut normals_valid = vec![false; n_eligible];
+
+    for (i, &k) in eligible.iter().enumerate() {
+        let start = k * n_state;
+        let coeffs = &pool.coefficients[start..start + n_state];
+        let norm_sq: f64 = coeffs.iter().map(|&c| c * c).sum();
+        let norm = norm_sq.sqrt();
+        if norm >= 1e-12 {
+            let inv = 1.0 / norm;
+            let dst = &mut normals_flat[i * n_state..(i + 1) * n_state];
+            for (d, &c) in dst.iter_mut().zip(coeffs.iter()) {
+                *d = c * inv;
             }
-        })
-        .collect();
+            normals_valid[i] = true;
+        }
+    }
 
     let zero_norm_cluster: Vec<usize> = eligible
         .iter()
-        .zip(unit_normals.iter())
-        .filter_map(|(&slot, n)| if n.is_none() { Some(slot) } else { None })
+        .zip(normals_valid.iter())
+        .filter_map(|(&slot, &valid)| if valid { None } else { Some(slot) })
         .collect();
 
     // Greedy single-linkage clustering for non-zero-norm cuts.
-    // `cluster_rep[i]` holds the unit normal of the representative (first
-    // member) of cluster i.
+    // `rep_normals` holds the unit normal of the representative (first member)
+    // of each cluster in a contiguous flat buffer (row-major, n_state per row).
+    // Replaces Vec<Vec<f64>> to eliminate one heap allocation per new cluster
+    // and keep all representatives in a single cache-friendly buffer.
     let mut clusters: Vec<Vec<usize>> = Vec::new();
-    let mut cluster_reps: Vec<Vec<f64>> = Vec::new();
+    let mut rep_normals: Vec<f64> = Vec::with_capacity(n_eligible * n_state);
+    let mut n_clusters: usize = 0;
 
-    for (&slot, normal_opt) in eligible.iter().zip(unit_normals.iter()) {
-        let Some(normal) = normal_opt else {
+    for (i, &slot) in eligible.iter().enumerate() {
+        if !normals_valid[i] {
             continue;
-        };
+        }
+
+        let normal = &normals_flat[i * n_state..(i + 1) * n_state];
 
         let mut assigned = false;
-        for (c_idx, rep) in cluster_reps.iter().enumerate() {
+        for c_idx in 0..n_clusters {
+            let rep = &rep_normals[c_idx * n_state..(c_idx + 1) * n_state];
             let cosine: f64 = normal.iter().zip(rep.iter()).map(|(a, b)| a * b).sum();
             if cosine > cosine_threshold {
                 clusters[c_idx].push(slot);
@@ -237,7 +250,8 @@ fn cluster_by_angular_similarity(
         }
 
         if !assigned {
-            cluster_reps.push(normal.clone());
+            rep_normals.extend_from_slice(normal);
+            n_clusters += 1;
             clusters.push(vec![slot]);
         }
     }
@@ -436,7 +450,7 @@ pub fn parse_angular_pruning_config(
 
 #[cfg(test)]
 mod tests {
-    use super::{AngularPruningParams, parse_angular_pruning_config};
+    use super::{parse_angular_pruning_config, AngularPruningParams};
     use cobre_io::config::AngularPruningConfig;
 
     // ── Disabled paths ───────────────────────────────────────────────────────

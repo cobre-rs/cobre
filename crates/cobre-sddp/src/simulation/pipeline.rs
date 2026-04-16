@@ -1044,7 +1044,7 @@ mod tests {
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
-        workspace::{ScratchBuffers, SolverWorkspace},
+        workspace::{BackwardAccumulators, ScratchBuffers, SolverWorkspace},
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1454,6 +1454,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }]
     }
 
@@ -2271,6 +2272,7 @@ mod tests {
                     downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
             })
             .collect();
         let result_4 = simulate(
@@ -3277,6 +3279,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3586,6 +3589,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -3886,6 +3890,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }]
     }
 

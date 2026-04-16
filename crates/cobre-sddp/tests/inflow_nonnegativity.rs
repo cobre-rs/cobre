@@ -594,6 +594,7 @@ fn simulate_fixture(
             n_load_buses: 0,
             max_blocks: 0,
             downstream_par_order: 0,
+            ..WorkspaceSizing::default()
         },
     )];
     let comm = StubComm;

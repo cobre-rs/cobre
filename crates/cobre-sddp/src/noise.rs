@@ -535,13 +535,13 @@ mod tests {
             objective: vec![],
             row_lower,
             row_upper: vec![0.0; n],
-            n_state: 0,
             n_transfer: 0,
             n_dual_relevant: 0,
             n_hydro: 0,
             max_par_order: 0,
             col_scale: Vec::new(),
             row_scale: Vec::new(),
+            n_state: 0,
         }
     }
 

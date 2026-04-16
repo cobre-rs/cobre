@@ -737,6 +737,7 @@ fn train_simulate_write_cycle() {
             n_load_buses: 0,
             max_blocks: 0,
             downstream_par_order: 0,
+            ..WorkspaceSizing::default()
         },
     )];
 
@@ -1404,6 +1405,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             n_load_buses: 0,
             max_blocks: 0,
             downstream_par_order: 0,
+            ..WorkspaceSizing::default()
         },
     )];
 

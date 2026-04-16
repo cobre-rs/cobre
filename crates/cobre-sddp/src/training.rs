@@ -412,6 +412,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             n_load_buses: stage_ctx.n_load_buses,
             max_blocks,
             downstream_par_order: stage_ctx.downstream_par_order,
+            max_openings: (0..num_stages)
+                .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
+                .max()
+                .unwrap_or(0),
+            initial_pool_capacity: fcf.pools[0].capacity,
+            n_state,
         },
         solver_factory,
     )

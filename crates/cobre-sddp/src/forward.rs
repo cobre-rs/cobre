@@ -1321,7 +1321,7 @@ mod tests {
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrainingConfig,
         TrajectoryRecord,
         context::{StageContext, TrainingContext},
-        workspace::{BasisStore, SolverWorkspace},
+        workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1812,6 +1812,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }
     }
 
@@ -3701,6 +3702,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -3830,6 +3832,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];

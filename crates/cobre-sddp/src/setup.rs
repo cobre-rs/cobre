@@ -1872,6 +1872,12 @@ impl StudySetup {
                 n_load_buses: self.stage_templates.n_load_buses,
                 max_blocks: self.max_blocks,
                 downstream_par_order: self.downstream_par_order,
+                max_openings: (0..self.num_stages())
+                    .map(|t| self.stochastic.opening_tree().n_openings(t))
+                    .max()
+                    .unwrap_or(0),
+                initial_pool_capacity: 0,
+                n_state: self.indexer.n_state,
             },
             solver_factory,
         )?;

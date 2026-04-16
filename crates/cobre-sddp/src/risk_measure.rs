@@ -174,6 +174,47 @@ impl RiskMeasure {
         }
     }
 
+    /// Aggregate per-opening backward pass results into caller-provided buffers.
+    ///
+    /// Buffer variant of [`aggregate_cut`](RiskMeasure::aggregate_cut) that
+    /// writes results into `intercept_out` and `coefficients_out` instead of
+    /// allocating a new `Vec<f64>`. The caller is responsible for ensuring
+    /// `coefficients_out.len() == state_dimension`.
+    ///
+    /// ## Preconditions
+    ///
+    /// - `outcomes.len() == probabilities.len()` (one probability per opening)
+    /// - `outcomes.len() > 0` (at least one opening)
+    /// - `coefficients_out.len() == outcomes[0].coefficients.len()`
+    /// - All `outcomes[i].coefficients` have equal length
+    pub(crate) fn aggregate_cut_into(
+        &self,
+        outcomes: &[BackwardOutcome],
+        probabilities: &[f64],
+        intercept_out: &mut f64,
+        coefficients_out: &mut [f64],
+    ) {
+        debug_assert_eq!(
+            outcomes.len(),
+            probabilities.len(),
+            "aggregate_cut_into: outcomes and probabilities must have the same length"
+        );
+        debug_assert!(
+            !outcomes.is_empty(),
+            "aggregate_cut_into: at least one outcome required"
+        );
+
+        match self {
+            RiskMeasure::Expectation => {
+                aggregate_weighted_into(outcomes, probabilities, intercept_out, coefficients_out);
+            }
+            RiskMeasure::CVaR { alpha, lambda } => {
+                let mu = compute_cvar_weights(outcomes, probabilities, *alpha, *lambda);
+                aggregate_weighted_into(outcomes, &mu, intercept_out, coefficients_out);
+            }
+        }
+    }
+
     /// Evaluate the risk-adjusted scalar cost from a vector of cost values.
     ///
     /// Used for convergence bound computation during the forward pass.
@@ -296,14 +337,35 @@ fn aggregate_weighted(outcomes: &[BackwardOutcome], weights: &[f64]) -> (f64, Ve
     let mut agg_intercept = 0.0_f64;
     let mut agg_coefficients = vec![0.0_f64; state_dim];
 
+    aggregate_weighted_into(outcomes, weights, &mut agg_intercept, &mut agg_coefficients);
+
+    (agg_intercept, agg_coefficients)
+}
+
+/// Write weighted-aggregation results into caller-provided output buffers.
+///
+/// Produces bit-identical results to [`aggregate_weighted`] while avoiding
+/// the allocation of a new `Vec<f64>` for coefficients. The caller pre-zeros
+/// both buffers; this function accumulates into them from scratch.
+///
+/// ## Preconditions
+///
+/// - `outcomes.len() == weights.len()`
+/// - `coefficients_out.len() == outcomes[0].coefficients.len()`
+pub(crate) fn aggregate_weighted_into(
+    outcomes: &[BackwardOutcome],
+    weights: &[f64],
+    intercept_out: &mut f64,
+    coefficients_out: &mut [f64],
+) {
+    coefficients_out.fill(0.0);
+    *intercept_out = 0.0;
     for (outcome, &w) in outcomes.iter().zip(weights) {
-        agg_intercept += w * outcome.intercept;
-        for (agg, &coeff) in agg_coefficients.iter_mut().zip(&outcome.coefficients) {
+        *intercept_out += w * outcome.intercept;
+        for (agg, &coeff) in coefficients_out.iter_mut().zip(&outcome.coefficients) {
             *agg += w * coeff;
         }
     }
-
-    (agg_intercept, agg_coefficients)
 }
 
 #[cfg(test)]
@@ -614,5 +676,95 @@ mod tests {
                 lambda: 0.5
             }
         ));
+    }
+
+    #[test]
+    fn aggregate_weighted_into_matches_aggregate_weighted() {
+        // Verify that aggregate_weighted_into produces bit-identical results
+        // to aggregate_weighted for both uniform and non-uniform weights.
+        use super::aggregate_weighted_into;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 2.0, 3.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![4.0, 5.0, 6.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![7.0, 8.0, 9.0]),
+        ];
+        let weights = vec![0.5, 0.3, 0.2];
+
+        // Reference: aggregate_cut (which calls aggregate_weighted)
+        let (ref_intercept, ref_coeffs) =
+            RiskMeasure::Expectation.aggregate_cut(&outcomes, &weights);
+
+        // Under test: aggregate_weighted_into
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 3];
+        aggregate_weighted_into(
+            &outcomes,
+            &weights,
+            &mut intercept_out,
+            &mut coefficients_out,
+        );
+
+        assert_eq!(
+            intercept_out, ref_intercept,
+            "intercept must be bit-identical"
+        );
+        assert_eq!(
+            coefficients_out, ref_coeffs,
+            "coefficients must be bit-identical"
+        );
+    }
+
+    #[test]
+    fn aggregate_cut_into_matches_aggregate_cut_expectation() {
+        // Verify that aggregate_cut_into produces bit-identical results to
+        // aggregate_cut for RiskMeasure::Expectation.
+        let outcomes = vec![
+            outcome_with_coeffs(5.0, 5.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(15.0, 15.0, vec![0.0, 1.0]),
+        ];
+        let probs = vec![0.6, 0.4];
+
+        let (ref_intercept, ref_coeffs) = RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
+
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 2];
+        RiskMeasure::Expectation.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept_out,
+            &mut coefficients_out,
+        );
+
+        assert_eq!(intercept_out, ref_intercept, "intercept bit-identical");
+        assert_eq!(coefficients_out, ref_coeffs, "coefficients bit-identical");
+    }
+
+    #[test]
+    fn aggregate_cut_into_matches_aggregate_cut_cvar() {
+        // Verify that aggregate_cut_into produces bit-identical results to
+        // aggregate_cut for RiskMeasure::CVaR.
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![0.0, 1.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![1.0, 1.0]),
+        ];
+        let probs = vec![1.0 / 3.0; 3];
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 1.0,
+        };
+
+        let (ref_intercept, ref_coeffs) = rm.aggregate_cut(&outcomes, &probs);
+
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 2];
+        rm.aggregate_cut_into(&outcomes, &probs, &mut intercept_out, &mut coefficients_out);
+
+        assert_eq!(intercept_out, ref_intercept, "CVaR intercept bit-identical");
+        assert_eq!(
+            coefficients_out, ref_coeffs,
+            "CVaR coefficients bit-identical"
+        );
     }
 }

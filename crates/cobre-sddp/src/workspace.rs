@@ -7,15 +7,21 @@
 use cobre_solver::{Basis, SolverInterface};
 
 use crate::lp_builder::PatchBuffer;
+use crate::risk_measure::BackwardOutcome;
 
 /// Sizing parameters shared by [`SolverWorkspace`], [`WorkspacePool`], and
 /// [`ScratchBuffers`] constructors.
 ///
-/// Grouping these five dimensions into one struct keeps constructor argument
+/// Grouping these eight dimensions into one struct keeps constructor argument
 /// counts within the clippy budget while making the sizing relationship
-/// explicit: every workspace allocates a [`PatchBuffer`] and [`ScratchBuffers`]
-/// from exactly these five values.
-#[derive(Clone, Copy, Debug)]
+/// explicit: every workspace allocates a [`PatchBuffer`], [`ScratchBuffers`],
+/// and [`BackwardAccumulators`] from exactly these values.
+///
+/// Set `max_openings`, `initial_pool_capacity`, and `n_state` to `0` for
+/// simulation-only workspaces that do not participate in the backward pass.
+/// The [`BackwardAccumulators`] buffers will then start empty and grow
+/// on-demand via the growth-only resize semantics in the backward pass.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct WorkspaceSizing {
     /// Number of hydro plants in the study.
     pub hydro_count: usize,
@@ -29,6 +35,72 @@ pub struct WorkspaceSizing {
     /// studies. Pass `0` for uniform-resolution studies (no downstream
     /// transition).
     pub downstream_par_order: usize,
+    /// Maximum number of openings across all successor stages. Used to
+    /// pre-size [`BackwardAccumulators::outcomes`]. Pass `0` for
+    /// simulation-only workspaces.
+    pub max_openings: usize,
+    /// Initial cut pool capacity for pre-sizing
+    /// [`BackwardAccumulators::slot_increments`]. Pass `0` for
+    /// simulation-only workspaces.
+    pub initial_pool_capacity: usize,
+    /// State dimension `n_state` for pre-sizing
+    /// [`BackwardAccumulators::agg_coefficients`]. Pass `0` for
+    /// simulation-only workspaces.
+    pub n_state: usize,
+}
+
+/// Pre-allocated accumulators for the backward pass trial-point loop.
+///
+/// Survives across stages and trial points without per-call allocation.
+/// Buffers grow monotonically (never shrink) using growth-only resize
+/// semantics — excess capacity from earlier stages is retained and reused.
+///
+/// Each rayon worker owns an exclusive [`SolverWorkspace`] and therefore an
+/// exclusive `BackwardAccumulators` instance; no synchronisation is needed.
+#[derive(Default)]
+pub(crate) struct BackwardAccumulators {
+    /// Per-opening backward outcomes. Grown monotonically to the maximum
+    /// `n_openings` seen so far via `push`.
+    pub(crate) outcomes: Vec<BackwardOutcome>,
+    /// Per-slot binding count, indexed by cut pool slot. Grown via
+    /// `.resize(pop, 0)` and zeroed per trial point via `.fill(0)`.
+    pub(crate) slot_increments: Vec<u64>,
+    /// Scratch buffer for aggregated cut coefficients (`n_state` entries).
+    /// Written by `aggregate_weighted_into` and then copied into the owned
+    /// `Vec<f64>` stored in each [`StagedCut`].
+    pub(crate) agg_coefficients: Vec<f64>,
+    /// Per-worker metadata sync contribution, indexed by cut pool slot.
+    ///
+    /// Accumulates binding increments across all trial points processed by
+    /// this worker for a given stage. Grown via `.resize(pop, 0)` when the
+    /// pool grows, and zeroed once per stage (not per trial point) via
+    /// `.fill(0)`. After the parallel region the sequential merge phase sums
+    /// contributions across all workers into `metadata_sync_buf`, replacing
+    /// the old per-`StagedCut` `binding_increments` Vec iteration.
+    pub(crate) metadata_sync_contribution: Vec<u64>,
+}
+
+impl BackwardAccumulators {
+    /// Allocate accumulators pre-sized from the given workspace dimensions.
+    ///
+    /// `max_openings`, `initial_pool_capacity`, and `n_state` may all be
+    /// `0` for simulation-only workspaces; buffers will then start empty
+    /// and grow lazily on the first backward pass stage.
+    pub(crate) fn new(max_openings: usize, initial_pool_capacity: usize, n_state: usize) -> Self {
+        let outcomes = (0..max_openings)
+            .map(|_| BackwardOutcome {
+                intercept: 0.0,
+                coefficients: vec![0.0_f64; n_state],
+                objective_value: 0.0,
+            })
+            .collect();
+        Self {
+            outcomes,
+            slot_increments: vec![0u64; initial_pool_capacity],
+            agg_coefficients: vec![0.0_f64; n_state],
+            metadata_sync_contribution: vec![0u64; initial_pool_capacity],
+        }
+    }
 }
 
 /// Pre-allocated scratch buffers for noise transformation and simulation.
@@ -85,14 +157,23 @@ pub struct SolverWorkspace<S: SolverInterface> {
     /// [`WorkspacePool::resize_scratch_bases`] to the maximum LP dimensions
     /// so that `Basis::clone_from` never reallocates on the hot path.
     pub(crate) scratch_basis: Basis,
+    /// Pre-allocated accumulators for the backward pass trial-point loop.
+    ///
+    /// Survives across stages without reallocation. Buffers grow
+    /// monotonically (never shrink) as larger stages are encountered.
+    /// Simulation-only workspaces (constructed with `max_openings = 0`)
+    /// start with empty buffers; the backward pass will never touch them.
+    pub(crate) backward_accum: BackwardAccumulators,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
     /// Construct a workspace with the given solver, patch buffer, and state capacity.
     ///
-    /// `sizing` provides the five buffer-dimension parameters shared between the
-    /// [`PatchBuffer`] (which must be pre-constructed by the caller) and the
-    /// internal [`ScratchBuffers`] allocation.
+    /// `sizing` provides the buffer-dimension parameters shared between the
+    /// [`PatchBuffer`], the internal [`ScratchBuffers`], and the
+    /// [`BackwardAccumulators`] allocation. Pass `max_openings = 0`,
+    /// `initial_pool_capacity = 0`, and `n_state = 0` in `sizing` for
+    /// simulation-only workspaces that do not participate in the backward pass.
     ///
     /// The `scratch_basis` starts empty. Call [`WorkspacePool::resize_scratch_bases`]
     /// after construction to pre-allocate for backward-pass padding.
@@ -104,6 +185,11 @@ impl<S: SolverInterface> SolverWorkspace<S> {
             current_state: Vec::with_capacity(n_state),
             scratch: ScratchBuffers::new(sizing),
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::new(
+                sizing.max_openings,
+                sizing.initial_pool_capacity,
+                sizing.n_state,
+            ),
         }
     }
 }
@@ -121,6 +207,8 @@ impl ScratchBuffers {
             n_load_buses,
             max_blocks,
             downstream_par_order,
+            // max_openings, initial_pool_capacity, n_state used by BackwardAccumulators only
+            ..
         } = s;
         Self {
             noise_buf: Vec::with_capacity(hydro_count),
@@ -196,6 +284,11 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 current_state: Vec::with_capacity(n_state),
                 scratch: ScratchBuffers::new(sizing),
                 scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::new(
+                    sizing.max_openings,
+                    sizing.initial_pool_capacity,
+                    sizing.n_state,
+                ),
             })
             .collect();
         Self { workspaces }
@@ -230,6 +323,11 @@ impl<S: SolverInterface> WorkspacePool<S> {
                 current_state: Vec::with_capacity(n_state),
                 scratch: ScratchBuffers::new(sizing),
                 scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::new(
+                    sizing.max_openings,
+                    sizing.initial_pool_capacity,
+                    sizing.n_state,
+                ),
             });
         }
         Ok(Self { workspaces })
@@ -483,6 +581,7 @@ mod tests {
             n_load_buses: 0,
             max_blocks: 0,
             downstream_par_order,
+            ..WorkspaceSizing::default()
         }
     }
 
@@ -535,6 +634,7 @@ mod tests {
             n_load_buses: 0,
             max_blocks: 1,
             downstream_par_order: 0,
+            ..WorkspaceSizing::default()
         });
         assert!(
             scratch.downstream_accumulator.is_empty(),
@@ -563,6 +663,7 @@ mod tests {
             n_load_buses: 0,
             max_blocks: 1,
             downstream_par_order: 2,
+            ..WorkspaceSizing::default()
         });
         assert_eq!(
             scratch.downstream_accumulator.len(),
@@ -598,6 +699,7 @@ mod tests {
                 n_load_buses: 0,
                 max_blocks: 1,
                 downstream_par_order: 2,
+                ..WorkspaceSizing::default()
             },
             || MockSolver,
         );

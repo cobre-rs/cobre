@@ -96,7 +96,6 @@ use crate::{
     cut_sync::CutSyncBuffers,
     forward::build_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
-    risk_measure::BackwardOutcome,
     risk_measure::RiskMeasure,
     solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
@@ -163,16 +162,6 @@ struct StagedCut {
     /// Global forward-pass index (`fwd_offset + m`), stored as `u32` for the
     /// FCF slot formula.
     forward_pass_index: u32,
-
-    /// Slots in the successor pool that were binding for at least one opening
-    /// during this trial point. These are accumulated across openings within
-    /// the worker and applied to FCF metadata in the sequential merge phase.
-    ///
-    /// Each entry is `(slot_index, active_count_increment)` where
-    /// `active_count_increment` is the number of openings in which that cut
-    /// was binding. This allows the merge phase to correctly accumulate
-    /// activity counts without double-counting.
-    binding_increments: Vec<(usize, u64)>,
 }
 
 /// Inputs bundled from the training loop for the backward pass.
@@ -304,17 +293,6 @@ struct SuccessorSpec<'a> {
     successor_pool: &'a CutPool,
 }
 
-/// Per-trial-point mutable accumulators reused across openings.
-struct TrialAccumulators {
-    /// Collected per-opening outcomes (intercept + coefficients + objective).
-    outcomes: Vec<BackwardOutcome>,
-    /// Binding count per cut pool slot. Indexed by slot index, pre-allocated
-    /// to `pool.populated_count` and zeroed per trial point via `fill(0)`.
-    /// Replaces the previous `HashMap<usize, u64>` to eliminate hashing
-    /// overhead and per-stage allocation.
-    slot_increments: Vec<u64>,
-}
-
 /// Load the stage LP template and append cuts once per trial point.
 ///
 /// Called once before the opening loop in [`process_trial_point_backward`].
@@ -436,8 +414,11 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
 /// Process one trial point `m` in the backward pass, iterating over all openings.
 ///
 /// Called once per trial point inside the parallel worker closure of
-/// `process_stage_backward`. The caller pre-allocates and clears `accum`
-/// before each call. Returns a single aggregated [`StagedCut`].
+/// `process_stage_backward`. Uses `ws.backward_accum` as pre-allocated scratch
+/// storage. The caller must have grown the accumulator buffers to the required
+/// dimensions and zeroed `slot_increments[..pop]` before calling.
+/// Returns a single aggregated [`StagedCut`].
+#[allow(clippy::too_many_lines)]
 fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
@@ -445,7 +426,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     spec: &BackwardPassSpec<'_>,
     succ: &SuccessorSpec<'_>,
     m: usize,
-    accum: &mut TrialAccumulators,
 ) -> Result<StagedCut, SddpError> {
     let indexer = training_ctx.indexer;
     let tree_view = training_ctx.stochastic.tree_view();
@@ -521,7 +501,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
         // Cut rows have implicit row_scale = 1.0 and require no adjustment.
         let row_scale = &ctx.templates[s].row_scale;
-        let out = &mut accum.outcomes[omega];
+        let out = &mut ws.backward_accum.outcomes[omega];
         if row_scale.is_empty() {
             out.coefficients
                 .copy_from_slice(&view.dual[..indexer.n_state]);
@@ -553,33 +533,46 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 [succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor];
             for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
                 if cut_duals[cut_idx] > succ.cut_activity_tolerance {
-                    accum.slot_increments[slot] += 1;
+                    ws.backward_accum.slot_increments[slot] += 1;
                 }
             }
         }
     }
 
-    let (agg_intercept, agg_coefficients) =
-        spec.risk_measures[succ.t].aggregate_cut(&accum.outcomes, succ.probabilities);
+    // Aggregate into the pre-allocated scratch buffer, then copy to an owned
+    // Vec<f64> for the StagedCut. The copy is the one unavoidable allocation
+    // per trial point: the coefficients must outlive the parallel closure.
+    let n_openings = succ.probabilities.len();
+    let mut agg_intercept = 0.0_f64;
+    spec.risk_measures[succ.t].aggregate_cut_into(
+        &ws.backward_accum.outcomes[..n_openings],
+        succ.probabilities,
+        &mut agg_intercept,
+        &mut ws.backward_accum.agg_coefficients,
+    );
+    let agg_coefficients = ws.backward_accum.agg_coefficients.clone();
     debug_assert!(
         u32::try_from(scenario).is_ok(),
         "global scenario index overflows u32"
     );
     #[allow(clippy::cast_possible_truncation)]
     let forward_pass_index = scenario as u32;
-    let binding_increments: Vec<(usize, u64)> = accum
-        .slot_increments
-        .iter()
-        .enumerate()
-        .filter(|&(_, c)| *c > 0)
-        .map(|(s, c)| (s, *c))
-        .collect();
+    // Accumulate binding data into the per-worker workspace buffer instead of
+    // building a per-trial-point Vec<(usize, u64)>. The sequential merge phase
+    // will sum across workers after the parallel region. Addition is commutative
+    // and associative so per-worker accumulation produces identical totals.
+    let pop = ws.backward_accum.slot_increments.len();
+    for slot in 0..pop {
+        let count = ws.backward_accum.slot_increments[slot];
+        if count > 0 {
+            ws.backward_accum.metadata_sync_contribution[slot] += count;
+        }
+    }
     Ok(StagedCut {
         trial_point_idx: m,
         intercept: agg_intercept,
         coefficients: agg_coefficients,
         forward_pass_index,
-        binding_increments,
     })
 }
 
@@ -599,7 +592,9 @@ fn process_stage_backward<S: SolverInterface + Send>(
     succ: &SuccessorSpec<'_>,
 ) -> Vec<Result<Vec<StagedCut>, SddpError>> {
     let n_openings = succ.probabilities.len();
+    let n_state = training_ctx.indexer.n_state;
     let local_work = spec.local_work;
+    let pop = succ.successor_populated_count;
 
     let next_trial = AtomicUsize::new(0);
 
@@ -612,18 +607,37 @@ fn process_stage_backward<S: SolverInterface + Send>(
             // atomic counter, which is acceptable overhead.
             load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
 
-            let mut staged: Vec<StagedCut> = Vec::new();
-            let n_state = training_ctx.indexer.n_state;
-            let mut accum = TrialAccumulators {
-                outcomes: (0..n_openings)
-                    .map(|_| BackwardOutcome {
+            // Grow outcomes buffer monotonically to cover this stage's n_openings.
+            // Never shrinks — excess capacity from earlier larger stages is reused.
+            while ws.backward_accum.outcomes.len() < n_openings {
+                ws.backward_accum
+                    .outcomes
+                    .push(crate::risk_measure::BackwardOutcome {
                         intercept: 0.0,
-                        coefficients: vec![0.0; n_state],
+                        coefficients: vec![0.0_f64; n_state],
                         objective_value: 0.0,
-                    })
-                    .collect(),
-                slot_increments: vec![0u64; succ.successor_populated_count],
-            };
+                    });
+            }
+            // Grow slot_increments monotonically to cover this stage's pool.
+            if ws.backward_accum.slot_increments.len() < pop {
+                ws.backward_accum.slot_increments.resize(pop, 0u64);
+            }
+            // Grow agg_coefficients monotonically to n_state.
+            if ws.backward_accum.agg_coefficients.len() < n_state {
+                ws.backward_accum.agg_coefficients.resize(n_state, 0.0_f64);
+            }
+            // Grow and zero metadata_sync_contribution per stage.
+            if ws.backward_accum.metadata_sync_contribution.len() < pop {
+                ws.backward_accum
+                    .metadata_sync_contribution
+                    .resize(pop, 0u64);
+            }
+            ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
+
+            // Pre-allocate staged buffer with a conservative capacity hint.
+            // Work-stealing means each worker claims roughly local_work items,
+            // but we can't know exactly; use local_work as an upper bound.
+            let mut staged: Vec<StagedCut> = Vec::with_capacity(local_work.max(1));
 
             loop {
                 let m = next_trial.fetch_add(1, Ordering::Relaxed);
@@ -633,7 +647,8 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 // DETERMINISM INVESTIGATION: reload model per trial point to
                 // eliminate HiGHS state carry-over between trial points.
                 load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
-                accum.slot_increments.fill(0);
+                // Zero only the live portion of slot_increments (length >= pop).
+                ws.backward_accum.slot_increments[..pop].fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
                     ctx,
@@ -641,7 +656,6 @@ fn process_stage_backward<S: SolverInterface + Send>(
                     spec,
                     succ,
                     m,
-                    &mut accum,
                 )?);
             }
             Ok(staged)
@@ -841,12 +855,18 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // added by the allgatherv are included in the slot range.
         let pool_size = fcf.pools[successor].metadata.len();
         if pool_size > 0 {
-            // Build the local increment buffer from this rank's staged cuts.
+            // Build the local increment buffer by summing per-worker contributions.
             spec.metadata_sync_buf.clear();
             spec.metadata_sync_buf.resize(pool_size, 0u64);
-            for cut in &staged_cuts_buf {
-                for &(slot, increment) in &cut.binding_increments {
-                    spec.metadata_sync_buf[slot] += increment;
+            for ws in workspaces.iter() {
+                for (slot, &inc) in ws
+                    .backward_accum
+                    .metadata_sync_contribution
+                    .iter()
+                    .enumerate()
+                    .take(pool_size)
+                {
+                    spec.metadata_sync_buf[slot] += inc;
                 }
             }
 
@@ -922,7 +942,7 @@ mod tests {
         StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
-        workspace::{BasisStore, SolverWorkspace},
+        workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1181,6 +1201,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }]
     }
 
@@ -3016,6 +3037,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -3111,6 +3133,7 @@ mod tests {
                     downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -3461,6 +3484,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         };
         let mut workspaces = vec![ws];
 
@@ -3625,6 +3649,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3784,6 +3809,7 @@ mod tests {
                 downstream_n_completed: 0,
             },
             scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -4212,6 +4238,7 @@ mod tests {
                     downstream_n_completed: 0,
                 },
                 scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
             })
             .collect();
 

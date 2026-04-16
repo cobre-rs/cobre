@@ -1242,7 +1242,7 @@ mod tests {
     // ── AC: past_inflows season_ids ───────────────────────────────────────────
 
     /// Given a `past_inflows` entry with matching `season_ids` and `values_m3s`
-    /// lengths, `parse_initial_conditions` returns `Ok(ic)` with the season_ids
+    /// lengths, `parse_initial_conditions` returns `Ok(ic)` with the `season_ids`
     /// preserved.
     #[test]
     fn test_parse_past_inflows_with_valid_season_ids() {
@@ -1287,8 +1287,8 @@ mod tests {
                 );
                 assert!(
                     message.contains("season_ids length must equal values_m3s length")
-                        || message.contains("3")
-                        || message.contains("2"),
+                        || message.contains('3')
+                        || message.contains('2'),
                     "message should describe the mismatch, got: {message}"
                 );
             }

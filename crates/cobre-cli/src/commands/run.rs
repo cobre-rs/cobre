@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
+    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
-    provenance::ComponentProvenance,
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -89,12 +89,7 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
     1
 }
 
-/// Return type of [`load_case_and_config`]: the values loaded on rank 0.
-///
-/// The [`PrepareStochasticResult`] bundles the updated system, built stochastic
-/// context, and optional estimation report from the pre-setup pipeline.
-/// The [`PrepareHydroModelsResult`] bundles the resolved production and evaporation
-/// models for all hydro plants.
+/// Values loaded on rank 0 by [`load_case_and_config`].
 type LoadedCase = (
     PrepareStochasticResult,
     PrepareHydroModelsResult,
@@ -102,12 +97,7 @@ type LoadedCase = (
     cobre_io::Config,
 );
 
-/// Load the case directory and parse the config on rank 0.
-///
-/// Extracted into a separate function so that errors are captured as `Err`
-/// rather than causing an early return from `execute()`. This allows
-/// `execute()` to always reach the `broadcast_value` calls, ensuring all
-/// MPI ranks participate in the collectives even when rank 0 fails.
+/// Load case and config on rank 0, capturing errors for MPI collective participation.
 fn load_case_and_config(
     args: &RunArgs,
     quiet: bool,
@@ -143,10 +133,7 @@ fn load_case_and_config(
     Ok((prepared, hydro_models, bcast, config))
 }
 
-/// Shared context threaded through the `execute` phase functions.
-///
-/// Constructed once during communicator setup and passed by reference to
-/// each subsequent phase. Avoids threading 6+ separate values individually.
+/// Shared context for execute phases (communicator, output, topology, etc.).
 struct RunContext<C: Communicator> {
     /// The MPI (or local) communicator.
     comm: C,
@@ -168,10 +155,7 @@ struct RunContext<C: Communicator> {
     solver_version: String,
 }
 
-/// Result of the load-and-broadcast phase.
-///
-/// Bundles the values produced by [`broadcast_and_build_setup`] that are
-/// consumed by subsequent training and output phases.
+/// Output of [`broadcast_and_build_setup`]: system, setup, config, and metadata.
 struct LoadBroadcastResult {
     system: System,
     setup: StudySetup,
@@ -187,10 +171,7 @@ struct LoadBroadcastResult {
     policy_mode: cobre_io::PolicyMode,
 }
 
-/// Result of the training phase.
-///
-/// Bundles the values produced by [`run_training_phase`] that are consumed
-/// by the simulation phase and the post-training error check.
+/// Output of [`run_training_phase`]: result, training output, and optional error.
 struct TrainingPhaseResult {
     result: cobre_sddp::TrainingResult,
     output: cobre_io::TrainingOutput,
@@ -824,27 +805,30 @@ fn build_study_setup(
         BroadcastCutSelection::Disabled,
     )
     .into_strategy();
-    let mut setup = StudySetup::from_broadcast_params(
+    let config = ConstructionConfig {
+        seed: bcast_config.seed,
+        forward_passes: bcast_config.forward_passes,
+        stopping_rule_set,
+        n_scenarios: bcast_config.n_scenarios,
+        io_channel_capacity: usize::try_from(bcast_config.io_channel_capacity).unwrap_or(64),
+        policy_path: bcast_config.policy_path.clone(),
+        inflow_method: bcast_config.inflow_method.clone(),
+        cut_selection,
+        cut_activity_tolerance: bcast_config.cut_activity_tolerance,
+        angular_pruning: bcast_config.angular_pruning,
+        budget: bcast_config.budget,
+        basis_padding_enabled: bcast_config.basis_padding_enabled,
+        export_states: bcast_config.export_states,
+    };
+    StudySetup::from_broadcast_params(
         system,
         stochastic,
-        bcast_config.seed,
-        bcast_config.forward_passes,
-        stopping_rule_set,
-        bcast_config.n_scenarios,
-        usize::try_from(bcast_config.io_channel_capacity).unwrap_or(64),
-        bcast_config.policy_path.clone(),
-        bcast_config.inflow_method.clone(),
-        cut_selection,
-        bcast_config.cut_activity_tolerance,
-        bcast_config.angular_pruning,
+        config,
         hydro_models,
         &bcast_config.training_source,
         &bcast_config.simulation_source,
     )
-    .map_err(CliError::from)?;
-    setup.set_export_states(bcast_config.export_states);
-    setup.set_budget(bcast_config.budget);
-    Ok(setup)
+    .map_err(CliError::from)
 }
 
 /// Print summaries, export stochastic artifacts, and write the scaling report.

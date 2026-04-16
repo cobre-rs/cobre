@@ -49,7 +49,8 @@ use cobre_core::{
 };
 use cobre_sddp::{
     InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet, StudySetup,
-    hydro_models::PrepareHydroModelsResult, setup::prepare_stochastic,
+    hydro_models::PrepareHydroModelsResult,
+    setup::{ConstructionConfig, prepare_stochastic},
 };
 use cobre_solver::highs::HighsSolver;
 use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
@@ -504,24 +505,24 @@ fn run_programmatic(
         mode: StoppingMode::Any,
     };
 
-    let mut setup = StudySetup::from_broadcast_params(
-        system,
-        stochastic,
-        42, // tree seed
+    let config = ConstructionConfig {
+        seed: 42, // tree seed
         forward_passes,
         stopping_rule_set,
-        0,             // n_scenarios (simulation disabled)
-        0,             // io_channel_capacity
-        String::new(), // policy_path
+        n_scenarios: 0, // simulation disabled
+        io_channel_capacity: 0,
+        policy_path: String::new(),
         inflow_method,
-        None, // cut_selection
-        0.0,  // cut_activity_tolerance
-        None, // angular_pruning
-        hydro_models,
-        source,
-        source,
-    )
-    .expect("StudySetup::from_broadcast_params must succeed");
+        cut_selection: None,
+        cut_activity_tolerance: 0.0,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
+        export_states: false,
+    };
+    let mut setup =
+        StudySetup::from_broadcast_params(system, stochastic, config, hydro_models, source, source)
+            .expect("StudySetup::from_broadcast_params must succeed");
 
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
@@ -829,24 +830,24 @@ fn run_with_setup(
         mode: StoppingMode::Any,
     };
 
-    let mut setup = StudySetup::from_broadcast_params(
-        system,
-        stochastic,
-        42,
+    let config = ConstructionConfig {
+        seed: 42,
         forward_passes,
         stopping_rule_set,
-        0,
-        0,
-        String::new(),
-        InflowNonNegativityMethod::None,
-        None,
-        0.0,
-        None, // angular_pruning
-        hydro_models,
-        source,
-        source,
-    )
-    .expect("StudySetup::from_broadcast_params must succeed");
+        n_scenarios: 0,
+        io_channel_capacity: 0,
+        policy_path: String::new(),
+        inflow_method: InflowNonNegativityMethod::None,
+        cut_selection: None,
+        cut_activity_tolerance: 0.0,
+        angular_pruning: None,
+        budget: None,
+        basis_padding_enabled: false,
+        export_states: false,
+    };
+    let mut setup =
+        StudySetup::from_broadcast_params(system, stochastic, config, hydro_models, source, source)
+            .expect("StudySetup::from_broadcast_params must succeed");
 
     let comm = StubComm;
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");

@@ -39,10 +39,11 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    CutManagementConfig, EntityCounts, EventConfig, ForwardResult, FutureCostFunction, LoopConfig, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext, WorkspaceSizing, simulate, sync_forward, train,
+    CutManagementConfig, EntityCounts, EventConfig, ForwardResult, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing, simulate, sync_forward,
+    train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -490,7 +491,7 @@ fn run_training(
     let mut primary_solver = MockSolver3H::new(100.0);
     let comm = StubComm;
 
-    let config =     TrainingConfig {
+    let config = TrainingConfig {
         loop_config: LoopConfig {
             forward_passes: 1,
             max_iterations: n_iterations,
@@ -564,7 +565,6 @@ fn run_training(
                     recent_accum_seed: &[],
                     recent_weight_seed: 0.0,
                 },
-                
                 &comm,
                 || Ok(MockSolver3H::new(100.0)),
             )

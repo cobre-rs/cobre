@@ -20,6 +20,7 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -27,25 +28,24 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 use cobre_io::{
-    write_policy_checkpoint, write_results, Config, PolicyCheckpointMetadata, PolicyCutRecord,
-    SimulationOutput, StageCutsPayload,
+    Config, PolicyCheckpointMetadata, PolicyCutRecord, SimulationOutput, StageCutsPayload,
+    write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    build_training_output, simulate, train, CutManagementConfig, EntityCounts, EventConfig,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, LoopConfig, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    WorkspaceSizing,
+    CutManagementConfig, EntityCounts, EventConfig, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing, build_training_output,
+    simulate, train,
 };
 
 /// Single-rank communicator for testing.
@@ -865,9 +865,11 @@ fn train_simulate_write_cycle() {
         assert_eq!(total_rows, 3);
     }
 
-    assert!(output_dir
-        .join("training/timing/iterations.parquet")
-        .is_file());
+    assert!(
+        output_dir
+            .join("training/timing/iterations.parquet")
+            .is_file()
+    );
 
     let metadata_path = output_dir.join("training/metadata.json");
     assert!(metadata_path.is_file());

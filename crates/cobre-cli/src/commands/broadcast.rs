@@ -1,13 +1,12 @@
-//! Postcard-serializable broadcast types for MPI communication.
+//! Postcard-serializable types for MPI broadcast.
 //!
-//! These types wrap SDDP configuration, stopping rules, cut selection,
-//! and opening tree data into postcard-compatible structs that can be
-//! broadcast from rank 0 to all ranks via `broadcast_value`.
+//! Wraps SDDP configuration, stopping rules, cut selection, and opening tree
+//! data for broadcast from rank 0 to all ranks.
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
-    StoppingRule, StoppingRuleSet, StudyParams,
+    CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
+    StudyParams, DEFAULT_MAX_ITERATIONS,
 };
 
 use crate::error::CliError;
@@ -128,6 +127,10 @@ pub(crate) struct BroadcastConfig {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub(crate) budget: Option<u32>,
+    /// Whether basis padding is enabled for warm-start.
+    ///
+    /// Derived from `config.training.cut_selection.basis_padding`.
+    pub(crate) basis_padding_enabled: bool,
     /// Scenario source for the training forward pass, broadcast so non-root
     /// ranks can build the stochastic context with matching sampling schemes.
     pub(crate) training_source: ScenarioSource,
@@ -204,6 +207,7 @@ impl BroadcastConfig {
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
             budget: params.budget,
+            basis_padding_enabled: params.basis_padding_enabled,
             training_source,
             simulation_source,
         })
@@ -212,10 +216,7 @@ impl BroadcastConfig {
 
 /// Postcard-serializable wrapper for [`OpeningTree`] broadcast.
 ///
-/// [`OpeningTree`] does not implement `serde::Serialize + Deserialize` to avoid
-/// adding a serde dependency to `cobre-stochastic`. This wrapper holds the three
-/// constituent parts (`data`, `openings_per_stage`, `dim`) that are sufficient
-/// to reconstruct the tree via [`OpeningTree::from_parts`] on all ranks.
+/// Reconstructs the tree via [`OpeningTree::from_parts`] on all ranks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BroadcastOpeningTree {
     pub(crate) data: Vec<f64>,
@@ -254,8 +255,8 @@ pub(crate) fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRu
 
 /// Broadcast a serializable value from rank 0 to all ranks.
 ///
-/// Serializes on rank 0, broadcasts length and bytes. Non-rank-0 deserializes.
-/// A length of 0 signals failure on rank 0, allowing all ranks to participate.
+/// Rank 0 serializes and broadcasts length + bytes; non-root ranks deserialize.
+/// Length 0 signals rank 0 failure, allowing all ranks to participate.
 ///
 /// # Errors
 ///
@@ -315,7 +316,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{BroadcastOpeningTree, broadcast_value};
+    use super::{broadcast_value, BroadcastOpeningTree};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

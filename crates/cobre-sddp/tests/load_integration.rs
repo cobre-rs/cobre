@@ -29,24 +29,24 @@ use std::sync::mpsc;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
     scenario::{InflowModel, LoadModel, SamplingScheme},
     temporal::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_sddp::{
-    cut::fcf::FutureCostFunction, train, CutManagementConfig, EventConfig, HorizonMode,
-    InflowNonNegativityMethod, LoopConfig, RiskMeasure, StageContext, StageIndexer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
+    RiskMeasure, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+    TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 // ===========================================================================

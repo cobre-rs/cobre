@@ -74,21 +74,21 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
-    ForwardSamplerConfig, SampleRequest,
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     basis_padding::pad_basis_for_cuts,
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -1308,21 +1308,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, partition, run_forward_pass, sync_forward, ForwardPassBatch,
-        ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch, partition,
+        run_forward_pass, sync_forward,
     };
     use crate::{
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Create a `Vec<RowBatch>` of empty batches, one per stage.
@@ -1852,6 +1852,7 @@ mod tests {
     /// AC: 2 scenarios, 3 stages, fixed `LpSolution(objective=100, theta=30)`.
     /// Expected: `scenario_count=2`, all 6 records with `stage_cost=70_000`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn ac_two_scenarios_three_stages_fixed_solution() {
         // StageIndexer: N=1, L=0 → n_state=1, theta=3, num_cols=4
         let indexer = StageIndexer::new(1, 0);
@@ -1973,6 +1974,7 @@ mod tests {
     /// (infeasible). The function must return `SddpError::Infeasible { stage: 1,
     /// scenario: 0 }`.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
@@ -2105,6 +2107,7 @@ mod tests {
     /// - `cost_sum` = `210_000` + `210_000` = `420_000`
     /// - `cost_sum_sq` = `210_000`^2 + `210_000`^2 = `88_200_000_000`
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cost_statistics_accumulated_correctly() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);
@@ -3348,6 +3351,7 @@ mod tests {
     ///
     /// Uses the existing 3-stage fixture to verify no regression.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn none_method_unchanged_with_truncation_code_present() {
         let indexer = StageIndexer::new(1, 0);
         let solution = fixed_solution(4, 100.0, indexer.theta, 30.0);

@@ -1,26 +1,14 @@
 //! Study setup struct that owns all precomputed state for a solve run.
 //!
-//! [`StudySetup`] centralises the orchestration that was previously scattered
-//! across entry points (CLI, Python bindings). It builds stage LP templates,
-//! the stage indexer, initial state, future cost function, horizon mode, risk
-//! measures, entity counts, and configuration-derived scalars from a validated
-//! [`System`] and [`cobre_io::Config`].
+//! [`StudySetup`] centralises orchestration from CLI/Python entry points.
+//! It builds LP templates, indexer, initial state, FCF, horizon mode, risk measures,
+//! and entity counts from a validated [`System`] and [`cobre_io::Config`].
 //!
-//! ## Ownership model
+//! **Ownership**: `StudySetup` owns all data; callers borrow for [`TrainingContext`]
+//! and [`StageContext`] construction. The [`StochasticContext`] lifetime matches setup.
 //!
-//! `StudySetup` owns all data. Callers borrow from it when constructing
-//! [`TrainingContext`] and [`StageContext`] for each pass. The
-//! [`StochasticContext`] is moved in at construction time so its lifetime
-//! matches `StudySetup`.
-//!
-//! ## What is NOT included
-//!
-//! - MPI communication — broadcast and barrier calls remain in the CLI/Python
-//!   entry points.
-//! - Solver instances — callers create solvers and pass them to `train()`/
-//!   `simulate()`.
-//! - Progress bars or event channels — callers wire those up and pass the
-//!   sender to [`TrainingConfig`].
+//! **Not included**: MPI communication (in CLI/Python), solver instances (caller-created),
+//! progress bars, event channels (caller-managed).
 //!
 //! ## Example
 //!
@@ -39,231 +27,40 @@
 //! # }
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
-use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+mod accessors;
+mod orchestration;
+pub mod params;
+pub(crate) mod scenario_libraries;
+pub mod stochastic_pipeline;
+pub(crate) mod template_postprocess;
 
-use cobre_comm::Communicator;
+pub use params::{
+    ConstructionConfig, StudyParams, DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED,
+};
+pub use stochastic_pipeline::{
+    build_ncs_factor_entries, load_load_factors_for_stochastic, prepare_stochastic,
+    PrepareStochasticResult,
+};
+
+use std::path::Path;
+
 use cobre_core::{
     entities::hydro::HydroGenerationModel,
     scenario::{SamplingScheme, ScenarioSource},
     temporal::StageLagTransition,
-    EntityId, Stage, System, TrainingEvent,
+    EntityId, Stage, System,
 };
-use cobre_solver::{SolverError, SolverInterface};
-use cobre_stochastic::{
-    context::OpeningTree, discover_historical_windows, pad_library_to_uniform,
-    standardize_external_inflow, standardize_external_load, standardize_external_ncs,
-    standardize_historical_windows, validate_external_library, validate_historical_library,
-    ExternalScenarioLibrary, HistoricalScenarioLibrary, OpeningTreeInputs, StochasticContext,
-};
+use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{
     build_stage_templates,
-    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
+    cut_selection::CutSelectionStrategy,
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
-    lp_builder,
-    simulation::{EntityCounts, SimulationOutputSpec},
-    stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
-    CutManagementConfig, EventConfig, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    LoopConfig, RiskMeasure, SddpError, SimulationConfig, SimulationError,
-    SimulationScenarioResult, SolverWorkspace, StageContext, StageIndexer, StageTemplates,
-    TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
-    WorkspaceSizing,
+    simulation::EntityCounts,
+    stopping_rule::{StoppingRule, StoppingRuleSet},
+    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
+    StageIndexer, StageTemplates,
 };
-
-/// Default number of forward-pass trajectories when not specified in config.
-pub const DEFAULT_FORWARD_PASSES: u32 = 1;
-
-/// Default maximum iterations when no stopping rule specifies an iteration limit.
-pub const DEFAULT_MAX_ITERATIONS: u64 = 100;
-
-/// Default random seed for stochastic scenario generation.
-pub const DEFAULT_SEED: u64 = 42;
-
-// ---------------------------------------------------------------------------
-// StudyParams
-// ---------------------------------------------------------------------------
-
-/// Scalar parameters extracted from a [`cobre_io::Config`].
-///
-/// `StudyParams` centralises the config-to-domain conversion that was previously
-/// duplicated between `StudySetup::new()` (cobre-sddp) and
-/// `BroadcastConfig::from_config()` (cobre-cli). Both callers now delegate
-/// to `StudyParams::from_config()` and then convert the resulting fields to
-/// their respective target representations.
-///
-/// The struct owns all values so it can be passed by value to constructors
-/// and broadcast helpers without lifetime dependencies.
-#[derive(Debug, Clone)]
-pub struct StudyParams {
-    /// Random seed for noise generation.
-    pub seed: u64,
-    /// Number of forward-pass trajectories per training iteration.
-    pub forward_passes: u32,
-    /// Stopping rule set (rules + mode) governing when training halts.
-    pub stopping_rule_set: StoppingRuleSet,
-    /// Number of simulation scenarios (0 if simulation is disabled).
-    pub n_scenarios: u32,
-    /// Buffer capacity for the simulation output channel.
-    pub io_channel_capacity: usize,
-    /// Policy directory path string.
-    pub policy_path: String,
-    /// Inflow non-negativity enforcement method.
-    pub inflow_method: InflowNonNegativityMethod,
-    /// Optional cut selection strategy (None means cut selection is disabled).
-    pub cut_selection: Option<CutSelectionStrategy>,
-    /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
-    pub cut_activity_tolerance: f64,
-    /// Optional angular-accelerated dominance pruning parameters.
-    pub angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
-    /// Maximum number of active cuts per stage (hard cap on LP size).
-    ///
-    /// `None` means no cap is enforced. Derived from
-    /// `config.training.cut_selection.max_active_per_stage`.
-    pub budget: Option<u32>,
-    /// Whether basis padding is enabled for warm-start.
-    ///
-    /// Derived from `config.training.cut_selection.basis_padding`.
-    /// Disabled by default (`false`).
-    pub basis_padding_enabled: bool,
-}
-
-impl StudyParams {
-    /// Extract study parameters from a validated [`cobre_io::Config`].
-    ///
-    /// This method contains the full config-to-domain conversion logic:
-    /// seed derivation, forward passes defaulting, stopping rule conversion,
-    /// stopping mode parsing, `n_scenarios` conditional, `io_channel_capacity`
-    /// conversion, policy path extraction, inflow method construction, and
-    /// cut selection parsing.
-    ///
-    /// # Errors
-    ///
-    /// - [`SddpError::Validation`] if `parse_cut_selection_config` returns an
-    ///   error for an unrecognised cut selection config string.
-    pub fn from_config(config: &cobre_io::Config) -> Result<Self, SddpError> {
-        use cobre_io::config::StoppingRuleConfig;
-
-        let seed = config
-            .training
-            .tree_seed
-            .map_or(DEFAULT_SEED, i64::unsigned_abs);
-
-        let forward_passes = config
-            .training
-            .forward_passes
-            .unwrap_or(DEFAULT_FORWARD_PASSES);
-
-        let rule_configs = match &config.training.stopping_rules {
-            Some(rules) if !rules.is_empty() => rules.clone(),
-            _ => vec![StoppingRuleConfig::IterationLimit {
-                limit: u32::try_from(DEFAULT_MAX_ITERATIONS).unwrap_or(u32::MAX),
-            }],
-        };
-
-        let stopping_rules: Vec<StoppingRule> = rule_configs
-            .into_iter()
-            .map(|c| match c {
-                StoppingRuleConfig::IterationLimit { limit } => StoppingRule::IterationLimit {
-                    limit: u64::from(limit),
-                },
-                StoppingRuleConfig::TimeLimit { seconds } => StoppingRule::TimeLimit { seconds },
-                StoppingRuleConfig::BoundStalling {
-                    iterations,
-                    tolerance,
-                } => StoppingRule::BoundStalling {
-                    iterations: u64::from(iterations),
-                    tolerance,
-                },
-                StoppingRuleConfig::Simulation { .. } => {
-                    // Not implemented in the minimal viable solver; fold into
-                    // an iteration limit so the stopping rule set is valid.
-                    StoppingRule::IterationLimit {
-                        limit: DEFAULT_MAX_ITERATIONS,
-                    }
-                }
-            })
-            .collect();
-
-        let stopping_mode = if config.training.stopping_mode.eq_ignore_ascii_case("all") {
-            StoppingMode::All
-        } else {
-            StoppingMode::Any
-        };
-
-        let stopping_rule_set = StoppingRuleSet {
-            rules: stopping_rules,
-            mode: stopping_mode,
-        };
-
-        let n_scenarios = if config.simulation.enabled {
-            config.simulation.num_scenarios
-        } else {
-            0
-        };
-
-        let io_channel_capacity =
-            usize::try_from(config.simulation.io_channel_capacity).unwrap_or(64);
-
-        let policy_path = config.policy.path.clone();
-
-        let inflow_method = InflowNonNegativityMethod::from(&config.modeling.inflow_non_negativity);
-
-        let cut_selection = parse_cut_selection_config(&config.training.cut_selection)
-            .map_err(|msg| SddpError::Validation(format!("cut_selection config error: {msg}")))?;
-
-        let cut_activity_tolerance = config
-            .training
-            .cut_selection
-            .cut_activity_tolerance
-            .unwrap_or(0.0);
-
-        let angular_pruning = crate::angular_pruning::parse_angular_pruning_config(
-            &config.training.cut_selection.angular_pruning,
-            config.training.cut_selection.check_frequency,
-        )
-        .map_err(|msg| SddpError::Validation(format!("angular_pruning config error: {msg}")))?;
-
-        let budget = config.training.cut_selection.max_active_per_stage;
-
-        // Warn when the budget is so tight that every iteration will immediately
-        // evict all cuts older than the current one.  This is not an error —
-        // the solver remains correct — but it usually indicates a misconfiguration.
-        if let Some(b) = budget {
-            // world_size is not available here; use 1 as a conservative estimate.
-            // The CLI/Python layer may emit a more precise warning with the real
-            // world_size after broadcast.
-            if u64::from(b) < u64::from(forward_passes) {
-                eprintln!(
-                    "warning: max_active_per_stage ({b}) is less than forward_passes \
-                     ({forward_passes}); budget enforcement will evict all \
-                     non-current-iteration cuts every iteration"
-                );
-            }
-        }
-
-        let basis_padding_enabled = config.training.cut_selection.basis_padding.unwrap_or(false);
-
-        Ok(Self {
-            seed,
-            forward_passes,
-            stopping_rule_set,
-            n_scenarios,
-            io_channel_capacity,
-            policy_path,
-            inflow_method,
-            cut_selection,
-            cut_activity_tolerance,
-            angular_pruning,
-            budget,
-            basis_padding_enabled,
-        })
-    }
-}
 
 // ---------------------------------------------------------------------------
 // StudySetup
@@ -279,117 +76,117 @@ impl StudyParams {
 /// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {
-    stage_templates: StageTemplates,
+    pub(crate) stage_templates: StageTemplates,
 
-    stochastic: StochasticContext,
-    indexer: StageIndexer,
-    fcf: FutureCostFunction,
-    initial_state: Vec<f64>,
-    horizon: HorizonMode,
-    risk_measures: Vec<RiskMeasure>,
-    entity_counts: EntityCounts,
+    pub(crate) stochastic: StochasticContext,
+    pub(crate) indexer: StageIndexer,
+    pub(crate) fcf: FutureCostFunction,
+    pub(crate) initial_state: Vec<f64>,
+    pub(crate) horizon: HorizonMode,
+    pub(crate) risk_measures: Vec<RiskMeasure>,
+    pub(crate) entity_counts: EntityCounts,
 
-    hydro_models: PrepareHydroModelsResult,
+    pub(crate) hydro_models: PrepareHydroModelsResult,
 
-    ncs_entity_ids_per_stage: Vec<Vec<i32>>,
+    pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,
     /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
-    ncs_max_gen: Vec<f64>,
+    pub(crate) ncs_max_gen: Vec<f64>,
 
-    block_counts_per_stage: Vec<usize>,
-    max_blocks: usize,
+    pub(crate) block_counts_per_stage: Vec<usize>,
+    pub(crate) max_blocks: usize,
 
-    scaling_report: crate::scaling_report::ScalingReport,
+    pub(crate) scaling_report: crate::scaling_report::ScalingReport,
 
     /// Forward-pass noise source scheme for the training inflow entity class.
-    inflow_scheme: SamplingScheme,
+    pub(crate) inflow_scheme: SamplingScheme,
     /// Forward-pass noise source scheme for the training load entity class.
-    load_scheme: SamplingScheme,
+    pub(crate) load_scheme: SamplingScheme,
     /// Forward-pass noise source scheme for the training NCS entity class.
-    ncs_scheme: SamplingScheme,
+    pub(crate) ncs_scheme: SamplingScheme,
     /// Forward-pass noise source scheme for the simulation inflow entity class.
-    sim_inflow_scheme: SamplingScheme,
+    pub(crate) sim_inflow_scheme: SamplingScheme,
     /// Forward-pass noise source scheme for the simulation load entity class.
-    sim_load_scheme: SamplingScheme,
+    pub(crate) sim_load_scheme: SamplingScheme,
     /// Forward-pass noise source scheme for the simulation NCS entity class.
-    sim_ncs_scheme: SamplingScheme,
+    pub(crate) sim_ncs_scheme: SamplingScheme,
     /// Study stages (id >= 0) owned for the lifetime of this setup.
     ///
     /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
     /// can read per-stage noise methods when constructing an `OutOfSample` sampler.
-    stages: Vec<Stage>,
+    pub(crate) stages: Vec<Stage>,
 
     /// Pre-standardized historical inflow windows library (training).
     ///
     /// `Some` when `inflow_scheme == SamplingScheme::Historical`, `None` otherwise.
-    historical_library: Option<HistoricalScenarioLibrary>,
+    pub(crate) historical_library: Option<HistoricalScenarioLibrary>,
     /// Pre-standardized external inflow scenario library (training).
     ///
     /// `Some` when `inflow_scheme == SamplingScheme::External`, `None` otherwise.
-    external_inflow_library: Option<ExternalScenarioLibrary>,
+    pub(crate) external_inflow_library: Option<ExternalScenarioLibrary>,
     /// Pre-standardized external load scenario library (training).
     ///
     /// `Some` when `load_scheme == SamplingScheme::External`, `None` otherwise.
-    external_load_library: Option<ExternalScenarioLibrary>,
+    pub(crate) external_load_library: Option<ExternalScenarioLibrary>,
     /// Pre-standardized external NCS scenario library (training).
     ///
     /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
-    external_ncs_library: Option<ExternalScenarioLibrary>,
+    pub(crate) external_ncs_library: Option<ExternalScenarioLibrary>,
     /// Pre-standardized historical inflow windows library (simulation).
     ///
     /// `Some` when `sim_inflow_scheme == SamplingScheme::Historical` and the
     /// simulation scheme differs from the training scheme. When the schemes are
     /// identical this field is `None` and the training `historical_library` is
     /// used instead.
-    sim_historical_library: Option<HistoricalScenarioLibrary>,
+    pub(crate) sim_historical_library: Option<HistoricalScenarioLibrary>,
     /// Pre-standardized external inflow scenario library (simulation).
     ///
     /// `Some` when `sim_inflow_scheme == SamplingScheme::External` and differs
     /// from the training inflow scheme. Shares the training library otherwise.
-    sim_external_inflow_library: Option<ExternalScenarioLibrary>,
+    pub(crate) sim_external_inflow_library: Option<ExternalScenarioLibrary>,
     /// Pre-standardized external load scenario library (simulation).
     ///
     /// `Some` when `sim_load_scheme == SamplingScheme::External` and differs
     /// from the training load scheme. Shares the training library otherwise.
-    sim_external_load_library: Option<ExternalScenarioLibrary>,
+    pub(crate) sim_external_load_library: Option<ExternalScenarioLibrary>,
     /// Pre-standardized external NCS scenario library (simulation).
     ///
     /// `Some` when `sim_ncs_scheme == SamplingScheme::External` and differs
     /// from the training NCS scheme. Shares the training library otherwise.
-    sim_external_ncs_library: Option<ExternalScenarioLibrary>,
+    pub(crate) sim_external_ncs_library: Option<ExternalScenarioLibrary>,
 
-    seed: u64,
-    forward_passes: u32,
-    max_iterations: u64,
-    start_iteration: u64,
-    n_scenarios: u32,
-    io_channel_capacity: usize,
-    policy_path: String,
-    inflow_method: InflowNonNegativityMethod,
-    cut_selection: Option<CutSelectionStrategy>,
-    cut_activity_tolerance: f64,
-    stopping_rule_set: StoppingRuleSet,
+    pub(crate) seed: u64,
+    pub(crate) forward_passes: u32,
+    pub(crate) max_iterations: u64,
+    pub(crate) start_iteration: u64,
+    pub(crate) n_scenarios: u32,
+    pub(crate) io_channel_capacity: usize,
+    pub(crate) policy_path: String,
+    pub(crate) inflow_method: InflowNonNegativityMethod,
+    pub(crate) cut_selection: Option<CutSelectionStrategy>,
+    pub(crate) cut_activity_tolerance: f64,
+    pub(crate) stopping_rule_set: StoppingRuleSet,
     /// Optional angular-accelerated dominance pruning parameters.
-    angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
+    pub(crate) angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
 
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Set from
     /// `config.training.cut_selection.max_active_per_stage` via `StudyParams`.
-    budget: Option<u32>,
+    pub(crate) budget: Option<u32>,
 
     /// Whether the caller wants the visited-states archive for export.
     ///
     /// When `true`, the archive is allocated during training regardless of the
     /// cut selection strategy. Defaults to `false`; set by CLI/Python callers
     /// based on `exports.states`.
-    export_states: bool,
+    pub(crate) export_states: bool,
 
     /// Whether basis padding is enabled for warm-start.
     ///
     /// When `true`, the forward pass applies informed basis status assignment for
     /// new cut rows before warm-starting the LP solver. Disabled by default.
     /// Set from `config.training.cut_selection.basis_padding` via `StudyParams`.
-    basis_padding_enabled: bool,
+    pub(crate) basis_padding_enabled: bool,
 
     /// Precomputed per-stage lag accumulation weights and period-finalization flags.
     ///
@@ -399,7 +196,7 @@ pub struct StudySetup {
     /// stages. Indexed by stage: `stage_lag_transitions[t]`.
     ///
     /// Exposed to the forward pass and simulation pipeline via [`StageContext`].
-    stage_lag_transitions: Vec<StageLagTransition>,
+    pub(crate) stage_lag_transitions: Vec<StageLagTransition>,
 
     /// Pre-computed noise group assignments for noise sharing in Pattern C.
     ///
@@ -408,7 +205,7 @@ pub struct StudySetup {
     /// time by [`crate::lag_transition::precompute_noise_groups`]. Indexed by stage.
     /// Consumed by `ForwardSampler`, `generate_opening_tree`, and
     /// `StageContext` for per-stage noise group lookups.
-    noise_group_ids: Vec<u32>,
+    pub(crate) noise_group_ids: Vec<u32>,
 
     /// Pre-computed lag accumulator seed from `initial_conditions.recent_observations`.
     ///
@@ -419,7 +216,7 @@ pub struct StudySetup {
     ///
     /// When `recent_observations` is empty, this is an all-zero seed and the
     /// behavior is identical to the previous zero-reset.
-    recent_observation_seed: crate::lag_transition::RecentObservationSeed,
+    pub(crate) recent_observation_seed: crate::lag_transition::RecentObservationSeed,
 
     /// PAR order of the downstream (coarser) resolution model.
     ///
@@ -427,7 +224,7 @@ pub struct StudySetup {
     /// range), indicating a monthly-to-quarterly resolution transition. Set at setup
     /// time and passed to `WorkspaceSizing` so that downstream scratch buffers are
     /// allocated at the correct capacity. Zero for uniform-resolution studies.
-    downstream_par_order: usize,
+    pub(crate) downstream_par_order: usize,
 }
 
 impl StudySetup {
@@ -441,8 +238,8 @@ impl StudySetup {
     ///
     /// - [`SddpError::Validation`] — if `build_stage_templates` succeeds but
     ///   the template list is empty ("system has no study stages").
-    /// - [`SddpError::LpBuilder`](SddpError::Solver) — propagated from
-    ///   `build_stage_templates` on LP construction failure.
+    /// - [`SddpError::Solver`] — propagated from `build_stage_templates`
+    ///   on LP construction failure.
     /// - [`SddpError::Validation`] — if `parse_cut_selection_config` returns
     ///   an invalid config string.
     pub fn new(
@@ -452,7 +249,6 @@ impl StudySetup {
         hydro_models: PrepareHydroModelsResult,
     ) -> Result<Self, SddpError> {
         let params = StudyParams::from_config(config)?;
-        let budget = params.budget;
         // Use a sentinel path; training_scenario_source / simulation_scenario_source
         // only use the path for error messages and the historical-years look-up,
         // which is not exercised when the caller provides a validated Config.
@@ -463,26 +259,15 @@ impl StudySetup {
         let simulation_source = config
             .simulation_scenario_source(sentinel_path)
             .map_err(|e| SddpError::Validation(e.to_string()))?;
-        let mut setup = Self::from_broadcast_params(
+        let config = params.into_construction_config();
+        Self::from_broadcast_params(
             system,
             stochastic,
-            params.seed,
-            params.forward_passes,
-            params.stopping_rule_set,
-            params.n_scenarios,
-            params.io_channel_capacity,
-            params.policy_path,
-            params.inflow_method,
-            params.cut_selection,
-            params.cut_activity_tolerance,
-            params.angular_pruning,
+            config,
             hydro_models,
             &training_source,
             &simulation_source,
-        )?;
-        setup.budget = budget;
-        setup.basis_padding_enabled = params.basis_padding_enabled;
-        Ok(setup)
+        )
     }
 
     /// Build all precomputed study state from pre-resolved broadcast parameters.
@@ -507,32 +292,30 @@ impl StudySetup {
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
     ///   construction failure.
-    #[allow(
-        clippy::too_many_arguments,
-        clippy::too_many_lines,
-        clippy::missing_panics_doc
-    )]
+    #[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
     pub fn from_broadcast_params(
         system: &System,
         stochastic: StochasticContext,
-        seed: u64,
-        forward_passes: u32,
-        stopping_rule_set: StoppingRuleSet,
-        n_scenarios: u32,
-        io_channel_capacity: usize,
-        policy_path: String,
-        inflow_method: InflowNonNegativityMethod,
-        cut_selection: Option<CutSelectionStrategy>,
-        cut_activity_tolerance: f64,
-        angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
+        config: ConstructionConfig,
         hydro_models: PrepareHydroModelsResult,
         training_source: &ScenarioSource,
         simulation_source: &ScenarioSource,
     ) -> Result<Self, SddpError> {
-        use crate::scaling_report::{
-            build_scaling_report, compute_coefficient_range, summarize_scale_factors, LpDimensions,
-            StageScalingReport,
-        };
+        let ConstructionConfig {
+            seed,
+            forward_passes,
+            stopping_rule_set,
+            n_scenarios,
+            io_channel_capacity,
+            policy_path,
+            inflow_method,
+            cut_selection,
+            cut_activity_tolerance,
+            angular_pruning,
+            budget,
+            basis_padding_enabled,
+            export_states,
+        } = config;
 
         let mut stage_templates = build_stage_templates(
             system,
@@ -543,124 +326,8 @@ impl StudySetup {
             &hydro_models.evaporation,
         )?;
 
-        // Compute per-stage one-step discount factors from the PolicyGraph
-        // and store in StageTemplates. This is done here (not inside
-        // build_stage_templates) to avoid threading PolicyGraph through
-        // the template builder's signature.
-        {
-            let pg = system.policy_graph();
-            let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-            stage_templates.discount_factors = study_stages
-                .iter()
-                .map(|stage| {
-                    let rate = pg
-                        .transitions
-                        .iter()
-                        .find(|tr| tr.source_id == stage.id)
-                        .and_then(|tr| tr.annual_discount_rate_override)
-                        .unwrap_or(pg.annual_discount_rate);
-                    if rate == 0.0 {
-                        1.0
-                    } else {
-                        let dt_days = f64::from(
-                            i32::try_from((stage.end_date - stage.start_date).num_days())
-                                .unwrap_or(i32::MAX),
-                        );
-                        1.0 / (1.0 + rate).powf(dt_days / 365.25)
-                    }
-                })
-                .collect();
-        }
-
-        // D_0 = 1.0, D_t = D_{t-1} * d_{t-1} for t >= 1.
-        // Used by the simulation extraction layer for reporting only.
-        {
-            let n = stage_templates.discount_factors.len();
-            let mut cumulative = vec![1.0; n];
-            for t in 1..n {
-                cumulative[t] = cumulative[t - 1] * stage_templates.discount_factors[t - 1];
-            }
-            stage_templates.cumulative_discount_factors = cumulative;
-        }
-
-        // Apply discount factors to theta objective coefficients before
-        // column/row scaling. The discount factor d_t converts
-        // `1.0 * theta` to `d_t * theta` in the objective, correctly
-        // valuing discounted future cost. This is orthogonal to cost
-        // scaling (which divides c_i by K but leaves theta untouched);
-        // the discount factor multiplies that untouched 1.0 to d_t.
-        // When annual_discount_rate == 0.0, d_t == 1.0 and this is a no-op.
-        if let Some(first) = stage_templates.templates.first() {
-            let theta_col = StageIndexer::new(stage_templates.n_hydros, first.max_par_order).theta;
-            for (s_idx, tmpl) in stage_templates.templates.iter_mut().enumerate() {
-                tmpl.objective[theta_col] *= stage_templates.discount_factors[s_idx];
-            }
-        }
-
-        // Compute and apply column scaling, then row scaling for numerical
-        // conditioning (D_r * A * D_c form). Scale factors are stored in the
-        // template for unscaling primal/dual solutions in the forward and
-        // backward passes.
-        //
-        // Scaling report: capture pre/post coefficient ranges for diagnostics.
-
-        let mut stage_scaling_reports = Vec::with_capacity(stage_templates.templates.len());
-
-        for (stage_id, tmpl) in stage_templates.templates.iter_mut().enumerate() {
-            // Pre-scaling snapshot (before col/row scaling; cost scaling is
-            // already baked into the objective during template construction).
-            let pre_scaling = compute_coefficient_range(tmpl);
-
-            let col_scale =
-                lp_builder::compute_col_scale(tmpl.num_cols, &tmpl.col_starts, &tmpl.values);
-            lp_builder::apply_col_scale(tmpl, &col_scale);
-            tmpl.col_scale.clone_from(&col_scale);
-            // Row scaling is applied to the already column-scaled matrix.
-            let row_scale = lp_builder::compute_row_scale(
-                tmpl.num_rows,
-                tmpl.num_cols,
-                &tmpl.col_starts,
-                &tmpl.row_indices,
-                &tmpl.values,
-            );
-            lp_builder::apply_row_scale(tmpl, &row_scale);
-            tmpl.row_scale.clone_from(&row_scale);
-
-            // Post-scaling snapshot (after col + row scaling).
-            let post_scaling = compute_coefficient_range(tmpl);
-
-            stage_scaling_reports.push(StageScalingReport {
-                stage_id,
-                dimensions: LpDimensions {
-                    num_cols: tmpl.num_cols,
-                    num_rows: tmpl.num_rows,
-                    num_nz: tmpl.num_nz,
-                },
-                pre_scaling,
-                post_scaling,
-                col_scale: summarize_scale_factors(&col_scale),
-                row_scale: summarize_scale_factors(&row_scale),
-            });
-        }
-
         let scaling_report =
-            build_scaling_report(lp_builder::COST_SCALE_FACTOR, stage_scaling_reports);
-
-        // Pre-scale noise_scale by row_scale so that the inflow noise
-        // perturbation (noise_scale * eta) is in the same scaled units as
-        // the template row bounds (which were already row-scaled above).
-        // Without this, transform_inflow_noise would produce a mixed-scale
-        // RHS: scaled base + unscaled perturbation.
-        let n_hydros_noise = stage_templates.n_hydros;
-        for (s_idx, tmpl) in stage_templates.templates.iter().enumerate() {
-            if !tmpl.row_scale.is_empty() {
-                let base_row = stage_templates.base_rows[s_idx];
-                for h in 0..n_hydros_noise {
-                    stage_templates.noise_scale[s_idx * n_hydros_noise + h] *=
-                        tmpl.row_scale[base_row + h];
-                }
-            }
-        }
+            template_postprocess::postprocess_templates(&mut stage_templates, system);
 
         if stage_templates.templates.is_empty() {
             return Err(SddpError::Validation(
@@ -874,97 +541,30 @@ impl StudySetup {
 
         let historical_library: Option<HistoricalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::Historical {
-                let user_pool = training_source.historical_years.as_ref();
-                let max_order = stochastic.par().max_order();
-                let window_years = discover_historical_windows(
-                    system.inflow_history(),
-                    &hydro_ids,
-                    &stages,
-                    max_order,
-                    user_pool,
-                    system.policy_graph().season_map.as_ref(),
-                    forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                let mut library = HistoricalScenarioLibrary::new(
-                    window_years.len(),
-                    stages.len(),
-                    hydro_ids.len(),
-                    max_order,
-                    window_years.clone(),
-                );
-                standardize_historical_windows(
-                    &mut library,
+                Some(scenario_libraries::build_historical_inflow_library(
                     system.inflow_history(),
                     &hydro_ids,
                     &stages,
                     stochastic.par(),
-                    &window_years,
                     system.policy_graph().season_map.as_ref(),
-                );
-                validate_historical_library(
-                    &library,
-                    system.inflow_history(),
-                    &hydro_ids,
-                    &stages,
-                    max_order,
-                    user_pool,
+                    training_source.historical_years.as_ref(),
                     forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                Some(library)
+                )?)
             } else {
                 None
             };
 
         let external_inflow_library: Option<ExternalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::External {
-                let external_rows = system.external_scenarios();
-                let n_stages = stages.len();
-                let n_hydros = hydro_ids.len();
-                let row_entity_ids: std::collections::HashSet<EntityId> =
-                    external_rows.iter().map(|r| r.hydro_id).collect();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                let per_stage_scenarios: Vec<usize> = if n_hydros > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_hydros).collect()
-                } else {
-                    vec![0usize; n_stages]
-                };
-                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-                let mut library = ExternalScenarioLibrary::new(
-                    n_stages,
-                    n_scenarios_ext,
-                    n_hydros,
-                    "inflow",
-                    per_stage_scenarios,
-                );
-                validate_external_library(
-                    &library,
-                    &hydro_ids,
-                    &row_entity_ids,
-                    &rows_per_stage,
-                    n_stages,
-                    forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                standardize_external_inflow(
-                    &mut library,
-                    external_rows,
+                Some(scenario_libraries::build_external_inflow_library(
+                    system.external_scenarios(),
                     &hydro_ids,
                     &stages,
                     stochastic.par(),
                     &system.initial_conditions().past_inflows,
                     &stage_lag_transitions,
-                );
-                pad_library_to_uniform(&mut library);
-                Some(library)
+                    forward_passes,
+                )?)
             } else {
                 None
             };
@@ -972,120 +572,28 @@ impl StudySetup {
         // External load library (built when load_scheme == External).
         let external_load_library: Option<ExternalScenarioLibrary> =
             if load_scheme == SamplingScheme::External {
-                let external_rows = system.external_load_scenarios();
-                let n_stages = stages.len();
-                // Build canonical bus ID list from load models (same logic as
-                // build_stochastic_context: buses with std_mw > 0.0, sorted and deduped).
-                let mut bus_ids: Vec<EntityId> = system
-                    .load_models()
-                    .iter()
-                    .filter(|m| m.std_mw > 0.0)
-                    .map(|m| m.bus_id)
-                    .collect();
-                bus_ids.sort_unstable_by_key(|id| id.0);
-                bus_ids.dedup();
-                let n_buses = bus_ids.len();
-                let row_entity_ids: std::collections::HashSet<EntityId> =
-                    external_rows.iter().map(|r| r.bus_id).collect();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                let per_stage_scenarios: Vec<usize> = if n_buses > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
-                } else {
-                    vec![0usize; n_stages]
-                };
-                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-                let mut library = ExternalScenarioLibrary::new(
-                    n_stages,
-                    n_scenarios_ext,
-                    n_buses,
-                    "load",
-                    per_stage_scenarios,
-                );
-                validate_external_library(
-                    &library,
-                    &bus_ids,
-                    &row_entity_ids,
-                    &rows_per_stage,
-                    n_stages,
-                    forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                standardize_external_load(
-                    &mut library,
-                    external_rows,
-                    &bus_ids,
+                Some(scenario_libraries::build_external_load_library(
+                    system.external_load_scenarios(),
                     system.load_models(),
-                    n_stages,
-                );
-                pad_library_to_uniform(&mut library);
-                Some(library)
+                    &stages,
+                    forward_passes,
+                )?)
             } else {
                 None
             };
 
         // External NCS library (built when ncs_scheme == External).
-        let external_ncs_library: Option<ExternalScenarioLibrary> = if ncs_scheme
-            == SamplingScheme::External
-        {
-            let external_rows = system.external_ncs_scenarios();
-            let n_stages = stages.len();
-            // Build canonical NCS ID list from ncs_models (same logic as
-            // build_stochastic_context: all NCS entities, sorted and deduped).
-            let mut ncs_ids: Vec<EntityId> = system.ncs_models().iter().map(|m| m.ncs_id).collect();
-            ncs_ids.sort_unstable_by_key(|id| id.0);
-            ncs_ids.dedup();
-            let n_ncs = ncs_ids.len();
-            let row_entity_ids: std::collections::HashSet<EntityId> =
-                external_rows.iter().map(|r| r.ncs_id).collect();
-            let mut rows_per_stage = vec![0usize; n_stages];
-            #[allow(clippy::cast_sign_loss)]
-            for row in external_rows {
-                let s = row.stage_id as usize;
-                if s < n_stages {
-                    rows_per_stage[s] += 1;
-                }
-            }
-            let per_stage_scenarios: Vec<usize> = if n_ncs > 0 {
-                rows_per_stage.iter().map(|&r| r / n_ncs).collect()
+        let external_ncs_library: Option<ExternalScenarioLibrary> =
+            if ncs_scheme == SamplingScheme::External {
+                Some(scenario_libraries::build_external_ncs_library(
+                    system.external_ncs_scenarios(),
+                    system.ncs_models(),
+                    &stages,
+                    forward_passes,
+                )?)
             } else {
-                vec![0usize; n_stages]
+                None
             };
-            let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-            let mut library = ExternalScenarioLibrary::new(
-                n_stages,
-                n_scenarios_ext,
-                n_ncs,
-                "ncs",
-                per_stage_scenarios,
-            );
-            validate_external_library(
-                &library,
-                &ncs_ids,
-                &row_entity_ids,
-                &rows_per_stage,
-                n_stages,
-                forward_passes,
-            )
-            .map_err(SddpError::Stochastic)?;
-            standardize_external_ncs(
-                &mut library,
-                external_rows,
-                &ncs_ids,
-                system.ncs_models(),
-                n_stages,
-            );
-            pad_library_to_uniform(&mut library);
-            Some(library)
-        } else {
-            None
-        };
 
         // Build simulation-specific libraries when simulation schemes differ from
         // training schemes. When they are identical, simulation borrows from the
@@ -1097,45 +605,15 @@ impl StudySetup {
             == SamplingScheme::Historical
             && sim_inflow_scheme != inflow_scheme
         {
-            let user_pool = simulation_source.historical_years.as_ref();
-            let max_order = stochastic.par().max_order();
-            let window_years = discover_historical_windows(
-                system.inflow_history(),
-                &hydro_ids,
-                &stages,
-                max_order,
-                user_pool,
-                system.policy_graph().season_map.as_ref(),
-                forward_passes,
-            )
-            .map_err(SddpError::Stochastic)?;
-            let mut library = HistoricalScenarioLibrary::new(
-                window_years.len(),
-                stages.len(),
-                hydro_ids.len(),
-                max_order,
-                window_years.clone(),
-            );
-            standardize_historical_windows(
-                &mut library,
+            Some(scenario_libraries::build_historical_inflow_library(
                 system.inflow_history(),
                 &hydro_ids,
                 &stages,
                 stochastic.par(),
-                &window_years,
                 system.policy_graph().season_map.as_ref(),
-            );
-            validate_historical_library(
-                &library,
-                system.inflow_history(),
-                &hydro_ids,
-                &stages,
-                max_order,
-                user_pool,
+                simulation_source.historical_years.as_ref(),
                 forward_passes,
-            )
-            .map_err(SddpError::Stochastic)?;
-            Some(library)
+            )?)
         } else {
             None
         };
@@ -1144,52 +622,15 @@ impl StudySetup {
             == SamplingScheme::External
             && sim_inflow_scheme != inflow_scheme
         {
-            let external_rows = system.external_scenarios();
-            let n_stages = stages.len();
-            let n_hydros = hydro_ids.len();
-            let row_entity_ids: std::collections::HashSet<EntityId> =
-                external_rows.iter().map(|r| r.hydro_id).collect();
-            let mut rows_per_stage = vec![0usize; n_stages];
-            #[allow(clippy::cast_sign_loss)]
-            for row in external_rows {
-                let s = row.stage_id as usize;
-                if s < n_stages {
-                    rows_per_stage[s] += 1;
-                }
-            }
-            let per_stage_scenarios: Vec<usize> = if n_hydros > 0 {
-                rows_per_stage.iter().map(|&r| r / n_hydros).collect()
-            } else {
-                vec![0usize; n_stages]
-            };
-            let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-            let mut library = ExternalScenarioLibrary::new(
-                n_stages,
-                n_scenarios_ext,
-                n_hydros,
-                "inflow",
-                per_stage_scenarios,
-            );
-            validate_external_library(
-                &library,
-                &hydro_ids,
-                &row_entity_ids,
-                &rows_per_stage,
-                n_stages,
-                forward_passes,
-            )
-            .map_err(SddpError::Stochastic)?;
-            standardize_external_inflow(
-                &mut library,
-                external_rows,
+            Some(scenario_libraries::build_external_inflow_library(
+                system.external_scenarios(),
                 &hydro_ids,
                 &stages,
                 stochastic.par(),
                 &system.initial_conditions().past_inflows,
                 &stage_lag_transitions,
-            );
-            pad_library_to_uniform(&mut library);
-            Some(library)
+                forward_passes,
+            )?)
         } else {
             None
         };
@@ -1197,58 +638,12 @@ impl StudySetup {
         // Simulation external load library.
         let sim_external_load_library: Option<ExternalScenarioLibrary> =
             if sim_load_scheme == SamplingScheme::External && sim_load_scheme != load_scheme {
-                let external_rows = system.external_load_scenarios();
-                let n_stages_sim = stages.len();
-                let mut bus_ids: Vec<EntityId> = system
-                    .load_models()
-                    .iter()
-                    .filter(|m| m.std_mw > 0.0)
-                    .map(|m| m.bus_id)
-                    .collect();
-                bus_ids.sort_unstable_by_key(|id| id.0);
-                bus_ids.dedup();
-                let n_buses = bus_ids.len();
-                let row_entity_ids: std::collections::HashSet<EntityId> =
-                    external_rows.iter().map(|r| r.bus_id).collect();
-                let mut rows_per_stage = vec![0usize; n_stages_sim];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages_sim {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                let per_stage_scenarios: Vec<usize> = if n_buses > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
-                } else {
-                    vec![0usize; n_stages_sim]
-                };
-                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-                let mut library = ExternalScenarioLibrary::new(
-                    n_stages_sim,
-                    n_scenarios_ext,
-                    n_buses,
-                    "load",
-                    per_stage_scenarios,
-                );
-                validate_external_library(
-                    &library,
-                    &bus_ids,
-                    &row_entity_ids,
-                    &rows_per_stage,
-                    n_stages_sim,
-                    forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                standardize_external_load(
-                    &mut library,
-                    external_rows,
-                    &bus_ids,
+                Some(scenario_libraries::build_external_load_library(
+                    system.external_load_scenarios(),
                     system.load_models(),
-                    n_stages_sim,
-                );
-                pad_library_to_uniform(&mut library);
-                Some(library)
+                    &stages,
+                    forward_passes,
+                )?)
             } else {
                 None
             };
@@ -1256,54 +651,12 @@ impl StudySetup {
         // Simulation external NCS library.
         let sim_external_ncs_library: Option<ExternalScenarioLibrary> =
             if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
-                let external_rows = system.external_ncs_scenarios();
-                let n_stages_sim = stages.len();
-                let mut ncs_ids: Vec<EntityId> =
-                    system.ncs_models().iter().map(|m| m.ncs_id).collect();
-                ncs_ids.sort_unstable_by_key(|id| id.0);
-                ncs_ids.dedup();
-                let n_ncs = ncs_ids.len();
-                let row_entity_ids: std::collections::HashSet<EntityId> =
-                    external_rows.iter().map(|r| r.ncs_id).collect();
-                let mut rows_per_stage = vec![0usize; n_stages_sim];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages_sim {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                let per_stage_scenarios: Vec<usize> = if n_ncs > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_ncs).collect()
-                } else {
-                    vec![0usize; n_stages_sim]
-                };
-                let n_scenarios_ext = per_stage_scenarios.iter().copied().max().unwrap_or(0);
-                let mut library = ExternalScenarioLibrary::new(
-                    n_stages_sim,
-                    n_scenarios_ext,
-                    n_ncs,
-                    "ncs",
-                    per_stage_scenarios,
-                );
-                validate_external_library(
-                    &library,
-                    &ncs_ids,
-                    &row_entity_ids,
-                    &rows_per_stage,
-                    n_stages_sim,
-                    forward_passes,
-                )
-                .map_err(SddpError::Stochastic)?;
-                standardize_external_ncs(
-                    &mut library,
-                    external_rows,
-                    &ncs_ids,
+                Some(scenario_libraries::build_external_ncs_library(
+                    system.external_ncs_scenarios(),
                     system.ncs_models(),
-                    n_stages_sim,
-                );
-                pad_library_to_uniform(&mut library);
-                Some(library)
+                    &stages,
+                    forward_passes,
+                )?)
             } else {
                 None
             };
@@ -1350,617 +703,14 @@ impl StudySetup {
             cut_activity_tolerance,
             stopping_rule_set,
             angular_pruning,
-            budget: None,
-            basis_padding_enabled: false,
-            export_states: false,
+            budget,
+            basis_padding_enabled,
+            export_states,
             stage_lag_transitions,
             noise_group_ids,
             recent_observation_seed,
             downstream_par_order,
         })
-    }
-
-    /// Return a reference to the full [`StageTemplates`] struct.
-    #[must_use]
-    pub fn templates_full(&self) -> &StageTemplates {
-        &self.stage_templates
-    }
-
-    /// Return a reference to the LP scaling report captured during template build.
-    #[must_use]
-    pub fn scaling_report(&self) -> &crate::scaling_report::ScalingReport {
-        &self.scaling_report
-    }
-
-    /// Return the slice of [`StageTemplate`](cobre_solver::StageTemplate)s,
-    /// one per study stage.
-    #[must_use]
-    pub fn stage_templates(&self) -> &[cobre_solver::StageTemplate] {
-        &self.stage_templates.templates
-    }
-
-    /// Return the per-stage water-balance row offset array.
-    #[must_use]
-    pub fn base_rows(&self) -> &[usize] {
-        &self.stage_templates.base_rows
-    }
-
-    /// Return the pre-computed noise scale factors (stage-major layout).
-    #[must_use]
-    pub fn noise_scale(&self) -> &[f64] {
-        &self.stage_templates.noise_scale
-    }
-
-    /// Return a shared reference to the stochastic context.
-    #[must_use]
-    pub fn stochastic(&self) -> &StochasticContext {
-        &self.stochastic
-    }
-
-    /// Return a shared reference to the stage indexer.
-    #[must_use]
-    pub fn indexer(&self) -> &StageIndexer {
-        &self.indexer
-    }
-
-    /// Return a shared reference to the future cost function.
-    #[must_use]
-    pub fn fcf(&self) -> &FutureCostFunction {
-        &self.fcf
-    }
-
-    /// Return a mutable reference to the future cost function.
-    ///
-    /// Training and simulation modify the FCF (add/deactivate cuts), so
-    /// callers must use this accessor when passing it to `train()` or
-    /// `simulate()`.
-    #[must_use]
-    pub fn fcf_mut(&mut self) -> &mut FutureCostFunction {
-        &mut self.fcf
-    }
-
-    /// Replace the FCF with a pre-loaded one (for simulation-only mode).
-    ///
-    /// This swaps the internal `FutureCostFunction` with the provided one,
-    /// enabling simulation against a policy loaded from disk without training.
-    pub fn replace_fcf(&mut self, fcf: FutureCostFunction) {
-        self.fcf = fcf;
-    }
-
-    /// Return the number of study stages.
-    #[must_use]
-    pub fn num_stages(&self) -> usize {
-        self.stage_templates.templates.len()
-    }
-
-    /// Return a reference to the initial state vector.
-    #[must_use]
-    pub fn initial_state(&self) -> &[f64] {
-        &self.initial_state
-    }
-
-    /// Return a reference to the horizon mode.
-    #[must_use]
-    pub fn horizon(&self) -> &HorizonMode {
-        &self.horizon
-    }
-
-    /// Return a reference to the per-stage risk measures.
-    #[must_use]
-    pub fn risk_measures(&self) -> &[RiskMeasure] {
-        &self.risk_measures
-    }
-
-    /// Return a reference to the entity counts struct.
-    #[must_use]
-    pub fn entity_counts(&self) -> &EntityCounts {
-        &self.entity_counts
-    }
-
-    /// Return a reference to the hydro model preprocessing result.
-    ///
-    /// Contains the resolved production models, evaporation models, and
-    /// provenance records for all hydro plants. Used by the LP builder
-    /// (Epic 2/3) to configure hydro-related LP variables and constraints.
-    #[must_use]
-    pub fn hydro_models(&self) -> &PrepareHydroModelsResult {
-        &self.hydro_models
-    }
-
-    /// Return the number of blocks per stage as a slice.
-    #[must_use]
-    pub fn block_counts_per_stage(&self) -> &[usize] {
-        &self.block_counts_per_stage
-    }
-
-    /// Return the maximum block count across all stages.
-    #[must_use]
-    pub fn max_blocks(&self) -> usize {
-        self.max_blocks
-    }
-
-    /// Return the random seed used for noise generation.
-    #[must_use]
-    pub fn seed(&self) -> u64 {
-        self.seed
-    }
-
-    /// Return the number of forward passes per training iteration.
-    #[must_use]
-    pub fn forward_passes(&self) -> u32 {
-        self.forward_passes
-    }
-
-    /// Return the maximum training iteration budget (derived from stopping rules).
-    #[must_use]
-    pub fn max_iterations(&self) -> u64 {
-        self.max_iterations
-    }
-
-    /// Set the starting iteration for resumed training.
-    ///
-    /// When resuming from a checkpoint, call this with the checkpoint's
-    /// `completed_iterations` so the training loop starts at `start_iteration + 1`.
-    pub fn set_start_iteration(&mut self, iteration: u64) {
-        self.start_iteration = iteration;
-    }
-
-    /// Enable the visited-states archive for state export.
-    ///
-    /// When `true`, the archive is allocated during training regardless of
-    /// whether cut selection requires it. Set this based on the
-    /// `exports.states` configuration flag.
-    pub fn set_export_states(&mut self, export: bool) {
-        self.export_states = export;
-    }
-
-    /// Set the active-cut budget cap for training.
-    ///
-    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
-    /// per stage after each backward pass. When `None`, no cap is enforced.
-    pub fn set_budget(&mut self, budget: Option<u32>) {
-        self.budget = budget;
-    }
-
-    /// Return the number of simulation scenarios (0 if simulation is disabled).
-    #[must_use]
-    pub fn n_scenarios(&self) -> u32 {
-        self.n_scenarios
-    }
-
-    /// Return the I/O channel capacity for the simulation output pipeline.
-    #[must_use]
-    pub fn io_channel_capacity(&self) -> usize {
-        self.io_channel_capacity
-    }
-
-    /// Return the policy directory path string.
-    #[must_use]
-    pub fn policy_path(&self) -> &str {
-        &self.policy_path
-    }
-
-    /// Return a reference to the inflow non-negativity enforcement method.
-    #[must_use]
-    pub fn inflow_method(&self) -> &InflowNonNegativityMethod {
-        &self.inflow_method
-    }
-
-    /// Return a reference to the optional cut selection strategy.
-    #[must_use]
-    pub fn cut_selection(&self) -> Option<&CutSelectionStrategy> {
-        self.cut_selection.as_ref()
-    }
-
-    /// Minimum dual multiplier for a cut to count as binding.
-    #[must_use]
-    pub fn cut_activity_tolerance(&self) -> f64 {
-        self.cut_activity_tolerance
-    }
-
-    /// Return a reference to the stopping rule set.
-    #[must_use]
-    pub fn stopping_rule_set(&self) -> &StoppingRuleSet {
-        &self.stopping_rule_set
-    }
-
-    /// Return the precomputed noise group IDs, indexed by stage.
-    ///
-    /// Stages sharing the same `(season_id, year)` have the same group ID.
-    /// Consumed by `ForwardSampler` and `generate_opening_tree` in Epic 2
-    /// to share noise draws across weekly stages within the same monthly bucket.
-    #[must_use]
-    pub fn noise_group_ids(&self) -> &[u32] {
-        &self.noise_group_ids
-    }
-
-    /// Construct a [`StageContext`] borrowing from this setup.
-    #[must_use]
-    pub fn stage_ctx(&self) -> StageContext<'_> {
-        StageContext {
-            templates: &self.stage_templates.templates,
-            base_rows: &self.stage_templates.base_rows,
-            noise_scale: &self.stage_templates.noise_scale,
-            n_hydros: self.stage_templates.n_hydros,
-            n_load_buses: self.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
-            load_bus_indices: &self.stage_templates.load_bus_indices,
-            block_counts_per_stage: &self.block_counts_per_stage,
-            ncs_max_gen: &self.ncs_max_gen,
-            discount_factors: &self.stage_templates.discount_factors,
-            cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
-            stage_lag_transitions: &self.stage_lag_transitions,
-            noise_group_ids: &self.noise_group_ids,
-            downstream_par_order: self.downstream_par_order,
-        }
-    }
-
-    /// Construct a [`TrainingContext`] borrowing from this setup.
-    #[must_use]
-    pub fn training_ctx(&self) -> TrainingContext<'_> {
-        TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-            inflow_scheme: self.inflow_scheme,
-            load_scheme: self.load_scheme,
-            ncs_scheme: self.ncs_scheme,
-            stages: &self.stages,
-            historical_library: self.historical_library.as_ref(),
-            external_inflow_library: self.external_inflow_library.as_ref(),
-            external_load_library: self.external_load_library.as_ref(),
-            external_ncs_library: self.external_ncs_library.as_ref(),
-            basis_padding_enabled: self.basis_padding_enabled,
-            recent_accum_seed: &self.recent_observation_seed.accum_seed,
-            recent_weight_seed: self.recent_observation_seed.weight_seed,
-        }
-    }
-
-    /// Construct a simulation [`TrainingContext`] borrowing from this setup.
-    ///
-    /// Uses the simulation-specific schemes and libraries. When the simulation
-    /// scheme for a class matches the training scheme, the training library is
-    /// reused (no duplication). Historical and external libraries are selected
-    /// per class using this priority: simulation-specific > training (shared).
-    #[must_use]
-    pub fn simulation_ctx(&self) -> TrainingContext<'_> {
-        // For each class, prefer the simulation-specific library when present;
-        // fall back to the training library when schemes are identical.
-        let historical_library = self.sim_historical_library.as_ref().or(
-            if self.sim_inflow_scheme == SamplingScheme::Historical {
-                self.historical_library.as_ref()
-            } else {
-                None
-            },
-        );
-        let external_inflow_library = self.sim_external_inflow_library.as_ref().or(
-            if self.sim_inflow_scheme == SamplingScheme::External {
-                self.external_inflow_library.as_ref()
-            } else {
-                None
-            },
-        );
-        let external_load_library = self.sim_external_load_library.as_ref().or(
-            if self.sim_load_scheme == SamplingScheme::External {
-                self.external_load_library.as_ref()
-            } else {
-                None
-            },
-        );
-        let external_ncs_library = self.sim_external_ncs_library.as_ref().or(
-            if self.sim_ncs_scheme == SamplingScheme::External {
-                self.external_ncs_library.as_ref()
-            } else {
-                None
-            },
-        );
-
-        TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-            inflow_scheme: self.sim_inflow_scheme,
-            load_scheme: self.sim_load_scheme,
-            ncs_scheme: self.sim_ncs_scheme,
-            stages: &self.stages,
-            historical_library,
-            external_inflow_library,
-            external_load_library,
-            external_ncs_library,
-            basis_padding_enabled: false,
-            recent_accum_seed: &self.recent_observation_seed.accum_seed,
-            recent_weight_seed: self.recent_observation_seed.weight_seed,
-        }
-    }
-
-    /// Execute the training loop using the precomputed study state.
-    ///
-    /// Constructs [`TrainingConfig`] and [`TrainingContext`] from the struct's
-    /// owned fields, then delegates to the internal [`crate::train`] function.
-    /// After a successful call, `self.fcf` contains all Benders cuts generated
-    /// during the run.
-    ///
-    /// The method takes `&mut self` because training mutates the FCF cut pool.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(SddpError::Infeasible { .. })` when an LP has no feasible
-    /// solution. Returns `Err(SddpError::Solver(_))` for other solver failures.
-    /// Returns `Err(SddpError::Communication(_))` when a collective operation
-    /// fails.
-    pub fn train<S: SolverInterface + Send, C: Communicator>(
-        &mut self,
-        solver: &mut S,
-        comm: &C,
-        n_threads: usize,
-        solver_factory: impl Fn() -> Result<S, SolverError>,
-        event_sender: Option<Sender<TrainingEvent>>,
-        shutdown_flag: Option<&Arc<AtomicBool>>,
-    ) -> Result<TrainingOutcome, SddpError> {
-        let training_config = TrainingConfig {
-            loop_config: LoopConfig {
-                forward_passes: self.forward_passes,
-                max_iterations: self.max_iterations,
-                start_iteration: self.start_iteration,
-                n_fwd_threads: n_threads,
-                max_blocks: self.max_blocks,
-                stopping_rules: self.stopping_rule_set.clone(),
-            },
-            cut_management: CutManagementConfig {
-                cut_selection: self.cut_selection.clone(),
-                angular_pruning: self.angular_pruning,
-                budget: self.budget,
-                basis_padding_enabled: self.basis_padding_enabled,
-                cut_activity_tolerance: self.cut_activity_tolerance,
-                warm_start_cuts: 0,
-                risk_measures: self.risk_measures.clone(),
-            },
-            events: EventConfig {
-                event_sender,
-                checkpoint_interval: None,
-                shutdown_flag: shutdown_flag.map(Arc::clone),
-                export_states: self.export_states,
-            },
-        };
-
-        // Inline context construction to allow &mut self.fcf (borrow checker requirements).
-        let stage_ctx = StageContext {
-            templates: &self.stage_templates.templates,
-            base_rows: &self.stage_templates.base_rows,
-            noise_scale: &self.stage_templates.noise_scale,
-            n_hydros: self.stage_templates.n_hydros,
-            n_load_buses: self.stage_templates.n_load_buses,
-            load_balance_row_starts: &self.stage_templates.load_balance_row_starts,
-            load_bus_indices: &self.stage_templates.load_bus_indices,
-            block_counts_per_stage: &self.block_counts_per_stage,
-            ncs_max_gen: &self.ncs_max_gen,
-            discount_factors: &self.stage_templates.discount_factors,
-            cumulative_discount_factors: &self.stage_templates.cumulative_discount_factors,
-            stage_lag_transitions: &self.stage_lag_transitions,
-            noise_group_ids: &self.noise_group_ids,
-            downstream_par_order: self.downstream_par_order,
-        };
-
-        let training_ctx = TrainingContext {
-            horizon: &self.horizon,
-            indexer: &self.indexer,
-            inflow_method: &self.inflow_method,
-            stochastic: &self.stochastic,
-            initial_state: &self.initial_state,
-            inflow_scheme: self.inflow_scheme,
-            load_scheme: self.load_scheme,
-            ncs_scheme: self.ncs_scheme,
-            stages: &self.stages,
-            historical_library: self.historical_library.as_ref(),
-            external_inflow_library: self.external_inflow_library.as_ref(),
-            external_load_library: self.external_load_library.as_ref(),
-            external_ncs_library: self.external_ncs_library.as_ref(),
-            basis_padding_enabled: self.basis_padding_enabled,
-            recent_accum_seed: &self.recent_observation_seed.accum_seed,
-            recent_weight_seed: self.recent_observation_seed.weight_seed,
-        };
-
-        crate::train(
-            solver,
-            training_config,
-            &mut self.fcf,
-            &stage_ctx,
-            &training_ctx,
-            comm,
-            solver_factory,
-        )
-    }
-
-    /// Execute the simulation pipeline using the trained future cost function.
-    ///
-    /// Constructs [`StageContext`], [`TrainingContext`], [`SimulationConfig`],
-    /// and [`SimulationOutputSpec`] from the struct's owned fields, then
-    /// delegates to [`crate::simulate`].
-    ///
-    /// The method takes `&self` because simulation only reads the FCF —
-    /// the cut pool is not modified during simulation.
-    ///
-    /// The `result_tx` channel and `event_sender` are created by the caller
-    /// (CLI/Python), because the caller also spawns the drain thread and
-    /// progress display. `StudySetup` does not manage threads.
-    ///
-    /// `stage_bases` provides an optional per-stage warm-start basis from the
-    /// training checkpoint. Pass `&training_result.basis_cache` to enable
-    /// warm-start, or `&[]` to fall back to cold-start.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(SimulationError::LpInfeasible { .. })` when a stage LP
-    /// has no feasible solution.
-    /// Returns `Err(SimulationError::SolverError { .. })` for other terminal
-    /// LP solver failures.
-    /// Returns `Err(SimulationError::ChannelClosed)` when the channel receiver
-    /// has been dropped.
-    pub fn simulate<S: SolverInterface + Send, C: Communicator>(
-        &self,
-        workspaces: &mut [SolverWorkspace<S>],
-        comm: &C,
-        result_tx: &SyncSender<SimulationScenarioResult>,
-        event_sender: Option<Sender<TrainingEvent>>,
-        stage_bases: &[Option<cobre_solver::Basis>],
-    ) -> Result<crate::SimulationRunResult, SimulationError> {
-        let stage_ctx = self.stage_ctx();
-        let training_ctx = self.simulation_ctx();
-
-        let sim_config = self.simulation_config();
-
-        let output = SimulationOutputSpec {
-            result_tx,
-            zeta_per_stage: &self.stage_templates.zeta_per_stage,
-            block_hours_per_stage: &self.stage_templates.block_hours_per_stage,
-            entity_counts: &self.entity_counts,
-            generic_constraint_row_entries: &self.stage_templates.generic_constraint_row_entries,
-            ncs_col_starts: &self.stage_templates.ncs_col_starts,
-            n_ncs_per_stage: &self.stage_templates.n_ncs_per_stage,
-            ncs_entity_ids_per_stage: &self.ncs_entity_ids_per_stage,
-            diversion_upstream: &self.stage_templates.diversion_upstream,
-            hydro_productivities_per_stage: &self.stage_templates.hydro_productivities_per_stage,
-            event_sender,
-        };
-
-        crate::simulate(
-            workspaces,
-            &stage_ctx,
-            &self.fcf,
-            &training_ctx,
-            &sim_config,
-            output,
-            stage_bases,
-            comm,
-        )
-    }
-
-    /// Convert a [`TrainingResult`] and event log into the training output
-    /// required by the output writers in `cobre-io`.
-    ///
-    /// This is a thin delegation to [`crate::build_training_output`], using
-    /// the FCF stored in `self` to populate cut statistics.
-    ///
-    /// The conversion is pure and cannot fail.
-    #[must_use]
-    pub fn build_training_output(
-        &self,
-        result: &TrainingResult,
-        events: &[TrainingEvent],
-    ) -> cobre_io::TrainingOutput {
-        crate::build_training_output(result, events, &self.fcf)
-    }
-
-    /// Construct a [`WorkspacePool`] sized for this study's indexer dimensions.
-    ///
-    /// Each workspace receives a fresh solver instance created by
-    /// `solver_factory`. The pool size equals `n_threads`.
-    ///
-    /// `n_load_buses` and `max_blocks` are taken from the pre-computed stage
-    /// templates so that Category 4 patch buffers are correctly sized.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(SolverError)` if any call to `solver_factory` fails.
-    pub fn create_workspace_pool<S: SolverInterface + Send>(
-        &self,
-        n_threads: usize,
-        solver_factory: impl Fn() -> Result<S, SolverError>,
-    ) -> Result<WorkspacePool<S>, SolverError> {
-        let mut pool = WorkspacePool::try_new(
-            n_threads,
-            self.indexer.n_state,
-            WorkspaceSizing {
-                hydro_count: self.indexer.hydro_count,
-                max_par_order: self.indexer.max_par_order,
-                n_load_buses: self.stage_templates.n_load_buses,
-                max_blocks: self.max_blocks,
-                downstream_par_order: self.downstream_par_order,
-                max_openings: (0..self.num_stages())
-                    .map(|t| self.stochastic.opening_tree().n_openings(t))
-                    .max()
-                    .unwrap_or(0),
-                initial_pool_capacity: 0,
-                n_state: self.indexer.n_state,
-            },
-            solver_factory,
-        )?;
-        if self.basis_padding_enabled {
-            let max_cols = self
-                .stage_templates
-                .templates
-                .iter()
-                .map(|t| t.num_cols)
-                .max()
-                .unwrap_or(0);
-            let max_rows = self
-                .stage_templates
-                .templates
-                .iter()
-                .map(|t| t.num_rows)
-                .max()
-                .unwrap_or(0);
-            pool.resize_scratch_bases(max_cols, max_rows);
-        }
-        Ok(pool)
-    }
-
-    /// Build a [`SimulationConfig`] from the stored `n_scenarios` and
-    /// `io_channel_capacity` fields.
-    ///
-    /// Provided as a convenience so callers do not have to construct the struct
-    /// manually when they only need the config (e.g., for sizing a drain
-    /// channel before calling [`simulate`](Self::simulate)).
-    #[must_use]
-    pub fn simulation_config(&self) -> SimulationConfig {
-        SimulationConfig {
-            n_scenarios: self.n_scenarios,
-            io_channel_capacity: self.io_channel_capacity,
-        }
-    }
-
-    /// Return a reference to the historical inflow scenario library, if built.
-    ///
-    /// Returns `Some` when `inflow_scheme == SamplingScheme::Historical` and
-    /// the library was successfully constructed during [`StudySetup::new`].
-    /// Returns `None` for all other inflow sampling schemes.
-    #[must_use]
-    pub fn historical_library(&self) -> Option<&HistoricalScenarioLibrary> {
-        self.historical_library.as_ref()
-    }
-
-    /// Return a reference to the external inflow scenario library, if built.
-    ///
-    /// Returns `Some` when `inflow_scheme == SamplingScheme::External` and
-    /// the library was successfully constructed during [`StudySetup::new`].
-    /// Returns `None` for all other inflow sampling schemes.
-    #[must_use]
-    pub fn external_inflow_library(&self) -> Option<&ExternalScenarioLibrary> {
-        self.external_inflow_library.as_ref()
-    }
-
-    /// Return a reference to the external load scenario library, if built.
-    ///
-    /// Returns `Some` when `load_scheme == SamplingScheme::External` and
-    /// the library was successfully constructed during [`StudySetup::new`].
-    /// Returns `None` for all other load sampling schemes.
-    #[must_use]
-    pub fn external_load_library(&self) -> Option<&ExternalScenarioLibrary> {
-        self.external_load_library.as_ref()
-    }
-
-    /// Return a reference to the external NCS scenario library, if built.
-    ///
-    /// Returns `Some` when `ncs_scheme == SamplingScheme::External` and
-    /// the library was successfully constructed during [`StudySetup::new`].
-    /// Returns `None` for all other NCS sampling schemes.
-    #[must_use]
-    pub fn external_ncs_library(&self) -> Option<&ExternalScenarioLibrary> {
-        self.external_ncs_library.as_ref()
     }
 }
 
@@ -2062,463 +812,6 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
     }
 
     state
-}
-
-// ---------------------------------------------------------------------------
-// PrepareStochasticResult + prepare_stochastic
-// ---------------------------------------------------------------------------
-
-/// Result of the stochastic preprocessing pipeline.
-///
-/// Bundles the outputs of [`prepare_stochastic`] so that callers do not have
-/// to handle three separate return values.
-#[derive(Debug)]
-pub struct PrepareStochasticResult {
-    /// Updated system with estimated PAR models (if estimation ran).
-    pub system: System,
-    /// Built stochastic context, ready to pass to [`StudySetup::new`].
-    pub stochastic: StochasticContext,
-    /// Estimation report (`Some` if `inflow_history.parquet` was present and
-    /// `inflow_seasonal_stats.parquet` was absent, triggering auto-estimation).
-    pub estimation_report: Option<crate::EstimationReport>,
-    /// Which of the 7 estimation path rows was taken during preprocessing.
-    pub estimation_path: crate::EstimationPath,
-}
-
-/// Load, validate, and assemble a user-supplied opening tree from the case directory.
-///
-/// Checks whether `scenarios/noise_openings.parquet` is present using
-/// [`cobre_io::validate_structure`]. If absent, returns `Ok(None)`.
-/// If present, loads the rows, validates dimensions and stage consistency,
-/// and assembles an [`OpeningTree`].
-///
-/// # Errors
-///
-/// - [`SddpError::Io`] if the Parquet file cannot be read.
-/// - [`SddpError::Io`] if rows fail dimension or stage consistency checks.
-fn load_user_opening_tree_inner(
-    case_dir: &Path,
-    system: &System,
-) -> Result<Option<OpeningTree>, SddpError> {
-    let mut ctx = cobre_io::ValidationContext::new();
-    let manifest = cobre_io::validate_structure(case_dir, &mut ctx);
-
-    if !manifest.scenarios_noise_openings_parquet {
-        return Ok(None);
-    }
-
-    let path = case_dir.join("scenarios").join("noise_openings.parquet");
-
-    let rows = cobre_io::scenarios::load_noise_openings(Some(&path))?;
-
-    let n_hydros = system.hydros().len();
-    let mut load_bus_ids: Vec<EntityId> = system
-        .load_models()
-        .iter()
-        .filter(|m| m.std_mw > 0.0)
-        .map(|m| m.bus_id)
-        .collect();
-    load_bus_ids.sort_unstable_by_key(|id| id.0);
-    load_bus_ids.dedup();
-    let n_load_buses = load_bus_ids.len();
-    let expected_dim = n_hydros + n_load_buses;
-
-    let expected_stages = system.stages().iter().filter(|s| s.id >= 0).count();
-    let mut openings_by_stage: BTreeMap<i32, BTreeSet<u32>> = BTreeMap::new();
-    for row in &rows {
-        openings_by_stage
-            .entry(row.stage_id)
-            .or_default()
-            .insert(row.opening_index);
-    }
-    let openings_per_stage: Vec<usize> = openings_by_stage.values().map(BTreeSet::len).collect();
-
-    cobre_io::scenarios::validate_noise_openings(
-        &rows,
-        expected_dim,
-        expected_stages,
-        &openings_per_stage,
-    )?;
-
-    let tree = cobre_io::scenarios::assemble_opening_tree(rows, expected_dim);
-    Ok(Some(tree))
-}
-
-/// Build NCS entity factor entries from the `ResolvedNcsFactors` stored in `System`.
-///
-/// Converts the dense 3D factor table into the `(entity_id, stage_id, block_pairs)`
-/// tuple format expected by `PrecomputedNormal::build`. Includes all NCS entities
-/// that have model entries in `non_controllable_stats.parquet`. Entities with
-/// `std_mw = 0` produce deterministic availability at their `mean_mw` value.
-#[must_use]
-pub fn build_ncs_factor_entries(
-    system: &System,
-) -> Vec<(
-    cobre_core::EntityId,
-    i32,
-    Vec<cobre_stochastic::normal::precompute::BlockFactorPair>,
-)> {
-    use cobre_stochastic::normal::precompute::BlockFactorPair;
-    use std::collections::BTreeSet;
-
-    // Collect NCS entity IDs that have model entries.
-    let stochastic_ncs: BTreeSet<cobre_core::EntityId> =
-        system.ncs_models().iter().map(|m| m.ncs_id).collect();
-
-    if stochastic_ncs.is_empty() {
-        return Vec::new();
-    }
-
-    let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let ncs_ids: Vec<cobre_core::EntityId> = system
-        .non_controllable_sources()
-        .iter()
-        .map(|n| n.id)
-        .collect();
-
-    let mut entries = Vec::new();
-    for (ncs_idx, ncs_id) in ncs_ids.iter().enumerate() {
-        if !stochastic_ncs.contains(ncs_id) {
-            continue;
-        }
-        for (stage_idx, stage) in study_stages.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let block_pairs: Vec<BlockFactorPair> = stage
-                .blocks
-                .iter()
-                .enumerate()
-                .map(|(block_idx, _)| {
-                    let factor = system
-                        .resolved_ncs_factors()
-                        .factor(ncs_idx, stage_idx, block_idx);
-                    // block_idx is a small count (< 1000 in practice); fits in i32.
-                    (block_idx as i32, factor)
-                })
-                .collect();
-            entries.push((*ncs_id, stage.id, block_pairs));
-        }
-    }
-    entries
-}
-
-/// Load `scenarios/load_factors.json` from the case directory, returning an
-/// empty vec when the file is absent. This is consumed by the stochastic
-/// context builder for per-block noise scaling.
-///
-/// # Errors
-///
-/// Returns [`SddpError`] if the file exists but cannot be read or parsed.
-pub fn load_load_factors_for_stochastic(
-    case_dir: &Path,
-) -> Result<Vec<cobre_io::scenarios::LoadFactorEntry>, SddpError> {
-    let path = case_dir.join("scenarios").join("load_factors.json");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    cobre_io::scenarios::parse_load_factors(&path).map_err(SddpError::from)
-}
-
-/// Prepare the stochastic pipeline: estimate PAR from history (if applicable),
-/// load a user-supplied opening tree (if present), and build the
-/// [`StochasticContext`].
-///
-/// This function encapsulates the pre-setup orchestration that would otherwise
-/// be duplicated across entry points (CLI, Python bindings). It is intended to
-/// be called once per entry point before constructing [`StudySetup`].
-///
-/// ## Input path matrix
-///
-/// | `inflow_history.parquet` | `inflow_seasonal_stats.parquet` | Behaviour |
-/// |---|---|---|
-/// | absent | any | System unchanged; `estimation_report = None`. |
-/// | present | present | System unchanged; estimation skipped. |
-/// | present | absent | PAR estimation runs; system updated. |
-///
-/// If `scenarios/noise_openings.parquet` is present, it is loaded, validated,
-/// and passed as the user opening tree to [`cobre_stochastic::build_stochastic_context`].
-///
-/// ## MPI note
-///
-/// Under MPI, this function must only be called on rank 0. Non-root ranks
-/// should receive the opening tree via broadcast and call
-/// [`cobre_stochastic::build_stochastic_context`] directly.
-///
-/// # Errors
-///
-/// - [`SddpError::Io`] — file read, parse, or validation failure from either
-///   `estimate_from_history` or opening tree loading.
-/// - [`SddpError::Stochastic`] — PAR parameter validation or spectral
-///   decomposition failure from `build_stochastic_context` or estimation.
-#[allow(clippy::too_many_lines)]
-pub fn prepare_stochastic(
-    system: System,
-    case_dir: &Path,
-    config: &cobre_io::Config,
-    seed: u64,
-    training_source: &ScenarioSource,
-) -> Result<PrepareStochasticResult, SddpError> {
-    let (system, estimation_report, estimation_path) =
-        crate::estimation::estimate_from_history(system, case_dir, config)?;
-
-    let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
-
-    // Load block-level load factors (optional). When present, these scale the
-    // stochastic noise realization per block, mirroring how the LP builder
-    // scales the deterministic load balance RHS.
-    let load_factor_entries = load_load_factors_for_stochastic(case_dir)?;
-
-    // Convert LoadFactorEntry -> Vec<BlockFactorPair> per entry. The pairs
-    // vec must outlive the entity_factor_entries references.
-    let block_pairs: Vec<Vec<cobre_stochastic::normal::precompute::BlockFactorPair>> =
-        load_factor_entries
-            .iter()
-            .map(|e| {
-                e.block_factors
-                    .iter()
-                    .map(|bf| (bf.block_id, bf.factor))
-                    .collect()
-            })
-            .collect();
-
-    let entity_factor_entries: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
-        load_factor_entries
-            .iter()
-            .zip(block_pairs.iter())
-            .map(|(e, pairs)| (e.bus_id, e.stage_id, pairs.as_slice()))
-            .collect();
-
-    // Build NCS block factor entries from ResolvedNcsFactors, mirroring the
-    // load factor conversion above. NCS entities consume their block factors
-    // from the resolved NCS factors table.
-    let ncs_factor_entries = build_ncs_factor_entries(&system);
-    let ncs_entity_factor_entries: Vec<
-        cobre_stochastic::normal::precompute::EntityFactorEntry<'_>,
-    > = ncs_factor_entries
-        .iter()
-        .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
-        .collect();
-
-    // Build a HistoricalScenarioLibrary for the opening tree when any study
-    // stage uses NoiseMethod::HistoricalResiduals. This must be done before
-    // build_stochastic_context because generate_opening_tree consumes the
-    // library reference. The forward-pass Historical library (built in
-    // StudySetup::new) is separate and remains unchanged.
-    let opening_tree_library = {
-        use cobre_core::temporal::NoiseMethod;
-
-        let needs_historical_tree = system.stages().iter().any(|s| {
-            s.id >= 0 && s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals
-        });
-
-        if needs_historical_tree {
-            let study_stages: Vec<_> = system
-                .stages()
-                .iter()
-                .filter(|s| s.id >= 0)
-                .cloned()
-                .collect();
-            let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-            // Build PAR cache directly — before the stochastic context exists.
-            let par = cobre_stochastic::PrecomputedPar::build(
-                system.inflow_models(),
-                &study_stages,
-                &hydro_ids,
-            )?;
-            let max_order = par.max_order();
-            let user_pool = training_source.historical_years.as_ref();
-            let window_years = cobre_stochastic::discover_historical_windows(
-                system.inflow_history(),
-                &hydro_ids,
-                &study_stages,
-                max_order,
-                user_pool,
-                system.policy_graph().season_map.as_ref(),
-                1, // forward_passes not relevant for opening tree windows
-            )?;
-            let mut lib = cobre_stochastic::HistoricalScenarioLibrary::new(
-                window_years.len(),
-                study_stages.len(),
-                hydro_ids.len(),
-                max_order,
-                window_years.clone(),
-            );
-            cobre_stochastic::standardize_historical_windows(
-                &mut lib,
-                system.inflow_history(),
-                &hydro_ids,
-                &study_stages,
-                &par,
-                &window_years,
-                system.policy_graph().season_map.as_ref(),
-            );
-            Some(lib)
-        } else {
-            None
-        }
-    };
-
-    // Compute per-stage external scenario counts for opening tree clamping.
-    //
-    // When any entity class uses External sampling, the external library is
-    // padded to a uniform scenario count after loading. The opening tree
-    // generator must clamp per-stage openings to the pre-padding raw count to
-    // avoid redundant LP solves for stages with fewer distinct scenarios.
-    //
-    // The raw count for inflow is `rows_per_stage / n_hydros`.
-    // For load it is `rows_per_stage / n_buses`.
-    // For ncs it is `rows_per_stage / n_ncs_entities`.
-    // When multiple classes use External, the element-wise minimum is used.
-    let external_scenario_counts: Option<Vec<usize>> = {
-        let study_stages: Vec<_> = system
-            .stages()
-            .iter()
-            .filter(|s| s.id >= 0)
-            .cloned()
-            .collect();
-        let n_stages = study_stages.len();
-
-        let inflow_counts: Option<Vec<usize>> =
-            if training_source.inflow_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_scenarios();
-                let n_hydros = system.hydros().len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_hydros > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_hydros).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        let load_counts: Option<Vec<usize>> =
-            if training_source.load_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_load_scenarios();
-                let mut bus_ids: Vec<EntityId> = system
-                    .load_models()
-                    .iter()
-                    .filter(|m| m.std_mw > 0.0)
-                    .map(|m| m.bus_id)
-                    .collect();
-                bus_ids.sort_unstable_by_key(|id| id.0);
-                bus_ids.dedup();
-                let n_buses = bus_ids.len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_buses > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        let ncs_counts: Option<Vec<usize>> =
-            if training_source.ncs_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_ncs_scenarios();
-                let mut ncs_ids: Vec<EntityId> =
-                    system.ncs_models().iter().map(|m| m.ncs_id).collect();
-                ncs_ids.sort_unstable_by_key(|id| id.0);
-                ncs_ids.dedup();
-                let n_ncs = ncs_ids.len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_ncs > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_ncs).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        // Combine class counts via element-wise minimum.
-        match (inflow_counts, load_counts, ncs_counts) {
-            (None, None, None) => None,
-            (Some(a), None, None) => Some(a),
-            (None, Some(b), None) => Some(b),
-            (None, None, Some(c)) => Some(c),
-            (Some(a), Some(b), None) => {
-                Some(a.iter().zip(b.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (Some(a), None, Some(c)) => {
-                Some(a.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (None, Some(b), Some(c)) => {
-                Some(b.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (Some(a), Some(b), Some(c)) => Some(
-                a.iter()
-                    .zip(b.iter())
-                    .zip(c.iter())
-                    .map(|((&x, &y), &z)| x.min(y).min(z))
-                    .collect(),
-            ),
-        }
-    };
-
-    // Compute noise group IDs for Pattern C noise sharing (Epic 2).
-    // Groups stages with the same (season_id, year) so weekly stages within
-    // the same monthly bucket share noise draws in the opening tree.
-    // For uniform monthly studies each stage has a unique group ID, so no
-    // sharing is triggered and the opening tree is identical to the pre-noise-
-    // sharing baseline (modulo the seed domain change from ticket-003).
-    let opening_tree_noise_group_ids: Vec<u32> = {
-        let study_stages: Vec<_> = system
-            .stages()
-            .iter()
-            .filter(|s| s.id >= 0)
-            .cloned()
-            .collect();
-        crate::lag_transition::precompute_noise_groups(&study_stages)
-    };
-
-    let forward_seed = training_source.seed.map(i64::unsigned_abs);
-    let stochastic = cobre_stochastic::build_stochastic_context(
-        &system,
-        seed,
-        forward_seed,
-        &entity_factor_entries,
-        &ncs_entity_factor_entries,
-        OpeningTreeInputs {
-            user_tree: user_opening_tree,
-            historical_library: opening_tree_library.as_ref(),
-            external_scenario_counts,
-            noise_group_ids: Some(opening_tree_noise_group_ids),
-        },
-        cobre_stochastic::ClassSchemes {
-            inflow: Some(training_source.inflow_scheme),
-            load: Some(training_source.load_scheme),
-            ncs: Some(training_source.ncs_scheme),
-        },
-    )?;
-
-    Ok(PrepareStochasticResult {
-        system,
-        stochastic,
-        estimation_report,
-        estimation_path,
-    })
 }
 
 // ---------------------------------------------------------------------------

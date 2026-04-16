@@ -105,6 +105,17 @@ When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
 When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`
 
+When modifying study setup construction or scenario library building, note that
+`setup.rs` is now a directory module (`setup/mod.rs`) with six sub-modules:
+→ `setup/params.rs` — `StudyParams`, `ConstructionConfig`, constants
+→ `setup/stochastic_pipeline.rs` — `PrepareStochasticResult`, `prepare_stochastic`, helpers
+→ `setup/template_postprocess.rs` — `postprocess_templates`
+→ `setup/scenario_libraries.rs` — 4 scenario library builder functions
+→ `setup/accessors.rs` — 33 accessor methods and context builders
+→ `setup/orchestration.rs` — `train`, `simulate`, `build_training_output`, `create_workspace_pool`
+The `StudySetup` struct, its two constructors (`new`, `from_broadcast_params`), and three
+private helpers remain in `setup/mod.rs`.
+
 When adding new output files, check both CLI and Python write paths:
 → `crates/cobre-cli/src/commands/run.rs` (`write_outputs` function)
 → `crates/cobre-python/src/run.rs` (`run_inner` function)

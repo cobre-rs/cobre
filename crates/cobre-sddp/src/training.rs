@@ -14,9 +14,11 @@
 //! 4. Backward pass — Benders cut generation.
 //! 5. Cut sync — `allgatherv` new cuts across ranks.
 //!    5a. Cut selection — optional periodic pool pruning via `CutSelectionStrategy`.
-//!    5b. LB evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
-//! 6. Convergence check — stopping rules evaluated.
-//! 7. (checkpoint — not yet implemented)
+//!    5b. Angular pruning — geometric cut dominance reduction (stage 0..T-2).
+//!    5c. Budget enforcement — active-cut hard cap (every iteration when set).
+//!    5d. Template baking — rebuild per-stage baked LP templates.
+//! 6. Lower bound evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
+//! 7. Convergence check — stopping rules evaluated.
 //! 8. Event emission — `IterationSummary` and per-step events via channel.
 //!
 //! ## Pre-allocation discipline

@@ -523,6 +523,10 @@ pub fn build_delta_cut_row_batch_into(
         // coefficient) pairs and share the same push logic.
         //
         // state_to_lp_column remaps outgoing-state indices to LP columns.
+        // For storage (j < N) the mapping is identity. For lag dimensions
+        // the outgoing state after shift_lag_state stores z_inflow at lag 0
+        // and shifted incoming lags at lag 1+, so the cut must reference the
+        // corresponding LP columns (z_inflow and incoming lag l−1).
         if is_sparse {
             for &j in mask {
                 let lp_col = indexer.state_to_lp_column(j);
@@ -1216,6 +1220,14 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     }
 
     let start = Instant::now();
+    // Populate `cut_batches` for the legacy (non-baked) load path and for
+    // backward-pass stage-loop initialization. On the baked path
+    // (`baked.ready == true`) the forward inner loop calls `load_model` only
+    // and never reads these batches; the backward pass overwrites each
+    // `cut_batches[successor]` with the delta batch before first use. This
+    // single full rebuild per iteration is one-time O(active_cuts) work
+    // outside the per-scenario hot loop and reuses pre-allocated RowBatch
+    // buffers, so it does not allocate.
     for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
         build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
     }

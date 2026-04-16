@@ -244,8 +244,9 @@ pub enum TrainingEvent {
         /// Total number of within-cluster dominance checks performed across all
         /// stages.
         dominance_checks: u64,
-        /// Number of stages processed (stages 1..num_stages-1; stage 0 is
-        /// exempt).
+        /// Number of stages processed (stages 0..num_stages-1; the terminal
+        /// stage is exempt because it has no successor states to verify
+        /// geometric dominance against).
         stages_processed: u32,
         /// Wall-clock time for the angular pruning phase, in milliseconds.
         pruning_time_ms: u64,

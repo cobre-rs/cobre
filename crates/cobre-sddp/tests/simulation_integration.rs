@@ -795,6 +795,7 @@ fn train_simulate_write_cycle() {
             hydro_productivities_per_stage: &vec![vec![1.0]; fx.n_stages],
             event_sender: None,
         },
+        None,
         &[],
         &sim_comm,
     )
@@ -1448,6 +1449,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             hydro_productivities_per_stage: &hydro_productivities_per_stage,
             event_sender: None,
         },
+        None,
         &[],
         &StubComm,
     )

@@ -9,9 +9,9 @@ use cobre_core::TrainingEvent;
 use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
-    simulation::SimulationOutputSpec, CutManagementConfig, EventConfig, LoopConfig, SddpError,
-    SimulationError, SimulationRunResult, SimulationScenarioResult, SolverWorkspace, StageContext,
-    TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
+    simulation::SimulationOutputSpec, CapturedBasis, CutManagementConfig, EventConfig, LoopConfig,
+    SddpError, SimulationError, SimulationRunResult, SimulationScenarioResult, SolverWorkspace,
+    StageContext, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
     WorkspaceSizing,
 };
 
@@ -109,18 +109,22 @@ impl StudySetup {
     /// Run simulation using the trained future cost function.
     ///
     /// The caller provides channels, event sender, and thread management.
+    /// `baked_templates` enables the baked-template LP load path (no `add_rows`
+    /// per stage); pass `None` for the legacy `load_model + add_rows` fallback.
     /// `stage_bases` enables warm-start; pass `&[]` for cold-start.
     ///
     /// # Errors
     ///
-    /// Returns `SimulationError` on LP infeasibility, solver failure, or channel closure.
+    /// Returns `SimulationError` on LP infeasibility, solver failure, channel closure,
+    /// or if `baked_templates.len() != num_stages`.
     pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         &self,
         workspaces: &mut [SolverWorkspace<S>],
         comm: &C,
         result_tx: &SyncSender<SimulationScenarioResult>,
         event_sender: Option<Sender<TrainingEvent>>,
-        stage_bases: &[Option<cobre_solver::Basis>],
+        baked_templates: Option<&[cobre_solver::StageTemplate]>,
+        stage_bases: &[Option<CapturedBasis>],
     ) -> Result<SimulationRunResult, SimulationError> {
         let stage_ctx = self.stage_ctx();
         let training_ctx = self.simulation_ctx();
@@ -148,6 +152,7 @@ impl StudySetup {
             &training_ctx,
             &sim_config,
             output,
+            baked_templates,
             stage_bases,
             comm,
         )

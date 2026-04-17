@@ -32,13 +32,13 @@ use std::sync::mpsc;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{
-    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
+    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
 };
 use cobre_sddp::{
-    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
+    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
-use cobre_solver::highs::HighsSolver;
 use cobre_solver::SolverInterface;
+use cobre_solver::highs::HighsSolver;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;
@@ -204,6 +204,7 @@ fn run_with_simulation(
             &comm,
             &result_tx,
             None,
+            result.baked_templates.as_deref(),
             &result.basis_cache,
         )
         .expect("simulate must return Ok");
@@ -1091,6 +1092,7 @@ fn d12_checkpoint_round_trip() {
             &comm,
             &result_tx,
             None,
+            result.baked_templates.as_deref(),
             &result.basis_cache,
         )
         .expect("simulate must return Ok");
@@ -2837,6 +2839,7 @@ fn d29_pattern_c_weekly_par() {
             &comm,
             &result_tx,
             None,
+            result.baked_templates.as_deref(),
             &result.basis_cache,
         )
         .expect("simulation must succeed");
@@ -2916,4 +2919,125 @@ fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
         "D30: lower bound must be positive, got {}",
         result.final_lb
     );
+}
+
+// ── Ticket-009 integration test ──────────────────────────────────────────────
+
+/// Verify that the baked-template simulation path produces bit-exactly identical
+/// per-scenario costs to the legacy (fallback) path.
+///
+/// Trains D01 (thermal dispatch, purely deterministic), which runs >= 2 iterations
+/// and therefore has `baked_templates: Some(...)`. Runs two simulations:
+/// 1. Baked path: passes `training_result.baked_templates.as_deref()`.
+/// 2. Fallback path: forces `None` for `baked_templates`.
+///
+/// Asserts that every `(scenario_id, total_cost)` pair is bit-for-bit identical
+/// between the two runs (i.e., relative error == 0.0, well within 1e-12).
+///
+/// This confirms that `bake_rows_into_template` produces a mathematically
+/// equivalent LP to `load_model + add_rows`.
+#[test]
+fn baked_vs_fallback_simulation_costs_are_identical() {
+    let case_dir = Path::new("../../examples/deterministic/d01-thermal-dispatch");
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let pr = prepare_stochastic(
+        system,
+        case_dir,
+        &config,
+        42,
+        &cobre_core::scenario::ScenarioSource::default(),
+    )
+    .expect("prepare_stochastic must succeed");
+    let system = pr.system;
+    let stochastic = pr.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut config_with_sim = config.clone();
+    config_with_sim.simulation.enabled = true;
+    config_with_sim.simulation.num_scenarios = 4;
+
+    let mut setup = StudySetup::new(&system, &config_with_sim, stochastic, hydro_models)
+        .expect("StudySetup must build");
+
+    let comm = StubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+    let training_result = outcome.result;
+
+    // D01 trains for > 1 iteration; the bake step must have run.
+    assert!(
+        training_result.baked_templates.is_some(),
+        "D01 training must produce baked templates (requires >= 2 iterations)"
+    );
+
+    let mut pool = setup
+        .create_workspace_pool(1, HighsSolver::new)
+        .expect("simulation workspace pool must build");
+
+    // ── Baked path ────────────────────────────────────────────────────────────
+    let io_capacity = setup.io_channel_capacity().max(1);
+    let (tx_baked, rx_baked) = mpsc::sync_channel(io_capacity);
+    let drain_baked = std::thread::spawn(move || rx_baked.into_iter().collect::<Vec<_>>());
+
+    let baked_run = setup
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &tx_baked,
+            None,
+            training_result.baked_templates.as_deref(),
+            &training_result.basis_cache,
+        )
+        .expect("baked-path simulate must return Ok");
+    drop(tx_baked);
+    drop(drain_baked.join().expect("drain thread must not panic"));
+
+    // ── Fallback path (force None) ────────────────────────────────────────────
+    let (tx_fallback, rx_fallback) = mpsc::sync_channel(io_capacity);
+    let drain_fallback = std::thread::spawn(move || rx_fallback.into_iter().collect::<Vec<_>>());
+
+    let fallback_run = setup
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &tx_fallback,
+            None,
+            None, // force legacy path
+            &training_result.basis_cache,
+        )
+        .expect("fallback-path simulate must return Ok");
+    drop(tx_fallback);
+    drop(drain_fallback.join().expect("drain thread must not panic"));
+
+    // ── Compare costs ─────────────────────────────────────────────────────────
+    assert_eq!(
+        baked_run.costs.len(),
+        fallback_run.costs.len(),
+        "both runs must return the same number of scenarios"
+    );
+
+    for ((b_id, b_cost, _), (f_id, f_cost, _)) in
+        baked_run.costs.iter().zip(fallback_run.costs.iter())
+    {
+        assert_eq!(b_id, f_id, "scenario IDs must match between runs");
+        let rel_err = if b_cost.abs() > 1e-10 {
+            (b_cost - f_cost).abs() / b_cost.abs()
+        } else {
+            (b_cost - f_cost).abs()
+        };
+        assert!(
+            rel_err < 1e-12,
+            "scenario {b_id}: baked cost {b_cost} != fallback cost {f_cost} (rel_err={rel_err})"
+        );
+    }
 }

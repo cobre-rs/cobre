@@ -286,6 +286,7 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     basis_cache: Vec::new(),
 ///     solver_stats_log: Vec::new(),
 ///     visited_archive: None,
+///     baked_templates: None
 /// };
 ///
 /// let events = vec![TrainingEvent::IterationSummary {
@@ -417,6 +418,7 @@ mod tests {
             basis_cache: Vec::new(),
             solver_stats_log: Vec::new(),
             visited_archive: None,
+            baked_templates: None,
         }
     }
 

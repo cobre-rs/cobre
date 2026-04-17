@@ -296,6 +296,7 @@ fn decomp_structural_properties_and_training() {
             &comm,
             &result_tx,
             None,
+            None,
             &outcome.result.basis_cache,
         )
         .expect("simulate must not return Err");

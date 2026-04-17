@@ -1765,7 +1765,7 @@ mod tests {
         let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
         let sim_result = setup
-            .simulate(&mut pool.workspaces, &comm, &result_tx, None, &[])
+            .simulate(&mut pool.workspaces, &comm, &result_tx, None, None, &[])
             .expect("simulate");
 
         // Drop the sender so the drain thread terminates.

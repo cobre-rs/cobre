@@ -36,7 +36,7 @@ use cobre_solver::{Basis, SolverInterface};
 /// parameters in [`CapturedBasis::new`] so the forward capture site can
 /// pre-allocate once and reuse the same `CapturedBasis` on subsequent
 /// iterations without heap reallocation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CapturedBasis {
     /// The underlying solver basis (row and column statuses).
     pub basis: Basis,

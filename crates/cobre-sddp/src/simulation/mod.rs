@@ -15,10 +15,10 @@ pub use aggregation::aggregate_simulation;
 pub use config::SimulationConfig;
 pub use error::SimulationError;
 pub use extraction::{
-    EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-    extract_stage_result,
+    accumulate_category_costs, assign_scenarios, extract_stage_result, EntityCounts, SolutionView,
+    StageExtractionSpec,
 };
-pub use pipeline::{SimulationOutputSpec, SimulationRunResult, simulate};
+pub use pipeline::{simulate, SimulationOutputSpec, SimulationRunResult};
 pub use types::{
     CategoryCostStats, ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult,
     SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,

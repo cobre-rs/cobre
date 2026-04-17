@@ -56,24 +56,23 @@ use std::path::Path;
 use chrono::NaiveDate;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
-    parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
-    validate_structure,
+    parse_inflow_ar_coefficients, parse_inflow_history,
+    scenarios::{assemble_inflow_models, InflowArCoefficientRow, InflowSeasonalStatsRow},
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::aggregate::aggregate_observations_to_season,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, ArCoefficientEstimate,
+        SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Classification of the estimation path taken for a given input file manifest.
@@ -1849,8 +1848,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {

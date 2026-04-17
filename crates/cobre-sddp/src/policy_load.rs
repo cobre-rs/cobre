@@ -10,9 +10,10 @@
 use cobre_io::PolicyCheckpointMetadata;
 use cobre_solver::Basis;
 
-use crate::SddpError;
 use crate::cut::pool::CutPool;
 use crate::setup::StudySetup;
+use crate::workspace::CapturedBasis;
+use crate::SddpError;
 
 /// Resolve the per-stage warm-start cut counts from a loaded policy checkpoint.
 ///
@@ -76,23 +77,33 @@ pub fn validate_policy_compatibility(
 
 /// Build a basis cache from deserialized checkpoint basis records.
 ///
-/// Returns a `Vec<Option<Basis>>` with one entry per stage. Stages with a
-/// matching record get `Some(Basis)` (with `u8` status codes widened to `i32`);
-/// stages without a record get `None`.
+/// Returns a `Vec<Option<CapturedBasis>>` with one entry per stage. Stages with
+/// a matching record get `Some(CapturedBasis)` (with `u8` status codes widened
+/// to `i32`); stages without a record get `None`.
+///
+/// The returned `CapturedBasis` entries have empty metadata (`cut_row_slots`,
+/// `state_at_capture`, `base_row_count = 0`). Checkpoint files do not store
+/// slot-tracking metadata; on the simulation warm-start path, `reconstruct_basis`
+/// degrades gracefully when `cut_row_slots` is empty (all rows treated as new).
 #[must_use]
 pub fn build_basis_cache_from_checkpoint(
     num_stages: usize,
     stage_bases: &[cobre_io::OwnedPolicyBasisRecord],
-) -> Vec<Option<Basis>> {
-    let mut cache: Vec<Option<Basis>> = vec![None; num_stages];
+) -> Vec<Option<CapturedBasis>> {
+    let mut cache: Vec<Option<CapturedBasis>> = vec![None; num_stages];
     for record in stage_bases {
         let stage = record.stage_id as usize;
         if stage < num_stages {
             let col_status: Vec<i32> = record.column_status.iter().map(|&c| i32::from(c)).collect();
             let row_status: Vec<i32> = record.row_status.iter().map(|&r| i32::from(r)).collect();
-            cache[stage] = Some(Basis {
-                col_status,
-                row_status,
+            cache[stage] = Some(CapturedBasis {
+                basis: Basis {
+                    col_status,
+                    row_status,
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
     }

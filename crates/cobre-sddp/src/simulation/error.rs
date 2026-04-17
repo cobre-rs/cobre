@@ -70,6 +70,11 @@ pub enum SimulationError {
     /// Forward sampler construction or sampling failure.
     #[error("stochastic error: {0}")]
     Stochastic(#[from] cobre_stochastic::StochasticError),
+
+    /// Invalid configuration passed to `simulate`, e.g. baked-template slice length
+    /// does not match `num_stages`.
+    #[error("invalid simulation configuration: {0}")]
+    InvalidConfiguration(String),
 }
 
 impl From<SimulationError> for SddpError {

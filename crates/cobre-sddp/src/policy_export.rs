@@ -103,7 +103,7 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
         .iter()
         .map(|opt| {
             opt.as_ref()
-                .map(|b| b.col_status.iter().map(|&v| v as u8).collect())
+                .map(|cb| cb.basis.col_status.iter().map(|&v| v as u8).collect())
                 .unwrap_or_default()
         })
         .collect();
@@ -112,7 +112,7 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
         .iter()
         .map(|opt| {
             opt.as_ref()
-                .map(|b| b.row_status.iter().map(|&v| v as u8).collect())
+                .map(|cb| cb.basis.row_status.iter().map(|&v| v as u8).collect())
                 .unwrap_or_default()
         })
         .collect();

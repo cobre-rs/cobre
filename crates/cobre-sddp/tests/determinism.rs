@@ -687,6 +687,7 @@ fn run_simulation(
                     hydro_productivities_per_stage: &vec![vec![1.0, 1.0, 1.0]; fx.n_stages],
                     event_sender: None,
                 },
+                None,
                 &[],
                 &comm,
             )

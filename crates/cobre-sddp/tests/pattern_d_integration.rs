@@ -317,6 +317,7 @@ fn pattern_d_structural_properties_and_training() {
             &comm,
             &result_tx,
             None,
+            None,
             &outcome.result.basis_cache,
         )
         .expect("D30: simulate must not return Err");

@@ -54,7 +54,7 @@ use crate::{
     solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
-    workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    workspace::{BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
     SddpError, TrainingConfig, TrajectoryRecord,
 };
 
@@ -105,13 +105,14 @@ pub struct TrainingResult {
     /// Total wall-clock time for the training run, in milliseconds.
     pub total_time_ms: u64,
 
-    /// Per-stage solver basis from the last iteration, indexed 0-based.
+    /// Per-stage captured basis from the last iteration, indexed 0-based.
     ///
-    /// Each entry is `Some(basis)` if the stage was solved at least once
+    /// Each entry is `Some(captured)` if the stage was solved at least once
     /// during the final iteration, or `None` if no solve occurred (e.g.,
     /// the last stage in finite-horizon mode has no successor cuts).
-    /// Used for policy checkpoint persistence.
-    pub basis_cache: Vec<Option<Basis>>,
+    /// Used for policy checkpoint persistence and simulation warm-start
+    /// via slot-tracked reconstruction.
+    pub basis_cache: Vec<Option<CapturedBasis>>,
 
     /// Per-iteration, per-phase solver statistics log.
     ///
@@ -126,6 +127,14 @@ pub struct TrainingResult {
     /// Always populated during training. The caller decides whether to
     /// persist it to the policy checkpoint based on `exports.states`.
     pub visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
+
+    /// Final-iteration baked templates, one per stage.
+    ///
+    /// `Some` if the bake step ran at least once during training (i.e.,
+    /// `baked_templates_ready == true` at termination).
+    /// `None` if training completed 0 or 1 iterations before any bake step
+    /// executed, so callers can distinguish "no bake" from "baked but empty".
+    pub baked_templates: Option<Vec<StageTemplate>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,17 +193,24 @@ fn broadcast_basis_cache<C: Communicator>(
     basis_store: &crate::workspace::BasisStore,
     num_stages: usize,
     comm: &C,
-) -> Result<Vec<Option<Basis>>, SddpError> {
-    // Single-rank fast path: no communication needed.
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
+    // Single-rank fast path: no communication needed — clone the full
+    // CapturedBasis including metadata (cut_row_slots, state_at_capture,
+    // base_row_count) so that simulation reconstruction has full slot
+    // identity on single-rank runs.
     if comm.size() == 1 {
         let cache = (0..num_stages)
-            .map(|t| basis_store.get(0, t).map(|cb| cb.basis.clone()))
+            .map(|t| basis_store.get(0, t).cloned())
             .collect();
         return Ok(cache);
     }
 
-    // Pack rank 0's scenario-0 bases into a flat i32 buffer that can be
-    // broadcast over the comm layer.
+    // Multi-rank path: pack rank 0's scenario-0 basis bodies into a flat i32
+    // buffer and broadcast. Metadata (cut_row_slots, state_at_capture) is NOT
+    // serialized in this ticket — receiving ranks hold a CapturedBasis with
+    // empty metadata, which causes reconstruct_basis to treat all rows as new
+    // cuts (safe degradation). Full metadata broadcast is implemented in
+    // ticket-017.
     //
     // Buffer layout per stage:
     //   [sentinel(0 or 1), <if sentinel==1: col_len, row_len, col_status..., row_status...>]
@@ -223,10 +239,14 @@ fn broadcast_basis_cache<C: Communicator>(
     buf.resize(total_len, 0_i32);
     comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
 
-    // Step 3: deserialize back into Vec<Option<Basis>>.
+    // Step 3: deserialize back into Vec<Option<CapturedBasis>>.
     // All index arithmetic is bounds-checked to convert a corrupted broadcast
     // into a recoverable error instead of an index-out-of-bounds panic.
-    let mut cache: Vec<Option<Basis>> = Vec::with_capacity(num_stages);
+    // Non-root ranks receive a CapturedBasis with empty metadata (cut_row_slots,
+    // state_at_capture are empty, base_row_count is 0) — this is the documented
+    // shim state pending ticket-017's full metadata broadcast. reconstruct_basis
+    // degrades correctly when cut_row_slots is empty (all rows treated as new).
+    let mut cache: Vec<Option<CapturedBasis>> = Vec::with_capacity(num_stages);
     let mut pos = 0_usize;
     for stage in 0..num_stages {
         if pos >= buf.len() {
@@ -261,9 +281,18 @@ fn broadcast_basis_cache<C: Communicator>(
             pos += col_len;
             let row_status = buf[pos..pos + row_len].to_vec();
             pos += row_len;
-            cache.push(Some(Basis {
-                col_status,
-                row_status,
+            // Wrap the reconstructed basis body in a CapturedBasis with empty
+            // metadata. base_row_count=0 and empty cut_row_slots means
+            // reconstruct_basis will treat all rows as new cuts (safe degradation).
+            // ticket-017 will extend this broadcast to include full metadata.
+            cache.push(Some(CapturedBasis {
+                basis: Basis {
+                    col_status,
+                    row_status,
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             }));
         }
     }
@@ -596,6 +625,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     basis_cache,
                     solver_stats_log,
                     visited_archive: visited_archive.take(),
+                    baked_templates: if baked_templates_ready {
+                        Some(baked_templates.clone())
+                    } else {
+                        None
+                    },
                 },
                 error: Some($e),
             });
@@ -1100,6 +1134,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             basis_cache,
             solver_stats_log,
             visited_archive,
+            baked_templates: if baked_templates_ready {
+                Some(baked_templates)
+            } else {
+                None
+            },
         },
         error: None,
     })
@@ -2993,14 +3032,16 @@ mod tests {
 
         assert_eq!(cache.len(), num_stages);
         for (t, entry) in cache.iter().enumerate() {
-            let basis = entry.as_ref().expect("stage {t} must have a basis");
+            let captured = entry
+                .as_ref()
+                .expect("stage {t} must have a captured basis");
             assert_eq!(
-                basis.col_status,
+                captured.basis.col_status,
                 vec![10_i32 + t as i32, 20_i32 + t as i32],
                 "stage {t} col_status must come from scenario 0, not scenario 3"
             );
             assert_eq!(
-                basis.row_status,
+                captured.basis.row_status,
                 vec![30_i32 + t as i32],
                 "stage {t} row_status must come from scenario 0, not scenario 3"
             );
@@ -3031,6 +3072,152 @@ mod tests {
                 "stage {t} must be None when basis store has no entry for scenario 0"
             );
         }
+    }
+
+    /// AC ticket-010: `broadcast_basis_cache` with `comm.size() == 1` must clone
+    /// the full `CapturedBasis` including metadata (`cut_row_slots`,
+    /// `state_at_capture`, `base_row_count`), not just the bare basis body.
+    #[test]
+    fn broadcast_basis_cache_single_rank_preserves_metadata() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let num_stages = 2;
+        let mut store = BasisStore::new(1, num_stages);
+
+        // Populate stage 0 with non-empty metadata.
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2_i32],
+                row_status: vec![3_i32, 4_i32, 5_i32],
+            },
+            base_row_count: 2,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![1.5_f64, 2.5_f64],
+        });
+        // Stage 1 left None.
+
+        let comm = StubComm; // size == 1
+        let cache = broadcast_basis_cache(&store, num_stages, &comm).unwrap();
+
+        assert_eq!(cache.len(), num_stages);
+        let cb = cache[0].as_ref().expect("stage 0 must have captured basis");
+        assert_eq!(
+            cb.cut_row_slots.len(),
+            3,
+            "single-rank path must preserve cut_row_slots"
+        );
+        assert_eq!(cb.base_row_count, 2, "base_row_count must be preserved");
+        assert_eq!(
+            cb.state_at_capture,
+            vec![1.5_f64, 2.5_f64],
+            "state_at_capture must be preserved"
+        );
+        assert!(cache[1].is_none(), "stage 1 must remain None");
+    }
+
+    /// AC ticket-010: `broadcast_basis_cache` with `comm.size() > 1` must
+    /// produce a `CapturedBasis` with empty metadata (the documented shim
+    /// state pending ticket-017). The multi-rank pack/broadcast/deserialize
+    /// path only transmits the basis body (`col_status`, `row_status`);
+    /// metadata fields (`cut_row_slots`, `state_at_capture`, `base_row_count`)
+    /// are rebuilt as empty on every rank.
+    ///
+    /// The test drives the multi-rank code path on rank 0 (`size=2, rank=0`).
+    /// Rank 0 owns the buffer, so the no-op `broadcast` stub is harmless —
+    /// the buffer already contains rank 0's own packed basis body. The
+    /// deserialize then runs the shim branch and strips metadata, which is
+    /// exactly the behaviour every receiving rank will observe once real MPI
+    /// broadcast runs under ticket-017.
+    #[test]
+    fn broadcast_basis_cache_multi_rank_strips_metadata() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        /// size=2, rank=0 — exercises the multi-rank code path (size > 1) on
+        /// root, where the no-op broadcast does not corrupt data because
+        /// rank 0 owns the packed buffer.
+        struct StubCommMultiRankRoot;
+        impl Communicator for StubCommMultiRankRoot {
+            fn allgatherv<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _counts: &[usize],
+                _displs: &[usize],
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+            fn allreduce<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _op: ReduceOp,
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                Ok(())
+            }
+            fn barrier(&self) -> Result<(), CommError> {
+                Ok(())
+            }
+            fn rank(&self) -> usize {
+                0
+            }
+            fn size(&self) -> usize {
+                2
+            }
+            fn abort(&self, code: i32) -> ! {
+                std::process::exit(code)
+            }
+        }
+
+        let mut store = BasisStore::new(1, 2);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2_i32, 3_i32],
+                row_status: vec![10_i32, 20_i32],
+            },
+            base_row_count: 5,
+            cut_row_slots: vec![100_u32, 200_u32],
+            state_at_capture: vec![1.5_f64],
+        });
+
+        let comm = StubCommMultiRankRoot;
+        let cache = broadcast_basis_cache(&store, 2, &comm).unwrap();
+
+        assert_eq!(cache.len(), 2);
+        let cb0 = cache[0]
+            .as_ref()
+            .expect("stage 0 must deserialise into CapturedBasis");
+        assert_eq!(
+            cb0.basis.col_status,
+            vec![1_i32, 2_i32, 3_i32],
+            "basis body col_status must round-trip through pack/deserialize"
+        );
+        assert_eq!(
+            cb0.basis.row_status,
+            vec![10_i32, 20_i32],
+            "basis body row_status must round-trip through pack/deserialize"
+        );
+        assert!(
+            cb0.cut_row_slots.is_empty(),
+            "multi-rank shim must produce empty cut_row_slots"
+        );
+        assert!(
+            cb0.state_at_capture.is_empty(),
+            "multi-rank shim must produce empty state_at_capture"
+        );
+        assert_eq!(
+            cb0.base_row_count, 0,
+            "multi-rank shim must zero base_row_count"
+        );
+        assert!(cache[1].is_none(), "stage 1 had no basis → None");
     }
 
     /// AC: `template_bake_event_emitted`

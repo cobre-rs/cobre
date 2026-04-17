@@ -401,6 +401,7 @@ fn run_simulation_phase_py(
             &LocalBackend,
             &result_tx,
             None,
+            training_result.baked_templates.as_deref(),
             &training_result.basis_cache,
         )
         .map_err(|e| format!("simulation error: {e}"));

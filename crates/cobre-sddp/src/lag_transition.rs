@@ -887,9 +887,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use cobre_core::{
-        EntityId,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         initial_conditions::RecentObservation,
+        EntityId,
     };
 
     fn make_hydro(id: i32) -> Hydro {

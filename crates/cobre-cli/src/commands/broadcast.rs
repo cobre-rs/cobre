@@ -5,8 +5,8 @@
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
-    StudyParams, DEFAULT_MAX_ITERATIONS,
+    CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
+    StoppingRule, StoppingRuleSet, StudyParams,
 };
 
 use crate::error::CliError;
@@ -308,7 +308,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{broadcast_value, BroadcastOpeningTree};
+    use super::{BroadcastOpeningTree, broadcast_value};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

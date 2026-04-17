@@ -23,14 +23,13 @@
 // External crate imports
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
-    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -38,18 +37,19 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
+    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
 };
 
 use cobre_sddp::{
-    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-    RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
+    cut::fcf::FutureCostFunction, train, CutManagementConfig, EventConfig, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, RiskMeasure, SddpError, StageContext, StageIndexer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
 };
 
 // ===========================================================================
@@ -340,9 +340,9 @@ impl SolverInterface for ExpandingMockSolver {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
-    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
+    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),
@@ -1729,9 +1729,9 @@ fn test_d01_with_basis_padding_enabled() {
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::scenario::ScenarioSource;
-    use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
-    use cobre_solver::SolverInterface;
+    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
     use cobre_solver::highs::HighsSolver;
+    use cobre_solver::SolverInterface;
 
     struct LocalStubComm;
 
@@ -1823,6 +1823,107 @@ fn test_d01_with_basis_padding_enabled() {
     assert_eq!(
         stats.basis_rejections, 0,
         "D01+basis_padding: expected 0 basis rejections, got {}",
+        stats.basis_rejections
+    );
+}
+
+/// AC #8 (ticket-003): D01 must produce a bit-identical lower bound after the
+/// forward path is rewired through `reconstruct_basis`.
+///
+/// `reconstruct_basis` is a warm-start heuristic — it must not change the
+/// optimal LP solution.  This test runs D01 with the default (post-ticket)
+/// configuration and asserts the lower bound matches the reference value of
+/// 182,500 $ to within float tolerance.  Combined with the existing
+/// `test_d01_with_basis_padding_enabled`, this confirms the reconstruction
+/// path is bit-equivalent to the prior pad-based path.
+#[test]
+fn test_forward_basis_reconstruct_bit_identical_d01() {
+    use std::path::Path;
+
+    use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
+    use cobre_core::scenario::ScenarioSource;
+    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+    use cobre_solver::highs::HighsSolver;
+    use cobre_solver::SolverInterface;
+
+    struct LocalStubComm;
+
+    impl Communicator for LocalStubComm {
+        fn allgatherv<T: CommData>(
+            &self,
+            send: &[T],
+            recv: &mut [T],
+            _counts: &[usize],
+            _displs: &[usize],
+        ) -> Result<(), CommError> {
+            recv[..send.len()].clone_from_slice(send);
+            Ok(())
+        }
+        fn allreduce<T: CommData>(
+            &self,
+            send: &[T],
+            recv: &mut [T],
+            _op: ReduceOp,
+        ) -> Result<(), CommError> {
+            recv.clone_from_slice(send);
+            Ok(())
+        }
+        fn broadcast<T: CommData>(&self, _buf: &mut [T], _root: usize) -> Result<(), CommError> {
+            Ok(())
+        }
+        fn barrier(&self) -> Result<(), CommError> {
+            Ok(())
+        }
+        fn rank(&self) -> usize {
+            0
+        }
+        fn size(&self) -> usize {
+            1
+        }
+        fn abort(&self, error_code: i32) -> ! {
+            std::process::exit(error_code)
+        }
+    }
+
+    let case_dir = Path::new("../../examples/deterministic/d01-thermal-dispatch");
+    let config_path = case_dir.join("config.json");
+    let config = cobre_io::parse_config(&config_path).expect("config must parse");
+    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
+
+    let prepare_result =
+        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
+    let system = prepare_result.system;
+    let stochastic = prepare_result.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut setup =
+        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+
+    let comm = LocalStubComm;
+    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
+
+    let outcome = setup
+        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(outcome.error.is_none(), "expected no training error");
+
+    // Reconstruct path must yield the bit-identical reference lower bound.
+    let diff = (outcome.result.final_lb - 182_500.0_f64).abs();
+    assert!(
+        diff <= 1e-6,
+        "reconstruct path: expected lower bound 182500.0, got {} (diff={:.2e})",
+        outcome.result.final_lb,
+        diff
+    );
+
+    // Sanity: zero basis rejections — reconstructed bases must be accepted.
+    let stats = solver.statistics();
+    assert_eq!(
+        stats.basis_rejections, 0,
+        "reconstruct path: expected 0 basis rejections, got {}",
         stats.basis_rejections
     );
 }
@@ -2112,11 +2213,11 @@ impl SolverInterface for TrackingMockSolver {
 #[allow(clippy::too_many_lines)]
 fn forward_pass_uses_baked_template_on_iter_2() {
     use cobre_sddp::{
-        BakedTemplates, BasisStore, ForwardPassBatch, FutureCostFunction, HorizonMode,
-        InflowNonNegativityMethod, PatchBuffer, SolverWorkspace, StageContext, StageIndexer,
-        TrainingContext, WorkspaceSizing, build_cut_row_batch_into, run_forward_pass,
+        build_cut_row_batch_into, run_forward_pass, BakedTemplates, BasisStore, ForwardPassBatch,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, SolverWorkspace,
+        StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
     };
-    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
+    use cobre_solver::{bake_rows_into_template, RowBatch, StageTemplate};
 
     // ── System parameters ───────────────────────────────────────────────────
     let n_stages = 3;
@@ -2384,12 +2485,12 @@ fn forward_pass_uses_baked_template_on_iter_2() {
 #[allow(clippy::too_many_lines)]
 fn backward_pass_uses_delta_batch_on_iter_2() {
     use cobre_sddp::{
-        BackwardPassSpec, BakedTemplates, BasisStore, CutSyncBuffers, ExchangeBuffers,
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure,
-        SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
-        build_cut_row_batch_into, run_backward_pass,
+        build_cut_row_batch_into, run_backward_pass, BackwardPassSpec, BakedTemplates, BasisStore,
+        CutSyncBuffers, ExchangeBuffers, FutureCostFunction, HorizonMode,
+        InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SolverWorkspace, StageContext,
+        StageIndexer, TrainingContext, WorkspaceSizing,
     };
-    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
+    use cobre_solver::{bake_rows_into_template, RowBatch, StageTemplate};
 
     // ── System parameters ──────────────────────────────────────────────────
     let n_stages = 3;

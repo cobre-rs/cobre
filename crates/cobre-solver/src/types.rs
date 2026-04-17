@@ -204,6 +204,14 @@ pub struct SolverStatistics {
     /// Incremented by the calling algorithm, not by the solver itself.
     pub basis_padding_slack: u64,
 
+    /// Number of cut rows whose slot identity was found in the stored basis
+    /// and whose status was copied directly during slot-tracked reconstruction
+    /// (Strategy S3+, ticket 003/004).
+    ///
+    /// Incremented by the calling algorithm via `record_reconstruction_stats`.
+    /// Ticket 005 adds the parquet column and writer wiring.
+    pub basis_preserved: u64,
+
     /// Per-level retry success histogram. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
     /// were recovered at retry level `k`. The sum equals
@@ -589,6 +597,7 @@ mod tests {
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
         assert_eq!(stats.basis_padding_tight, 0);
         assert_eq!(stats.basis_padding_slack, 0);
+        assert_eq!(stats.basis_preserved, 0);
         assert!(stats.retry_level_histogram.is_empty());
     }
 

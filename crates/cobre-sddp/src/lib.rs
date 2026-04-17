@@ -35,7 +35,7 @@
 )]
 
 pub mod backward;
-pub mod basis_padding;
+pub mod basis_reconstruct;
 pub mod config;
 pub mod context;
 pub mod convergence;

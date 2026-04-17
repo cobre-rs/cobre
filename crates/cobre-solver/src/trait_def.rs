@@ -172,6 +172,19 @@ pub trait SolverInterface: Send {
     /// `tight` is the count of new cut rows assigned `NONBASIC_LOWER` and
     /// `slack` is the count assigned `BASIC` by the padding pass.
     fn record_padding_stats(&mut self, _tight: u64, _slack: u64) {}
+
+    /// Record slot-tracked basis reconstruction statistics.
+    ///
+    /// Called after each `reconstruct_basis` call on the forward or backward
+    /// path. Default implementation is a no-op; `HighsSolver` overrides to
+    /// accumulate into `SolverStatistics` fields.
+    ///
+    /// - `preserved`: cut rows whose slot identity was found in the stored
+    ///   basis and whose status was copied directly.
+    /// - `new_tight`: new cut rows (slot not in stored basis) evaluated as
+    ///   tight or violated at the padding state.
+    /// - `new_slack`: new cut rows evaluated as slack at the padding state.
+    fn record_reconstruction_stats(&mut self, _preserved: u32, _new_tight: u32, _new_slack: u32) {}
 }
 
 #[cfg(test)]

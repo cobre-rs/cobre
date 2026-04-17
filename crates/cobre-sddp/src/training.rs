@@ -188,7 +188,7 @@ fn broadcast_basis_cache<C: Communicator>(
     // Single-rank fast path: no communication needed.
     if comm.size() == 1 {
         let cache = (0..num_stages)
-            .map(|t| basis_store.get(0, t).cloned())
+            .map(|t| basis_store.get(0, t).map(|cb| cb.basis.clone()))
             .collect();
         return Ok(cache);
     }
@@ -203,12 +203,12 @@ fn broadcast_basis_cache<C: Communicator>(
         for t in 0..num_stages {
             match basis_store.get(0, t) {
                 None => buf.push(0_i32),
-                Some(basis) => {
+                Some(captured) => {
                     buf.push(1_i32);
-                    buf.push(basis.col_status.len() as i32);
-                    buf.push(basis.row_status.len() as i32);
-                    buf.extend_from_slice(&basis.col_status);
-                    buf.extend_from_slice(&basis.row_status);
+                    buf.push(captured.basis.col_status.len() as i32);
+                    buf.push(captured.basis.row_status.len() as i32);
+                    buf.extend_from_slice(&captured.basis.col_status);
+                    buf.extend_from_slice(&captured.basis.row_status);
                 }
             }
         }
@@ -2986,17 +2986,29 @@ mod tests {
 
         // Populate scenario 0 with col_status=[10,20], row_status=[30].
         for t in 0..num_stages {
-            *store.get_mut(0, t) = Some(Basis {
-                col_status: vec![10_i32 + t as i32, 20_i32 + t as i32],
-                row_status: vec![30_i32 + t as i32],
+            // test shim: zero metadata is acceptable for tests exercising broadcast path
+            *store.get_mut(0, t) = Some(crate::workspace::CapturedBasis {
+                basis: Basis {
+                    col_status: vec![10_i32 + t as i32, 20_i32 + t as i32],
+                    row_status: vec![30_i32 + t as i32],
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
 
         // Populate scenario 3 (last) with completely different values.
         for t in 0..num_stages {
-            *store.get_mut(3, t) = Some(Basis {
-                col_status: vec![99_i32, 88_i32],
-                row_status: vec![77_i32],
+            // test shim: zero metadata is acceptable for tests exercising broadcast path
+            *store.get_mut(3, t) = Some(crate::workspace::CapturedBasis {
+                basis: Basis {
+                    col_status: vec![99_i32, 88_i32],
+                    row_status: vec![77_i32],
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
 

@@ -90,7 +90,7 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
-    basis_padding::pad_basis_for_cuts,
+    basis_reconstruct::pad_basis_for_cuts,
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -472,7 +472,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             if let Some(rb) = succ.basis_store.get(m, s) {
                 if training_ctx.basis_padding_enabled {
                     // Copy stored basis into scratch (reuses pre-allocated capacity).
-                    ws.scratch_basis.clone_from(rb);
+                    ws.scratch_basis.clone_from(&rb.basis);
 
                     // Truncate stale cut-row statuses if the active set changed.
                     // Expected row count differs by path:
@@ -513,7 +513,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                     ws.solver.solve_with_basis(&ws.scratch_basis)
                 } else {
                     // Padding disabled: use the stored basis directly.
-                    ws.solver.solve_with_basis(rb)
+                    ws.solver.solve_with_basis(&rb.basis)
                 }
             } else {
                 ws.solver.solve()
@@ -1355,6 +1355,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -1377,7 +1378,13 @@ mod tests {
         basis: Basis,
     ) -> BasisStore {
         let mut store = BasisStore::new(num_scenarios, num_stages);
-        *store.get_mut(scenario, stage) = Some(basis);
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *store.get_mut(scenario, stage) = Some(crate::workspace::CapturedBasis {
+            basis,
+            base_row_count: 0,
+            cut_row_slots: Vec::new(),
+            state_at_capture: Vec::new(),
+        });
         store
     }
 
@@ -3211,6 +3218,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3308,6 +3316,7 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    recon_slot_lookup: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
@@ -3660,6 +3669,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3826,6 +3836,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3987,6 +3998,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -4419,6 +4431,7 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    recon_slot_lookup: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),

@@ -569,6 +569,7 @@ mod tests {
             downstream_weight_accum: 0.0,
             downstream_completed_lags: Vec::new(),
             downstream_n_completed: 0,
+            recon_slot_lookup: Vec::new(),
         }
     }
 

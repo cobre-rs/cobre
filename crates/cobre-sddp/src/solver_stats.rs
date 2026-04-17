@@ -70,6 +70,12 @@ pub struct SolverStatsDelta {
     /// Application-level counter: not included in MPI packing or allreduce.
     pub basis_padding_slack: u64,
 
+    /// Number of stored cut rows whose status was preserved (slot found in
+    /// stored basis) by `reconstruct_basis` during this phase.
+    ///
+    /// Application-level counter: not included in MPI packing or allreduce.
+    pub basis_preserved: u64,
+
     /// Per-level retry success histogram delta. Length depends on the solver
     /// backend (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -116,6 +122,7 @@ impl SolverStatsDelta {
                 * 1000.0,
             basis_padding_tight: after.basis_padding_tight - before.basis_padding_tight,
             basis_padding_slack: after.basis_padding_slack - before.basis_padding_slack,
+            basis_preserved: after.basis_preserved - before.basis_preserved,
             retry_level_histogram: after
                 .retry_level_histogram
                 .iter()
@@ -149,6 +156,7 @@ impl SolverStatsDelta {
             result.basis_set_time_ms += d.basis_set_time_ms;
             result.basis_padding_tight += d.basis_padding_tight;
             result.basis_padding_slack += d.basis_padding_slack;
+            result.basis_preserved += d.basis_preserved;
             ensure_histogram_capacity(&mut result.retry_level_histogram, &d.retry_level_histogram);
             for (dst, src) in result
                 .retry_level_histogram
@@ -190,6 +198,7 @@ pub fn aggregate_solver_statistics(
         result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
         result.basis_padding_tight += s.basis_padding_tight;
         result.basis_padding_slack += s.basis_padding_slack;
+        result.basis_preserved += s.basis_preserved;
         ensure_histogram_capacity(&mut result.retry_level_histogram, &s.retry_level_histogram);
         for (dst, src) in result
             .retry_level_histogram
@@ -289,6 +298,7 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         // Padding counters are application-level and excluded from MPI packing.
         basis_padding_tight: 0,
         basis_padding_slack: 0,
+        basis_preserved: 0,
         retry_level_histogram: Vec::new(),
     }
 }
@@ -371,6 +381,7 @@ mod tests {
             total_basis_set_time_seconds: 0.1,
             basis_padding_tight: 0,
             basis_padding_slack: 0,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         };
         let after = SolverStatistics {
@@ -391,6 +402,7 @@ mod tests {
             total_basis_set_time_seconds: 0.3,
             basis_padding_tight: 0,
             basis_padding_slack: 0,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -432,6 +444,7 @@ mod tests {
             total_basis_set_time_seconds: 0.01,
             basis_padding_tight: 0,
             basis_padding_slack: 0,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
@@ -477,6 +490,7 @@ mod tests {
             basis_set_time_ms: 1.0,
             basis_padding_tight: 3,
             basis_padding_slack: 7,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         };
         let d2 = SolverStatsDelta {
@@ -497,6 +511,7 @@ mod tests {
             basis_set_time_ms: 2.0,
             basis_padding_tight: 5,
             basis_padding_slack: 2,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -540,6 +555,7 @@ mod tests {
             total_basis_set_time_seconds: 0.05,
             basis_padding_tight: 4,
             basis_padding_slack: 6,
+            basis_preserved: 0,
             retry_level_histogram: vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let s2 = SolverStatistics {
@@ -560,6 +576,7 @@ mod tests {
             total_basis_set_time_seconds: 0.15,
             basis_padding_tight: 10,
             basis_padding_slack: 20,
+            basis_preserved: 0,
             retry_level_histogram: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
@@ -605,6 +622,7 @@ mod tests {
             basis_set_time_ms: 0.125,
             basis_padding_tight: 0,
             basis_padding_slack: 0,
+            basis_preserved: 0,
             retry_level_histogram: vec![0; 12],
         }
     }

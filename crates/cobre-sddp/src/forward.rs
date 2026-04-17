@@ -71,25 +71,25 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::WelfordAccumulator;
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
-    basis_padding::pad_basis_for_cuts,
+    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
-    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
+    workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -751,11 +751,53 @@ struct StageKey<'a> {
     /// `fcf.pools[num_stages - 1].warm_start_count > 0` and reused for every
     /// (scenario, stage) pair in the pass.
     terminal_has_boundary_cuts: bool,
-    /// Reference to the cut pool for stage `t`. Used by [`pad_basis_for_cuts`]
-    /// to assign informed basis statuses to new cut rows before warm-starting.
+    /// Reference to the cut pool for stage `t`. Used by
+    /// [`reconstruct_basis`](crate::basis_reconstruct::reconstruct_basis)
+    /// to walk active cut rows and by `write_capture_metadata` to record slot
+    /// identities for the next iteration's warm-start.
     pool: &'a CutPool,
     /// Whether basis padding is enabled (config-gated, default false).
+    /// Retained on `StageKey` for the backward path (which still consults it
+    /// in ticket 004) and Epic 02 (final flag disposition).  The forward
+    /// apply path no longer reads this — `reconstruct_basis` runs
+    /// unconditionally when a stored basis exists.
+    #[allow(dead_code)]
     basis_padding_enabled: bool,
+}
+
+/// Populate `CapturedBasis` metadata after a forward solve.
+///
+/// `cut_row_count` is the number of cut rows actually in the LP (derived from
+/// `basis_row_capacity - base_row_count`).  On terminal stages the pool may
+/// hold cuts that the LP does not load, so iterating `pool.active_cuts()`
+/// blindly would over-count; `take(cut_row_count)` limits to the LP shape.
+///
+/// `row_status` is defensively resized to `base_row_count + cut_row_count` so
+/// the metadata invariant holds even when the underlying solver's `get_basis`
+/// is a no-op (e.g. test mocks).  For real solvers this is a no-op since they
+/// write the correct length.
+#[allow(clippy::cast_possible_truncation)]
+fn write_capture_metadata(
+    captured: &mut CapturedBasis,
+    pool: &CutPool,
+    base_row_count: usize,
+    cut_row_count: usize,
+    current_state: &[f64],
+) {
+    captured.cut_row_slots.clear();
+    for (slot, _intercept, _coeffs) in pool.active_cuts().take(cut_row_count) {
+        captured.cut_row_slots.push(slot as u32);
+    }
+    captured.state_at_capture.clear();
+    captured.state_at_capture.extend_from_slice(current_state);
+    captured.base_row_count = base_row_count;
+    let expected_len = base_row_count + cut_row_count;
+    if captured.basis.row_status.len() != expected_len {
+        captured.basis.row_status.resize(
+            expected_len,
+            crate::basis_reconstruct::HIGHS_BASIS_STATUS_BASIC,
+        );
+    }
 }
 
 /// Execute the stage-level LP solve for one (scenario, stage) pair.
@@ -788,7 +830,10 @@ fn run_forward_stage<S: SolverInterface + Send>(
         basis_row_capacity,
         terminal_has_boundary_cuts,
         pool,
-        basis_padding_enabled,
+        // basis_padding_enabled is no longer consulted on the forward apply
+        // path — reconstruct_basis runs unconditionally when a stored basis
+        // exists.  Field stays on `StageKey` until Epic 02 decides its fate.
+        basis_padding_enabled: _,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -889,41 +934,43 @@ fn run_forward_stage<S: SolverInterface + Send>(
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
 
+    // Grow the slot-lookup scratch if the pool has allocated new slots since
+    // the last call.  `pool.populated_count` is monotonically non-decreasing,
+    // so after the first few iterations this check is a no-op.
+    if ws.scratch.recon_slot_lookup.len() < pool.populated_count {
+        ws.scratch
+            .recon_slot_lookup
+            .resize(pool.populated_count, None);
+    }
+
     let view = match basis_slice.get_mut(m, t) {
-        &mut Some(ref mut rb) => {
-            // `basis_row_capacity` equals the total LP row count for the current
-            // iteration at stage `t`: `baked.templates[t].num_rows` when baked
-            // templates are ready (cut rows are structural), or
-            // `ctx.templates[t].num_rows + pool.active_count()` on the legacy path.
-            let expected_rows = basis_row_capacity;
-
-            // Truncate if the active cut set changed since this basis was stored.
-            // This happens when cut selection deactivates or reactivates cuts between
-            // iterations: the stored row statuses map to a different slot ordering than
-            // the current LP, so applying them verbatim would feed HiGHS a misaligned
-            // basis (wrong pivot selection or an outright rejection). Truncating to the
-            // base template rows drops the stale cut-row statuses; padding (if enabled)
-            // then re-evaluates all active cuts at the current state and fills with
-            // informed statuses, and without padding HiGHS fills missing rows with
-            // BASIC (correct default — all cuts assumed slack). Template row statuses
-            // are preserved because the template structure never changes across iterations.
-            if rb.row_status.len() != expected_rows {
-                rb.row_status.truncate(ctx.templates[t].num_rows);
-            }
-
-            if basis_padding_enabled {
-                let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
-                let (tight, slack) = pad_basis_for_cuts(
-                    rb,
-                    pool,
-                    &ws.current_state[..indexer.n_state],
-                    theta_value,
-                    ctx.templates[t].num_rows,
-                    1e-7,
-                );
-                ws.solver.record_padding_stats(tight as u64, slack as u64);
-            }
-            ws.solver.solve_with_basis(rb)
+        &mut Some(ref captured) => {
+            // Slot-tracked reconstruction: copy preserved cut-row statuses by
+            // slot identity, and evaluate new cuts at the current state.
+            // Unconditional — does not consult `basis_padding_enabled`; Epic 02
+            // owns the final disposition of that flag.
+            let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
+            let recon_stats = reconstruct_basis(
+                captured,
+                ReconstructionTarget {
+                    base_row_count: ctx.templates[t].num_rows,
+                    num_cols: ctx.templates[t].num_cols,
+                },
+                pool.active_cuts(),
+                PaddingContext {
+                    state: &ws.current_state[..indexer.n_state],
+                    theta: theta_value,
+                    tolerance: 1e-7,
+                },
+                &mut ws.scratch_basis,
+                &mut ws.scratch.recon_slot_lookup,
+            );
+            ws.solver.record_reconstruction_stats(
+                recon_stats.preserved,
+                recon_stats.new_tight,
+                recon_stats.new_slack,
+            );
+            ws.solver.solve_with_basis(&ws.scratch_basis)
         }
         _ => ws.solver.solve(),
     }
@@ -1018,12 +1065,33 @@ fn run_forward_stage<S: SolverInterface + Send>(
     );
     rec.state.clear();
     rec.state.extend_from_slice(&ws.current_state);
-    if let Some(rb) = basis_slice.get_mut(m, t) {
-        ws.solver.get_basis(rb);
+    let cut_row_count = basis_row_capacity.saturating_sub(ctx.templates[t].num_rows);
+    if let Some(captured) = basis_slice.get_mut(m, t) {
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            captured,
+            pool,
+            ctx.templates[t].num_rows,
+            cut_row_count,
+            &ws.current_state[..indexer.n_state],
+        );
     } else {
-        let mut rb = Basis::new(ctx.templates[t].num_cols, basis_row_capacity);
-        ws.solver.get_basis(&mut rb);
-        *basis_slice.get_mut(m, t) = Some(rb);
+        let mut captured = CapturedBasis::new(
+            ctx.templates[t].num_cols,
+            basis_row_capacity,
+            ctx.templates[t].num_rows,
+            cut_row_count,
+            indexer.n_state,
+        );
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            &mut captured,
+            pool,
+            ctx.templates[t].num_rows,
+            cut_row_count,
+            &ws.current_state[..indexer.n_state],
+        );
+        *basis_slice.get_mut(m, t) = Some(captured);
     }
     Ok(stage_cost)
 }
@@ -1455,21 +1523,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch,
-        build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
+        build_cut_row_batch, build_delta_cut_row_batch_into, partition, run_forward_pass,
+        sync_forward, ForwardPassBatch, ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{BakedTemplates, StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
@@ -2147,6 +2215,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -4121,6 +4190,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -4252,6 +4322,7 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                recon_slot_lookup: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),

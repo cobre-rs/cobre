@@ -6,6 +6,88 @@
 
 use cobre_solver::{Basis, SolverInterface};
 
+// ---------------------------------------------------------------------------
+// CapturedBasis
+// ---------------------------------------------------------------------------
+
+/// A solver basis augmented with slot-tracking metadata for cut-set-aware
+/// warm-start reconstruction.
+///
+/// `CapturedBasis` wraps a raw [`Basis`] and attaches two pieces of metadata
+/// that the reconstruction algorithm (tickets 002–004) needs:
+///
+/// - `base_row_count`: the number of template (non-cut) rows in the LP when
+///   the basis was captured.  Row statuses at indices `0..base_row_count`
+///   belong to template rows and are always valid.
+///
+/// - `cut_row_slots`: maps each cut row in the captured basis to the cut pool
+///   slot it occupied at capture time.  Entry `i` corresponds to LP row
+///   `base_row_count + i`.  Length must equal
+///   `basis.row_status.len() - base_row_count` when both are populated;
+///   tickets 003 and 004 enforce this invariant — this ticket only declares it.
+///
+/// - `state_at_capture`: the state vector `x_hat` at which the basis was
+///   captured.  Used by the backward warm-start to evaluate newly added cuts
+///   at the correct operating point.
+///
+/// # Zero-allocation design
+///
+/// `cut_row_slots` and `state_at_capture` are sized via explicit capacity
+/// parameters in [`CapturedBasis::new`] so the forward capture site can
+/// pre-allocate once and reuse the same `CapturedBasis` on subsequent
+/// iterations without heap reallocation.
+#[derive(Clone)]
+pub struct CapturedBasis {
+    /// The underlying solver basis (row and column statuses).
+    pub basis: Basis,
+    /// Number of template (non-cut) LP rows at capture time.
+    pub base_row_count: usize,
+    /// Cut pool slot for each cut row in `basis.row_status[base_row_count..]`.
+    /// Empty until ticket 003 populates it during forward capture.
+    pub cut_row_slots: Vec<u32>,
+    /// State vector `x_hat` at which this basis was captured.
+    /// Empty until ticket 003 populates it during forward capture.
+    pub state_at_capture: Vec<f64>,
+}
+
+impl CapturedBasis {
+    /// Construct an empty `CapturedBasis` with the given capacities.
+    ///
+    /// - `num_cols` / `num_rows`: forwarded to [`Basis::new`].
+    /// - `base_row_count`: stored as-is; typically `ctx.templates[t].num_rows`.
+    /// - `cut_slot_capacity`: pre-allocated capacity for `cut_row_slots`
+    ///   (`basis_row_capacity - base_row_count` in the forward pass).
+    /// - `n_state`: pre-allocated capacity for `state_at_capture`.
+    ///
+    /// `cut_row_slots` and `state_at_capture` start empty (length 0);
+    /// tickets 003/004 push into them on the hot path without allocation.
+    #[must_use]
+    pub fn new(
+        num_cols: usize,
+        num_rows: usize,
+        base_row_count: usize,
+        cut_slot_capacity: usize,
+        n_state: usize,
+    ) -> Self {
+        Self {
+            basis: Basis::new(num_cols, num_rows),
+            base_row_count,
+            cut_row_slots: Vec::with_capacity(cut_slot_capacity),
+            state_at_capture: Vec::with_capacity(n_state),
+        }
+    }
+
+    /// Clear slot and state metadata in place.
+    ///
+    /// Does **not** touch `basis` — the solver's `get_basis` call overwrites
+    /// that on the next capture.  Keeps the allocated capacity of both vectors
+    /// so subsequent pushes are allocation-free.
+    pub fn clear(&mut self) {
+        self.cut_row_slots.clear();
+        self.state_at_capture.clear();
+    }
+}
+
 use crate::lp_builder::PatchBuffer;
 use crate::risk_measure::BackwardOutcome;
 
@@ -134,6 +216,18 @@ pub(crate) struct ScratchBuffers {
     // Slot 0 = oldest completed quarter, slot n-1 = most recent.
     pub(crate) downstream_completed_lags: Vec<f64>,
     pub(crate) downstream_n_completed: usize,
+    /// Scratch lookup table for basis reconstruction (ticket-002+).
+    ///
+    /// Maps each cut pool slot to its position in the stored
+    /// `CapturedBasis::cut_row_slots`, so the reconstruction algorithm can
+    /// locate the row status for any active cut in O(1) without allocation.
+    /// Pre-filled with `None` to `initial_pool_capacity` entries so the
+    /// first call can index up to that bound without resize.
+    ///
+    /// When `initial_pool_capacity == 0` (simulation-only workspaces), this
+    /// vec starts empty; tickets 003/004 grow it in-place if needed.
+    #[allow(dead_code)]
+    pub(crate) recon_slot_lookup: Vec<Option<u32>>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -207,7 +301,8 @@ impl ScratchBuffers {
             n_load_buses,
             max_blocks,
             downstream_par_order,
-            // max_openings, initial_pool_capacity, n_state used by BackwardAccumulators only
+            initial_pool_capacity,
+            // max_openings, n_state used by BackwardAccumulators only
             ..
         } = s;
         Self {
@@ -240,6 +335,7 @@ impl ScratchBuffers {
                 Vec::new()
             },
             downstream_n_completed: 0,
+            recon_slot_lookup: vec![None; initial_pool_capacity],
         }
     }
 }
@@ -384,7 +480,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
 /// [`SolverStatistics`]: cobre_solver::SolverStatistics
 pub struct BasisStore {
     /// Flat storage: `bases[scenario * num_stages + stage]`.
-    bases: Vec<Option<Basis>>,
+    bases: Vec<Option<CapturedBasis>>,
     /// Number of stages per scenario.
     num_stages: usize,
 }
@@ -431,12 +527,12 @@ impl BasisStore {
     ///
     /// Returns `None` if the slot has not yet been populated.
     #[must_use]
-    pub fn get(&self, scenario: usize, stage: usize) -> Option<&Basis> {
+    pub fn get(&self, scenario: usize, stage: usize) -> Option<&CapturedBasis> {
         self.bases[scenario * self.num_stages + stage].as_ref()
     }
 
     /// Get a mutable reference to the basis slot at `[scenario][stage]`.
-    pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<Basis> {
+    pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<CapturedBasis> {
         &mut self.bases[scenario * self.num_stages + stage]
     }
 
@@ -487,7 +583,7 @@ impl BasisStore {
 /// disjoint memory regions.
 pub struct BasisStoreSliceMut<'a> {
     /// Sub-slice of the flat basis array for this worker's scenario range.
-    bases: &'a mut [Option<Basis>],
+    bases: &'a mut [Option<CapturedBasis>],
     /// Absolute scenario index of the first scenario in this slice.
     scenario_offset: usize,
     /// Number of stages per scenario.
@@ -504,7 +600,7 @@ impl BasisStoreSliceMut<'_> {
     ///
     /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
     #[must_use]
-    pub fn get(&self, scenario: usize, stage: usize) -> Option<&Basis> {
+    pub fn get(&self, scenario: usize, stage: usize) -> Option<&CapturedBasis> {
         let local = scenario - self.scenario_offset;
         self.bases[local * self.num_stages + stage].as_ref()
     }
@@ -515,7 +611,7 @@ impl BasisStoreSliceMut<'_> {
     /// # Panics
     ///
     /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
-    pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<Basis> {
+    pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<CapturedBasis> {
         let local = scenario - self.scenario_offset;
         &mut self.bases[local * self.num_stages + stage]
     }
@@ -523,10 +619,12 @@ impl BasisStoreSliceMut<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BasisStore, ScratchBuffers, SolverWorkspace, WorkspacePool, WorkspaceSizing};
+    use super::{
+        BasisStore, CapturedBasis, ScratchBuffers, SolverWorkspace, WorkspacePool, WorkspaceSizing,
+    };
     use cobre_solver::{
-        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
         types::{RowBatch, StageTemplate},
+        Basis, SolutionView, SolverError, SolverInterface, SolverStatistics,
     };
 
     /// Minimal no-op solver for workspace tests.
@@ -741,8 +839,8 @@ mod tests {
     #[test]
     fn basis_store_get_mut_set_and_retrieve() {
         let mut store = BasisStore::new(2, 3);
-        let basis = Basis::new(4, 2);
-        *store.get_mut(1, 2) = Some(basis);
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *store.get_mut(1, 2) = Some(CapturedBasis::new(4, 2, 0, 0, 0));
         assert!(store.get(1, 2).is_some());
         assert!(store.get(0, 0).is_none());
         assert!(store.get(1, 0).is_none());
@@ -770,9 +868,11 @@ mod tests {
         let mut slices = store.split_workers_mut(2);
 
         // Worker 0 writes to scenario 0 stage 1.
-        *slices[0].get_mut(0, 1) = Some(Basis::new(2, 1));
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *slices[0].get_mut(0, 1) = Some(CapturedBasis::new(2, 1, 0, 0, 0));
         // Worker 1 writes to scenario 3 stage 2.
-        *slices[1].get_mut(3, 2) = Some(Basis::new(2, 1));
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *slices[1].get_mut(3, 2) = Some(CapturedBasis::new(2, 1, 0, 0, 0));
 
         // Drop slices to release the borrow on store.
         drop(slices);
@@ -793,7 +893,8 @@ mod tests {
     fn basis_store_split_single_worker() {
         let mut store = BasisStore::new(3, 2);
         let mut slices = store.split_workers_mut(1);
-        *slices[0].get_mut(2, 1) = Some(Basis::new(1, 0));
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *slices[0].get_mut(2, 1) = Some(CapturedBasis::new(1, 0, 0, 0, 0));
         drop(slices);
         assert!(store.get(2, 1).is_some());
     }
@@ -818,13 +919,114 @@ mod tests {
         let mut slices = store.split_workers_mut(3);
 
         // Worker 1 covers absolute scenarios 2..4.
-        *slices[1].get_mut(2, 0) = Some(Basis::new(1, 0));
-        *slices[1].get_mut(3, 1) = Some(Basis::new(1, 0));
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *slices[1].get_mut(2, 0) = Some(CapturedBasis::new(1, 0, 0, 0, 0));
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *slices[1].get_mut(3, 1) = Some(CapturedBasis::new(1, 0, 0, 0, 0));
         drop(slices);
 
         assert!(store.get(2, 0).is_some());
         assert!(store.get(3, 1).is_some());
         assert!(store.get(0, 0).is_none());
         assert!(store.get(4, 0).is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // New unit tests for ticket-001
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_captured_basis_new_capacities() {
+        // AC: CapturedBasis::new(4, 6, 3, 10, 2) must produce:
+        //   basis.row_status.len() == 6, base_row_count == 3,
+        //   cut_row_slots.capacity() >= 10, cut_row_slots.len() == 0,
+        //   state_at_capture.capacity() >= 2, state_at_capture.len() == 0.
+        let cb = CapturedBasis::new(4, 6, 3, 10, 2);
+        assert_eq!(cb.basis.row_status.len(), 6, "row_status length");
+        assert_eq!(cb.base_row_count, 3, "base_row_count");
+        assert!(
+            cb.cut_row_slots.capacity() >= 10,
+            "cut_row_slots capacity must be >= 10 (got {})",
+            cb.cut_row_slots.capacity()
+        );
+        assert_eq!(cb.cut_row_slots.len(), 0, "cut_row_slots starts empty");
+        assert!(
+            cb.state_at_capture.capacity() >= 2,
+            "state_at_capture capacity must be >= 2 (got {})",
+            cb.state_at_capture.capacity()
+        );
+        assert_eq!(
+            cb.state_at_capture.len(),
+            0,
+            "state_at_capture starts empty"
+        );
+    }
+
+    #[test]
+    fn test_basis_store_holds_captured_basis() {
+        // AC: BasisStore after migration holds Option<CapturedBasis>, not Option<Basis>.
+        // slot set, slot read, default None holds for all 15 cells.
+        let mut store = BasisStore::new(3, 5);
+        // All 15 slots start as None.
+        for s in 0..3 {
+            for t in 0..5 {
+                assert!(
+                    store.get(s, t).is_none(),
+                    "slot [{s}][{t}] must be None before any write"
+                );
+            }
+        }
+        // Write a CapturedBasis at [1][3]; read it back.
+        *store.get_mut(1, 3) = Some(CapturedBasis::new(4, 6, 3, 10, 2));
+        let retrieved = store.get(1, 3);
+        assert!(retrieved.is_some(), "slot [1][3] must be Some after write");
+        let cb = retrieved.expect("just checked is_some");
+        assert_eq!(cb.base_row_count, 3);
+        // All other slots remain None.
+        for s in 0..3 {
+            for t in 0..5 {
+                if s == 1 && t == 3 {
+                    continue;
+                }
+                assert!(
+                    store.get(s, t).is_none(),
+                    "slot [{s}][{t}] must remain None"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_recon_slot_lookup_presized() {
+        // AC: every workspace in a freshly constructed WorkspacePool with
+        //   WorkspaceSizing { initial_pool_capacity: 50, .. }
+        //   must have recon_slot_lookup.len() == 50 and every entry is None.
+        let pool = WorkspacePool::new(
+            4,
+            0,
+            WorkspaceSizing {
+                initial_pool_capacity: 50,
+                ..WorkspaceSizing::default()
+            },
+            || MockSolver,
+        );
+        for (i, ws) in pool.workspaces.iter().enumerate() {
+            assert_eq!(
+                ws.scratch.recon_slot_lookup.len(),
+                50,
+                "workspace {i}: recon_slot_lookup.len() must equal initial_pool_capacity (50)"
+            );
+            assert!(
+                ws.scratch.recon_slot_lookup.iter().all(Option::is_none),
+                "workspace {i}: all recon_slot_lookup entries must be None"
+            );
+        }
+        // Verify zero initial_pool_capacity produces an empty vec.
+        let pool_empty = WorkspacePool::new(1, 0, WorkspaceSizing::default(), || MockSolver);
+        assert_eq!(
+            pool_empty.workspaces[0].scratch.recon_slot_lookup.len(),
+            0,
+            "initial_pool_capacity=0 must produce empty recon_slot_lookup"
+        );
     }
 }

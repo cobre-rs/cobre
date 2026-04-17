@@ -1195,7 +1195,7 @@ mod tests {
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
-        workspace::{BackwardAccumulators, ScratchBuffers, SolverWorkspace},
+        workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1256,6 +1256,17 @@ mod tests {
     ///
     /// `load_count` and `add_rows_count` track how many times `load_model` and
     /// `add_rows` were called, used by the baked-path acceptance tests.
+    ///
+    /// `solve_count` counts calls to the cold-start `solve` path only.
+    /// `solve_with_basis_count` counts calls to the warm-start `solve_with_basis`
+    /// path only.  `call_count` tracks the combined total across both paths and
+    /// is used by the infeasibility injection logic.
+    ///
+    /// `recorded_basis` captures the last `Basis` passed to `solve_with_basis`,
+    /// used by the warm-start reconstruction acceptance tests.
+    ///
+    /// `preserved_counter` accumulates the `preserved` argument passed to
+    /// `record_reconstruction_stats`.
     struct MockSolver {
         solution: LpSolution,
         infeasible_at: Option<usize>,
@@ -1267,6 +1278,14 @@ mod tests {
         load_count: usize,
         /// Number of `add_rows` calls since construction.
         add_rows_count: usize,
+        /// Number of cold-start `solve()` calls (excludes `solve_with_basis`).
+        solve_count: usize,
+        /// Number of warm-start `solve_with_basis()` calls (excludes `solve`).
+        solve_with_basis_count: usize,
+        /// Last `Basis` passed to `solve_with_basis`, if any.
+        recorded_basis: Option<Basis>,
+        /// Cumulative `preserved` argument from `record_reconstruction_stats`.
+        preserved_counter: u32,
     }
 
     impl MockSolver {
@@ -1283,6 +1302,10 @@ mod tests {
                 buf_reduced_costs,
                 load_count: 0,
                 add_rows_count: 0,
+                solve_count: 0,
+                solve_with_basis_count: 0,
+                recorded_basis: None,
+                preserved_counter: 0,
             }
         }
 
@@ -1299,6 +1322,10 @@ mod tests {
                 buf_reduced_costs,
                 load_count: 0,
                 add_rows_count: 0,
+                solve_count: 0,
+                solve_with_basis_count: 0,
+                recorded_basis: None,
+                preserved_counter: 0,
             }
         }
 
@@ -1336,15 +1363,26 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_count += 1;
             self.do_solve()
         }
         fn reset(&mut self) {}
         fn get_basis(&mut self, _out: &mut Basis) {}
         fn solve_with_basis(
             &mut self,
-            _basis: &Basis,
+            basis: &Basis,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            self.solve_with_basis_count += 1;
+            self.recorded_basis = Some(basis.clone());
             self.do_solve()
+        }
+        fn record_reconstruction_stats(
+            &mut self,
+            preserved: u32,
+            _new_tight: u32,
+            _new_slack: u32,
+        ) {
+            self.preserved_counter += preserved;
         }
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -4617,5 +4655,302 @@ mod tests {
             }
             other => panic!("expected InvalidConfiguration error, got: {other:?}"),
         }
+    }
+
+    // ── Ticket-010 warm-start CapturedBasis acceptance tests ─────────────────
+
+    /// Acceptance criterion (ticket-010 AC #2): when `stage_bases` contains a
+    /// `CapturedBasis` with known slots, the basis passed to `solve_with_basis`
+    /// has `row_status.len() == base_row_count + active_cuts_count` and the tail
+    /// entries match the stored cut statuses verbatim (preservation path).
+    ///
+    /// Setup:
+    /// - `CapturedBasis` at stage 0: `base_row_count=2`, `cut_row_slots=[10,11,12]`,
+    ///   `state_at_capture=[1.0]`, `row_status` length 5 with distinct sentinel values.
+    /// - FCF pool at stage 0 has exactly those 3 slots active (slots 10, 11, 12).
+    /// - `MockSolver::recorded_basis` captures the last basis received by
+    ///   `solve_with_basis`.
+    ///
+    /// The reconstruction maps all 3 stored cut rows (slots 10, 11, 12) into
+    /// the output basis — the preservation path.  The tail of the output
+    /// `row_status` must equal the tail of the stored `row_status`.
+    #[test]
+    fn simulate_with_captured_basis_preserves_row_statuses() {
+        // Sentinel status values for the stored cut rows so we can verify exact
+        // preservation.  These are arbitrary non-zero i32 values; the test only
+        // checks that they are passed through unchanged.
+        const CUT_STATUS_0: i32 = 7;
+        const CUT_STATUS_1: i32 = 11;
+        const CUT_STATUS_2: i32 = 13;
+        // Base rows use HIGHS_BASIS_STATUS_BASIC = 1.
+        const BASE_STATUS: i32 = 1;
+
+        let n_stages = 1;
+        let n_scenarios = 1u32;
+        let templates: Vec<StageTemplate> = vec![minimal_template_1_0()];
+        let base_rows: Vec<usize> = vec![2]; // 2 structural rows in the template
+
+        let indexer = StageIndexer::new(1, 0);
+
+        // Build an FCF with 3 active cuts at slots 10, 11, 12 for stage 0.
+        // warm_start_count=10, forward_passes=1 →
+        //   add_cut(iter=0, fwd=0) → slot 10
+        //   add_cut(iter=1, fwd=0) → slot 11
+        //   add_cut(iter=2, fwd=0) → slot 12
+        let mut fcf = FutureCostFunction::new(n_stages, 1, 1, 5, &[10]);
+        fcf.pools[0].add_cut(0, 0, 50.0, &[1.0]);
+        fcf.pools[0].add_cut(1, 0, 60.0, &[1.0]);
+        fcf.pools[0].add_cut(2, 0, 70.0, &[1.0]);
+        assert_eq!(
+            fcf.pools[0].active_count(),
+            3,
+            "pool must have exactly 3 active cuts at slots 10, 11, 12"
+        );
+        assert_eq!(
+            fcf.pools[0].populated_count, 13,
+            "populated_count must be 13 (slot 12 + 1)"
+        );
+
+        // Build the CapturedBasis with matching slot metadata.
+        let mut cb = CapturedBasis::new(4, 5, 2, 3, 1);
+        // row_status: 2 base rows + 3 cut rows with sentinel values.
+        cb.basis.row_status = vec![
+            BASE_STATUS,
+            BASE_STATUS,
+            CUT_STATUS_0,
+            CUT_STATUS_1,
+            CUT_STATUS_2,
+        ];
+        cb.basis.col_status = vec![1_i32; 4];
+        cb.cut_row_slots.extend_from_slice(&[10u32, 11, 12]);
+        cb.state_at_capture.push(1.0);
+
+        let stage_bases: Vec<Option<CapturedBasis>> = vec![Some(cb)];
+
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 8,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(16);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            // fallback path (no baked templates); reconstruction uses pool.active_cuts()
+            None,
+            &stage_bases,
+            &comm,
+        );
+
+        assert!(
+            result.is_ok(),
+            "simulate must succeed with CapturedBasis warm-start: {result:?}"
+        );
+
+        // Verify that solve_with_basis was called (warm-start path taken).
+        let solver = &workspaces[0].solver;
+        assert_eq!(
+            solver.solve_with_basis_count, 1,
+            "solve_with_basis must be called exactly once (1 scenario × 1 stage)"
+        );
+        assert_eq!(
+            solver.solve_count, 0,
+            "cold-start solve must not be called when a CapturedBasis is provided"
+        );
+
+        // Verify the basis passed to solve_with_basis has the correct structure.
+        let recorded = solver
+            .recorded_basis
+            .as_ref()
+            .expect("recorded_basis must be Some after a warm-start solve");
+
+        // Row count: base_row_count=2 + 3 active cut slots = 5.
+        assert_eq!(
+            recorded.row_status.len(),
+            2 + 3,
+            "reconstructed basis row_status must have length base_row_count(2) + cuts(3) = 5, \
+             got {}",
+            recorded.row_status.len()
+        );
+
+        // The last 3 entries must match the stored cut statuses verbatim
+        // (all 3 slots were in the stored basis → preservation path).
+        let tail = &recorded.row_status[2..];
+        assert_eq!(
+            tail,
+            &[CUT_STATUS_0, CUT_STATUS_1, CUT_STATUS_2],
+            "reconstructed basis tail must match stored cut statuses verbatim \
+             (preservation path): expected [{CUT_STATUS_0}, {CUT_STATUS_1}, {CUT_STATUS_2}], \
+             got {tail:?}"
+        );
+    }
+
+    /// Acceptance criterion (ticket-010 AC #3): when `stage_bases` is `&[]`
+    /// (cold-start), every LP solve must go through `solver.solve()` and
+    /// `solve_with_basis` must never be called.
+    ///
+    /// Uses `solve_count` and `solve_with_basis_count` split on `MockSolver`.
+    #[test]
+    fn simulate_with_empty_stage_bases_cold_starts() {
+        let n_stages = 2;
+        let n_scenarios = 3u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 16,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(32);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            None,
+            // empty stage_bases → cold-start for every stage
+            &[],
+            &comm,
+        );
+
+        assert!(
+            result.is_ok(),
+            "cold-start simulate must succeed: {result:?}"
+        );
+
+        let solver = &workspaces[0].solver;
+        let expected_solves = n_scenarios as usize * n_stages;
+
+        assert_eq!(
+            solver.solve_with_basis_count, 0,
+            "solve_with_basis must not be called when stage_bases is empty; \
+             got solve_with_basis_count={}",
+            solver.solve_with_basis_count
+        );
+        assert_eq!(
+            solver.solve_count, expected_solves,
+            "cold-start solve must be called exactly n_scenarios({n_scenarios}) × \
+             n_stages({n_stages}) = {expected_solves} times; got {}",
+            solver.solve_count
+        );
     }
 }

@@ -54,6 +54,7 @@
 )]
 
 use std::path::Path;
+use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
@@ -658,4 +659,148 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
             result2.final_lb
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Simulation smoke — basis_preserved > 0 after train + simulate
+// ---------------------------------------------------------------------------
+
+/// Smoke test: after 2-iteration training on D03, simulation with the trained
+/// `basis_cache` produces `basis_preserved > 0` in the aggregated solver stats.
+///
+/// ## What this guards
+///
+/// This test verifies that the simulation warm-start path introduced in
+/// ticket-010 actually reaches `reconstruct_basis` and records at least one
+/// preserved row in the `SolverStatistics`.  A regression that accidentally
+/// gates reconstruction off (e.g., always taking the cold-start branch) will
+/// produce `basis_preserved == 0` and fail this assertion.
+///
+/// ## Setup
+///
+/// - D03 case (3 stages, 2 cascaded hydros).
+/// - 2 training iterations with 2 forward passes: enough for the backward pass
+///   to populate the FCF, and for the second iteration's forward pass to store
+///   a basis with non-empty `cut_row_slots` in `basis_cache`.
+/// - Simulation runs with the stored `basis_cache` from training.
+///
+/// ## Assertion
+///
+/// `sum(basis_preserved across all simulation scenarios) > 0`.
+/// `basis_rejections == 0` (reconstructed bases must always be accepted).
+#[test]
+fn simulate_warm_start_basis_preserved_gt_zero() {
+    let case_dir = d03_case_dir();
+    let config_path = case_dir.join("config.json");
+    let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+    // 2 forward passes, 2 iterations: backward pass from iter 1 populates the FCF;
+    // iter 2 forward pass captures a basis with non-empty cut_row_slots, which is
+    // then available in basis_cache for the simulation warm-start.
+    config.training.forward_passes = Some(2);
+    config.training.stopping_rules = Some(vec![StoppingRuleConfig::IterationLimit { limit: 2 }]);
+
+    // No cut selection — cuts only grow; keeps slot tracking simple.
+    config.training.cut_selection.enabled = Some(false);
+    config.training.cut_selection.max_active_per_stage = None;
+
+    // Enable simulation so StudySetup::simulation_config() returns n_scenarios > 0.
+    // 2 scenarios gives a meaningful basis_preserved count without being slow.
+    config.simulation.enabled = true;
+    config.simulation.num_scenarios = 2;
+
+    let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
+    let prepare_result =
+        prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())
+            .expect("prepare_stochastic must succeed");
+    let system = prepare_result.system;
+    let stochastic = prepare_result.stochastic;
+
+    let hydro_models =
+        prepare_hydro_models(&system, &case_dir).expect("prepare_hydro_models must succeed");
+
+    let mut setup =
+        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
+
+    let comm = StubComm;
+    let mut train_solver = HighsSolver::new().expect("HighsSolver for training must succeed");
+
+    let outcome = setup
+        .train(&mut train_solver, &comm, 1, HighsSolver::new, None, None)
+        .expect("train must return Ok");
+    assert!(
+        outcome.error.is_none(),
+        "simulate_warm_start: expected no training error, got: {:?}",
+        outcome.error
+    );
+    assert_eq!(
+        outcome.result.iterations, 2,
+        "simulate_warm_start: expected 2 iterations, got {}",
+        outcome.result.iterations
+    );
+
+    // Verify training produced non-empty basis_cache at stage 0 with slots.
+    let basis_cache = &outcome.result.basis_cache;
+    assert!(
+        basis_cache
+            .iter()
+            .any(|cb| cb.as_ref().is_some_and(|b| !b.cut_row_slots.is_empty())),
+        "simulate_warm_start: at least one stage must have a CapturedBasis with \
+         non-empty cut_row_slots in basis_cache after 2 iterations"
+    );
+
+    // Diagnostic: inspect the FCF pool state after training.
+    // Build a simulation workspace pool (1 thread, HighsSolver).
+    let mut pool = setup
+        .create_workspace_pool(1, HighsSolver::new)
+        .expect("simulation workspace pool must build");
+
+    let io_capacity = setup.io_channel_capacity().max(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
+
+    // Drain simulation results on a background thread to avoid channel backpressure.
+    let drain_handle = std::thread::spawn(move || result_rx.into_iter().count());
+
+    // Pass baked_templates=None to force the fallback (non-baked) reconstruction
+    // path.  On the baked path reconstruct_basis receives an empty
+    // current_cut_rows iterator (all cuts are structural), so basis_preserved is
+    // always 0 there by design.  The fallback path passes pool.active_cuts() as
+    // current_cut_rows; stored slots from basis_cache are matched against the
+    // active pool slots and preserved, producing basis_preserved > 0.
+    let sim_result = setup
+        .simulate(
+            &mut pool.workspaces,
+            &comm,
+            &result_tx,
+            None,
+            None, // force fallback path so basis_preserved > 0 is verifiable
+            &outcome.result.basis_cache,
+        )
+        .expect("simulate must return Ok");
+
+    drop(result_tx);
+    drain_handle.join().expect("drain thread must not panic");
+
+    // Aggregate basis_preserved and basis_rejections across all simulation scenarios.
+    let total_preserved: u64 = sim_result
+        .solver_stats
+        .iter()
+        .map(|(_, delta)| delta.basis_preserved)
+        .sum();
+    let total_rejections: u64 = sim_result
+        .solver_stats
+        .iter()
+        .map(|(_, delta)| delta.basis_rejections)
+        .sum();
+
+    assert!(
+        total_preserved > 0,
+        "simulate_warm_start: expected basis_preserved > 0 in simulation, got 0 \
+         (reconstruction path must be exercised when basis_cache has non-empty slots)"
+    );
+    assert_eq!(
+        total_rejections, 0,
+        "simulate_warm_start: expected 0 basis_rejections in simulation, got {total_rejections} \
+         (reconstructed bases must always be accepted by HiGHS)"
+    );
 }

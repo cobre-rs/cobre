@@ -263,32 +263,43 @@ When running with MPI, rank 0's scenario-0 basis is broadcast to all
 ranks before the simulation phase. This ensures all ranks warm-start
 simulation from the same LP vertex, regardless of rank count.
 
-### Basis-Aware Padding (Strategy S3)
+### Basis Reconstruction
 
-When new cut rows are added between iterations, the cached basis has fewer
-row entries than the LP requires. By default, HiGHS fills new entries with
-`BASIC`, which may require discovery pivots to find the correct status.
+Each stored warm-start basis is wrapped in a `CapturedBasis { basis,
+base_row_count, cut_row_slots, state_at_capture }` struct that records
+the LP row count and the ordered list of cut pool slot indices at capture
+time, alongside the state vector used to evaluate cut slacks. The
+`reconstruct_basis` function in `cobre-sddp::basis_reconstruct` is the
+sole entry point for applying a stored basis across cut-set churn on the
+forward pass, backward pass, and simulation pipeline.
 
-When `basis_padding` is enabled, each new cut is evaluated at the
-warm-start state. Tight or violated cuts (slack <= tolerance) are assigned
-`NONBASIC_LOWER`, while slack cuts are assigned `BASIC`. This reduces
-simplex discovery work after cut additions.
+When a stored basis is applied to an LP whose cut rows have changed,
+`reconstruct_basis` walks the current LP's cut rows, looks each slot up
+in an O(1) scratch map built from `cut_row_slots`, and classifies each
+row into one of three categories:
 
-**Configuration:**
+- **Preserved**: the slot identity was found in the stored basis —
+  the original status code is copied verbatim. The `basis_preserved`
+  counter is incremented.
+- **New-tight**: the slot was not found (a newly added cut) and its
+  slack at `state_at_capture` is <= 1e-7 — the row is assigned
+  `NONBASIC_LOWER`. The `basis_new_tight` counter is incremented.
+- **New-slack**: the slot was not found and its slack at
+  `state_at_capture` is > 1e-7 — the row is assigned `BASIC`.
+  The `basis_new_slack` counter is incremented.
 
-```json
-{
-  "training": {
-    "cut_selection": {
-      "basis_padding": true
-    }
-  }
-}
-```
+Reconstruction is always active when a stored basis exists — there is no
+configuration flag. The Epic 02 A/B benchmark provided the motivation:
+across a 10-iteration training run on a representative case, 148,060 cut
+rows were preserved and the mechanism delivered a -3.5% wall-time
+improvement versus the pre-Epic-01 baseline.
 
-This feature is disabled by default. When enabled, the counters
-`basis_padding_tight` and `basis_padding_slack` in the solver statistics
-track how many cuts were assigned each status.
+The three counters `basis_preserved`, `basis_new_tight`, and
+`basis_new_slack` are written as `UInt64` columns in both
+`training/solver/iterations.parquet` and
+`simulation/solver/iterations.parquet`. See the
+[Output Format reference](../reference/output-format.md#trainingsolveriterationsparquet)
+for the full column schema.
 
 ---
 

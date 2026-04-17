@@ -349,7 +349,7 @@ Per-iteration, per-rank timing statistics for distributed runs. One row per
 
 Per-iteration, per-phase, per-stage LP solver statistics for diagnosing
 conditioning issues and retry behavior. One row per `(iteration, phase,
-stage)` triple. 16 columns. All columns are non-nullable.
+stage)` triple. 19 columns. All columns are non-nullable.
 
 The `phase` column is a string: `"forward"`, `"backward"`, or
 `"lower_bound"`.
@@ -372,6 +372,20 @@ The `phase` column is a string: `"forward"`, `"backward"`, or
 | `add_rows_time_ms`   | Float64 | No       | Cumulative time spent in `add_rows` calls, in milliseconds.                          |
 | `set_bounds_time_ms` | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds. |
 | `basis_set_time_ms`  | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.              |
+| `basis_preserved`    | UInt64  | No       | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim).                   |
+| `basis_new_tight`    | UInt64  | No       | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). |
+| `basis_new_slack`    | UInt64  | No       | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`).                                     |
+
+### `simulation/solver/iterations.parquet`
+
+Identical schema to [`training/solver/iterations.parquet`](#trainingsolveriterationsparquet).
+One row per `(scenario, phase, stage)` triple where `phase == "simulation"`.
+
+The `basis_preserved` column on simulation rows is a direct indicator that
+`broadcast_basis_cache` is delivering full `CapturedBasis` metadata to
+non-root ranks. A near-zero value on a multi-rank run suggests a pre-Epic-03
+checkpoint or a wire-format regression in
+`crates/cobre-sddp/src/training.rs` (the four-broadcast format).
 
 ### `training/solver/retry_histogram.parquet`
 
@@ -581,11 +595,15 @@ contained in the file is:
 | `intercept`          | float64   | Pre-computed cut intercept: `alpha - beta' * x_hat`, where `x_hat` is the state at the generating forward pass node.                 |
 | `coefficients`       | float64[] | Gradient coefficient vector. Length equals `state_dimension` from `state_dictionary.json`.                                           |
 | `is_active`          | bool      | Whether this cut is currently active in the LP. Inactive cuts are retained for potential reactivation by the cut selection strategy. |
-| `domination_count`   | uint32    | Cut selection bookkeeping counter. Number of times this cut has been dominated without being selected.                               |
 
 The encoding uses the FlatBuffers runtime builder API (little-endian, no
 reflection, no generated code). Field order in the binary matches the
 declaration order above.
+
+Legacy policy files that still contain the `CUT_FIELD_DOMINATION_COUNT`
+FlatBuffer slot deserialise via the `field_pos` graceful-absence pattern
+and the value is discarded; the field is not present in policy files written
+by the current release.
 
 ### `policy/basis/stage_NNN.bin`
 

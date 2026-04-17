@@ -207,6 +207,12 @@ monotonically from zero. `reset()` does not zero them — statistics persist for
 the lifetime of the solver instance and are aggregated across threads after
 iterative solving completes.
 
+The three basis reconstruction counters (`basis_preserved`, `basis_new_tight`,
+`basis_new_slack`) are listed below in readability order — `basis_preserved`
+first because it is the most diagnostic field. The Rust struct orders them as
+`basis_new_tight`, `basis_new_slack`, `basis_preserved`, which matches the
+writer order in the parquet output.
+
 | Field                          | Type       | Description                                                                                         |
 | ------------------------------ | ---------- | --------------------------------------------------------------------------------------------------- |
 | `solve_count`                  | `u64`      | Total `solve` and `solve_with_basis` calls.                                                         |
@@ -224,8 +230,9 @@ iterative solving completes.
 | `total_add_rows_time_seconds`  | `f64`      | Cumulative time in `add_rows`.                                                                       |
 | `total_set_bounds_time_seconds`| `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                              |
 | `total_basis_set_time_seconds` | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                          |
-| `basis_padding_tight`          | `u64`      | Cut rows assigned `NONBASIC_LOWER` by basis-aware padding (Strategy S3). Set by the calling algorithm. |
-| `basis_padding_slack`          | `u64`      | Cut rows assigned `BASIC` by basis-aware padding. Set by the calling algorithm.                      |
+| `basis_preserved`              | `u64`      | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim). Set by the calling algorithm via `reconstruct_basis`. |
+| `basis_new_tight`              | `u64`      | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). Set by the calling algorithm. |
+| `basis_new_slack`              | `u64`      | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`). Set by the calling algorithm. |
 | `retry_level_histogram`        | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.  |
 
 See the [`SolverStatistics`
@@ -317,6 +324,14 @@ If HiGHS rejects the basis (returns `HIGHS_STATUS_ERROR` from `Highs_setBasis`),
 the method falls back to a cold-start solve and increments
 `SolverStatistics.basis_rejections`. After setting the basis, `solve_with_basis`
 delegates to `solve()`, which handles the retry escalation sequence.
+
+The calling algorithm (cobre-sddp) wraps each stored basis in a
+`CapturedBasis` struct and uses `reconstruct_basis` to classify cut rows as
+preserved, new-tight, or new-slack before calling `solve_with_basis`. This
+slot-tracked reconciliation replaces the naive row-count fill that `solve_with_basis`
+performs internally. The three counters `basis_preserved`, `basis_new_tight`,
+and `basis_new_slack` in `SolverStatistics` are incremented by the algorithm
+during this reconstruction step.
 
 ## SoA bound patching
 

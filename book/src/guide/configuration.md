@@ -294,7 +294,6 @@ of each stage, see
 | `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stage 1).                                                                                 |
 | `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                                       |
 | `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 2 budget enforcement). `null` = no budget.                                          |
-| `basis_padding`          | boolean | `false` | Enable basis-aware warm-start padding (Strategy S3). See [Basis Warm-Start](./performance-accelerators.md#basis-warm-start). |
 
 **Methods:**
 
@@ -320,8 +319,7 @@ Example with both pipeline stages:
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "max_active_per_stage": 500,
-      "basis_padding": false
+      "max_active_per_stage": 500
     }
   }
 }
@@ -560,8 +558,7 @@ Controls which outputs are written to the results directory.
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "max_active_per_stage": null,
-      "basis_padding": false
+      "max_active_per_stage": null
     }
   },
   "modeling": {

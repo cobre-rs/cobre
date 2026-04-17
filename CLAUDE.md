@@ -24,15 +24,15 @@ generation, training, simulation, policy checkpointing, and output writing.
 D19–D30) and 2 cut selection integration tests (D17–D18).
 
 **Implemented:** constant-productivity and FPHA hydro models, evaporation,
-cascade coupling, water withdrawal, inflow non-negativity (truncation, penalty, 
+cascade coupling, water withdrawal, inflow non-negativity (truncation, penalty,
 truncation-with-penalty), multi-segment deficit, generic constraints (20
-variable types), NCS stochastic availability, block factors, per-stage 
+variable types), NCS stochastic availability, block factors, per-stage
 productivity override, per-stage thermal cost override, CVaR risk measure,
 PAR(p) estimation (periodic YW, PACF), LP scaling, solver statistics
 instrumentation, LP setup optimisation (model persistence, incremental cuts,
 sparse cuts), simulation basis warm-start, two-stage cut management pipeline
 (strategy-based selection, active cut budget enforcement),
-basis-aware warm-start padding, backward pass work-stealing
+slot-tracked basis reconstruction with capture-time state metadata (CapturedBasis), backward pass work-stealing
 parallelism, parallel lower bound evaluation, solver safeguards (12-level retry
 escalation with wall-clock budgets), MPI distribution with execution topology
 reporting, Python bindings with Arrow zero-copy, CLI with 7 subcommands, policy
@@ -48,6 +48,9 @@ lag accumulation (StageLagTransition precomputation with frozen-lag semantics),
 recent_observations input for mid-season study starts, terminal boundary cuts
 (BoundaryPolicy for Cobre-to-Cobre FCF coupling), non-uniform scenario count
 support (V3.4 relaxation with padding for DECOMP weekly+monthly studies).
+Simulation pipeline bakes per-stage templates end-to-end when training produced
+baked templates; the full CapturedBasis metadata propagates to non-root MPI
+ranks via a 4-broadcast wire format.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 
@@ -62,6 +65,18 @@ These are non-negotiable. Violations must be fixed before committing.
 - `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI
 - **Never use `Box<dyn Trait>`** — enum dispatch for closed variant sets
 - **Never allocate on hot paths** — pre-allocate workspaces, reuse buffers
+- **`CapturedBasis` metadata integrity** — `basis_cache` is
+  `Vec<Option<CapturedBasis>>` (not bare `Basis`);
+  `broadcast_basis_cache` uses a 4-broadcast wire format
+  (2 x i32, 2 x f64). Both are invariants established by the
+  basis-reconstruction plan; regressing either silently
+  degrades warm-start quality without a compile error.
+- **`TrainingResult` struct-literal parity** — any new field
+  added to `TrainingResult` MUST be listed explicitly at every
+  struct literal site in `crates/cobre-cli/src/commands/run.rs`
+  and `crates/cobre-python/src/run.rs`. `Option<T>` fields with
+  a struct spread silently adopt `None` — grep `TrainingResult {`
+  after any struct change.
 - **Never add `#[allow(clippy::too_many_arguments)]`** without first absorbing
   the parameter into an existing context struct. See `.claude/architecture-rules.md`
 - **Declaration-order invariance** — results must be bit-for-bit identical
@@ -102,6 +117,13 @@ When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
 `simulation/pipeline.rs`, `lower_bound.rs`), read:
 → `.claude/architecture-rules.md`
 
+When applying a stored basis at any call site, read:
+→ `crates/cobre-sddp/src/basis_reconstruct.rs` module docs.
+`reconstruct_basis` is the single hot-path entry point; never
+bypass it. The `stored_cut_row_offset` parameter is non-zero
+only on the baked-template backward path (pass `0` everywhere
+else).
+
 When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`
 
@@ -124,9 +146,9 @@ When adding new output files, check both CLI and Python write paths:
 
 ## Key References
 
-| Resource | Location | Purpose |
-|----------|----------|---------|
-| Software book | `book/` | User-facing documentation (mdBook) |
-| Methodology reference | `~/git/cobre-docs/` | Specs, theory, math |
-| CHANGELOG | `CHANGELOG.md` | Per-release feature list |
-| Design docs | `docs/design/` | Future feature designs (not yet implemented) |
+| Resource              | Location            | Purpose                                      |
+| --------------------- | ------------------- | -------------------------------------------- |
+| Software book         | `book/`             | User-facing documentation (mdBook)           |
+| Methodology reference | `~/git/cobre-docs/` | Specs, theory, math                          |
+| CHANGELOG             | `CHANGELOG.md`      | Per-release feature list                     |
+| Design docs           | `docs/design/`      | Future feature designs (not yet implemented) |

@@ -243,6 +243,7 @@ fn delta_to_stats_row(
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
         basis_rejections: delta.basis_rejections as u32,
+        basis_non_alien_rejections: delta.basis_non_alien_rejections as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,

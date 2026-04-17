@@ -158,6 +158,21 @@ pub struct SolverStatistics {
     /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
     pub basis_rejections: u64,
 
+    /// Number of times `solve_with_basis` fell back from the non-alien path
+    /// to the alien path due to `HiGHS` rejecting the non-alien basis
+    /// (`isBasisConsistent` failed).
+    ///
+    /// A non-zero value indicates that basis padding or construction
+    /// produced a basis whose total basic count did not equal `num_rows`.
+    /// On the baked-template path this should be effectively zero; on the
+    /// non-baked path it tracks how often padding breaks consistency.
+    /// Non-alien rate can be computed as
+    /// `1 - basis_non_alien_rejections / basis_offered`.
+    ///
+    /// Distinct from `basis_rejections`, which counts alien-path
+    /// rejections (pathological misconfigurations).
+    pub basis_non_alien_rejections: u64,
+
     /// Number of solves that returned optimal on the first attempt (before any retry).
     ///
     /// Enables first-try rate computation: `first_try_rate = first_try_successes / solve_count`.
@@ -599,6 +614,12 @@ mod tests {
         assert_eq!(stats.basis_new_slack, 0);
         assert_eq!(stats.basis_preserved, 0);
         assert!(stats.retry_level_histogram.is_empty());
+    }
+
+    #[test]
+    fn default_stats_has_zero_non_alien_rejections() {
+        let s = SolverStatistics::default();
+        assert_eq!(s.basis_non_alien_rejections, 0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

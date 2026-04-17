@@ -39,6 +39,9 @@ pub struct SolverStatsRow {
     pub basis_offered: u32,
     /// Times the basis was rejected.
     pub basis_rejections: u32,
+    /// Times `solve_with_basis` fell back from the non-alien path to the alien path
+    /// because `HiGHS` rejected the non-alien basis (`isBasisConsistent` failed).
+    pub basis_non_alien_rejections: u32,
     /// Total simplex iterations.
     pub simplex_iterations: u64,
     /// Cumulative solve time in milliseconds.
@@ -113,6 +116,11 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         UInt32Array::from(rows.iter().map(|r| r.basis_offered).collect::<Vec<_>>());
     let basis_rejections_arr =
         UInt32Array::from(rows.iter().map(|r| r.basis_rejections).collect::<Vec<_>>());
+    let basis_non_alien_rejections_arr = UInt32Array::from(
+        rows.iter()
+            .map(|r| r.basis_non_alien_rejections)
+            .collect::<Vec<_>>(),
+    );
     let simplex_iter_arr = UInt64Array::from(
         rows.iter()
             .map(|r| r.simplex_iterations)
@@ -152,6 +160,7 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(retry_attempts_arr),
         Arc::new(basis_offered_arr),
         Arc::new(basis_rejections_arr),
+        Arc::new(basis_non_alien_rejections_arr),
         Arc::new(simplex_iter_arr),
         Arc::new(solve_time_arr),
         Arc::new(load_model_time_arr),
@@ -273,6 +282,7 @@ mod tests {
                 retry_attempts: 4,
                 basis_offered: 90,
                 basis_rejections: 3,
+                basis_non_alien_rejections: 0,
                 simplex_iterations: 5000,
                 solve_time_ms: 42.5,
                 load_model_time_ms: 0.0,
@@ -295,6 +305,7 @@ mod tests {
                 retry_attempts: 0,
                 basis_offered: 180,
                 basis_rejections: 1,
+                basis_non_alien_rejections: 0,
                 simplex_iterations: 10000,
                 solve_time_ms: 85.0,
                 load_model_time_ms: 0.0,
@@ -323,13 +334,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        // iterations.parquet — 19 scalar columns
+        // iterations.parquet — 20 scalar columns
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         assert!(iter_path.exists());
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 19);
+        assert_eq!(batch.num_columns(), 20);
 
         let iteration_col = batch
             .column(0)
@@ -339,8 +350,11 @@ mod tests {
         assert_eq!(iteration_col.value(0), 1);
         assert_eq!(iteration_col.value(1), 1);
 
+        // Column indices after inserting basis_non_alien_rejections at position 10:
+        // 9 = basis_rejections, 10 = basis_non_alien_rejections, 11 = simplex_iterations,
+        // 12 = solve_time_ms
         let solve_time_col = batch
-            .column(11)
+            .column(12)
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
@@ -348,7 +362,7 @@ mod tests {
         assert!((solve_time_col.value(1) - 85.0).abs() < 1e-10);
 
         let simplex_col = batch
-            .column(10)
+            .column(11)
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
@@ -378,7 +392,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 19);
+        assert_eq!(builder.schema().fields().len(), 20);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -402,6 +416,7 @@ mod tests {
                 retry_attempts: 3,
                 basis_offered: 40,
                 basis_rejections: 0,
+                basis_non_alien_rejections: 0,
                 simplex_iterations: 2000,
                 solve_time_ms: 10.0,
                 load_model_time_ms: 0.0,
@@ -425,6 +440,7 @@ mod tests {
                 retry_attempts: 0,
                 basis_offered: 80,
                 basis_rejections: 0,
+                basis_non_alien_rejections: 0,
                 simplex_iterations: 5000,
                 solve_time_ms: 20.0,
                 load_model_time_ms: 0.0,

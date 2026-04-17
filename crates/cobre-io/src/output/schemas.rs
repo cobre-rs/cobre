@@ -285,7 +285,7 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 19 columns. One row per (iteration, phase, stage) triple. Includes three
+/// 20 columns. One row per (iteration, phase, stage) triple. Includes three
 /// basis reconstruction columns: `basis_preserved`, `basis_new_tight`,
 /// `basis_new_slack`.
 pub(crate) fn solver_iterations_schema() -> Schema {
@@ -300,6 +300,7 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("retry_attempts", DataType::UInt32, false),
         Field::new("basis_offered", DataType::UInt32, false),
         Field::new("basis_rejections", DataType::UInt32, false),
+        Field::new("basis_non_alien_rejections", DataType::UInt32, false),
         Field::new("simplex_iterations", DataType::UInt64, false),
         Field::new("solve_time_ms", DataType::Float64, false),
         Field::new("load_model_time_ms", DataType::Float64, false),
@@ -842,7 +843,7 @@ mod tests {
             ("iteration_timing", 16),
             ("rank_timing", 8),
             ("cut_selection", 9),
-            ("solver_iterations", 19),
+            ("solver_iterations", 20),
             ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {

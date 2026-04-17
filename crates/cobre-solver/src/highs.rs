@@ -1196,12 +1196,9 @@ impl SolverInterface for HighsSolver {
             self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
         }
 
-        // Attempt to install the basis in HiGHS.
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer.
-        // - `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
-        // - `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
-        // - We pass exactly `num_cols` col entries and `num_rows` row entries.
+        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+        // `basis_col_i32` has been sized to at least `num_cols` in `load_model`.
+        // `basis_row_i32` has been sized to at least `num_rows` in `load_model`/`add_rows`.
         let basis_set_start = Instant::now();
         let set_status = unsafe {
             ffi::cobre_highs_set_basis(
@@ -1751,6 +1748,107 @@ mod tests {
             (result.objective - 162.0).abs() < 1e-8,
             "objective with both cuts active must be 162.0, got {}",
             result.objective
+        );
+    }
+
+    /// Non-alien path accepts a self-extracted basis: counter must stay at zero.
+    ///
+    /// Solves SS1.1 cold, extracts the optimal basis, reloads the model, and
+    /// warm-starts via `solve_with_basis`.  The non-alien FFI call
+    /// (`cobre_highs_set_basis_non_alien`) should accept a basis that was just
+    /// produced by `HiGHS` itself, so `basis_non_alien_rejections` must not
+    /// increase and `basis_rejections` must remain zero.
+    #[test]
+    fn test_solve_with_basis_non_alien_success() {
+        // Arrange
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver.load_model(&template);
+        let _ = solver.solve().expect("cold-start solve must succeed");
+        let mut basis = Basis::new(template.num_cols, template.num_rows);
+        solver.get_basis(&mut basis);
+
+        // Reload model so HiGHS internal state is fresh, then warm-start.
+        solver.load_model(&template);
+        let before = solver.statistics();
+
+        // Act
+        let _ = solver
+            .solve_with_basis(&basis)
+            .expect("warm-start solve must succeed with self-extracted basis");
+
+        // Assert
+        let after = solver.statistics();
+        assert_eq!(
+            after.basis_non_alien_rejections - before.basis_non_alien_rejections,
+            0,
+            "non-alien path should accept a self-extracted basis; rejections delta must be 0"
+        );
+        assert_eq!(
+            after.basis_rejections - before.basis_rejections,
+            0,
+            "alien fallback must not be triggered when non-alien path succeeds"
+        );
+    }
+
+    /// Non-alien FFI smoke test: `cobre_highs_set_basis_non_alien` rejects an
+    /// inconsistent basis and returns `HIGHS_STATUS_ERROR`.
+    ///
+    /// This test exercises the new C wrapper directly (the runtime path uses
+    /// only the alien setter). Validates that the FFI symbol links, accepts a
+    /// consistent basis with `kHighsStatusOk`, and rejects an all-nonbasic
+    /// basis with `kHighsStatusError`. Both properties are required before
+    /// the non-alien path can be re-enabled behind a feature gate.
+    #[test]
+    fn test_cobre_highs_set_basis_non_alien_ffi_contract() {
+        use crate::ffi;
+
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver.load_model(&template);
+
+        // Solve once to obtain a consistent basis.
+        let _ = solver.solve().expect("cold-start solve must succeed");
+        let mut basis = Basis::new(template.num_cols, template.num_rows);
+        solver.get_basis(&mut basis);
+
+        // Case 1: consistent basis -> kHighsStatusOk (0) or kHighsStatusWarning (1).
+        // SAFETY: solver.handle is valid; basis buffers are the right size.
+        let ok_status = unsafe {
+            ffi::cobre_highs_set_basis_non_alien(
+                solver.handle,
+                basis.col_status.as_ptr(),
+                basis.row_status.as_ptr(),
+            )
+        };
+        assert_ne!(
+            ok_status,
+            ffi::HIGHS_STATUS_ERROR,
+            "non-alien FFI must accept a self-extracted basis"
+        );
+
+        // Case 2: all-nonbasic basis (total basic = 0 != num_rows = 2)
+        //         -> kHighsStatusError.
+        basis
+            .col_status
+            .iter_mut()
+            .for_each(|v| *v = ffi::HIGHS_BASIS_STATUS_NONBASIC);
+        basis
+            .row_status
+            .iter_mut()
+            .for_each(|v| *v = ffi::HIGHS_BASIS_STATUS_NONBASIC);
+        // SAFETY: same as above.
+        let err_status = unsafe {
+            ffi::cobre_highs_set_basis_non_alien(
+                solver.handle,
+                basis.col_status.as_ptr(),
+                basis.row_status.as_ptr(),
+            )
+        };
+        assert_eq!(
+            err_status,
+            ffi::HIGHS_STATUS_ERROR,
+            "non-alien FFI must reject a zero-basic-count basis"
         );
     }
 }

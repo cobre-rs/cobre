@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
+    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
-    provenance::ComponentProvenance,
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -971,6 +971,7 @@ fn run_training_phase(
         local_solve_time_s,
         local_basis_offered,
         local_basis_rejections,
+        local_basis_non_alien_rejections,
         local_simplex_iter,
     ) = aggregate_solver_stats(&training_result.solver_stats_log);
 
@@ -982,9 +983,10 @@ fn run_training_phase(
         local_solve_time_s,
         local_basis_offered as f64,
         local_basis_rejections as f64,
+        local_basis_non_alien_rejections as f64,
         local_simplex_iter as f64,
     ];
-    let mut recv_stats = [0.0_f64; 7];
+    let mut recv_stats = [0.0_f64; 8];
     ctx.comm
         .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
@@ -998,6 +1000,7 @@ fn run_training_phase(
         total_solve_time_s,
         total_basis_offered,
         total_basis_rejections,
+        total_basis_non_alien_rejections,
         total_simplex_iter,
     ) = (
         recv_stats[0] as u64,
@@ -1007,6 +1010,7 @@ fn run_training_phase(
         recv_stats[4] as u64,
         recv_stats[5] as u64,
         recv_stats[6] as u64,
+        recv_stats[7] as u64,
     );
 
     // Print training summary on rank 0.
@@ -1033,6 +1037,7 @@ fn run_training_phase(
         total_solve_time_seconds: Some(total_solve_time_s),
         total_basis_offered: Some(total_basis_offered),
         total_basis_rejections: Some(total_basis_rejections),
+        total_basis_non_alien_rejections: Some(total_basis_non_alien_rejections),
         total_simplex_iterations: Some(total_simplex_iter),
     };
     if !ctx.quiet && ctx.is_root {
@@ -1049,13 +1054,14 @@ fn run_training_phase(
 /// Aggregate solver statistics from the training stats log.
 fn aggregate_solver_stats(
     stats_log: &[(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)],
-) -> (u64, u64, u64, f64, u64, u64, u64) {
+) -> (u64, u64, u64, f64, u64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
     let mut failed = 0u64;
     let mut solve_time = 0.0_f64;
     let mut basis_offered = 0u64;
     let mut basis_rejections = 0u64;
+    let mut basis_non_alien_rejections = 0u64;
     let mut simplex = 0u64;
     for (_, _, _, delta) in stats_log {
         first_try += delta.first_try_successes;
@@ -1064,6 +1070,7 @@ fn aggregate_solver_stats(
         solve_time += delta.solve_time_ms;
         basis_offered += delta.basis_offered;
         basis_rejections += delta.basis_rejections;
+        basis_non_alien_rejections += delta.basis_non_alien_rejections;
         simplex += delta.simplex_iterations;
     }
     (
@@ -1073,6 +1080,7 @@ fn aggregate_solver_stats(
         solve_time / 1000.0,
         basis_offered,
         basis_rejections,
+        basis_non_alien_rejections,
         simplex,
     )
 }
@@ -1285,6 +1293,7 @@ fn print_sim_summary(
             total_solve_time_seconds: Some(agg.solve_time_ms / 1000.0),
             total_basis_offered: Some(agg.basis_offered),
             total_basis_rejections: Some(agg.basis_rejections),
+            total_basis_non_alien_rejections: Some(agg.basis_non_alien_rejections),
             total_simplex_iterations: Some(agg.simplex_iterations),
         },
     );
@@ -1491,6 +1500,7 @@ fn delta_to_stats_row(
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
         basis_rejections: delta.basis_rejections as u32,
+        basis_non_alien_rejections: delta.basis_non_alien_rejections as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,

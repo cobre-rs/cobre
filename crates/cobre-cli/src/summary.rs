@@ -274,7 +274,11 @@ fn format_production_line(summary: &HydroModelSummary) -> String {
 
 /// Pluralize "hydro" or "hydros" based on count.
 fn hydro_plural(count: usize) -> &'static str {
-    if count == 1 { "hydro" } else { "hydros" }
+    if count == 1 {
+        "hydro"
+    } else {
+        "hydros"
+    }
 }
 
 /// Format the evaporation detail line for a [`HydroModelSummary`].
@@ -465,6 +469,9 @@ pub struct TrainingSummary {
     /// Total number of basis rejections.
     pub total_basis_rejections: Option<u64>,
 
+    /// Total number of non-alien basis rejections (fallbacks from non-alien path to alien path).
+    pub total_basis_non_alien_rejections: Option<u64>,
+
     /// Total simplex iterations across all solves.
     pub total_simplex_iterations: Option<u64>,
 }
@@ -509,6 +516,9 @@ pub struct SimulationSummary {
 
     /// Times the basis was rejected (cold-start fallback).
     pub total_basis_rejections: Option<u64>,
+
+    /// Times `solve_with_basis` fell back from the non-alien path to the alien path.
+    pub total_basis_non_alien_rejections: Option<u64>,
 
     /// Total simplex iterations across all solves.
     pub total_simplex_iterations: Option<u64>,
@@ -683,6 +693,9 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
             ));
         }
     }
+    if let Some(non_alien_rejections) = t.total_basis_non_alien_rejections {
+        let _ = stderr.write_line(&format!("  Non-alien rejections: {non_alien_rejections}"));
+    }
     if let Some(simplex) = t.total_simplex_iterations {
         let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
     }
@@ -747,6 +760,9 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
             ));
         }
     }
+    if let Some(non_alien_rejections) = sim.total_basis_non_alien_rejections {
+        let _ = stderr.write_line(&format!("  Non-alien rejections: {non_alien_rejections}"));
+    }
     if let Some(simplex) = sim.total_simplex_iterations {
         let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
     }
@@ -791,8 +807,8 @@ mod tests {
     use console::Term;
 
     use super::{
-        RunSummary, SimulationSummary, TrainingSummary, format_duration, format_summary_string,
-        print_summary,
+        format_duration, format_summary_string, print_summary, RunSummary, SimulationSummary,
+        TrainingSummary,
     };
 
     fn make_training_summary() -> TrainingSummary {
@@ -815,6 +831,7 @@ mod tests {
             total_solve_time_seconds: Some(28.8),
             total_basis_offered: Some(34_000),
             total_basis_rejections: Some(200),
+            total_basis_non_alien_rejections: Some(50),
             total_simplex_iterations: Some(1_800_000),
         }
     }
@@ -888,6 +905,7 @@ mod tests {
             total_solve_time_seconds: None,
             total_basis_offered: None,
             total_basis_rejections: None,
+            total_basis_non_alien_rejections: None,
             total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));
@@ -1053,6 +1071,7 @@ mod tests {
             total_solve_time_seconds: None,
             total_basis_offered: None,
             total_basis_rejections: None,
+            total_basis_non_alien_rejections: None,
             total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));
@@ -1061,7 +1080,7 @@ mod tests {
 
     // ── HydroModelSummary tests ────────────────────────────────────────────
 
-    use super::{HydroModelSummary, format_hydro_model_summary_string, print_hydro_model_summary};
+    use super::{format_hydro_model_summary_string, print_hydro_model_summary, HydroModelSummary};
     use cobre_core::EntityId;
     use cobre_sddp::FphaHydroDetail;
 
@@ -1363,8 +1382,8 @@ mod tests {
     // ── ModelProvenanceReport tests ───────────────────────────────────────────
 
     use super::{
-        ModelProvenanceReport, ProvenanceSource, format_provenance_summary_string,
-        print_provenance_summary,
+        format_provenance_summary_string, print_provenance_summary, ModelProvenanceReport,
+        ProvenanceSource,
     };
 
     fn make_provenance_report_full_estimation() -> ModelProvenanceReport {

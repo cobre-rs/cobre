@@ -188,6 +188,17 @@ unsafe extern "C" {
         row_status: *const int32_t,
     ) -> c_int;
 
+    /// Set the basis using `alien = false`, saving one LU factorization
+    /// compared to [`cobre_highs_set_basis`]. Caller guarantees basis
+    /// consistency (total basic count equals `num_rows`); rejection returns
+    /// `HIGHS_STATUS_ERROR` and the caller must fall back to the alien path.
+    /// Wraps `Highs::setBasis(const HighsBasis&)` with `basis.alien = false`.
+    pub fn cobre_highs_set_basis_non_alien(
+        highs: *mut c_void,
+        col_status: *const int32_t,
+        row_status: *const int32_t,
+    ) -> c_int;
+
     /// Get the current basis into caller-allocated arrays. Wraps `Highs_getBasis()`.
     pub fn cobre_highs_get_basis(
         highs: *const c_void,

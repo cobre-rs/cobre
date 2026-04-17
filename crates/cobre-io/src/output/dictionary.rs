@@ -14,13 +14,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int8Builder, Int32Builder, RecordBatch};
+use arrow::array::{Float64Builder, Int32Builder, Int8Builder, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use cobre_core::System;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
@@ -29,6 +28,7 @@ use crate::output::schemas::{
     iteration_timing_schema, non_controllables_schema, pumping_stations_schema, rank_timing_schema,
     retry_histogram_schema, solver_iterations_schema, thermals_schema,
 };
+use crate::Config;
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
 
@@ -665,6 +665,10 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
         ("solver_iterations", "basis_offered") => "Number of solve_with_basis calls",
         ("solver_iterations", "basis_rejections") => "Times the warm-start basis was rejected",
+        ("solver_iterations", "basis_non_alien_rejections") => {
+            "Times solve_with_basis fell back from the non-alien path to the alien path \
+             because HiGHS rejected the non-alien basis (isBasisConsistent failed)"
+        }
         ("solver_iterations", "simplex_iterations") => "Total simplex iterations",
         ("solver_iterations", "solve_time_ms") => "Cumulative solve wall-clock time",
         ("solver_iterations", "load_model_time_ms") => "Cumulative load_model call time",
@@ -1059,13 +1063,13 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use cobre_core::{
-        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
-        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
-        StageStateConfig, SystemBuilder, Thermal,
         resolved::{
             BoundsCountsSpec, BoundsDefaults, ContractStageBounds, HydroStageBounds,
             LineStageBounds, PumpingStageBounds, ResolvedBounds, ThermalStageBounds,
         },
+        Block, BlockMode, Bus, DeficitSegment, EntityId, Hydro, HydroGenerationModel,
+        HydroPenalties, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+        StageStateConfig, SystemBuilder, Thermal,
     };
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -1439,8 +1443,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 194,
-            "variables.csv must have exactly 194 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
+            row_count, 195,
+            "variables.csv must have exactly 195 data rows (one per column across all 16 iteration_timing columns + rest of schemas, including basis_non_alien_rejections)"
         );
     }
 

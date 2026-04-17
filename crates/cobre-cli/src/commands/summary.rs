@@ -21,14 +21,14 @@ use clap::Args;
 use console::Term;
 
 use cobre_io::{
-    ConvergenceSummary, OutputError, SimulationMetadata, TrainingMetadata,
-    read_convergence_summary, read_simulation_metadata, read_training_metadata,
+    read_convergence_summary, read_simulation_metadata, read_training_metadata, ConvergenceSummary,
+    OutputError, SimulationMetadata, TrainingMetadata,
 };
 
 use crate::{
     error::CliError,
     summary::{
-        SimulationSummary, TrainingSummary, print_simulation_summary, print_training_summary,
+        print_simulation_summary, print_training_summary, SimulationSummary, TrainingSummary,
     },
 };
 
@@ -140,6 +140,7 @@ fn build_training_summary(
         total_solve_time_seconds: None,
         total_basis_offered: None,
         total_basis_rejections: None,
+        total_basis_non_alien_rejections: None,
         total_simplex_iterations: None,
     }
 }
@@ -160,6 +161,7 @@ fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary 
         total_solve_time_seconds: None,
         total_basis_offered: None,
         total_basis_rejections: None,
+        total_basis_non_alien_rejections: None,
         total_simplex_iterations: None,
     }
 }
@@ -193,7 +195,7 @@ mod tests {
         MetadataCuts, MetadataIterations, MetadataProblemDimensions, TrainingMetadata,
     };
 
-    use super::{SummaryArgs, build_training_summary, convergence_fallback};
+    use super::{build_training_summary, convergence_fallback, SummaryArgs};
 
     fn make_training_metadata() -> TrainingMetadata {
         TrainingMetadata {

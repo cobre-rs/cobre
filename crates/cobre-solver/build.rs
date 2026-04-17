@@ -16,6 +16,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=csrc/highs_wrapper.c");
     println!("cargo:rerun-if-changed=csrc/highs_wrapper.h");
+    println!("cargo:rerun-if-changed=csrc/highs_wrapper_cpp.cpp");
 
     if env::var("CARGO_FEATURE_HIGHS").is_err() {
         return;
@@ -126,4 +127,31 @@ fn main() {
     }
 
     build.compile("highs_wrapper");
+
+    // C++ shim: implements cobre_highs_set_basis_non_alien which constructs a
+    // HighsBasis (C++ type) with alien = false and calls
+    // Highs::setBasis(const HighsBasis&) directly, bypassing the alien-path LU
+    // factorisation that the HiGHS C API always triggers.  Compiled as a
+    // separate object with C++17 so that the plain-C wrapper above is
+    // unaffected.
+    let mut build_cpp = cc::Build::new();
+    build_cpp
+        .file("csrc/highs_wrapper_cpp.cpp")
+        .cpp(true)
+        .include("csrc")
+        .include(&highs_include)
+        .include(&highs_include_highs)
+        .warnings(true)
+        .extra_warnings(true);
+
+    build_cpp.flag_if_supported("-std=c++17");
+
+    // Mirror the MSVC CRT setting used for the HiGHS cmake build above.
+    if target_env == "msvc" {
+        build_cpp.flag("/std:c++17");
+    } else {
+        build_cpp.flag("-Wno-unused-function");
+    }
+
+    build_cpp.compile("highs_wrapper_cpp");
 }

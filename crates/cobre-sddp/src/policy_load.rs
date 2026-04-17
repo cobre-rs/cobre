@@ -240,7 +240,6 @@ mod tests {
                         intercept,
                         coefficients: &coefficients,
                         is_active: true,
-                        domination_count: 0,
                     })
                     .collect()
             })

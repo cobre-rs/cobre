@@ -4808,7 +4808,6 @@ mod tests {
             iteration: 0,
             forward_pass_index: 0,
             is_active: true,
-            domination_count: 0,
         };
         let mut pool = crate::cut::pool::CutPool::new_with_warm_start(1, 2, 10, &[warm_record]);
         // Now add a training cut at iteration=1, fwd_idx=0:

@@ -155,7 +155,6 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
-            domination_count: 0,
         };
 
         Self {
@@ -253,7 +252,6 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
-            domination_count: 0,
         };
 
         if slot >= self.populated_count {
@@ -515,7 +513,6 @@ impl CutPool {
     ///         intercept: 5.0,
     ///         coefficients: vec![1.0, 2.0],
     ///         is_active: true,
-    ///         domination_count: 0,
     ///     },
     /// ];
     ///
@@ -554,7 +551,6 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
-                domination_count: u64::from(record.domination_count),
             });
         }
 
@@ -591,7 +587,7 @@ impl CutPool {
     ///     OwnedPolicyCutRecord {
     ///         cut_id: 0, slot_index: 0, iteration: 0, forward_pass_index: 0,
     ///         intercept: 5.0, coefficients: vec![1.0, 2.0],
-    ///         is_active: true, domination_count: 0,
+    ///         is_active: true,
     ///     },
     /// ];
     /// let pool = CutPool::new_with_warm_start(2, 4, 10, &records);
@@ -616,7 +612,6 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
-            domination_count: 0,
         };
 
         let mut coefficients = vec![0.0_f64; capacity * state_dimension];
@@ -648,7 +643,6 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
-                domination_count: u64::from(record.domination_count),
             };
         }
 
@@ -887,7 +881,6 @@ mod tests {
         assert_eq!(meta.forward_pass_index, 2);
         assert_eq!(meta.active_count, 0);
         assert_eq!(meta.last_active_iter, 3);
-        assert_eq!(meta.domination_count, 0);
     }
 
     #[test]
@@ -1198,7 +1191,6 @@ mod tests {
                 is_active: true,
                 iteration: 5,
                 forward_pass_index: 0,
-                domination_count: 0,
             },
             OwnedPolicyCutRecord {
                 cut_id: 1,
@@ -1208,7 +1200,6 @@ mod tests {
                 is_active: true,
                 iteration: 7,
                 forward_pass_index: 1,
-                domination_count: 0,
             },
         ];
 
@@ -1238,7 +1229,6 @@ mod tests {
             is_active: true,
             iteration: 0,
             forward_pass_index: 0,
-            domination_count: 0,
         }];
         let pool = CutPool::new_with_warm_start(1, 4, 100, &records);
         assert!(pool.warm_start_count > 0, "terminal pool has boundary cuts");

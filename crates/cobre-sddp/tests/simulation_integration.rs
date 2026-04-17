@@ -649,7 +649,6 @@ fn train_simulate_write_cycle() {
                         coefficients: &pool.coefficients
                             [slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
                         is_active: pool.active[slot],
-                        domination_count: meta.domination_count as u32,
                     }
                 })
                 .collect()

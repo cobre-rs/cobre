@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+- **Policy FlatBuffer schema** — `CUT_FIELD_DOMINATION_COUNT` (slot 22) removed
+  from the cut record vtable. `PolicyCutRecord::domination_count` and
+  `OwnedPolicyCutRecord::domination_count` removed from the Rust API. Old policy
+  files deserialize via the FlatBuffer graceful-absence pattern (`field_pos`
+  returns `None`, caller falls back to `0`). **Python**:
+  `cobre.results.load_policy(...)` per-cut dict no longer includes the
+  `"domination_count"` key.
 - Removed `basis_padding` config field (and the corresponding
   `basis_padding_enabled` Rust struct fields on `CutManagementConfig`,
   `TrainingContext`, and `StageKey`). Basis reconstruction is now always
@@ -117,6 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`CutSelectionStrategy::update_activity` method** — dead code. Metadata
+  updates (`active_count`, `last_active_iter`) are performed inline by the
+  backward pass at `crates/cobre-sddp/src/backward.rs:978-997`.
+- **`CutMetadata::domination_count` field** — never read by production code.
+  The `Dominated` cut selection algorithm uses a per-call local scratch buffer.
 - **Angular diversity pruning** — `angular_pruning.rs` module,
   `AngularPruningParams`, `AngularPruningResult`,
   `select_angular_dominated`, and `parse_angular_pruning_config`.
@@ -136,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   purge" that could destroy LB monotonicity on runs exceeding ~50
   iterations; they are no longer needed now that the LB LP is
   append-only.
+- **`SparseCut` module** — `crates/cobre-sddp/src/cut/sparse.rs`
+  deleted. The type was never instantiated in production; sparse
+  cut storage is handled by `indexer.nonzero_state_indices` in
+  `crates/cobre-sddp/src/indexer.rs`. Re-export
+  `cobre_sddp::cut::SparseCut` removed.
 
 ## [0.4.4] - 2026-04-14
 

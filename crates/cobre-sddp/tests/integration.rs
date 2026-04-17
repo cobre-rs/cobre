@@ -47,8 +47,8 @@ use cobre_stochastic::{
 };
 
 use cobre_sddp::{
-    AngularPruningParams, CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod,
-    LoopConfig, RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
+    RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
     StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
 };
 
@@ -256,10 +256,9 @@ impl SolverInterface for MockSolver {
 
 /// Mock solver that returns a zero-filled dual slice matching the current row count.
 ///
-/// Used in `test_angular_pruning_stage_0` where backward-pass solves at interior
-/// stages need a dual slice covering template rows plus active cut rows. Unlike
-/// `MockSolver` (which has a hardcoded two-element dual), this expands the dual
-/// buffer as cuts accumulate.
+/// Unlike `MockSolver` (which has a hardcoded two-element dual), this expands
+/// the dual buffer as cuts accumulate, so it can back tests where the backward
+/// pass solves at interior stages with active cut rows present.
 struct ExpandingMockSolver {
     objectives: Vec<f64>,
     call_count: usize,
@@ -597,7 +596,6 @@ fn run_one_deterministic_pass(
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -658,7 +656,6 @@ fn train_converges_with_mock_solver() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -769,7 +766,6 @@ fn train_lb_monotonically_nondecreasing() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -871,7 +867,6 @@ fn train_emits_correct_event_sequence() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -992,7 +987,6 @@ fn train_stops_at_iteration_limit() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -1083,7 +1077,6 @@ fn train_stops_on_graceful_shutdown() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -1164,7 +1157,6 @@ fn train_propagates_infeasible_error() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -1252,7 +1244,6 @@ fn d17_level1_cut_selection_convergence() {
                 threshold: 0,
                 check_frequency: 2,
             }),
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -1444,7 +1435,6 @@ fn d17_level1_cut_selection_with_basis_padding() {
                     threshold: 0,
                     check_frequency: 2,
                 }),
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -1500,7 +1490,6 @@ fn d17_level1_cut_selection_with_basis_padding() {
                     threshold: 0,
                     check_frequency: 2,
                 }),
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: true,
                 cut_activity_tolerance: 0.0,
@@ -1605,7 +1594,6 @@ fn d18_lml1_cut_selection_convergence() {
                 memory_window: 3,
                 check_frequency: 2,
             }),
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -1901,7 +1889,6 @@ fn d18_lml1_cut_selection_with_basis_padding() {
                     memory_window: 3,
                     check_frequency: 2,
                 }),
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -1957,7 +1944,6 @@ fn d18_lml1_cut_selection_with_basis_padding() {
                     memory_window: 3,
                     check_frequency: 2,
                 }),
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: true,
                 cut_activity_tolerance: 0.0,
@@ -2022,200 +2008,6 @@ fn d18_lml1_cut_selection_with_basis_padding() {
         stats.basis_rejections, 0,
         "D18+basis_padding: expected 0 basis rejections, got {}",
         stats.basis_rejections,
-    );
-}
-
-/// Angular pruning runs at stage 0 after ticket-005 loop-bounds fix.
-///
-/// ## Background
-///
-/// Ticket-005 changed the angular pruning loop from `(1..num_prune_stages)` to
-/// `(0..num_prune_stages)`, enabling stage 0 to be processed for the first time.
-/// This test verifies that the fix is effective and safe.
-///
-/// ## Call-count analysis (why the cycling objectives produce dominated cuts)
-///
-/// With `Fixture::new(4)`, `forward_passes: 1`, `n_openings: 1`, and
-/// `n_fwd_threads: 1`, the factory solver (used for both the forward and
-/// backward passes) makes exactly 7 `solve()` calls per iteration:
-///
-/// ```text
-/// calls 0–3  : forward pass (4 stages × 1 trial point)
-/// call  4    : backward pass t=2, solve at stage 3
-/// call  5    : backward pass t=1, solve at stage 2
-/// call  6    : backward pass t=0, solve at stage 1  ← cut for pools[0]
-/// ```
-///
-/// The LB solver (first `train` argument) is separate and cycles
-/// independently; it does not affect the factory call count.
-///
-/// With `objectives = [100.0, 50.0]` (period 2), call 6 maps to
-/// index `6 % 2 = 0` → `100.0` (iteration 1), call 13 maps to
-/// `13 % 2 = 1` → `50.0` (iteration 2), call 20 maps to
-/// `20 % 2 = 0` → `100.0` (iteration 3), etc.
-///
-/// All generated cuts have zero-norm coefficient vectors (dual = 0),
-/// so their intercept equals the objective returned by the solver.
-/// At iteration 3, the eligible zero-norm cluster at pools[0] contains:
-///
-/// - Cut from iteration 1: intercept 100.0 (survivor)
-/// - Cut from iteration 2: intercept  50.0 (dominated, deactivated)
-///
-/// ## What this tests
-///
-/// - AC-2: every `AngularPruningComplete` event has `stages_processed = num_stages - 1 = 3`.
-/// - AC-3: `fcf.pools[0].active_count() < fcf.pools[0].populated_count` after training.
-/// - The final lower bound is non-negative (pruning did not weaken the bound).
-#[test]
-#[allow(clippy::too_many_lines)]
-fn test_angular_pruning_stage_0() {
-    const N_STAGES: usize = 4;
-    let fx = Fixture::new(N_STAGES);
-    let mut fcf = make_fcf(N_STAGES);
-    let mut lb_solver = ExpandingMockSolver::with_objectives(vec![100.0]);
-    let comm = StubComm;
-
-    let (tx, rx) = mpsc::channel::<TrainingEvent>();
-    let config = TrainingConfig {
-        loop_config: LoopConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            start_iteration: 0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            stopping_rules: iteration_limit(10),
-        },
-        cut_management: CutManagementConfig {
-            cut_selection: None,
-            angular_pruning: Some(AngularPruningParams {
-                cosine_threshold: 0.999,
-                check_frequency: 1,
-            }),
-            budget: None,
-            basis_padding_enabled: false,
-            cut_activity_tolerance: 0.0,
-            warm_start_cuts: 0,
-            risk_measures: fx.risk_measures.clone(),
-        },
-        events: EventConfig {
-            event_sender: Some(tx),
-            checkpoint_interval: None,
-            shutdown_flag: None,
-            export_states: false,
-        },
-    };
-
-    let stage_ctx = StageContext {
-        templates: &fx.templates,
-        base_rows: &fx.base_rows,
-        noise_scale: &[],
-        n_hydros: 0,
-        n_load_buses: 0,
-        load_balance_row_starts: &[],
-        load_bus_indices: &[],
-        block_counts_per_stage: &[1usize, 1, 1, 1],
-        ncs_max_gen: &[],
-        discount_factors: &[],
-        cumulative_discount_factors: &[],
-        stage_lag_transitions: &[],
-        noise_group_ids: &[],
-        downstream_par_order: 0,
-    };
-
-    let result = train(
-        &mut lb_solver,
-        config,
-        &mut fcf,
-        &stage_ctx,
-        &TrainingContext {
-            horizon: &fx.horizon,
-            indexer: &fx.indexer,
-            inflow_method: &InflowNonNegativityMethod::None,
-            stochastic: &fx.stochastic,
-            initial_state: &fx.initial_state,
-            inflow_scheme: SamplingScheme::InSample,
-            load_scheme: SamplingScheme::InSample,
-            ncs_scheme: SamplingScheme::InSample,
-            historical_library: None,
-            external_inflow_library: None,
-            external_load_library: None,
-            external_ncs_library: None,
-            basis_padding_enabled: false,
-            recent_accum_seed: &[],
-            recent_weight_seed: 0.0,
-            stages: &[],
-        },
-        &comm,
-        || Ok(ExpandingMockSolver::with_objectives(vec![100.0, 50.0])),
-    )
-    .unwrap();
-
-    assert!(
-        result.result.iterations <= 10,
-        "training must complete within the iteration limit"
-    );
-
-    let events: Vec<TrainingEvent> = rx.try_iter().collect();
-
-    let pruning_events: Vec<&TrainingEvent> = events
-        .iter()
-        .filter(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
-        .collect();
-
-    assert!(
-        !pruning_events.is_empty(),
-        "must emit at least one AngularPruningComplete event"
-    );
-
-    for event in &pruning_events {
-        if let TrainingEvent::AngularPruningComplete {
-            stages_processed, ..
-        } = event
-        {
-            assert_eq!(
-                *stages_processed,
-                (N_STAGES - 1) as u32,
-                "stages_processed must equal num_stages-1 ({}) — ticket-005 regression \
-                 check: got {}",
-                N_STAGES - 1,
-                stages_processed,
-            );
-        }
-    }
-
-    let total_deactivated: u32 = pruning_events
-        .iter()
-        .filter_map(|e| {
-            if let TrainingEvent::AngularPruningComplete {
-                cuts_deactivated, ..
-            } = e
-            {
-                Some(*cuts_deactivated)
-            } else {
-                None
-            }
-        })
-        .sum();
-
-    assert!(
-        total_deactivated > 0,
-        "at least one cut must be deactivated by angular pruning across all events; \
-         this confirms stage 0 is actually pruned by the ticket-005 loop-bounds fix \
-         (total_deactivated = 0)"
-    );
-
-    assert!(
-        fcf.pools[0].active_count() < fcf.pools[0].populated_count,
-        "stage-0 pool must have deactivated cuts after training: \
-         active={} populated={}",
-        fcf.pools[0].active_count(),
-        fcf.pools[0].populated_count,
-    );
-
-    assert!(
-        result.result.final_lb >= 0.0,
-        "final lower bound must be non-negative after angular pruning at stage 0, got {}",
-        result.result.final_lb,
     );
 }
 
@@ -2944,7 +2736,6 @@ fn baked_backward_pass_smoke_test() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,

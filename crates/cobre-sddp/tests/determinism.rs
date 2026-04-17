@@ -502,7 +502,6 @@ fn run_training(
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,

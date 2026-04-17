@@ -275,11 +275,11 @@ Example:
 ## `cut_selection`
 
 Controls the cut management pipeline for managing cut pool growth. The
-pipeline has up to three stages: strategy-based selection, angular
-diversity pruning, and budget enforcement. Cut management periodically
-scans the cut pool and deactivates cuts that are unlikely to improve the
-policy, reducing LP size without sacrificing convergence quality. For a
-detailed explanation of each stage, see
+pipeline has up to two stages: strategy-based selection and budget
+enforcement. Cut management periodically scans the cut pool and
+deactivates cuts that are unlikely to improve the policy, reducing LP
+size without sacrificing convergence quality. For a detailed explanation
+of each stage, see
 [Performance Accelerators](./performance-accelerators.md#cut-management-pipeline).
 
 ### Core Fields
@@ -291,9 +291,9 @@ detailed explanation of each stage, see
 | `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                                             |
 | `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.                      |
 | `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                                     |
-| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stages 1 and 2).                                                                          |
+| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stage 1).                                                                                 |
 | `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                                       |
-| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 3 budget enforcement). `null` = no budget.                                          |
+| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 2 budget enforcement). `null` = no budget.                                          |
 | `basis_padding`          | boolean | `false` | Enable basis-aware warm-start padding (Strategy S3). See [Basis Warm-Start](./performance-accelerators.md#basis-warm-start). |
 
 **Methods:**
@@ -309,19 +309,7 @@ detailed explanation of each stage, see
   archive (always collected during training). The `domination_epsilon`
   parameter controls the tolerance for domination comparisons.
 
-### `angular_pruning`
-
-Optional second stage of the cut management pipeline. Clusters cuts by
-cosine similarity and performs within-cluster dominance verification.
-Gated by its own `check_frequency`.
-
-| Field              | Type    | Default | Description                                                     |
-| ------------------ | ------- | ------- | --------------------------------------------------------------- |
-| `enabled`          | boolean | `false` | Enable angular diversity pruning.                               |
-| `cosine_threshold` | float   | `0.999` | Cosine similarity threshold for clustering coefficient vectors. |
-| `check_frequency`  | integer | `1`     | Iterations between angular pruning checks.                      |
-
-Example with all three pipeline stages:
+Example with both pipeline stages:
 
 ```json
 {
@@ -332,11 +320,6 @@ Example with all three pipeline stages:
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "angular_pruning": {
-        "enabled": true,
-        "cosine_threshold": 0.999,
-        "check_frequency": 5
-      },
       "max_active_per_stage": 500,
       "basis_padding": false
     }
@@ -577,11 +560,6 @@ Controls which outputs are written to the results directory.
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "angular_pruning": {
-        "enabled": false,
-        "cosine_threshold": 0.999,
-        "check_frequency": 5
-      },
       "max_active_per_stage": null,
       "basis_padding": false
     }

@@ -1433,8 +1433,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 194,
-            "variables.csv must have exactly 194 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
+            row_count, 193,
+            "variables.csv must have exactly 193 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
         );
     }
 

@@ -815,7 +815,6 @@ fn build_study_setup(
         inflow_method: bcast_config.inflow_method.clone(),
         cut_selection,
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
-        angular_pruning: bcast_config.angular_pruning,
         budget: bcast_config.budget,
         basis_padding_enabled: bcast_config.basis_padding_enabled,
         export_states: bcast_config.export_states,

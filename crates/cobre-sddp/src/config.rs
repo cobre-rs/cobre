@@ -4,7 +4,7 @@
 //! training loop behaviour, grouped into three sub-structs:
 //!
 //! - [`LoopConfig`]: iteration loop control and convergence.
-//! - [`CutManagementConfig`]: three-stage cut management pipeline.
+//! - [`CutManagementConfig`]: two-stage cut management pipeline.
 //! - [`EventConfig`]: event infrastructure for monitoring and checkpointing.
 //!
 //! ## Construction
@@ -52,12 +52,11 @@
 //! assert_eq!(config.events.checkpoint_interval, Some(50));
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use cobre_core::TrainingEvent;
 
-use crate::angular_pruning::AngularPruningParams;
 use crate::cut_selection::CutSelectionStrategy;
 use crate::risk_measure::RiskMeasure;
 use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
@@ -134,7 +133,7 @@ impl Default for LoopConfig {
     }
 }
 
-/// Three-stage cut management pipeline configuration.
+/// Two-stage cut management pipeline configuration.
 ///
 /// Construct via [`Default::default()`] for tests, or explicitly set all fields
 /// for production configuration.
@@ -156,23 +155,14 @@ pub struct CutManagementConfig {
     /// criteria. When `None`, all generated cuts remain active.
     pub cut_selection: Option<CutSelectionStrategy>,
 
-    /// Optional angular diversity pruning parameters (stage 2 of the cut
-    /// selection pipeline).
-    ///
-    /// When `Some(params)`, the training loop applies angular pruning after the
-    /// strategy-based selection pass, using cosine similarity clustering as a
-    /// computational accelerator for pointwise dominance verification.
-    /// When `None`, angular pruning is disabled.
-    pub angular_pruning: Option<AngularPruningParams>,
-
-    /// Maximum number of active cuts per stage (stage 3 of the cut selection
+    /// Maximum number of active cuts per stage (stage 2 of the cut selection
     /// pipeline — hard cap on LP size).
     ///
     /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
-    /// per stage after strategy selection and angular pruning have completed.
-    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
-    /// tie-broken by usage frequency (`active_count` ascending). Cuts generated
-    /// in the current iteration are never evicted.
+    /// per stage after strategy selection has completed. Cuts are evicted in
+    /// order of staleness (`last_active_iter` ascending), tie-broken by usage
+    /// frequency (`active_count` ascending). Cuts generated in the current
+    /// iteration are never evicted.
     ///
     /// When `None`, no hard cap is enforced.
     pub budget: Option<u32>,
@@ -212,7 +202,6 @@ impl Default for CutManagementConfig {
     fn default() -> Self {
         Self {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 1e-6,
@@ -306,7 +295,7 @@ pub struct TrainingConfig {
     /// Controls the iteration loop, forward pass count, and convergence rules.
     pub loop_config: LoopConfig,
 
-    /// Three-stage cut management pipeline configuration.
+    /// Two-stage cut management pipeline configuration.
     pub cut_management: CutManagementConfig,
 
     /// Event infrastructure for monitoring and checkpointing.

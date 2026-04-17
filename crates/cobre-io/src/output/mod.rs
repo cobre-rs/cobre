@@ -218,15 +218,11 @@ pub struct CutSelectionRecord {
     pub cuts_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
-    /// Cuts evicted by budget enforcement (Step 4c) at this stage.
+    /// Cuts evicted by budget enforcement (Step 4b) at this stage.
     ///
     /// `None` when budget enforcement is disabled (`max_active_per_stage` is absent).
     pub budget_evicted: Option<u32>,
-    /// Active cuts after angular dominance pruning (Step 4b).
-    ///
-    /// `None` when angular pruning is disabled.
-    pub active_after_angular: Option<u32>,
-    /// Active cuts after budget enforcement (Step 4c).
+    /// Active cuts after budget enforcement (Step 4b).
     ///
     /// `None` when budget enforcement is disabled.
     pub active_after_budget: Option<u32>,

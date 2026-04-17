@@ -683,58 +683,6 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
     new_count
 }
 
-/// Deactivate cuts in the live LP by zeroing their row bounds.
-///
-/// For each slot index in `deactivation_set.indices`, looks up the LP row
-/// via `row_map`, then calls `solver.set_row_bounds` to set the row bounds
-/// to `(-inf, +inf)`, making the constraint non-binding (a free row).
-/// Updates `row_map` to mark the slot as deactivated.
-///
-/// Slots that are not present in the LP (never appended) are silently
-/// skipped. This handles the case where cut selection deactivates a cut
-/// that was generated but not yet appended to the LP.
-///
-/// # Returns
-///
-/// The number of LP rows whose bounds were actually zeroed.
-///
-/// # Panics
-///
-/// Panics if `set_row_bounds` is called with mismatched slice lengths
-/// (indicates a logic error in this function).
-pub fn deactivate_cuts_in_lp<S: SolverInterface>(
-    solver: &mut S,
-    deactivation_set: &crate::cut_selection::DeactivationSet,
-    row_map: &mut crate::cut::CutRowMap,
-) -> usize {
-    if deactivation_set.indices.is_empty() {
-        return 0;
-    }
-
-    let mut indices: Vec<usize> = Vec::with_capacity(deactivation_set.indices.len());
-    let mut lower: Vec<f64> = Vec::with_capacity(deactivation_set.indices.len());
-    let mut upper: Vec<f64> = Vec::with_capacity(deactivation_set.indices.len());
-
-    for &slot_u32 in &deactivation_set.indices {
-        let slot = slot_u32 as usize;
-        if let Some(lp_row) = row_map.lp_row_for_slot(slot) {
-            // Only deactivate if the slot is still active in the row_map.
-            if row_map.is_slot_active(slot) {
-                indices.push(lp_row);
-                lower.push(f64::NEG_INFINITY);
-                upper.push(f64::INFINITY);
-                row_map.deactivate(slot);
-            }
-        }
-    }
-
-    if !indices.is_empty() {
-        solver.set_row_bounds(&indices, &lower, &upper);
-    }
-
-    indices.len()
-}
-
 /// Bundled scalar parameters for one forward pass invocation.
 ///
 /// Groups the per-iteration, per-rank scalar arguments that are forwarded
@@ -2261,7 +2209,6 @@ mod tests {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -2386,7 +2333,6 @@ mod tests {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -2517,7 +2463,6 @@ mod tests {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -2960,7 +2905,6 @@ mod tests {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -3783,7 +3727,6 @@ mod tests {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -4626,7 +4569,6 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(solver.add_rows_count, 1);
         assert_eq!(row_map.total_cut_rows(), 2);
-        assert_eq!(row_map.active_count(), 2);
         assert_eq!(row_map.lp_row_for_slot(0), Some(5));
         assert_eq!(row_map.lp_row_for_slot(1), Some(6));
     }
@@ -4730,168 +4672,6 @@ mod tests {
 
         assert_eq!(actual.values, expected.values);
         assert_eq!(actual.col_indices, expected.col_indices);
-    }
-
-    // ── Tests for deactivate_cuts_in_lp ────────────────────────────────
-
-    /// Mock solver that records `set_row_bounds` calls.
-    struct BoundRecordingMockSolver {
-        last_indices: Vec<usize>,
-        last_lower: Vec<f64>,
-        last_upper: Vec<f64>,
-        set_row_bounds_count: usize,
-    }
-
-    impl BoundRecordingMockSolver {
-        fn new() -> Self {
-            Self {
-                last_indices: Vec::new(),
-                last_lower: Vec::new(),
-                last_upper: Vec::new(),
-                set_row_bounds_count: 0,
-            }
-        }
-    }
-
-    impl SolverInterface for BoundRecordingMockSolver {
-        fn solver_name_version(&self) -> String {
-            "MockSolver 0.0.0".to_string()
-        }
-        fn load_model(&mut self, _template: &StageTemplate) {}
-        fn add_rows(&mut self, _cuts: &RowBatch) {}
-        fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
-            self.last_indices = indices.to_vec();
-            self.last_lower = lower.to_vec();
-            self.last_upper = upper.to_vec();
-            self.set_row_bounds_count += 1;
-        }
-        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            Err(SolverError::InternalError {
-                message: "not implemented".to_string(),
-                error_code: None,
-            })
-        }
-        fn reset(&mut self) {}
-        fn get_basis(&mut self, _out: &mut Basis) {}
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            Err(SolverError::InternalError {
-                message: "not implemented".to_string(),
-                error_code: None,
-            })
-        }
-        fn statistics(&self) -> SolverStatistics {
-            SolverStatistics::default()
-        }
-        fn name(&self) -> &'static str {
-            "BoundRecordingMock"
-        }
-    }
-
-    #[test]
-    fn deactivate_cuts_empty_set_returns_zero() {
-        use crate::cut::CutRowMap;
-        use crate::cut_selection::DeactivationSet;
-
-        let mut solver = BoundRecordingMockSolver::new();
-        let mut row_map = CutRowMap::new(10, 5);
-
-        let deact = DeactivationSet {
-            stage_index: 0,
-            indices: vec![],
-        };
-        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
-        assert_eq!(count, 0);
-        assert_eq!(solver.set_row_bounds_count, 0);
-    }
-
-    #[test]
-    fn deactivate_cuts_zeros_bounds_for_mapped_slots() {
-        use crate::cut::CutRowMap;
-        use crate::cut_selection::DeactivationSet;
-
-        let mut solver = BoundRecordingMockSolver::new();
-        let mut row_map = CutRowMap::new(10, 5);
-        row_map.insert(0); // lp_row = 5
-        row_map.insert(1); // lp_row = 6
-        row_map.insert(2); // lp_row = 7
-
-        let deact = DeactivationSet {
-            stage_index: 0,
-            indices: vec![0, 2], // deactivate slots 0 and 2
-        };
-        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
-
-        assert_eq!(count, 2);
-        assert_eq!(solver.set_row_bounds_count, 1);
-        assert_eq!(solver.last_indices, vec![5, 7]);
-        assert!(solver.last_lower.iter().all(|&v| v == f64::NEG_INFINITY));
-        assert!(solver.last_upper.iter().all(|&v| v == f64::INFINITY));
-        assert_eq!(row_map.active_count(), 1); // only slot 1 remains active
-    }
-
-    #[test]
-    fn deactivate_cuts_skips_unmapped_slots() {
-        use crate::cut::CutRowMap;
-        use crate::cut_selection::DeactivationSet;
-
-        let mut solver = BoundRecordingMockSolver::new();
-        let mut row_map = CutRowMap::new(10, 5);
-        row_map.insert(0); // lp_row = 5
-
-        // Slot 3 was never inserted.
-        let deact = DeactivationSet {
-            stage_index: 0,
-            indices: vec![0, 3],
-        };
-        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
-
-        // Only slot 0 should be deactivated; slot 3 is skipped.
-        assert_eq!(count, 1);
-        assert_eq!(solver.last_indices, vec![5]);
-    }
-
-    #[test]
-    fn deactivate_cuts_preserves_row_mapping() {
-        use crate::cut::CutRowMap;
-        use crate::cut_selection::DeactivationSet;
-
-        let mut solver = BoundRecordingMockSolver::new();
-        let mut row_map = CutRowMap::new(10, 5);
-        row_map.insert(0); // lp_row = 5
-
-        let deact = DeactivationSet {
-            stage_index: 0,
-            indices: vec![0],
-        };
-        super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
-
-        // Row mapping is preserved after deactivation.
-        assert_eq!(row_map.lp_row_for_slot(0), Some(5));
-        assert!(!row_map.is_slot_active(0));
-    }
-
-    #[test]
-    fn deactivate_already_deactivated_slot_is_noop() {
-        use crate::cut::CutRowMap;
-        use crate::cut_selection::DeactivationSet;
-
-        let mut solver = BoundRecordingMockSolver::new();
-        let mut row_map = CutRowMap::new(10, 5);
-        row_map.insert(0);
-        row_map.deactivate(0); // already deactivated
-
-        let deact = DeactivationSet {
-            stage_index: 0,
-            indices: vec![0],
-        };
-        let count = super::deactivate_cuts_in_lp(&mut solver, &deact, &mut row_map);
-
-        assert_eq!(count, 0);
-        assert_eq!(solver.set_row_bounds_count, 0);
     }
 
     // ── Tests for build_delta_cut_row_batch_into ─────────────────────────

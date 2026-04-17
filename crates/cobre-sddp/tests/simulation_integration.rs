@@ -565,7 +565,6 @@ fn train_simulate_write_cycle() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -1336,7 +1335,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,

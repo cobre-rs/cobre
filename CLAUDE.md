@@ -30,9 +30,9 @@ variable types), NCS stochastic availability, block factors, per-stage
 productivity override, per-stage thermal cost override, CVaR risk measure,
 PAR(p) estimation (periodic YW, PACF), LP scaling, solver statistics
 instrumentation, LP setup optimisation (model persistence, incremental cuts,
-sparse cuts), simulation basis warm-start, three-stage cut management pipeline
-(strategy-based selection, angular-accelerated dominance pruning, active cut
-budget enforcement), basis-aware warm-start padding, backward pass work-stealing
+sparse cuts), simulation basis warm-start, two-stage cut management pipeline
+(strategy-based selection, active cut budget enforcement),
+basis-aware warm-start padding, backward pass work-stealing
 parallelism, parallel lower bound evaluation, solver safeguards (12-level retry
 escalation with wall-clock budgets), MPI distribution with execution topology
 reporting, Python bindings with Arrow zero-copy, CLI with 7 subcommands, policy

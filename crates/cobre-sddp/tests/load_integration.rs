@@ -424,7 +424,6 @@ fn test_stochastic_load_training_completes() {
         },
         cut_management: CutManagementConfig {
             cut_selection: None,
-            angular_pruning: None,
             budget: None,
             basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
@@ -577,7 +576,6 @@ fn test_deterministic_load_training_matches_baseline() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
@@ -660,7 +658,6 @@ fn test_stochastic_load_seed_determinism() {
             },
             cut_management: CutManagementConfig {
                 cut_selection: None,
-                angular_pruning: None,
                 budget: None,
                 basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,

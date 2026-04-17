@@ -48,12 +48,10 @@ not during forward synchronization.
 │          allgatherv shares each rank's newly generated cuts so that all  │
 │          ranks maintain an identical FCF at the end of each iteration.  │
 │                                                                         │
-│  Step 5a Cut management pipeline (optional, three stages)               │
+│  Step 5a Cut management pipeline (optional, two stages)                 │
 │          S1: Strategy-based selection (Level1/LML1/Dominated) —         │
 │              runs at multiples of check_frequency.                      │
-│          S2: Angular diversity pruning — clusters cuts by cosine        │
-│              similarity and performs within-cluster dominance checks.    │
-│          S3: Budget enforcement — hard cap on active cuts per stage,    │
+│          S2: Budget enforcement — hard cap on active cuts per stage,    │
 │              runs every iteration when max_active_per_stage is set.     │
 │                                                                         │
 │  Step 5b LB evaluation                                                  │
@@ -97,7 +95,6 @@ near zero.
 | `backward`            | `run_backward_pass`: step 4 Benders cut generation with work-stealing parallelism                                                                                                                                                                                                  |
 | `cut_sync`            | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                                                                                                                                                                                        |
 | `cut_selection`       | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a Stage 1 pool pruning                                                                                                                                                                                             |
-| `angular_pruning`     | `AngularPruningParams`, `select_angular_dominated`: step 5a Stage 2 — cosine-based clustering with within-cluster dominance verification                                                                                                                                           |
 | `lower_bound`         | `evaluate_lower_bound`: step 5b risk-adjusted LB computation (parallelized across openings)                                                                                                                                                                                        |
 | `convergence`         | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                                                                                                                                                                                           |
 | `cut`                 | `CutPool`, `FutureCostFunction`, `CutRowMap`, `WARM_START_ITERATION`: cut data structures, wire format, and LP row mapping                                                                                                                                                         |
@@ -147,8 +144,7 @@ silent misconfigurations.
 | `warm_start_cuts`       | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file        |
 | `event_sender`          | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
 | `cut_selection`         | `Option<CutSelectionStrategy>`  | Stage 1 cut selection strategy; `None` = no selection     |
-| `angular_pruning`       | `Option<AngularPruningParams>`  | Stage 2 angular diversity pruning; `None` = disabled      |
-| `budget`                | `Option<u32>`                   | Stage 3 max active cuts per stage; `None` = no budget     |
+| `budget`                | `Option<u32>`                   | Stage 2 max active cuts per stage; `None` = no budget     |
 | `basis_padding_enabled` | `bool`                          | Strategy S3 basis-aware warm-start padding                |
 
 ### `StoppingRuleSet`
@@ -202,8 +198,8 @@ assigned per stage from the `stages.json` configuration field `risk_measure`.
 ### `CutSelectionStrategy`
 
 Cut selection is optional. When configured, it forms Stage 1 of the
-three-stage cut management pipeline that also includes angular pruning
-(Stage 2) and budget enforcement (Stage 3). See the user-facing
+two-stage cut management pipeline that also includes budget enforcement
+(Stage 2). See the user-facing
 [Performance Accelerators](../guide/performance-accelerators.md#cut-management-pipeline)
 guide for the full pipeline description.
 
@@ -385,8 +381,7 @@ Key events emitted during training:
 | `BackwardPassComplete`      | After step 4 cut generation for all trial points              |
 | `CutSyncComplete`           | After step 5 cut allgatherv                                   |
 | `CutSelectionComplete`      | After step 5a Stage 1 selection (when strategy is set)        |
-| `AngularPruningComplete`    | After step 5a Stage 2 angular pruning (when enabled)          |
-| `BudgetEnforcementComplete` | After step 5a Stage 3 budget enforcement (when budget is set) |
+| `BudgetEnforcementComplete` | After step 5a Stage 2 budget enforcement (when budget is set) |
 | `ConvergenceUpdate`         | After step 6 stopping rules evaluated                         |
 | `IterationSummary`          | At the end of each iteration (LB, UB, gap, timing)            |
 | `TrainingFinished`          | When a stopping rule triggers                                 |
@@ -494,10 +489,12 @@ region to preserve bit-for-bit determinism across thread counts.
 
 ### Model persistence and incremental cuts
 
-`CutRowMap` provides O(1) bidirectional mapping between cut pool slots and LP
-row indices. Deactivated cuts become "phantom rows" (bounds zeroed) rather than
-triggering a full LP rebuild. Periodic rebuild occurs when phantoms exceed 20%
-of total rows or 50 iterations elapse.
+`CutRowMap` provides O(1) slot-to-row lookup for the persistent lower-bound
+LP so the append path skips cuts that are already present. The LB LP is
+strictly append-only: cuts are never removed from it, which keeps the lower
+bound monotonically non-decreasing. The shared cut pool's active/inactive
+bit is not propagated to the LB LP — pool-deactivated cuts remain as LP
+rows in the LB solver.
 
 ### Cut wire format
 

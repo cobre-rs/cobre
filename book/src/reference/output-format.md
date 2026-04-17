@@ -412,18 +412,17 @@ The JSON is an array of per-stage objects, each containing:
 Per-stage cut selection statistics. One row per `(iteration, stage)` pair,
 written only at iterations where selection ran. 10 columns.
 
-| Column                 | Type    | Nullable | Description                                                                 |
-| ---------------------- | ------- | -------- | --------------------------------------------------------------------------- |
-| `iteration`            | Int32   | No       | Training iteration number (1-based).                                        |
-| `stage`                | Int32   | No       | Stage index (0-based).                                                      |
-| `cuts_populated`       | Int32   | No       | Total cut slots containing cuts (active + inactive).                        |
-| `cuts_active_before`   | Int32   | No       | Active cuts before this iteration's selection pipeline.                     |
-| `cuts_deactivated`     | Int32   | No       | Cuts deactivated by the strategy-based selection (Stage 1).                 |
-| `cuts_active_after`    | Int32   | No       | Active cuts after Stage 1 selection.                                        |
-| `selection_time_ms`    | Float64 | No       | Wall-clock time for the full selection pipeline.                            |
-| `active_after_angular` | Int32   | Yes      | Active cuts after angular pruning (Stage 2). `null` when S2 is disabled.    |
-| `budget_evicted`       | Int32   | Yes      | Cuts evicted by budget enforcement (Stage 3). `null` when S3 is disabled.   |
-| `active_after_budget`  | Int32   | Yes      | Active cuts after budget enforcement (Stage 3). `null` when S3 is disabled. |
+| Column                | Type    | Nullable | Description                                                                 |
+| --------------------- | ------- | -------- | --------------------------------------------------------------------------- |
+| `iteration`           | Int32   | No       | Training iteration number (1-based).                                        |
+| `stage`               | Int32   | No       | Stage index (0-based).                                                      |
+| `cuts_populated`      | Int32   | No       | Total cut slots containing cuts (active + inactive).                        |
+| `cuts_active_before`  | Int32   | No       | Active cuts before this iteration's selection pipeline.                     |
+| `cuts_deactivated`    | Int32   | No       | Cuts deactivated by the strategy-based selection (Stage 1).                 |
+| `cuts_active_after`   | Int32   | No       | Active cuts after Stage 1 selection.                                        |
+| `selection_time_ms`   | Float64 | No       | Wall-clock time for the full selection pipeline.                            |
+| `budget_evicted`      | Int32   | Yes      | Cuts evicted by budget enforcement (Stage 2). `null` when S2 is disabled.   |
+| `active_after_budget` | Int32   | Yes      | Active cuts after budget enforcement (Stage 2). `null` when S2 is disabled. |
 
 ---
 

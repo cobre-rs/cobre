@@ -59,10 +59,9 @@ pub struct StoppingRuleResult {
 /// selection step: how many cuts existed, how many were active before
 /// selection, how many were deactivated, and how many remain active.
 ///
-/// The three optional fields capture the multi-step pipeline state:
-/// `active_after_angular` is set after Step 4b (angular dominance pruning),
-/// `budget_evicted` and `active_after_budget` are set after Step 4c (budget
-/// enforcement). All three are `None` when the corresponding step is disabled.
+/// The two optional fields capture the budget-enforcement pipeline state:
+/// `budget_evicted` and `active_after_budget` are set after Step 4b (budget
+/// enforcement). Both are `None` when budget enforcement is disabled.
 #[derive(Debug, Clone)]
 pub struct StageSelectionRecord {
     /// 0-based stage index.
@@ -77,15 +76,11 @@ pub struct StageSelectionRecord {
     pub cuts_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
-    /// Active cuts after angular dominance pruning (Step 4b).
-    ///
-    /// `None` when angular pruning is disabled or has not run yet.
-    pub active_after_angular: Option<u32>,
-    /// Cuts evicted by budget enforcement (Step 4c) at this stage.
+    /// Cuts evicted by budget enforcement (Step 4b) at this stage.
     ///
     /// `None` when budget enforcement is disabled.
     pub budget_evicted: Option<u32>,
-    /// Active cuts after budget enforcement (Step 4c).
+    /// Active cuts after budget enforcement (Step 4b).
     ///
     /// `None` when budget enforcement is disabled.
     pub active_after_budget: Option<u32>,
@@ -97,7 +92,7 @@ pub struct StageSelectionRecord {
 /// The enum has 15 variants: 11 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c + 4d)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
@@ -106,9 +101,8 @@ pub struct StageSelectionRecord {
 /// | 3    | [`Self::BackwardPassComplete`] | Backward sweep done                                    |
 /// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
 /// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
-/// | 4b   | [`Self::AngularPruningComplete`] | Angular dominance pruning done (conditional on `should_run`) |
-/// | 4c   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
-/// | 4d   | [`Self::TemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
+/// | 4b   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
+/// | 4c   | [`Self::TemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
@@ -227,37 +221,12 @@ pub enum TrainingEvent {
         per_stage: Vec<StageSelectionRecord>,
     },
 
-    /// Step 4b: Angular diversity pruning completed.
-    ///
-    /// Only emitted on iterations where angular pruning runs (i.e., when
-    /// `should_run(iteration)` returns `true`). On non-pruning iterations
-    /// this variant is skipped entirely. Always emitted after
-    /// [`Self::CutSelectionComplete`] when both are enabled on the same
-    /// iteration.
-    AngularPruningComplete {
-        /// Iteration number (1-based).
-        iteration: u64,
-        /// Total number of cuts deactivated across all stages.
-        cuts_deactivated: u32,
-        /// Total number of angular clusters formed across all stages.
-        clusters_formed: u64,
-        /// Total number of within-cluster dominance checks performed across all
-        /// stages.
-        dominance_checks: u64,
-        /// Number of stages processed (stages 0..num_stages-1; the terminal
-        /// stage is exempt because it has no successor states to verify
-        /// geometric dominance against).
-        stages_processed: u32,
-        /// Wall-clock time for the angular pruning phase, in milliseconds.
-        pruning_time_ms: u64,
-    },
-
-    /// Step 4c: Active-cut budget enforcement completed.
+    /// Step 4b: Active-cut budget enforcement completed.
     ///
     /// Emitted every iteration when `budget` is set in `TrainingConfig`.
-    /// When `budget` is `None`, this variant is never emitted. Unlike Steps
-    /// 4a and 4b, budget enforcement is not gated by `check_frequency`
-    /// because the budget is a hard cap that must be maintained at all times.
+    /// When `budget` is `None`, this variant is never emitted. Unlike Step
+    /// 4a, budget enforcement is not gated by `check_frequency` because the
+    /// budget is a hard cap that must be maintained at all times.
     BudgetEnforcementComplete {
         /// Iteration number (1-based).
         iteration: u64,
@@ -269,13 +238,13 @@ pub enum TrainingEvent {
         enforcement_time_ms: u64,
     },
 
-    /// Step 4d: Template baking completed.
+    /// Step 4c: Template baking completed.
     ///
     /// Emitted every iteration after all per-stage baked templates have been
-    /// rebuilt from the current active cut set (after Steps 4a–4c). Baking
+    /// rebuilt from the current active cut set (after Steps 4a and 4b). Baking
     /// runs sequentially over stages and is outside the forward/backward hot
-    /// paths. The baked templates will be consumed by the forward pass
-    /// (ticket-010) and backward pass (ticket-011) in the *next* iteration.
+    /// paths. The baked templates are consumed by the forward and backward
+    /// passes in the *next* iteration.
     TemplateBakeComplete {
         /// Iteration number (1-based).
         iteration: u64,
@@ -483,14 +452,6 @@ mod tests {
                 allgatherv_time_ms: 1,
                 per_stage: vec![],
             },
-            TrainingEvent::AngularPruningComplete {
-                iteration: 10,
-                cuts_deactivated: 3,
-                clusters_formed: 5,
-                dominance_checks: 12,
-                stages_processed: 11,
-                pruning_time_ms: 8,
-            },
             TrainingEvent::BudgetEnforcementComplete {
                 iteration: 10,
                 cuts_evicted: 2,
@@ -570,12 +531,12 @@ mod tests {
     }
 
     #[test]
-    fn all_fifteen_variants_construct() {
+    fn all_fourteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            15,
-            "expected exactly 15 TrainingEvent variants"
+            14,
+            "expected exactly 14 TrainingEvent variants"
         );
     }
 
@@ -769,35 +730,6 @@ mod tests {
             panic!("wrong variant")
         };
         assert!((scenario_cost - 50_000.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn angular_pruning_complete_fields_accessible() {
-        let event = TrainingEvent::AngularPruningComplete {
-            iteration: 15,
-            cuts_deactivated: 7,
-            clusters_formed: 4,
-            dominance_checks: 20,
-            stages_processed: 11,
-            pruning_time_ms: 12,
-        };
-        let TrainingEvent::AngularPruningComplete {
-            iteration,
-            cuts_deactivated,
-            clusters_formed,
-            dominance_checks,
-            stages_processed,
-            pruning_time_ms,
-        } = event
-        else {
-            panic!("wrong variant")
-        };
-        assert_eq!(iteration, 15);
-        assert_eq!(cuts_deactivated, 7);
-        assert_eq!(clusters_formed, 4);
-        assert_eq!(dominance_checks, 20);
-        assert_eq!(stages_processed, 11);
-        assert_eq!(pruning_time_ms, 12);
     }
 
     #[test]

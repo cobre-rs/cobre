@@ -4,7 +4,6 @@ use cobre_io::config::StoppingRuleConfig;
 
 use crate::{
     InflowNonNegativityMethod, SddpError,
-    angular_pruning::{AngularPruningParams, parse_angular_pruning_config},
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
@@ -47,8 +46,6 @@ pub struct StudyParams {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
-    /// Optional angular-accelerated dominance pruning parameters.
-    pub angular_pruning: Option<AngularPruningParams>,
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from
@@ -66,7 +63,7 @@ impl StudyParams {
     ///
     /// # Errors
     ///
-    /// - [`SddpError::Validation`] if cut selection or angular pruning config is invalid.
+    /// - [`SddpError::Validation`] if cut selection config is invalid.
     pub fn from_config(config: &cobre_io::Config) -> Result<Self, SddpError> {
         let seed = config
             .training
@@ -142,12 +139,6 @@ impl StudyParams {
             .cut_activity_tolerance
             .unwrap_or(0.0);
 
-        let angular_pruning = parse_angular_pruning_config(
-            &config.training.cut_selection.angular_pruning,
-            config.training.cut_selection.check_frequency,
-        )
-        .map_err(|msg| SddpError::Validation(format!("angular_pruning config error: {msg}")))?;
-
         let budget = config.training.cut_selection.max_active_per_stage;
 
         // Warn when the budget is so tight that every iteration will immediately
@@ -178,7 +169,6 @@ impl StudyParams {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
-            angular_pruning,
             budget,
             basis_padding_enabled,
         })
@@ -200,7 +190,6 @@ impl StudyParams {
             inflow_method: self.inflow_method,
             cut_selection: self.cut_selection,
             cut_activity_tolerance: self.cut_activity_tolerance,
-            angular_pruning: self.angular_pruning,
             budget: self.budget,
             basis_padding_enabled: self.basis_padding_enabled,
             export_states: false,
@@ -237,8 +226,6 @@ pub struct ConstructionConfig {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
-    /// Optional angular-accelerated dominance pruning parameters.
-    pub angular_pruning: Option<AngularPruningParams>,
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from

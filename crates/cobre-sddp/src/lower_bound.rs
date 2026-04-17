@@ -173,15 +173,19 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             }
         }
 
-        // Incremental LP management for the lower bound solver.
+        // Append-only LP management for the lower bound solver.
         //
         // When a CutRowMap is provided, the solver persists across iterations:
         //   - First call (row_map empty): load_model + append all active cuts.
         //   - Subsequent calls: append only new cuts (row_map tracks existing).
-        // When no CutRowMap is provided, fall back to full rebuild each call.
+        // Cuts are never removed from the LB LP — this keeps the lower bound
+        // monotonically non-decreasing across iterations.
+        //
+        // When no CutRowMap is provided (test contexts with no persistent
+        // state), fall back to full rebuild each call.
         if let Some(row_map) = lb_cut_row_map {
             if row_map.total_cut_rows() == 0 {
-                // First call or post-rebuild: full load.
+                // First call: full load.
                 solver.load_model(template);
             }
             // Append only cuts not yet present in the LP.
@@ -195,7 +199,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 lb_cut_batch,
             );
         } else {
-            // Legacy path: full rebuild every call.
+            // Test-only path: full rebuild every call.
             build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &template.col_scale);
             solver.load_model(template);
             if lb_cut_batch.num_rows > 0 {

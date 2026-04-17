@@ -29,15 +29,17 @@ to `O(workers x stages)`.
 
 ### Incremental Cut Injection
 
-Benders cuts are appended to the LP via `add_rows` without rebuilding the
-structural model. A `CutRowMap` provides O(1) bidirectional mapping between
-cut pool slot indices and LP row indices.
+Benders cuts are appended to the persistent lower-bound LP via `add_rows`
+without rebuilding the structural model. A `CutRowMap` provides O(1)
+slot-to-row lookup so the incremental append skips cuts that are already
+present.
 
-When cut selection deactivates a cut, rather than rebuilding the LP, the
-cut's row bounds are zeroed out (creating a "phantom row" that is present
-in the LP but non-binding). A periodic full rebuild is triggered when
-phantom rows exceed 20% of total rows or 50 iterations have elapsed since
-the last rebuild.
+The LB LP is strictly append-only: cuts generated during training are
+appended and never removed, which keeps the lower bound monotonically
+non-decreasing across iterations. Cut selection in the shared cut pool
+still affects the forward and backward passes — pool-deactivated cuts
+remain as LP rows in the LB solver but are not re-evaluated, so they
+contribute only their binding value at the trial point.
 
 ### Sparse Cut Representation
 
@@ -54,13 +56,13 @@ The `PatchBuffer` holds three parallel arrays (`indices`, `lower`, `upper`)
 consumed by the solver's `set_row_bounds` call. It is sized once at
 construction for the maximum number of patches across all stages:
 
-| Category | Range | Content |
-| --- | --- | --- |
-| 1 | `[0, N)` | Storage-fixing: equality constraint at incoming storage |
-| 2 | `[N, N*(1+L))` | Lag-fixing: equality constraint at AR lagged inflows |
-| 3 | `[N*(1+L), N*(2+L))` | Noise-fixing: equality constraint at scenario noise |
-| 4 | `[N*(2+L), N*(2+L) + M*B)` | Load balance: stochastic load demand per bus per block |
-| 5 | `[N*(2+L) + M*B, ...)` | z-inflow RHS: inflow variable bounds |
+| Category | Range                      | Content                                                 |
+| -------- | -------------------------- | ------------------------------------------------------- |
+| 1        | `[0, N)`                   | Storage-fixing: equality constraint at incoming storage |
+| 2        | `[N, N*(1+L))`             | Lag-fixing: equality constraint at AR lagged inflows    |
+| 3        | `[N*(1+L), N*(2+L))`       | Noise-fixing: equality constraint at scenario noise     |
+| 4        | `[N*(2+L), N*(2+L) + M*B)` | Load balance: stochastic load demand per bus per block  |
+| 5        | `[N*(2+L) + M*B, ...)`     | z-inflow RHS: inflow variable bounds                    |
 
 Where N = hydro plants, L = max PAR order, M = stochastic load buses,
 B = max blocks per stage. The buffer is reused across all iterations and
@@ -80,28 +82,28 @@ The caller never sees intermediate failures — only the final
 
 Each level stacks on top of the previous:
 
-| Level | Action |
-| --- | --- |
-| 0 | Clear cached basis and factorization |
-| 1 | Enable presolve |
-| 2 | Switch to dual simplex |
-| 3 | Relax feasibility tolerances (1e-6) |
-| 4 | Switch to interior point method (IPM) |
+| Level | Action                                |
+| ----- | ------------------------------------- |
+| 0     | Clear cached basis and factorization  |
+| 1     | Enable presolve                       |
+| 2     | Switch to dual simplex                |
+| 3     | Relax feasibility tolerances (1e-6)   |
+| 4     | Switch to interior point method (IPM) |
 
 ### Phase 2 (levels 5--11): Extended Strategies
 
 Each level starts from restored defaults with presolve and iteration
 limits, then applies level-specific options:
 
-| Level | Action |
-| --- | --- |
-| 5 | Scale strategy 3 |
-| 6 | Primal simplex + scale strategy 4 |
-| 7 | Scale strategy 3 + relaxed tolerances |
-| 8 | Objective scale (-10) |
-| 9 | Primal simplex + objective scale (-10) + bound scale (-5) |
-| 10 | Objective scale (-13) + bound scale (-8) + relaxed tolerances |
-| 11 | IPM + objective/bound scaling + relaxed tolerances |
+| Level | Action                                                        |
+| ----- | ------------------------------------------------------------- |
+| 5     | Scale strategy 3                                              |
+| 6     | Primal simplex + scale strategy 4                             |
+| 7     | Scale strategy 3 + relaxed tolerances                         |
+| 8     | Objective scale (-10)                                         |
+| 9     | Primal simplex + objective scale (-10) + bound scale (-5)     |
+| 10    | Objective scale (-13) + bound scale (-8) + relaxed tolerances |
+| 11    | IPM + objective/bound scaling + relaxed tolerances            |
 
 **Budgets:** 15 seconds per level in Phase 1, 30 seconds per level in
 Phase 2, 120 seconds overall. Iteration limits are set to
@@ -151,7 +153,7 @@ and after scaling for each stage.
 ## Cut Management Pipeline
 
 As training progresses, the cut pool grows and LP solve times increase.
-Cobre provides a three-stage cut management pipeline to control this
+Cobre provides a two-stage cut management pipeline to control this
 growth while preserving convergence guarantees.
 
 The pipeline runs after each iteration's backward pass and cut
@@ -161,10 +163,7 @@ synchronization:
 Stage 1: Strategy-based selection  (check_frequency gated)
     |
     v
-Stage 2: Angular diversity pruning (check_frequency gated)
-    |
-    v
-Stage 3: Budget enforcement        (every iteration)
+Stage 2: Budget enforcement        (every iteration)
 ```
 
 ### Stage 1: Strategy-Based Selection
@@ -172,11 +171,11 @@ Stage 3: Budget enforcement        (every iteration)
 Three strategies are available, configured via
 [`cut_selection`](./configuration.md#cut_selection) in `config.json`:
 
-| Strategy | Deactivation Condition | Aggressiveness |
-| --- | --- | --- |
-| `level1` | `active_count <= threshold` (never-binding cuts) | Least |
-| `lml1` | `iteration - last_active_iter > memory_window` | Medium |
-| `domination` | Dominated at all visited forward-pass trial points | Most |
+| Strategy     | Deactivation Condition                             | Aggressiveness |
+| ------------ | -------------------------------------------------- | -------------- |
+| `level1`     | `active_count <= threshold` (never-binding cuts)   | Least          |
+| `lml1`       | `iteration - last_active_iter > memory_window`     | Medium         |
+| `domination` | Dominated at all visited forward-pass trial points | Most           |
 
 All strategies respect `check_frequency`: selection runs only at
 iterations that are multiples of `check_frequency`. Stage 0 is always
@@ -189,54 +188,16 @@ at every visited forward-pass state, using the visited-states archive
 that is always collected during training. The `domination_epsilon`
 parameter controls the tolerance for domination comparisons.
 
-### Stage 2: Angular Diversity Pruning
-
-A computational accelerator for geometric redundancy detection, enabled
-via the `angular_pruning` configuration block:
-
-1. **Cluster phase**: Groups active cuts by cosine similarity of their
-   coefficient vectors using greedy single-linkage clustering. Cuts whose
-   coefficient vectors have cosine similarity above `cosine_threshold`
-   (default 0.999) are placed in the same cluster.
-
-2. **Dominance phase**: Within each cluster, performs pairwise pointwise
-   dominance verification at all visited trial points. A cut is removed
-   only if it is dominated at **every** trial point.
-
-This preserves Assumption (H2) from Guigues (2017) — near-parallel cuts
-with different intercepts create crossing hyperplanes where dominance
-is state-dependent, so the per-point check is essential for convergence.
-
-**Configuration:**
-
-```json
-{
-  "training": {
-    "cut_selection": {
-      "enabled": true,
-      "method": "level1",
-      "threshold": 0,
-      "check_frequency": 5,
-      "angular_pruning": {
-        "enabled": true,
-        "cosine_threshold": 0.999,
-        "check_frequency": 5
-      }
-    }
-  }
-}
-```
-
-### Stage 3: Budget Enforcement
+### Stage 2: Budget Enforcement
 
 A hard-cap safety net on LP size, enabled via `max_active_per_stage`.
-When the number of active cuts exceeds the budget after Stages 1 and 2,
-the pool evicts cuts sorted by staleness (`last_active_iter` ascending,
+When the number of active cuts exceeds the budget after Stage 1, the
+pool evicts cuts sorted by staleness (`last_active_iter` ascending,
 then `active_count` ascending). Cuts from the current iteration are
 always protected.
 
-Unlike Stages 1 and 2, budget enforcement runs **every iteration**
-(not gated by `check_frequency`).
+Unlike Stage 1, budget enforcement runs **every iteration** (not gated
+by `check_frequency`).
 
 **Configuration:**
 
@@ -264,20 +225,19 @@ configurations viable.
 ### Observability
 
 The cut management pipeline writes per-stage statistics to
-`training/cut_selection/iterations.parquet` with 10 columns:
+`training/cut_selection/iterations.parquet` with 9 columns:
 
-| Column | Description |
-| --- | --- |
-| `iteration` | Training iteration |
-| `stage` | Stage index |
-| `cuts_populated` | Total slots with cuts |
-| `cuts_active_before` | Active cuts before selection |
-| `cuts_deactivated` | Cuts deactivated by Stage 1 |
-| `cuts_active_after` | Active cuts after Stage 1 |
-| `selection_time_ms` | Wall-clock time for the selection |
-| `active_after_angular` | Active cuts after Stage 2 (null if disabled) |
-| `budget_evicted` | Cuts evicted by Stage 3 (null if disabled) |
-| `active_after_budget` | Active cuts after Stage 3 (null if disabled) |
+| Column                | Description                                  |
+| --------------------- | -------------------------------------------- |
+| `iteration`           | Training iteration                           |
+| `stage`               | Stage index                                  |
+| `cuts_populated`      | Total slots with cuts                        |
+| `cuts_active_before`  | Active cuts before selection                 |
+| `cuts_deactivated`    | Cuts deactivated by Stage 1                  |
+| `cuts_active_after`   | Active cuts after Stage 1                    |
+| `selection_time_ms`   | Wall-clock time for the selection            |
+| `budget_evicted`      | Cuts evicted by Stage 2 (null if disabled)   |
+| `active_after_budget` | Active cuts after Stage 2 (null if disabled) |
 
 ---
 
@@ -375,21 +335,21 @@ and shared read-only.
 The training loop makes no heap allocations on the hot path inside the
 iteration loop. All workspace buffers are allocated once before the loop:
 
-| Buffer | Size |
-| --- | --- |
-| `TrajectoryRecord` flat vec | `forward_passes x num_stages` records |
-| `PatchBuffer` | `N*(2+L) + M*max_blocks` entries |
-| `ExchangeBuffers` (state allgatherv) | `local_count x num_ranks x n_state` floats |
-| `CutSyncBuffers` (cut allgatherv) | `max_cuts_per_rank x num_ranks x cut_wire_size` bytes |
-| `ScratchBuffers` per worker | noise, inflow, lag matrix, PAR, eta, load, z-inflow buffers |
-| `Basis` per worker | pre-allocated with `template_rows + max_cut_rows` entries |
+| Buffer                               | Size                                                        |
+| ------------------------------------ | ----------------------------------------------------------- |
+| `TrajectoryRecord` flat vec          | `forward_passes x num_stages` records                       |
+| `PatchBuffer`                        | `N*(2+L) + M*max_blocks` entries                            |
+| `ExchangeBuffers` (state allgatherv) | `local_count x num_ranks x n_state` floats                  |
+| `CutSyncBuffers` (cut allgatherv)    | `max_cuts_per_rank x num_ranks x cut_wire_size` bytes       |
+| `ScratchBuffers` per worker          | noise, inflow, lag matrix, PAR, eta, load, z-inflow buffers |
+| `Basis` per worker                   | pre-allocated with `template_rows + max_cut_rows` entries   |
 
 ### CutPool Flat Coefficient Storage
 
 Cut coefficients are stored as a single contiguous `Vec<f64>` of size
 `capacity x state_dimension` rather than a `Vec<Vec<f64>>`. This provides
 cache-friendly sequential access during batch iteration (cut evaluation,
-dominance checks, angular pruning) and eliminates per-cut heap allocation.
+dominance checks) and eliminates per-cut heap allocation.
 
 ### Lazy FCF Growth
 

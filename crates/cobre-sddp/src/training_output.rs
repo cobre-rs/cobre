@@ -373,7 +373,6 @@ pub fn build_training_output(
                     cuts_deactivated: rec.cuts_deactivated,
                     cuts_active_after: rec.cuts_active_after,
                     selection_time_ms: rec.selection_time_ms,
-                    active_after_angular: rec.active_after_angular,
                     budget_evicted: rec.budget_evicted,
                     active_after_budget: rec.active_after_budget,
                 }))
@@ -903,7 +902,6 @@ mod tests {
                         cuts_deactivated: 0,
                         cuts_active_after: 5,
                         selection_time_ms: 0.0,
-                        active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
                     },
@@ -914,7 +912,6 @@ mod tests {
                         cuts_deactivated: 3,
                         cuts_active_after: 5,
                         selection_time_ms: 2.5,
-                        active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
                     },

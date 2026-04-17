@@ -34,7 +34,6 @@
     )
 )]
 
-pub mod angular_pruning;
 pub mod backward;
 pub mod basis_padding;
 pub mod config;
@@ -74,10 +73,6 @@ pub mod trajectory;
 pub mod visited_states;
 pub mod workspace;
 
-pub use angular_pruning::{
-    AngularPruningParams, AngularPruningResult, parse_angular_pruning_config,
-    select_angular_dominated,
-};
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
 pub use context::{BakedTemplates, StageContext, TrainingContext};

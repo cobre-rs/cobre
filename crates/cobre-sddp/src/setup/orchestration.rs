@@ -47,7 +47,6 @@ impl StudySetup {
             },
             cut_management: CutManagementConfig {
                 cut_selection: self.cut_selection.clone(),
-                angular_pruning: self.angular_pruning,
                 budget: self.budget,
                 basis_padding_enabled: self.basis_padding_enabled,
                 cut_activity_tolerance: self.cut_activity_tolerance,

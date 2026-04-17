@@ -75,6 +75,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JSON schemas** regenerated for `config.json` (added `BoundaryPolicy`
   under `policy.boundary`) and `initial_conditions.json` (added
   `recent_observations` array with `RawRecentObservation` definition).
+- **Cut management pipeline reduced to two stages** (strategy-based
+  selection + budget enforcement). The intermediate angular diversity
+  pruning stage was observed to deactivate zero cuts under the default
+  `cosine_threshold=0.999` in production-scale systems
+  (`n_state >> 100`) — the clustering phase formed only singletons, so
+  the within-cluster dominance phase never ran. The feature was removed
+  in favour of explicit theoretical guarantees.
+- **Lower-bound LP is now strictly append-only.** The dedicated
+  stage-0 LB solver no longer rebuilds its LP periodically; cuts
+  generated during training are appended and never removed from the
+  LB LP, keeping the lower bound monotonically non-decreasing across
+  iterations regardless of run length. Cut selection (LML1/Level1/
+  Dominated and budget enforcement) continues to deactivate cuts in
+  the shared cut pool, which affects the forward and backward passes;
+  pool-deactivated cuts remain as LP rows in the LB solver.
+
+### Removed
+
+- **Angular diversity pruning** — `angular_pruning.rs` module,
+  `AngularPruningParams`, `AngularPruningResult`,
+  `select_angular_dominated`, and `parse_angular_pruning_config`.
+  `TrainingEvent::AngularPruningComplete` variant removed.
+  `CutSelectionConfig.angular_pruning` field removed (breaking
+  config-file change — `config.json` files containing this field will
+  fail to deserialize).
+- **`active_after_angular` column** removed from
+  `training/cut_selection/iterations.parquet` (breaking output-schema
+  change — the column count drops from 10 to 9).
+- **LB LP periodic rebuild mechanism** — `needs_periodic_rebuild`
+  helper and the rebuild trigger in `training.rs`, together with
+  `CutRowMap::reset`, `CutRowMap::deactivate`, `CutRowMap::active_count`,
+  `CutRowMap::is_slot_active`, `CutRowMap::slot_for_lp_row`, and the
+  internal `row_to_slot` / `is_active` fields. `deactivate_cuts_in_lp`
+  in `forward.rs` removed. These components implemented a "phantom-row
+  purge" that could destroy LB monotonicity on runs exceeding ~50
+  iterations; they are no longer needed now that the LB LP is
+  append-only.
 
 ## [0.4.4] - 2026-04-14
 

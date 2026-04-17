@@ -164,8 +164,6 @@ pub struct StudySetup {
     pub(crate) cut_selection: Option<CutSelectionStrategy>,
     pub(crate) cut_activity_tolerance: f64,
     pub(crate) stopping_rule_set: StoppingRuleSet,
-    /// Optional angular-accelerated dominance pruning parameters.
-    pub(crate) angular_pruning: Option<crate::angular_pruning::AngularPruningParams>,
 
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
@@ -310,7 +308,6 @@ impl StudySetup {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
-            angular_pruning,
             budget,
             basis_padding_enabled,
             export_states,
@@ -701,7 +698,6 @@ impl StudySetup {
             cut_selection,
             cut_activity_tolerance,
             stopping_rule_set,
-            angular_pruning,
             budget,
             basis_padding_enabled,
             export_states,

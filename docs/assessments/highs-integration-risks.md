@@ -833,3 +833,499 @@ run training for a fixed iteration count, record `total_solve_time_seconds`
 and `success_count`. Apply Phase 1, re-run. The expected delta is a
 reduction in per-solve factor time proportional to the size of the
 `solve_with_basis` calls that used the baked path.
+
+---
+
+# Amendment — Cross-Work-Distribution Reproducibility (2026-04-17)
+
+This amendment **supersedes the "Recommended Plan" section above**. It
+incorporates a constraint that the original plan implicitly relaxed, and a
+C-API-exposure finding that changes the shape of the minimum viable fix.
+
+## The Constraint That Invalidated the Previous Phase 2
+
+Cobre's reproducibility invariant is stronger than "HiGHS is deterministic
+given identical input":
+
+> Results must be **bit-for-bit identical regardless of how scenarios /
+> trial points are partitioned across MPI ranks × OpenMP threads**. A
+> 4-rank × 8-thread run and a 1-rank × 32-thread run must produce the same
+> cuts, policy, and simulation output.
+
+This is why the backward pass calls `load_model` per trial point today
+(`backward.rs:699`) and the forward pass calls it per scenario
+(`forward.rs:1325, 1327`). `passLp` was the only resource available to
+guarantee that every solve starts from an identical cold state.
+
+The original Phase 2 ("eliminate per-scenario `load_model`, rely on
+`kNewBounds`") breaks this invariant. Worker A solving scenarios
+`{0,1,2,3}` sequentially arrives at scenario 2 with three prior solves of
+accumulated simplex state (basis, invert, DSE weights). Worker B solving
+`{2,3}` arrives at scenario 2 with zero prior state. HiGHS is deterministic
+given identical inputs, but the _inputs to scenario 2's simplex_ differ
+between the two workers. Under primal/dual degeneracy the resulting vertex
+— and therefore the dual multipliers fed into cut construction — can
+differ. The cobre team has observed this regression empirically.
+
+**`changeBounds` alone is not a reproducibility-preserving reset.** It
+preserves the invert and basis for performance, but those are exactly the
+bits that carry scenario-history bias.
+
+## What We Actually Need
+
+A mechanism that gives every scenario solve an **identical starting
+simplex state across workers**, at a fraction of the cost of `passLp`.
+Three properties are required:
+
+1. **Deterministic** — byte-identical starting state across workers for
+   the same (iteration, stage).
+2. **Cheap** — materially cheaper than a full structural reload.
+3. **Correctness-preserving** — produces the same pivot path a cold
+   start-from-template would.
+
+`kNewBounds`-only fails (1). `passLp` fails (2). What remains is to
+identify the cheapest HiGHS operation that restores **all** solver state
+flags cobre's determinism depends on — not just the basis — so that every
+trial point's solve starts from an equivalent "canonical" state
+regardless of the prior solve history on the same worker. The exhaustive
+audit below identifies that operation: `Highs_clearSolver`.
+
+## Finding 7 — Exhaustive `setBasis`-as-Reset Determinism Audit
+
+Before committing to a reset strategy we performed a line-by-line audit
+of HiGHS to answer a single question: given a HiGHS instance that has
+previously solved many LPs, does `setBasis(B) + changeBounds(Δ) + run`
+produce byte-identical output to `passLp(template) + setBasis(B) +
+changeBounds(Δ) + run` on a fresh instance? The answer is **NO** —
+`setBasis` alone is not a sufficient deterministic reset. Two specific
+HiGHS internal state fields are cleared by `passLp` (which calls
+`clearSolver` internally) but **not** by `setBasis`:
+
+### Finding 7.1 — `HEkk::random_` PRNG state leaks across solves
+
+`setSimplexOptions()` (`HEkk.cpp:1623-1645`) reseeds
+`random_.initialise(options_->random_seed)` at line 1639. But
+`setSimplexOptions` is invoked only from `initialiseEkk()`
+(`HEkk.cpp:1574-1581`), which is guarded at line 1574:
+
+```cpp
+if (this->status_.initialised_for_new_lp) return;
+```
+
+`setBasis` → `newHighsBasis()` → `updateStatus(LpAction::kNewBasis)` →
+`invalidateBasis()` → `invalidateBasisArtifacts()` does **not** clear
+`initialised_for_new_lp`. This flag is cleared only by
+`HEkk::invalidate()` (`HEkk.cpp:277-284`), which `setBasis` never
+invokes.
+
+Consequence: on a reused instance, the PRNG is seeded exactly once
+(on the first `passLp`). Every subsequent `run()` calls
+`initialiseForSolve()` → `initialiseSimplexLpRandomVectors()`
+(`HEkk.cpp:1601`), which advances `random_` to produce
+`numTotPermutation_`, `numColPermutation_`, `numTotRandomValue_`.
+These permutation vectors feed into simplex pricing tie-breaks. Two
+runs that differ in the number of prior solves on the same instance
+see different permutation vectors on identical input, producing
+different pivot sequences and (on degenerate LPs) different optimal
+vertices.
+
+### Finding 7.2 — `bad_basis_change_` taboo list accumulates across solves
+
+The `bad_basis_change_` vector holds cycle-avoidance taboo entries
+written during degenerate solves. `tabooBadBasisChange()`
+(`HEkk.cpp:665`) reads it to prevent repeating a pivot that led to
+cycling. The vector is cleared only by `clearBadBasisChange()`, called
+solely from `initialiseEkk()` (same `initialised_for_new_lp` guard).
+
+Consequence: a reused instance carries taboos from prior degenerate
+solves. A subsequent `run()` avoids pivots that a fresh instance
+would freely choose. On degenerate LPs — which backward-pass
+subproblems frequently are — this produces divergent trajectories.
+
+### Finding 7.3 — What IS safely reset by `setBasis`
+
+The exhaustive field audit confirmed these properties hold for cobre's
+option set (`simplex_strategy = kSimplexStrategyDualPlain`,
+`parallel = off`, `simplex_scale_strategy = 0`, `presolve = off`):
+
+- **Dual edge weights.** `invalidateBasisArtifacts()` sets
+  `has_dual_steepest_edge_weights = false`. `HEkkDual.cpp:146`
+  unconditionally `assign(solver_num_row, 1.0)` before any DSE
+  computation — stale buffer values are never read.
+- **Perturbation state.** `costs_perturbed` / `bounds_perturbed` are
+  reset to `false` by `initialiseCost()` / `initialiseBound()`
+  (`HEkk.cpp:2443, 2571`) on every `initialiseForSolve()`.
+- **Factorization (`simplex_nla_.factor_`).** `has_invert = false`
+  after `invalidateBasisArtifacts` forces a full fresh
+  `HFactor::build()` on the next `run`, which calls
+  `refactor_info_.clear()` (`HSimplexNla.cpp:126`). Stale factor data
+  is overwritten.
+- **Crash / logical basis.** A valid consistent `setBasis(B)`
+  installs `basis_ = B` and sets `has_basis = true`, bypassing the
+  crash heuristic entirely (`HApp.h:191-215`).
+- **Synthetic clock / timer-based gating.** All algorithmic decisions
+  are gated on deterministic counters (iteration count, synthetic
+  tick derived from FLOP estimates). No wall-clock decisions remain
+  in the production path — the obsolete synthetic-tick check in
+  `HEkkDual.cpp:2258-2265` is commented out.
+- **Parallel simplex.** With `simplex_strategy =
+kSimplexStrategyDualPlain` and `parallel = off`,
+  `chooseSimplexStrategyThreads()` (`HEkk.cpp:1726`) never upgrades
+  to `kSimplexStrategyDualMulti`. No thread-local state, no task
+  scheduling.
+
+### Finding 7.4 — The correct reset is `Highs_clearSolver`
+
+`Highs::clearSolver()` (`Highs.cpp:63-68`) calls
+`invalidateSolverData()`, which includes `invalidateEkk()` →
+`HEkk::invalidate()` (`HEkk.cpp:277-284`). This sets
+`initialised_for_new_lp = false` and `initialised_for_solve = false`.
+On the next `run()`:
+
+- `initialiseEkk()` fires (because `initialised_for_new_lp == false`)
+- `setSimplexOptions()` reseeds `random_` from `options.random_seed`
+- `clearBadBasisChange()` zeros the taboo list
+- `initialised_for_new_lp = true` is restored
+
+After `clearSolver`, the sequence `setBasis(B) + changeBounds(Δ) +
+run` produces byte-identical output to `passLp + setBasis(B) +
+changeBounds(Δ) + run` on a fresh instance, given identical options.
+
+**Crucially, `clearSolver` does NOT touch the LP model itself.** The
+CSC matrix (`lp_.a_matrix_`) and bounds vectors persist. No matrix
+re-copy, no `assessMatrix` re-scan. The work is O(1) in flag resets
+plus a few small vector clears — compared to `passLp`'s O(nnz) matrix
+transfer and assessment.
+
+This reconciles the apparent tension with HiGHS issue #1598 (user
+complaints about non-determinism on reuse): the reported symptom is
+consistent with `bad_basis_change_` taboo accumulation across solves.
+The issue would be closed by exactly the reset we need — which
+`clearSolver` already provides.
+
+### Finding 7.5 — The FFI is already in place
+
+`Highs_clearSolver` is in the HiGHS C API
+(`interfaces/highs_c_api.h:396`, `.cpp:378`). Cobre's wrapper already
+exposes it: `cobre_highs_clear_solver` (`csrc/highs_wrapper.h:166`,
+`.c:196-197`), and it's declared on the Rust FFI at
+`crates/cobre-solver/src/ffi.rs:204`. It is currently invoked inside
+`HighsSolver::reset` (`highs.rs:1123`) and the retry-escalation path
+(`highs.rs:652`) — **no new FFI is required**. The missing piece is a
+trait-level entry point that triggers the state reset without forcing
+a subsequent `load_model` (which the current `reset()` does via
+`has_model = false` at `highs.rs:1132`).
+
+---
+
+# Implementation Roadmap
+
+The roadmap splits into two shipping phases (B.1 → A.1) and two gated
+follow-ups (B.2 → possibly C). No new types, no new storage pattern, no
+`SolverState` abstraction. One new trait method, one new FFI function.
+
+## Phase B.1 — Non-alien `setBasis`
+
+**Goal.** When `HighsSolver::solve_with_basis` installs a caller-provided
+basis, route through `Highs::setBasis` with `alien = false` instead of
+the current default-alien path. Saves one LU factor per basis install
+(the throwaway factor inside `formSimplexLpBasisAndFactor`).
+
+**Scope.**
+
+1. Add `cobre_highs_set_basis_non_alien(void*, const int32_t*, const int32_t*)`
+   to `csrc/highs_wrapper.{h,c}`. Implementation constructs a `HighsBasis`,
+   sets `alien = false`, populates `col_status` / `row_status` from the
+   raw `i32` inputs, calls `((Highs*)h)->setBasis(basis)`.
+2. Mirror declaration in `crates/cobre-solver/src/ffi.rs`.
+3. In `HighsSolver::solve_with_basis`, try the non-alien path first.
+   On `HIGHS_STATUS_ERROR` (meaning `isBasisConsistent` rejected the
+   basis), fall back to the existing alien `cobre_highs_set_basis`.
+4. New counter `basis_non_alien_rejections` on `SolverStatistics`.
+
+**Acceptance.** D01-D30 bit-identical. Instrumentation shows >99% of
+warm-start calls succeed on the non-alien path for baked-template LPs.
+
+**Risk.** Low. Fallback to alien preserves current behavior on any
+inconsistency. **No trait changes, no caller changes.**
+
+## Phase A.1 — Per-stage `load_model`, per-trial-point `clear_solver_state`
+
+**Goal.** Eliminate the O(nnz) `passLp` matrix re-copy currently
+performed per trial point in the backward pass (`backward.rs:699`).
+Replace with per-stage `load_model` (the template is identical across
+all trial points at a given stage) plus per-trial-point
+`clear_solver_state` + basis install + bound patch + solve.
+
+### Trait addition
+
+```rust
+/// Clears the solver's derived state (factorization, warm-start weights,
+/// PRNG state, cycle-avoidance taboos, all simplex status flags) while
+/// keeping the loaded LP intact. After this call the next solve behaves
+/// as if it were the first solve on a fresh instance with the same LP.
+///
+/// This is the deterministic-reset primitive for warm-start chains that
+/// span work-distribution variations — specifically, the backward pass
+/// reusing a solver across trial points at a single stage.
+///
+/// Contract: caller does NOT need to call `load_model` before the next
+/// solve. Bounds should be set (via `set_row_bounds` / `set_col_bounds`)
+/// and a warm-start basis may be installed via `solve_with_basis`.
+///
+/// # Errors
+/// `SolverError::Unsupported` on backends without an equivalent cheap
+/// reset. Such backends should be invoked via the `reset` +
+/// `load_model` path instead.
+fn clear_solver_state(&mut self) -> Result<(), SolverError> {
+    Err(SolverError::Unsupported("clear_solver_state not implemented for this backend"))
+}
+```
+
+HighsSolver implementation: two FFI lines wrapping
+`ffi::cobre_highs_clear_solver`. Does not touch `has_model`, `num_cols`,
+`num_rows` — the LP remains loaded and usable.
+
+### Backward-pass restructuring
+
+The backward pass outer loop is already stage-major
+(`backward.rs:806`). The structural change is moving `load_model` from
+per-trial-point to per-worker-per-stage:
+
+```rust
+// Pseudocode — replaces the per-trial-point load_backward_lp.
+for t in (0..num_stages - 1).rev() {
+    // Barrier implicit in process_stage_backward.
+    let workers = /* ... */;
+    workers.par_iter_mut().for_each(|ws| {
+        ws.solver.load_model(&templates[t]);          // ONCE per worker per stage
+        while let Some(trial) = claim_next_trial_point() {
+            ws.solver.clear_solver_state()?;          // per-trial-point deterministic reset
+            let stored_basis = state_store.get(trial.scenario, t);
+            // For opening 0:
+            apply_bounds_for_opening(ws, trial, 0);
+            if let Some(b) = stored_basis {
+                ws.solver.solve_with_basis(b)?;
+            } else {
+                ws.solver.solve()?;                   // cold fallback
+            }
+            ws.solver.get_basis(&mut captured.basis);
+            // For openings 1..K-1: natural warm-start chain.
+            for k in 1..num_openings {
+                apply_bounds_for_opening(ws, trial, k);
+                ws.solver.solve()?;                   // invert preserved via kNewBounds
+            }
+        }
+    });
+}
+```
+
+Key invariants:
+
+- `load_model` per worker per stage. One call per `(worker, stage)`
+  pair, not per `(worker, trial_point)`.
+- `clear_solver_state` per trial point — resets RNG, bad-basis-change,
+  and all simplex status flags without re-copying the LP matrix.
+- `solve_with_basis` per trial point (opening 0) — deterministic basis
+  install (the caller provides the stored basis from the state store).
+- Natural warm-start chain for openings 1..K-1 via `changeBounds` + `run`,
+  as today.
+
+### Scope
+
+1. Add `clear_solver_state` to `SolverInterface` (`trait_def.rs`) with
+   default `Err(Unsupported)` implementation.
+2. Implement on `HighsSolver` via `ffi::cobre_highs_clear_solver`. Do
+   not touch `has_model` / `num_cols` / `num_rows`. Return
+   `SolverError::InternalError` only on FFI failure.
+3. Restructure the backward-pass worker loop: detect stage transitions
+   (first trial point claimed at each stage), hoist `load_model` out of
+   the trial-point loop. Per trial point, call `clear_solver_state`
+   before applying opening 0's bounds and solving.
+4. Gate the new path behind `CanonicalStateStrategy::{Disabled,
+ClearSolver}` config option, defaulting to `Disabled`.
+5. Instrument: `clear_solver_count` and `clear_solver_failures` counters
+   on `SolverStatistics`.
+
+### Acceptance criteria (blocking)
+
+**Cross-work-distribution reproducibility is not optional.** The prior
+team hit reproducibility bugs on a similar optimization. The audit
+argues `clearSolver` is a complete reset, but empirical validation
+across parallel configurations is the authority.
+
+The invariant we test is specifically: **a single binary built with
+the A.1 changes must produce identical outputs regardless of how work
+is distributed across workers or MPI ranks.** We do NOT require the
+new binary to reproduce pre-A.1 reference outputs — the algorithmic
+restructuring (per-stage `load_model` + per-trial-point
+`clear_solver_state`, replacing per-trial-point `passLp`) may produce
+numerically different but equally valid solutions by choosing a
+different path through the simplex. What is non-negotiable is that
+the new binary's output depends only on the problem, not on how many
+workers or ranks happen to be running.
+
+**What is required.**
+
+1. For each D01-D30 case, the binary run under `ClearSolver` must
+   produce byte-identical outputs across worker counts 1, 2, 4, 8 on
+   a single rank. Any divergence across worker counts is a hard
+   blocker.
+2. Same invariant across MPI configurations: 2, 4, 8 ranks × 1, 2, 4
+   threads-per-rank. Outputs must be byte-identical across all
+   rank/thread combinations. Covered on at least three representative
+   D-cases.
+3. `work_stealing_produces_identical_results_across_worker_counts`
+   (`backward.rs:4516`) must pass under `ClearSolver`. This is the
+   existing in-suite probe for the exact invariant A.1 must preserve.
+
+**What is NOT required.**
+
+- Byte-identical match against pre-A.1 reference outputs. D-case
+  fixtures may need to be regenerated from the new binary once the
+  cross-distribution invariant holds. Update fixture files as part of
+  the A.1 PR; note the fixture rebaseline in the PR description.
+- Any specific match against the fixtures currently in the repo. If
+  the new solver path lands on a different-but-equivalent optimum, we
+  accept that — as long as all distributions land on the same new
+  optimum.
+
+**Post-flip expectation.** Once `ClearSolver` becomes the default,
+the regenerated D-case fixtures become the new frozen reference. All
+future PRs must then preserve byte-identicality against those
+fixtures AND across work distributions. Any future change that breaks
+either is a regression.
+
+**Divergence across distributions at any point is a hard blocker.**
+If it occurs during A.1 validation, the audit missed a state path.
+Reopen the investigation — do not flip the default until the path is
+identified and closed.
+
+### Expected gain
+
+Eliminates the O(nnz) matrix copy + `assessMatrix` work per trial point.
+For typical cobre LPs (~500 rows, ~5000 nonzeros), `passLp` costs tens
+to hundreds of microseconds per call. Per iteration,
+`num_scenarios × num_stages` trial points × `passLp` is a significant
+wall-clock contributor. Replacing it with `clearSolver` (flag resets +
+small vector clears) is roughly an O(1) op per trial point.
+
+The user has reported backward-pass growing to >90% of program
+execution time on recent benchmarks, driven in part by load imbalance.
+A.1 reduces the per-trial-point overhead proportionally; load
+imbalance is addressed separately (not in scope here).
+
+### Risk
+
+Medium. Bit-identicality tests are the safeguard. The audit is
+thorough but empirical validation is what closes the risk.
+
+## Phase B.2 — Per-`(scenario, stage, opening)` basis storage (deferred, empirical)
+
+**Goal (when pursued).** Replace the single per-`(scenario, stage)` basis
+slot with per-`(scenario, stage, opening)` slots, so each opening's solve
+warm-starts from its own previously-stored basis rather than chaining
+from the previous opening's end state.
+
+**Trade-off.** `setBasis` **always** invalidates the invert (verified
+in Finding 7 — both alien and non-alien paths call `newHighsBasis()`
+→ `invalidateBasis()`). Per-opening basis therefore replaces
+today's 1 refactor per `(m, t)` (the opening-0 solve's factor) with K
+refactors per `(m, t)`. Non-alien `setBasis` from B.1 makes each
+individual factor cheaper, but does not avoid them.
+
+Whether this is a net win depends on:
+
+- How correlated the openings at a given `(m, t)` are. Highly
+  correlated → chained warm-start is already near-optimal; per-opening
+  basis loses.
+- The factor-cost / pivot-cost ratio for cobre's LP dimensions.
+  Typical rule of thumb: one factor ≈ 10-25 pivots.
+- How much per-opening basis saves in pivot count vs. chained.
+
+**Criteria for pursuing.** Profile A.1 under production workloads.
+If per-opening pivot counts are consistently > 15-20 and openings are
+weakly correlated (noise realizations with broad stochastic variation),
+B.2 is a candidate. Otherwise skip.
+
+**Scope (when pursued).**
+
+1. Add a parallel `BackwardBasisStore` to `cobre-sddp/src/workspace.rs`,
+   indexed `[scenario * num_stages * num_openings + stage *
+num_openings + opening]`. Same `CapturedBasis` payload.
+2. Memory projection: `num_scenarios × num_stages × num_openings ×
+sizeof_basis_slot` logged at training start, warned above a threshold.
+3. In the backward-pass worker loop, per opening: `clear_solver_state`
+   - `set_*_bounds` + `solve_with_basis(&per_opening_basis)`. No more
+     natural warm-start chain across openings.
+4. Validate bit-identicality (same criteria as A.1).
+
+**Risk.** Low-medium. Memory footprint is the main concern — bases
+are small (5-15 KB) so the K× multiplier stays tractable at typical
+cobre workloads (~1.5-9 GB), but must be projected per-case.
+
+## Phase C — Stage-major forward pass (deferred indefinitely)
+
+Unchanged from prior analysis. Flipping the forward pass to
+stage-major would allow the same per-stage `load_model` amortization
+as A.1, but requires inverting the loop nesting, transposing basis
+storage, and re-auditing determinism. **Switching axes does not itself
+add parallelism** — same M × W coarse granularity. Phase A.1 does not
+apply to the forward pass because scenarios walk stages 1..T
+sequentially; there is no natural per-stage boundary to hoist
+`load_model` out of.
+
+Defer until profiling post-A.1 shows forward-pass `passLp` dominates,
+which is unlikely.
+
+## Community Evidence: Upstream Will Not Deliver
+
+- **HiGHS #1598** (open, 2024, Enhancement): users reported
+  non-determinism under instance reuse. The symptom pattern matches
+  the `bad_basis_change_` taboo accumulation path (Finding 7.2).
+  Assigned to jajhall, no PR. The fix users need — explicit
+  force-refactorization and state reset across reuses — already
+  exists as `Highs_clearSolver` but the upstream issue hasn't been
+  closed with that guidance.
+- **HiGHS #1607** (open): tangential documentation issue.
+- **HiGHS.jl #192** (closed, zero comments, zero PRs): @odow (JuMP)
+  and @joaquimg requested basis reset — upstream identified it as a
+  HiGHS-core change, never picked it up.
+
+Translation: extending `highs_wrapper.{h,c}` ourselves remains the only
+way forward. The extension surface is now **one function** (non-alien
+`setBasis`). `clearSolver` is already wired. No blob APIs, no iterate
+serialization, no internal-layout coupling.
+
+## Roadmap Summary
+
+| Phase | Scope                                                                | New FFI | Trait change | Perf delta      | Risk    | Depends on   |
+| ----- | -------------------------------------------------------------------- | ------- | ------------ | --------------- | ------- | ------------ |
+| B.1   | Non-alien `setBasis` inside `solve_with_basis`                       | 1 fn    | None         | Medium          | Low     | —            |
+| A.1   | `clear_solver_state` trait + per-stage `load_model` in backward pass | None    | 1 method     | **High**        | Medium  | B.1          |
+| —     | Profile                                                              | —       | —            | —               | —       | A.1          |
+| B.2   | Per-`(scenario, stage, opening)` basis storage                       | None    | None         | Empirically tbd | Low-Med | A.1, profile |
+| C     | Stage-major forward pass                                             | None    | None         | Low             | High    | (deferred)   |
+
+**Headline.** One new FFI function, one new trait method, backward pass
+hoists `load_model` to per-stage cadence. That is the entire shipping
+surface of the optimization.
+
+## Revised Immediate Next Action
+
+1. **Phase B.1 PR** — non-alien `setBasis` wrapper + fallback +
+   `basis_non_alien_rejections` counter. Self-contained.
+2. **Phase A.1 PR** — `clear_solver_state` trait method + `HighsSolver`
+   impl + backward-pass restructure. Gated behind
+   `CanonicalStateStrategy::ClearSolver`. **Must produce byte-identical
+   outputs across worker counts 1/2/4/8 and across MPI 2/4/8 ranks × 1/2/4
+   threads on D01-D30 before default flips.** Rebaseline the D-case
+   fixtures in the same PR if the new binary lands on a different-but-
+   equivalent optimum than the pre-A.1 baseline — the cross-distribution
+   invariant, not the pre-A.1 match, is what gates the flip.
+3. **Profile** after A.1 lands. Confirm backward-pass wall time drops
+   proportionally to eliminated `passLp` work. Identify the new top
+   hotspot.
+4. **Phase B.2** only if profiling shows opening-level pivot counts are
+   high and openings are weakly correlated.
+5. **No Phase C** without separate restructuring justification.

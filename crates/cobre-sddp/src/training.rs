@@ -165,29 +165,42 @@ fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
 ///
 /// ## Serialization format
 ///
-/// For each stage *t* in `0..num_stages`, the flat `i32` buffer contains:
-/// - `0_i32` sentinel when `basis_store.get(0, t)` is `None`
-/// - `1_i32` sentinel + `col_len: i32` + `row_len: i32` + `col_status[..]`
-///   + `row_status[..]` when `Some(basis)`
+/// Two broadcast buffers per call (four broadcasts total: length then payload
+/// for each):
 ///
-/// This avoids adding `serde` to `cobre-solver` and uses only `i32`
-/// broadcast, which `CommData` supports for all backends.
+/// **i32 buffer** — for each stage *t* in `0..num_stages`:
+/// - `0_i32` sentinel when `basis_store.get(0, t)` is `None`
+/// - When `Some(captured)`: `1_i32` sentinel, then `col_len`, `row_len`,
+///   `base_row_count`, `cut_slot_count`, `state_len` (all `i32`), then
+///   `col_status[..]`, `row_status[..]`, `cut_row_slots[..] as i32`
+///
+/// **f64 buffer** — for each stage *t* in `0..num_stages`:
+/// - When `sentinel == 1`: `state_at_capture[..]` appended sequentially
+/// - When `sentinel == 0`: no entries appended
+///
+/// `u32` slot values are cast to `i32` for transmission; they are always
+/// non-negative (LP pool indices) and fit comfortably in `i32`.
 ///
 /// ## Single-rank optimization
 ///
 /// When `comm.size() == 1` the broadcast is skipped; only the extraction
-/// from local scenario 0 runs.
+/// from local scenario 0 runs. All metadata is preserved via `Clone`.
 ///
 /// # Errors
 ///
-/// Returns `SddpError::Communication` if the `comm.broadcast` call fails.
-// Basis lengths are bounded by LP column/row counts, which fit comfortably
-// in i32 in all realistic cases. The i32<->usize casts here are deliberate:
-// MPI broadcast requires CommData (which requires Copy), ruling out usize.
+/// Returns `SddpError::Communication` if any `comm.broadcast` call fails.
+/// Returns `SddpError::Validation` if any length prefix is inconsistent with
+/// the received buffer size, naming the offending stage in the message.
+// Basis lengths and slot counts are bounded by LP column/row counts and cut
+// pool sizes, which fit comfortably in i32. The i32<->usize casts here are
+// deliberate: MPI broadcast requires CommData (which requires Copy), ruling
+// out usize. The u32->i32 cast for cut_row_slots is guarded by the allow
+// attribute below; slot values are LP pool indices (always non-negative).
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
 )]
 fn broadcast_basis_cache<C: Communicator>(
     basis_store: &crate::workspace::BasisStore,
@@ -205,49 +218,75 @@ fn broadcast_basis_cache<C: Communicator>(
         return Ok(cache);
     }
 
-    // Multi-rank path: pack rank 0's scenario-0 basis bodies into a flat i32
-    // buffer and broadcast. Metadata (cut_row_slots, state_at_capture) is NOT
-    // serialized in this ticket — receiving ranks hold a CapturedBasis with
-    // empty metadata, which causes reconstruct_basis to treat all rows as new
-    // cuts (safe degradation). Full metadata broadcast is implemented in
-    // ticket-017.
+    // Multi-rank path: pack rank 0's scenario-0 full CapturedBasis into two
+    // flat buffers (one i32 for integer/status fields, one f64 for
+    // state_at_capture) and broadcast both.
     //
-    // Buffer layout per stage:
-    //   [sentinel(0 or 1), <if sentinel==1: col_len, row_len, col_status..., row_status...>]
+    // i32 buffer layout per stage:
+    //   [sentinel(0 or 1)]
+    //   if sentinel == 1:
+    //     [col_len, row_len, base_row_count, cut_slot_count, state_len: i32]
+    //     [col_status: col_len × i32]
+    //     [row_status: row_len × i32]
+    //     [cut_row_slots as i32: cut_slot_count × i32]
+    //
+    // f64 buffer layout (no framing — sequential across stages):
+    //   if sentinel == 1:
+    //     [state_at_capture: state_len × f64]
     let mut buf: Vec<i32> = Vec::new();
+    let mut f64_buf: Vec<f64> = Vec::new();
     if comm.rank() == 0 {
         for t in 0..num_stages {
             match basis_store.get(0, t) {
                 None => buf.push(0_i32),
                 Some(captured) => {
+                    let cut_slot_count = captured.cut_row_slots.len();
+                    let state_len = captured.state_at_capture.len();
                     buf.push(1_i32);
                     buf.push(captured.basis.col_status.len() as i32);
                     buf.push(captured.basis.row_status.len() as i32);
+                    buf.push(captured.base_row_count as i32);
+                    buf.push(cut_slot_count as i32);
+                    buf.push(state_len as i32);
                     buf.extend_from_slice(&captured.basis.col_status);
                     buf.extend_from_slice(&captured.basis.row_status);
+                    // cast_sign_loss: slot values are u32 LP pool indices
+                    // (always non-negative) cast to i32 for CommData transport
+                    for &slot in &captured.cut_row_slots {
+                        buf.push(slot as i32);
+                    }
+                    f64_buf.extend_from_slice(&captured.state_at_capture);
                 }
             }
         }
     }
 
-    // Step 1: broadcast the buffer length so all ranks can allocate.
+    // Step 1: broadcast the i32 buffer length so all ranks can allocate.
     let mut len_buf = [buf.len() as i32];
     comm.broadcast(&mut len_buf, 0).map_err(SddpError::from)?;
     let total_len = len_buf[0] as usize;
 
-    // Step 2: resize non-root buffers and broadcast the payload.
+    // Step 2: resize non-root i32 buffers and broadcast the i32 payload.
     buf.resize(total_len, 0_i32);
     comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
 
-    // Step 3: deserialize back into Vec<Option<CapturedBasis>>.
+    // Step 3: broadcast the f64 buffer length so all ranks can allocate.
+    let mut f64_len_buf = [f64_buf.len() as i32];
+    comm.broadcast(&mut f64_len_buf, 0)
+        .map_err(SddpError::from)?;
+    let f64_total_len = f64_len_buf[0] as usize;
+
+    // Step 4: resize non-root f64 buffers and broadcast the f64 payload.
+    f64_buf.resize(f64_total_len, 0.0_f64);
+    comm.broadcast(&mut f64_buf, 0).map_err(SddpError::from)?;
+
+    // Step 5: deserialize back into Vec<Option<CapturedBasis>>.
     // All index arithmetic is bounds-checked to convert a corrupted broadcast
     // into a recoverable error instead of an index-out-of-bounds panic.
-    // Non-root ranks receive a CapturedBasis with empty metadata (cut_row_slots,
-    // state_at_capture are empty, base_row_count is 0) — this is the documented
-    // shim state pending ticket-017's full metadata broadcast. reconstruct_basis
-    // degrades correctly when cut_row_slots is empty (all rows treated as new).
+    // Two cursors: pos for the i32 buffer, f64_pos for the f64 buffer.
     let mut cache: Vec<Option<CapturedBasis>> = Vec::with_capacity(num_stages);
     let mut pos = 0_usize;
+    let mut f64_pos = 0_usize;
     for stage in 0..num_stages {
         if pos >= buf.len() {
             return Err(SddpError::Validation(format!(
@@ -260,7 +299,9 @@ fn broadcast_basis_cache<C: Communicator>(
         if sentinel == 0 {
             cache.push(None);
         } else {
-            if pos + 2 > buf.len() {
+            // Read 5 length/metadata fields: col_len, row_len, base_row_count,
+            // cut_slot_count, state_len.
+            if pos + 5 > buf.len() {
                 return Err(SddpError::Validation(format!(
                     "broadcast_basis_cache: buffer truncated reading lengths at stage {stage}"
                 )));
@@ -269,30 +310,70 @@ fn broadcast_basis_cache<C: Communicator>(
             pos += 1;
             let row_len = buf[pos] as usize;
             pos += 1;
-            if pos + col_len + row_len > buf.len() {
+            let base_row_count = buf[pos] as usize;
+            pos += 1;
+            let cut_slot_count = buf[pos] as usize;
+            pos += 1;
+            let state_len = buf[pos] as usize;
+            pos += 1;
+
+            // Read col_status.
+            if pos + col_len > buf.len() {
                 return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading basis data at stage {stage} \
-                     (need {}, have {})",
-                    col_len + row_len,
+                    "broadcast_basis_cache: buffer truncated reading col_status at stage {stage} \
+                     (need {col_len}, have {})",
                     buf.len() - pos
                 )));
             }
             let col_status = buf[pos..pos + col_len].to_vec();
             pos += col_len;
+
+            // Read row_status.
+            if pos + row_len > buf.len() {
+                return Err(SddpError::Validation(format!(
+                    "broadcast_basis_cache: buffer truncated reading row_status at stage {stage} \
+                     (need {row_len}, have {})",
+                    buf.len() - pos
+                )));
+            }
             let row_status = buf[pos..pos + row_len].to_vec();
             pos += row_len;
-            // Wrap the reconstructed basis body in a CapturedBasis with empty
-            // metadata. base_row_count=0 and empty cut_row_slots means
-            // reconstruct_basis will treat all rows as new cuts (safe degradation).
-            // ticket-017 will extend this broadcast to include full metadata.
+
+            // Read cut_row_slots (stored as i32, cast back to u32).
+            if pos + cut_slot_count > buf.len() {
+                return Err(SddpError::Validation(format!(
+                    "broadcast_basis_cache: buffer truncated reading cut_row_slots at stage \
+                     {stage} (need {cut_slot_count}, have {})",
+                    buf.len() - pos
+                )));
+            }
+            // cast_sign_loss: values were originally u32 LP pool indices cast to
+            // i32 on the pack side; casting back to u32 is lossless.
+            let cut_row_slots: Vec<u32> = buf[pos..pos + cut_slot_count]
+                .iter()
+                .map(|&v| v as u32)
+                .collect();
+            pos += cut_slot_count;
+
+            // Read state_at_capture from the f64 buffer.
+            if f64_pos + state_len > f64_buf.len() {
+                return Err(SddpError::Validation(format!(
+                    "broadcast_basis_cache: f64 buffer truncated reading state_at_capture at \
+                     stage {stage} (need {state_len}, have {})",
+                    f64_buf.len() - f64_pos
+                )));
+            }
+            let state_at_capture = f64_buf[f64_pos..f64_pos + state_len].to_vec();
+            f64_pos += state_len;
+
             cache.push(Some(CapturedBasis {
                 basis: Basis {
                     col_status,
                     row_status,
                 },
-                base_row_count: 0,
-                cut_row_slots: Vec::new(),
-                state_at_capture: Vec::new(),
+                base_row_count,
+                cut_row_slots,
+                state_at_capture,
             }));
         }
     }
@@ -3116,66 +3197,213 @@ mod tests {
         assert!(cache[1].is_none(), "stage 1 must remain None");
     }
 
-    /// AC ticket-010: `broadcast_basis_cache` with `comm.size() > 1` must
-    /// produce a `CapturedBasis` with empty metadata (the documented shim
-    /// state pending ticket-017). The multi-rank pack/broadcast/deserialize
-    /// path only transmits the basis body (`col_status`, `row_status`);
-    /// metadata fields (`cut_row_slots`, `state_at_capture`, `base_row_count`)
-    /// are rebuilt as empty on every rank.
+    /// A discriminated payload stored by `MultiRankMockComm`.
     ///
-    /// The test drives the multi-rank code path on rank 0 (`size=2, rank=0`).
-    /// Rank 0 owns the buffer, so the no-op `broadcast` stub is harmless —
-    /// the buffer already contains rank 0's own packed basis body. The
-    /// deserialize then runs the shim branch and strips metadata, which is
-    /// exactly the behaviour every receiving rank will observe once real MPI
-    /// broadcast runs under ticket-017.
-    #[test]
-    fn broadcast_basis_cache_multi_rank_strips_metadata() {
-        use super::broadcast_basis_cache;
-        use crate::workspace::{BasisStore, CapturedBasis};
+    /// `broadcast_basis_cache` issues exactly four `broadcast` calls:
+    /// two `i32` calls (length then payload) and two `f64` calls (length then
+    /// payload). We store each call as a typed variant so that rank 1 can
+    /// deserialize without any `unsafe` code.
+    #[derive(Clone)]
+    enum MockPayload {
+        Ints(Vec<i32>),
+        Floats(Vec<f64>),
+    }
 
-        /// size=2, rank=0 — exercises the multi-rank code path (size > 1) on
-        /// root, where the no-op broadcast does not corrupt data because
-        /// rank 0 owns the packed buffer.
-        struct StubCommMultiRankRoot;
-        impl Communicator for StubCommMultiRankRoot {
-            fn allgatherv<T: CommData>(
-                &self,
-                _send: &[T],
-                _recv: &mut [T],
-                _counts: &[usize],
-                _displs: &[usize],
-            ) -> Result<(), CommError> {
-                unreachable!()
-            }
-            fn allreduce<T: CommData>(
-                &self,
-                _send: &[T],
-                _recv: &mut [T],
-                _op: ReduceOp,
-            ) -> Result<(), CommError> {
-                unreachable!()
-            }
-            fn broadcast<T: CommData>(
-                &self,
-                _buf: &mut [T],
-                _root: usize,
-            ) -> Result<(), CommError> {
-                Ok(())
-            }
-            fn barrier(&self) -> Result<(), CommError> {
-                Ok(())
-            }
-            fn rank(&self) -> usize {
-                0
-            }
-            fn size(&self) -> usize {
-                2
-            }
-            fn abort(&self, code: i32) -> ! {
-                std::process::exit(code)
+    /// A multi-rank mock communicator that simulates 2-rank broadcasts.
+    ///
+    /// On rank 0, each `broadcast<T>` call records the outgoing buffer as a
+    /// `MockPayload` variant. On rank 1, each `broadcast<T>` call pops the
+    /// next recorded entry and copies it into the caller's mutable slice.
+    ///
+    /// Only `T = i32` and `T = f64` are supported (matching the wire types
+    /// used by `broadcast_basis_cache`). `allgatherv` and `allreduce` are not
+    /// called by that function and are left as `unreachable!()`.
+    ///
+    /// `Mutex` is used instead of `RefCell` to satisfy the `Sync` bound
+    /// required by `Communicator`.
+    struct MultiRankMockComm {
+        rank: usize,
+        queue: std::sync::Mutex<std::collections::VecDeque<MockPayload>>,
+    }
+
+    impl MultiRankMockComm {
+        fn new_root() -> Self {
+            Self {
+                rank: 0,
+                queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
             }
         }
+
+        /// Build a rank-1 peer by snapshotting the root's recorded queue.
+        ///
+        /// Must be called **after** `broadcast_basis_cache` has returned on
+        /// rank 0 so the snapshot contains all four recorded payloads.
+        fn new_peer(root: &MultiRankMockComm) -> Self {
+            Self {
+                rank: 1,
+                queue: std::sync::Mutex::new(root.queue.lock().unwrap().clone()),
+            }
+        }
+
+        /// Build a rank-1 peer from an explicit replay queue.
+        ///
+        /// Used by corruption tests that tamper with the recorded payloads
+        /// before replaying them to rank 1.
+        fn new_peer_from_queue(queue: std::collections::VecDeque<MockPayload>) -> Self {
+            Self {
+                rank: 1,
+                queue: std::sync::Mutex::new(queue),
+            }
+        }
+
+        /// Extract a snapshot of the recorded queue (for corruption tests).
+        fn snapshot(&self) -> std::collections::VecDeque<MockPayload> {
+            self.queue.lock().unwrap().clone()
+        }
+    }
+
+    impl Communicator for MultiRankMockComm {
+        fn allgatherv<T: CommData>(
+            &self,
+            _send: &[T],
+            _recv: &mut [T],
+            _counts: &[usize],
+            _displs: &[usize],
+        ) -> Result<(), CommError> {
+            unreachable!("broadcast_basis_cache does not call allgatherv")
+        }
+
+        fn allreduce<T: CommData>(
+            &self,
+            _send: &[T],
+            _recv: &mut [T],
+            _op: ReduceOp,
+        ) -> Result<(), CommError> {
+            unreachable!("broadcast_basis_cache does not call allreduce")
+        }
+
+        fn broadcast<T: CommData>(&self, buf: &mut [T], root: usize) -> Result<(), CommError> {
+            // We need MockRecord to dispatch safely. We cannot add that bound
+            // to the Communicator trait, so we use a private helper that
+            // downcasts via a local trait object. This is the only clean safe
+            // approach without unsafe in a forbid-unsafe crate.
+            //
+            // The actual dispatch is done by calling into a monomorphic helper
+            // through a function pointer selected at the call site where T is
+            // known. We implement this by defining a local function that takes
+            // &dyn Any and casts it:
+            self.broadcast_typed(buf, root)
+        }
+
+        fn barrier(&self) -> Result<(), CommError> {
+            Ok(())
+        }
+
+        fn rank(&self) -> usize {
+            self.rank
+        }
+
+        fn size(&self) -> usize {
+            2
+        }
+
+        fn abort(&self, code: i32) -> ! {
+            std::process::exit(code)
+        }
+    }
+
+    impl MultiRankMockComm {
+        // Result<(), CommError> is required to match the Communicator::broadcast
+        // return type this delegates to, even though the body always returns Ok(()).
+        #[allow(clippy::unnecessary_wraps)]
+        fn broadcast_typed<T: CommData>(
+            &self,
+            buf: &mut [T],
+            _root: usize,
+        ) -> Result<(), CommError> {
+            use std::any::Any;
+            // T: CommData implies T: 'static + Copy, so Box<T>: Any.
+            // We identify the concrete type by boxing a probe value (Default
+            // if the slice is empty) and downcasting. No raw pointer casts.
+            let probe: Box<dyn Any> = Box::new(T::default());
+
+            if probe.downcast_ref::<i32>().is_some() {
+                // T == i32
+                if self.rank == 0 {
+                    let ints: Vec<i32> = buf
+                        .iter()
+                        .map(|v| {
+                            *Box::<dyn Any>::from(Box::new(*v))
+                                .downcast::<i32>()
+                                .expect("T proved i32 above")
+                        })
+                        .collect();
+                    self.queue
+                        .lock()
+                        .unwrap()
+                        .push_back(MockPayload::Ints(ints));
+                } else {
+                    let payload = self
+                        .queue
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("MultiRankMockComm: no payload to replay for i32 broadcast");
+                    let MockPayload::Ints(src) = payload else {
+                        panic!("MultiRankMockComm: expected Ints payload for i32 broadcast");
+                    };
+                    assert_eq!(src.len(), buf.len(), "i32 replay length mismatch");
+                    for (dst, v) in buf.iter_mut().zip(src.iter()) {
+                        let boxed: Box<dyn Any> = Box::new(*v);
+                        *dst = *boxed.downcast::<T>().expect("T proved i32 above");
+                    }
+                }
+            } else if probe.downcast_ref::<f64>().is_some() {
+                // T == f64
+                if self.rank == 0 {
+                    let floats: Vec<f64> = buf
+                        .iter()
+                        .map(|v| {
+                            *Box::<dyn Any>::from(Box::new(*v))
+                                .downcast::<f64>()
+                                .expect("T proved f64 above")
+                        })
+                        .collect();
+                    self.queue
+                        .lock()
+                        .unwrap()
+                        .push_back(MockPayload::Floats(floats));
+                } else {
+                    let payload = self
+                        .queue
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("MultiRankMockComm: no payload to replay for f64 broadcast");
+                    let MockPayload::Floats(src) = payload else {
+                        panic!("MultiRankMockComm: expected Floats payload for f64 broadcast");
+                    };
+                    assert_eq!(src.len(), buf.len(), "f64 replay length mismatch");
+                    for (dst, v) in buf.iter_mut().zip(src.iter()) {
+                        let boxed: Box<dyn Any> = Box::new(*v);
+                        *dst = *boxed.downcast::<T>().expect("T proved f64 above");
+                    }
+                }
+            } else {
+                panic!("MultiRankMockComm: unsupported broadcast type (expected i32 or f64)");
+            }
+            Ok(())
+        }
+    }
+
+    /// AC ticket-017: `broadcast_basis_cache` with `size=2` must transmit the
+    /// full `CapturedBasis` metadata (`cut_row_slots`, `state_at_capture`,
+    /// `base_row_count`) to rank 1. The `MultiRankMockComm` pair records
+    /// rank-0's four broadcasts and replays them exactly to rank 1.
+    #[test]
+    fn broadcast_basis_cache_multi_rank_round_trips_full_metadata() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
 
         let mut store = BasisStore::new(1, 2);
         *store.get_mut(0, 0) = Some(CapturedBasis {
@@ -3183,41 +3411,239 @@ mod tests {
                 col_status: vec![1_i32, 2_i32, 3_i32],
                 row_status: vec![10_i32, 20_i32],
             },
-            base_row_count: 5,
-            cut_row_slots: vec![100_u32, 200_u32],
-            state_at_capture: vec![1.5_f64],
+            base_row_count: 4,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![1.5_f64, 2.5_f64],
         });
+        // Stage 1 left None.
 
-        let comm = StubCommMultiRankRoot;
-        let cache = broadcast_basis_cache(&store, 2, &comm).unwrap();
+        // Step 1: run broadcast_basis_cache from rank-0's perspective.
+        // This populates the mock's recorded buffers.
+        let root_comm = MultiRankMockComm::new_root();
+        let _cache_rank0 = broadcast_basis_cache(&store, 2, &root_comm).unwrap();
+
+        // Step 2: build a rank-1 peer that replays rank-0's recorded buffers.
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        // Rank 1's basis_store is empty — all data must come from the broadcast.
+        let empty_store = BasisStore::new(1, 2);
+        let cache = broadcast_basis_cache(&empty_store, 2, &peer_comm).unwrap();
 
         assert_eq!(cache.len(), 2);
         let cb0 = cache[0]
             .as_ref()
-            .expect("stage 0 must deserialise into CapturedBasis");
+            .expect("stage 0 must deserialise into CapturedBasis on rank 1");
         assert_eq!(
             cb0.basis.col_status,
             vec![1_i32, 2_i32, 3_i32],
-            "basis body col_status must round-trip through pack/deserialize"
+            "col_status must round-trip"
         );
         assert_eq!(
             cb0.basis.row_status,
             vec![10_i32, 20_i32],
-            "basis body row_status must round-trip through pack/deserialize"
-        );
-        assert!(
-            cb0.cut_row_slots.is_empty(),
-            "multi-rank shim must produce empty cut_row_slots"
-        );
-        assert!(
-            cb0.state_at_capture.is_empty(),
-            "multi-rank shim must produce empty state_at_capture"
+            "row_status must round-trip"
         );
         assert_eq!(
-            cb0.base_row_count, 0,
-            "multi-rank shim must zero base_row_count"
+            cb0.cut_row_slots,
+            vec![10_u32, 11_u32, 12_u32],
+            "cut_row_slots must round-trip on non-root rank"
+        );
+        assert_eq!(
+            cb0.state_at_capture,
+            vec![1.5_f64, 2.5_f64],
+            "state_at_capture must round-trip on non-root rank"
+        );
+        assert_eq!(
+            cb0.base_row_count, 4,
+            "base_row_count must round-trip on non-root rank"
         );
         assert!(cache[1].is_none(), "stage 1 had no basis → None");
+    }
+
+    /// AC ticket-017: When rank 0's `CapturedBasis` has an empty `cut_row_slots`
+    /// (legitimate for stages that never produced cuts), the round-trip must
+    /// produce `cut_row_slots.is_empty()` on rank 1 without error.
+    #[test]
+    fn broadcast_basis_cache_empty_cut_slots_round_trips_ok() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![5_i32, 6_i32],
+                row_status: vec![7_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![], // deliberately empty
+            state_at_capture: vec![3.75_f64],
+        });
+
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        let empty_store = BasisStore::new(1, 1);
+        let cache = broadcast_basis_cache(&empty_store, 1, &peer_comm).unwrap();
+
+        assert_eq!(cache.len(), 1);
+        let cb = cache[0]
+            .as_ref()
+            .expect("stage 0 must be Some after broadcast");
+        assert!(
+            cb.cut_row_slots.is_empty(),
+            "empty cut_row_slots must round-trip without error or panic"
+        );
+        assert_eq!(
+            cb.state_at_capture,
+            vec![3.75_f64],
+            "state_at_capture must still round-trip when cut_row_slots is empty"
+        );
+        assert_eq!(cb.base_row_count, 1, "base_row_count must round-trip");
+    }
+
+    /// AC ticket-017: When the i32 broadcast buffer is truncated mid-
+    /// `cut_row_slots`, `broadcast_basis_cache` must return
+    /// `SddpError::Validation` with a message containing "cut_row_slots" and
+    /// the stage index.
+    ///
+    /// The queue produced by a successful rank-0 run contains four payloads:
+    ///   [0] Ints(i32-len-scalar)   — one i32 (the total i32 count)
+    ///   [1] Ints(i32-payload)      — all the integer data
+    ///   [2] Ints(f64-len-scalar)   — one i32 (the total f64 count)
+    ///   [3] Floats(f64-payload)    — all the f64 state data
+    ///
+    /// To simulate a truncated i32 payload we replace entry [1] with a
+    /// shorter `Ints` vector (missing the last cut slot) and patch entry [0]
+    /// to reflect the new count, so that rank 1 allocates the right buffer
+    /// size but then fails the `cut_row_slots` bounds check.
+    #[test]
+    fn broadcast_basis_cache_truncated_cut_slots_returns_validation() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        // Build a store with cut_row_slots = [10, 11, 12].
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![0.0_f64],
+        });
+
+        // Record rank-0 payloads.
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+        let mut snapshot = root_comm.snapshot();
+
+        // snapshot[1] is the Ints(payload) entry. Remove the last i32 value
+        // (the last cut slot) to simulate a truncated buffer. Also patch
+        // snapshot[0] (the length scalar) to match the reduced count.
+        let truncated_len = {
+            let entry = snapshot.get_mut(1).expect("i32 payload entry must exist");
+            let MockPayload::Ints(ref mut ints) = *entry else {
+                panic!("entry [1] must be Ints");
+            };
+            ints.pop(); // remove one cut slot
+            ints.len() as i32
+        };
+        // Patch the length scalar (entry [0]).
+        let len_entry = snapshot.get_mut(0).expect("i32 length entry must exist");
+        let MockPayload::Ints(ref mut len_vec) = *len_entry else {
+            panic!("entry [0] must be Ints");
+        };
+        assert_eq!(len_vec.len(), 1, "length entry must hold a single scalar");
+        len_vec[0] = truncated_len;
+
+        let peer_comm = MultiRankMockComm::new_peer_from_queue(snapshot);
+        let empty_store = BasisStore::new(1, 1);
+        let result = broadcast_basis_cache(&empty_store, 1, &peer_comm);
+
+        match result {
+            Err(SddpError::Validation(msg)) => {
+                assert!(
+                    msg.contains("cut_row_slots"),
+                    "error message must mention 'cut_row_slots', got: {msg}"
+                );
+                assert!(
+                    msg.contains('0'),
+                    "error message must contain stage index 0, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    /// AC ticket-017: When the f64 broadcast buffer is truncated mid-
+    /// `state_at_capture`, `broadcast_basis_cache` must return
+    /// `SddpError::Validation` with a message containing "state_at_capture"
+    /// and the stage index.
+    ///
+    /// We truncate entry [3] (Floats payload) and patch entry [2] (f64-len
+    /// scalar) to match, so rank 1 allocates a shorter f64 buffer and the
+    /// `state_at_capture` bounds check fires.
+    #[test]
+    fn broadcast_basis_cache_truncated_state_returns_validation() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![1.0_f64, 2.0_f64, 3.0_f64],
+        });
+
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+        let mut snapshot = root_comm.snapshot();
+
+        // snapshot[3] is the Floats(f64-payload) entry with 3 values.
+        // Keep only 1 value so that rank 1's buffer is too short for the
+        // state_len=3 embedded in the i32 payload.
+        let truncated_f64_len = {
+            let entry = snapshot.get_mut(3).expect("f64 payload entry must exist");
+            let MockPayload::Floats(ref mut floats) = *entry else {
+                panic!("entry [3] must be Floats");
+            };
+            floats.truncate(1); // keep only 1 f64
+            floats.len() as i32
+        };
+        // Patch entry [2] (f64 length scalar).
+        let f64_len_entry = snapshot.get_mut(2).expect("f64 length entry must exist");
+        let MockPayload::Ints(ref mut f64_len_vec) = *f64_len_entry else {
+            panic!("entry [2] must be Ints (f64 length is broadcast as i32)");
+        };
+        assert_eq!(
+            f64_len_vec.len(),
+            1,
+            "f64 length entry must hold a single scalar"
+        );
+        f64_len_vec[0] = truncated_f64_len;
+
+        let peer_comm = MultiRankMockComm::new_peer_from_queue(snapshot);
+        let empty_store = BasisStore::new(1, 1);
+        let result = broadcast_basis_cache(&empty_store, 1, &peer_comm);
+
+        match result {
+            Err(SddpError::Validation(msg)) => {
+                assert!(
+                    msg.contains("state_at_capture"),
+                    "error message must mention 'state_at_capture', got: {msg}"
+                );
+                assert!(
+                    msg.contains('0'),
+                    "error message must contain stage index 0, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
     }
 
     /// AC: `template_bake_event_emitted`

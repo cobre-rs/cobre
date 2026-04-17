@@ -712,6 +712,10 @@ fn run_inner(
                 solver_stats_log: Vec::new(),
                 basis_cache,
                 visited_archive: None,
+                // Baked templates are not stored in policy checkpoints; the
+                // simulation path will use the fallback load_model + add_rows
+                // path.
+                baked_templates: None,
             };
 
             let simulation = Some(run_simulation_phase_py(

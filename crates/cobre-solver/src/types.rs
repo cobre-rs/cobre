@@ -191,18 +191,18 @@ pub struct SolverStatistics {
     /// `solve()` (without basis) does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
-    /// Number of new cut rows assigned `NONBASIC_LOWER` by basis-aware padding
-    /// (Strategy S3).
+    /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation
+    /// at the padding state (Strategy S3 / slot-tracked reconstruction).
     ///
     /// Incremented by the calling algorithm, not by the solver itself. A
-    /// non-zero value indicates that basis padding is active and functioning.
-    pub basis_padding_tight: u64,
+    /// non-zero value indicates that basis reconstruction is active and functioning.
+    pub basis_new_tight: u64,
 
-    /// Number of new cut rows assigned `BASIC` by basis-aware padding
-    /// (Strategy S3).
+    /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
+    /// padding state (Strategy S3 / slot-tracked reconstruction).
     ///
     /// Incremented by the calling algorithm, not by the solver itself.
-    pub basis_padding_slack: u64,
+    pub basis_new_slack: u64,
 
     /// Number of cut rows whose slot identity was found in the stored basis
     /// and whose status was copied directly during slot-tracked reconstruction
@@ -595,8 +595,8 @@ mod tests {
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
         assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
-        assert_eq!(stats.basis_padding_tight, 0);
-        assert_eq!(stats.basis_padding_slack, 0);
+        assert_eq!(stats.basis_new_tight, 0);
+        assert_eq!(stats.basis_new_slack, 0);
         assert_eq!(stats.basis_preserved, 0);
         assert!(stats.retry_level_histogram.is_empty());
     }

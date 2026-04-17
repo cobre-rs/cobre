@@ -74,22 +74,22 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
-    ForwardSamplerConfig, SampleRequest,
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
+    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -962,6 +962,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
                     theta: theta_value,
                     tolerance: 1e-7,
                 },
+                0,
                 &mut ws.scratch_basis,
                 &mut ws.scratch.recon_slot_lookup,
             );
@@ -1523,21 +1524,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
-    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
+    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        build_cut_row_batch, build_delta_cut_row_batch_into, partition, run_forward_pass,
-        sync_forward, ForwardPassBatch, ForwardResult, SyncResult,
+        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch,
+        build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
     };
     use crate::{
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{BakedTemplates, StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
@@ -1941,7 +1942,7 @@ mod tests {
 
     /// Verify the three-component decomposition: 4 workers with solve times
     /// 500/600/550/580 ms and setup times 50/60/45/55 ms yields setup=210,
-    /// imbalance=50, scheduling varies by parallel_wall_ms.
+    /// imbalance=50, scheduling varies by `parallel_wall_ms`.
     #[test]
     fn forward_overhead_decomposition_four_workers() {
         use cobre_solver::SolverStatistics;
@@ -2057,7 +2058,7 @@ mod tests {
             ..SolverStatistics::default()
         };
 
-        let deltas = vec![SolverStatsDelta::from_snapshots(&before, &after)];
+        let deltas = [SolverStatsDelta::from_snapshots(&before, &after)];
         let worker_totals: Vec<f64> = deltas
             .iter()
             .map(|d| {
@@ -2094,7 +2095,7 @@ mod tests {
             ..SolverStatistics::default()
         };
 
-        let deltas = vec![SolverStatsDelta::from_snapshots(&before, &after)];
+        let deltas = [SolverStatsDelta::from_snapshots(&before, &after)];
         let max_ms = deltas
             .iter()
             .map(|d| d.solve_time_ms)
@@ -3293,6 +3294,7 @@ mod tests {
     ///
     /// `MockSolver.statistics().solve_count` now returns `call_count`, so we
     /// can verify each workspace performed its assigned number of LP solves.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_forward_pass_work_distribution() {
         let indexer = StageIndexer::new(1, 0);

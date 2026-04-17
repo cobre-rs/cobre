@@ -40,22 +40,22 @@ use cobre_solver::StageTemplate;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{BakedTemplates, StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
+    cut::CutRowMap,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
+    forward::{build_cut_row_batch_into, run_forward_pass, sync_forward, ForwardPassBatch},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
-    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    SddpError, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -404,21 +404,23 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         solver_factory,
     )
     .map_err(SddpError::Solver)?;
-    if training_ctx.basis_padding_enabled {
-        let max_cols = stage_ctx
-            .templates
-            .iter()
-            .map(|t| t.num_cols)
-            .max()
-            .unwrap_or(0);
-        let max_rows = stage_ctx
-            .templates
-            .iter()
-            .map(|t| t.num_rows)
-            .max()
-            .unwrap_or(0);
-        fwd_pool.resize_scratch_bases(max_cols, max_rows);
-    }
+    // Pre-size ws.scratch_basis to the largest template the reconstruction
+    // path might ever populate. reconstruct_basis runs unconditionally on any
+    // forward/backward apply with a stored basis; pre-sizing here is what
+    // keeps the hot path allocation-free regardless of basis_padding_enabled.
+    let max_cols = stage_ctx
+        .templates
+        .iter()
+        .map(|t| t.num_cols)
+        .max()
+        .unwrap_or(0);
+    let max_rows = stage_ctx
+        .templates
+        .iter()
+        .map(|t| t.num_rows)
+        .max()
+        .unwrap_or(0);
+    fwd_pool.resize_scratch_bases(max_cols, max_rows);
 
     // Per-scenario, per-stage basis store. Sized for the maximum local forward
     // passes so that scenario indices are stable across iterations. The store
@@ -1123,7 +1125,6 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1132,21 +1133,22 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
     };
 
     use super::train;
     use crate::{
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
         CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
         RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
         TrainingConfig,
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.

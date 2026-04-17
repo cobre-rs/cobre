@@ -51,10 +51,15 @@ pub struct SolverStatsRow {
     pub set_bounds_time_ms: f64,
     /// Cumulative time in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
-    /// Number of cut rows assigned `NONBASIC_LOWER` during basis padding.
-    pub basis_padding_tight: u64,
-    /// Number of cut rows assigned `BASIC` during basis padding.
-    pub basis_padding_slack: u64,
+    /// Number of cut rows whose status was preserved from a stored basis via slot
+    /// reconciliation during reconstruction.
+    pub basis_preserved: u64,
+    /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation
+    /// at the padding state.
+    pub basis_new_tight: u64,
+    /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
+    /// padding state.
+    pub basis_new_slack: u64,
     /// Per-level retry success counts. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -129,16 +134,12 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
     );
     let basis_set_time_arr =
         Float64Array::from(rows.iter().map(|r| r.basis_set_time_ms).collect::<Vec<_>>());
-    let padding_tight_arr = UInt64Array::from(
-        rows.iter()
-            .map(|r| r.basis_padding_tight)
-            .collect::<Vec<_>>(),
-    );
-    let padding_slack_arr = UInt64Array::from(
-        rows.iter()
-            .map(|r| r.basis_padding_slack)
-            .collect::<Vec<_>>(),
-    );
+    let basis_preserved_arr =
+        UInt64Array::from(rows.iter().map(|r| r.basis_preserved).collect::<Vec<_>>());
+    let basis_new_tight_arr =
+        UInt64Array::from(rows.iter().map(|r| r.basis_new_tight).collect::<Vec<_>>());
+    let basis_new_slack_arr =
+        UInt64Array::from(rows.iter().map(|r| r.basis_new_slack).collect::<Vec<_>>());
 
     vec![
         Arc::new(iteration_arr),
@@ -157,8 +158,9 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(add_rows_time_arr),
         Arc::new(set_bounds_time_arr),
         Arc::new(basis_set_time_arr),
-        Arc::new(padding_tight_arr),
-        Arc::new(padding_slack_arr),
+        Arc::new(basis_preserved_arr),
+        Arc::new(basis_new_tight_arr),
+        Arc::new(basis_new_slack_arr),
     ]
 }
 
@@ -277,8 +279,9 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_padding_tight: 0,
-                basis_padding_slack: 0,
+                basis_preserved: 0,
+                basis_new_tight: 0,
+                basis_new_slack: 0,
                 retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
@@ -298,8 +301,9 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_padding_tight: 0,
-                basis_padding_slack: 0,
+                basis_preserved: 0,
+                basis_new_tight: 0,
+                basis_new_slack: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ]
@@ -319,13 +323,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        // iterations.parquet — 18 scalar columns
+        // iterations.parquet — 19 scalar columns
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         assert!(iter_path.exists());
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 18);
+        assert_eq!(batch.num_columns(), 19);
 
         let iteration_col = batch
             .column(0)
@@ -374,7 +378,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 18);
+        assert_eq!(builder.schema().fields().len(), 19);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -404,8 +408,9 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_padding_tight: 0,
-                basis_padding_slack: 0,
+                basis_preserved: 0,
+                basis_new_tight: 0,
+                basis_new_slack: 0,
                 // Level 0: 5 recoveries, level 2: 1 recovery
                 retry_level_histogram: vec![5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             },
@@ -426,8 +431,9 @@ mod tests {
                 add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_padding_tight: 0,
-                basis_padding_slack: 0,
+                basis_preserved: 0,
+                basis_new_tight: 0,
+                basis_new_slack: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ];

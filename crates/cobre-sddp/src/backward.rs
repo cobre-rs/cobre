@@ -90,7 +90,7 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
-    basis_reconstruct::pad_basis_for_cuts,
+    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -302,8 +302,6 @@ struct SuccessorSpec<'a> {
     baked_template: Option<&'a cobre_solver::StageTemplate>,
     /// Row count of the baked template (base + baked cut rows).
     baked_template_num_rows: usize,
-    /// Number of delta cut rows appended via `add_rows` on top of baked template.
-    num_delta_cuts: usize,
     /// Ordered slot indices of the active cuts at the successor stage.
     successor_active_slots: &'a [usize],
     /// Basis store for warm-starting each worker's first opening solve.
@@ -458,63 +456,81 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
         // Opening 0: use forward-pass basis from BasisStore for warm start.
-        // When basis padding is enabled, copy the stored basis into
-        // `scratch_basis`, apply truncation if the active cut set changed, pad
-        // with informed row statuses for the successor cut pool evaluated at the
-        // trial point state, then solve with the scratch copy.  The stored basis
-        // in BasisStore is never modified (it is read-only; multiple trial points
-        // may share it in the same parallel stage).
+        // Slot-tracked reconstruction: copy preserved cut-row statuses by slot
+        // identity and evaluate new cuts at `state_at_capture` (the state used
+        // when the basis was captured, not the current trial point `x_hat`).
+        // This avoids the inconsistency that caused the +6% backward-simplex
+        // regression: the stored rows were captured at `state_at_capture`, so
+        // evaluating new rows at `x_hat` mixed two different states.
+        //
+        // Baked path: reconcile only delta slots (offset = baked_cut_count).
+        // Legacy path: reconcile the full active-cut set (offset = 0).
+        //
+        // BasisStore is read-only; the scratch copy absorbs all mutation.
         //
         // Openings 1+: HiGHS retains internal factorization from the previous
         // solve — only bounds/RHS changed via `patch_opening_bounds`, so
         // `solve()` hot-starts without redundant refactorization (P3b).
         let view = if omega == 0 {
-            if let Some(rb) = succ.basis_store.get(m, s) {
-                if training_ctx.basis_padding_enabled {
-                    // Copy stored basis into scratch (reuses pre-allocated capacity).
-                    ws.scratch_basis.clone_from(&rb.basis);
-
-                    // Truncate stale cut-row statuses if the active set changed.
-                    // Expected row count differs by path:
-                    //   Baked path: baked_template_num_rows (base + baked cuts) + num_delta_cuts.
-                    //   Legacy path: template_num_rows (base) + active_count (full active set).
-                    // Truncation target also differs: baked path keeps baked cut statuses
-                    // intact and drops only stale delta statuses; legacy path truncates to
-                    // the base template boundary.
-                    let (expected_rows, truncate_to) = if succ.baked_template.is_some() {
-                        (
-                            succ.baked_template_num_rows + succ.num_delta_cuts,
-                            succ.baked_template_num_rows,
-                        )
-                    } else {
-                        (
-                            succ.template_num_rows + succ.successor_pool.active_count(),
-                            succ.template_num_rows,
-                        )
-                    };
-                    if ws.scratch_basis.row_status.len() != expected_rows {
-                        ws.scratch_basis.row_status.truncate(truncate_to);
-                    }
-
-                    // Pad with informed statuses for the successor cut pool
-                    // evaluated at the trial point state (x_hat is the incoming
-                    // state for stage t+1, matching the forward-pass semantics).
-                    let theta_value = succ.successor_pool.evaluate_at_state(x_hat);
-                    let (tight, slack) = pad_basis_for_cuts(
-                        &mut ws.scratch_basis,
-                        succ.successor_pool,
-                        x_hat,
-                        theta_value,
-                        succ.template_num_rows,
-                        1e-7,
-                    );
-                    ws.solver.record_padding_stats(tight as u64, slack as u64);
-
-                    ws.solver.solve_with_basis(&ws.scratch_basis)
-                } else {
-                    // Padding disabled: use the stored basis directly.
-                    ws.solver.solve_with_basis(&rb.basis)
+            if let Some(captured) = succ.basis_store.get(m, s) {
+                // Grow slot-lookup scratch if the pool has expanded.
+                if ws.scratch.recon_slot_lookup.len() < succ.successor_pool.populated_count {
+                    ws.scratch
+                        .recon_slot_lookup
+                        .resize(succ.successor_pool.populated_count, None);
                 }
+
+                // Use `state_at_capture` as the padding state; fall back to
+                // `x_hat` only when no capture state was recorded (legacy
+                // bases written before the field existed).
+                let padding_state = if captured.state_at_capture.is_empty() {
+                    x_hat
+                } else {
+                    &captured.state_at_capture
+                };
+                let theta_value = succ.successor_pool.evaluate_at_state(padding_state);
+
+                // Reconstruct basis by path: baked uses delta cuts only (rows
+                // already baked into the template base are skipped via offset);
+                // legacy uses the full active-cut set with offset 0.
+                let target = ReconstructionTarget {
+                    base_row_count: succ.template_num_rows,
+                    num_cols: ctx.templates[s].num_cols,
+                };
+                let padding = PaddingContext {
+                    state: padding_state,
+                    theta: theta_value,
+                    tolerance: 1e-7,
+                };
+                let recon_stats = if succ.baked_template.is_some() {
+                    let baked_cut_count = succ.baked_template_num_rows - succ.template_num_rows;
+                    reconstruct_basis(
+                        captured,
+                        target,
+                        succ.successor_pool.active_delta_cuts(spec.iteration),
+                        padding,
+                        baked_cut_count,
+                        &mut ws.scratch_basis,
+                        &mut ws.scratch.recon_slot_lookup,
+                    )
+                } else {
+                    reconstruct_basis(
+                        captured,
+                        target,
+                        succ.successor_pool.active_cuts(),
+                        padding,
+                        0,
+                        &mut ws.scratch_basis,
+                        &mut ws.scratch.recon_slot_lookup,
+                    )
+                };
+                ws.solver.record_reconstruction_stats(
+                    recon_stats.preserved,
+                    recon_stats.new_tight,
+                    recon_stats.new_slack,
+                );
+
+                ws.solver.solve_with_basis(&ws.scratch_basis)
             } else {
                 ws.solver.solve()
             }
@@ -843,33 +859,32 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // Build the cut batch: delta-only when baked templates are ready,
         // full active set on the legacy path (iteration 1 or baking disabled).
         let template_num_rows = ctx.templates[successor].num_rows;
-        let (baked_template, baked_template_num_rows, num_delta_cuts, num_cuts_at_successor) =
-            if baked.ready {
-                build_delta_cut_row_batch_into(
-                    &mut cut_batches[successor],
-                    fcf,
-                    successor,
-                    indexer,
-                    &ctx.templates[successor].col_scale,
-                    spec.iteration,
-                );
-                let baked_tmpl = &baked.templates[successor];
-                let baked_num_rows = baked_tmpl.num_rows;
-                let num_delta = cut_batches[successor].num_rows;
-                // Total cuts = baked cut rows (beyond base template) + delta rows.
-                let total_cuts = (baked_num_rows - template_num_rows) + num_delta;
-                (Some(baked_tmpl), baked_num_rows, num_delta, total_cuts)
-            } else {
-                build_cut_row_batch_into(
-                    &mut cut_batches[successor],
-                    fcf,
-                    successor,
-                    indexer,
-                    &ctx.templates[successor].col_scale,
-                );
-                let num_cuts = cut_batches[successor].num_rows;
-                (None, template_num_rows, 0, num_cuts)
-            };
+        let (baked_template, baked_template_num_rows, num_cuts_at_successor) = if baked.ready {
+            build_delta_cut_row_batch_into(
+                &mut cut_batches[successor],
+                fcf,
+                successor,
+                indexer,
+                &ctx.templates[successor].col_scale,
+                spec.iteration,
+            );
+            let baked_tmpl = &baked.templates[successor];
+            let baked_num_rows = baked_tmpl.num_rows;
+            let num_delta = cut_batches[successor].num_rows;
+            // Total cuts = baked cut rows (beyond base template) + delta rows.
+            let total_cuts = (baked_num_rows - template_num_rows) + num_delta;
+            (Some(baked_tmpl), baked_num_rows, total_cuts)
+        } else {
+            build_cut_row_batch_into(
+                &mut cut_batches[successor],
+                fcf,
+                successor,
+                indexer,
+                &ctx.templates[successor].col_scale,
+            );
+            let num_cuts = cut_batches[successor].num_rows;
+            (None, template_num_rows, num_cuts)
+        };
         #[allow(clippy::cast_possible_truncation)]
         {
             cut_batch_build_ms += batch_start.elapsed().as_millis() as u64;
@@ -888,7 +903,6 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             template_num_rows,
             baked_template,
             baked_template_num_rows,
-            num_delta_cuts,
             successor_active_slots: spec.successor_active_slots_buf,
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,
@@ -4579,7 +4593,7 @@ mod tests {
         }
     }
 
-    /// Decompose parallel overhead into (setup_ms, imbalance_ms, scheduling_ms)
+    /// Decompose parallel overhead into (`setup_ms`, `imbalance_ms`, `scheduling_ms`)
     /// from per-worker before/after snapshots.
     fn decompose_overhead(
         pairs: &[(SolverStatistics, SolverStatistics)],
@@ -4587,6 +4601,7 @@ mod tests {
     ) -> (u64, u64, u64) {
         use crate::solver_stats::SolverStatsDelta;
 
+        #[allow(clippy::cast_precision_loss)]
         let n_workers = pairs.len() as f64;
 
         let worker_deltas: Vec<SolverStatsDelta> = pairs
@@ -4623,9 +4638,10 @@ mod tests {
         };
 
         let stage_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
+        #[allow(clippy::cast_precision_loss)]
         let stage_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
 
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         (
             stage_setup_ms as u64,
             stage_imbalance_ms as u64,
@@ -4664,11 +4680,11 @@ mod tests {
         assert_eq!(scheduling_ms, 50, "scheduling overhead = wall - max_worker");
     }
 
-    /// Acceptance criterion: setup_time_ms is the sum of all workers' non-solve
+    /// Acceptance criterion: `setup_time_ms` is the sum of all workers' non-solve
     /// work, matching the ticket spec example.
     ///
     /// Workers have setup costs (load+add+bounds+basis): 20, 25, 15, 22 ms.
-    /// Expected setup_ms = 20 + 25 + 15 + 22 = 82.
+    /// Expected `setup_ms` = 20 + 25 + 15 + 22 = 82.
     #[test]
     fn decompose_setup_time_is_aggregate_non_solve_work() {
         let zero = SolverStatistics::default();
@@ -4732,8 +4748,8 @@ mod tests {
         );
     }
 
-    /// Edge case: scheduling_overhead_ms is clamped to 0 when max_worker_total
-    /// exceeds parallel_wall_ms (clock skew or measurement granularity).
+    /// Edge case: `scheduling_overhead_ms` is clamped to 0 when `max_worker_total`
+    /// exceeds `parallel_wall_ms` (clock skew or measurement granularity).
     #[test]
     fn decompose_scheduling_clamped_when_worker_exceeds_wall() {
         let zero = SolverStatistics::default();

@@ -17,19 +17,21 @@
     clippy::panic,
     clippy::float_cmp,
     clippy::cast_precision_loss,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
 )]
 
 // External crate imports
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId, TrainingEvent,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -37,19 +39,18 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId, TrainingEvent,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 use cobre_sddp::{
-    cut::fcf::FutureCostFunction, train, CutManagementConfig, EventConfig, HorizonMode,
-    InflowNonNegativityMethod, LoopConfig, RiskMeasure, SddpError, StageContext, StageIndexer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
+    RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -340,9 +341,9 @@ impl SolverInterface for ExpandingMockSolver {
 /// Build a `StochasticContext` with `n_stages` stages, 1 hydro, and seed 42.
 #[allow(clippy::cast_possible_wrap, clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticContext {
+    use cobre_core::SystemBuilder;
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
     use cobre_core::scenario::InflowModel;
-    use cobre_core::SystemBuilder;
 
     let bus = Bus {
         id: EntityId(0),
@@ -845,8 +846,8 @@ fn train_lb_monotonically_nondecreasing() {
 
 /// Verify the exact event sequence emitted by `train` for 3 iterations:
 /// 1 `TrainingStarted` + 3 * 7 per-iteration events + 1 `TrainingFinished` = 23 total.
-/// Per-iteration events: ForwardPassComplete, ForwardSyncComplete, BackwardPassComplete,
-/// CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary.
+/// Per-iteration events: `ForwardPassComplete`, `ForwardSyncComplete`, `BackwardPassComplete`,
+/// `CutSyncComplete`, `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`.
 #[test]
 fn train_emits_correct_event_sequence() {
     let fx = Fixture::new(2);
@@ -1729,9 +1730,9 @@ fn test_d01_with_basis_padding_enabled() {
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::scenario::ScenarioSource;
-    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
-    use cobre_solver::highs::HighsSolver;
+    use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
     use cobre_solver::SolverInterface;
+    use cobre_solver::highs::HighsSolver;
 
     struct LocalStubComm;
 
@@ -1842,9 +1843,9 @@ fn test_forward_basis_reconstruct_bit_identical_d01() {
 
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::scenario::ScenarioSource;
-    use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
-    use cobre_solver::highs::HighsSolver;
+    use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
     use cobre_solver::SolverInterface;
+    use cobre_solver::highs::HighsSolver;
 
     struct LocalStubComm;
 
@@ -2213,11 +2214,11 @@ impl SolverInterface for TrackingMockSolver {
 #[allow(clippy::too_many_lines)]
 fn forward_pass_uses_baked_template_on_iter_2() {
     use cobre_sddp::{
-        build_cut_row_batch_into, run_forward_pass, BakedTemplates, BasisStore, ForwardPassBatch,
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, SolverWorkspace,
-        StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
+        BakedTemplates, BasisStore, ForwardPassBatch, FutureCostFunction, HorizonMode,
+        InflowNonNegativityMethod, PatchBuffer, SolverWorkspace, StageContext, StageIndexer,
+        TrainingContext, WorkspaceSizing, build_cut_row_batch_into, run_forward_pass,
     };
-    use cobre_solver::{bake_rows_into_template, RowBatch, StageTemplate};
+    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
 
     // ── System parameters ───────────────────────────────────────────────────
     let n_stages = 3;
@@ -2485,12 +2486,12 @@ fn forward_pass_uses_baked_template_on_iter_2() {
 #[allow(clippy::too_many_lines)]
 fn backward_pass_uses_delta_batch_on_iter_2() {
     use cobre_sddp::{
-        build_cut_row_batch_into, run_backward_pass, BackwardPassSpec, BakedTemplates, BasisStore,
-        CutSyncBuffers, ExchangeBuffers, FutureCostFunction, HorizonMode,
-        InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SolverWorkspace, StageContext,
-        StageIndexer, TrainingContext, WorkspaceSizing,
+        BackwardPassSpec, BakedTemplates, BasisStore, CutSyncBuffers, ExchangeBuffers,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure,
+        SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
+        build_cut_row_batch_into, run_backward_pass,
     };
-    use cobre_solver::{bake_rows_into_template, RowBatch, StageTemplate};
+    use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
 
     // ── System parameters ──────────────────────────────────────────────────
     let n_stages = 3;

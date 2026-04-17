@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed parquet columns in `training/solver/iterations.parquet`:
+  `basis_padding_tight` → `basis_new_tight` and
+  `basis_padding_slack` → `basis_new_slack`. Added new column
+  `basis_preserved` tracking warm-start basis rows preserved from the
+  previous iteration's stored basis via slot reconciliation.
+- Renamed public Rust APIs:
+  `cobre_solver::SolverStatistics::basis_padding_{tight,slack}` →
+  `basis_new_{tight,slack}`; added `basis_preserved`.
+  `SolverInterface::record_padding_stats` removed; use
+  `record_reconstruction_stats(preserved, new_tight, new_slack)` instead.
+- Renamed module `crates/cobre-sddp/src/basis_padding.rs` →
+  `basis_reconstruct.rs` (effective since ticket 002, noted here for
+  completeness).
+
 ### Added
 
 - **Production DECOMP support** — weekly+monthly mixed-resolution studies

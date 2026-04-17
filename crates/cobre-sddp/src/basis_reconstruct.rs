@@ -1,19 +1,15 @@
 //! Slot-tracked basis reconstruction for cut-set-aware warm-start (Strategy S3+).
 //!
-//! This module provides two helpers:
-//!
-//! - [`pad_basis_for_cuts`] — the original length-based padding helper (retained
-//!   for backwards compatibility while tickets 003 and 004 rewire the callers).
-//! - [`reconstruct_basis`] — the slot-identity-based replacement that correctly
-//!   handles cut-set churn (drops, reorders, adds) between iterations.
+//! This module provides [`reconstruct_basis`] — the slot-identity-based helper that
+//! correctly handles cut-set churn (drops, reorders, adds) between iterations.
 //!
 //! ## Why slot identity matters
 //!
-//! `pad_basis_for_cuts` uses the LP row count as the only reconciliation key.
-//! If cut selection replaces one cut with another of equal count, the two bases
-//! are the same length but positionally misaligned — `HiGHS` receives a basis with
-//! mismatched row statuses and crashes back to cold start (or, worse, warm-starts
-//! with a corrupt basis).
+//! The legacy `pad_basis_for_cuts` helper used the LP row count as the only
+//! reconciliation key.  If cut selection replaced one cut with another of equal
+//! count, the two bases were the same length but positionally misaligned — `HiGHS`
+//! received a basis with mismatched row statuses and crashed back to cold start
+//! (or, worse, warm-started with a corrupt basis).
 //!
 //! `reconstruct_basis` takes [`CapturedBasis::cut_row_slots`] as its key: each
 //! stored cut row carries the [`CutPool`](crate::cut::pool::CutPool) slot that
@@ -21,6 +17,14 @@
 //! looks each slot up in an O(1) scratch map, and either copies the stored status
 //! (slot found → preserved) or evaluates the cut at `padding_state` to assign
 //! tight/slack (slot not found → new).
+//!
+//! ## `stored_cut_row_offset`
+//!
+//! On the baked-template path, some cut rows are baked into the template base and
+//! do not appear in the delta-cut iterator.  Pass `stored_cut_row_offset` equal to
+//! the number of baked cut rows so the helper skips those entries in
+//! `stored.cut_row_slots` and reads row statuses at the correct position.  For
+//! the forward path and the legacy backward path, pass `0`.
 //!
 //! ## Usage
 //!
@@ -42,6 +46,7 @@
 //!     target,
 //!     cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
 //!     padding,
+//!     0,
 //!     &mut out,
 //!     &mut lookup,
 //! );
@@ -52,7 +57,6 @@ pub use cobre_solver::ffi::{HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER};
 
 use cobre_solver::Basis;
 
-use crate::cut::pool::CutPool;
 use crate::workspace::CapturedBasis;
 
 // ---------------------------------------------------------------------------
@@ -128,13 +132,19 @@ pub struct ReconstructionStats {
 /// - `target` — template row count and column count of the target LP.
 /// - `current_cut_rows` — iterator of `(slot, intercept, coefficients)` in
 ///   target LP row order.  The state dimension is inferred from
-///   `padding_state.len()`.
-/// - `padding_state` — state at which to evaluate newly-added cuts.
-///   Forward path: `ws.current_state[..n_state]`.
-///   Backward path: `stored.state_at_capture` (the fix implemented by ticket 004).
-/// - `theta_padding_value` — θ proxy for the tight/slack decision.
-/// - `tolerance` — slack threshold; cuts with `theta - cut_value <= tolerance`
-///   get `NONBASIC_LOWER`.
+///   `padding.state.len()`.
+/// - `padding` — state, θ proxy, and tolerance for evaluating new cut rows.
+///   Forward path: `padding.state = ws.current_state[..n_state]`.
+///   Backward path: `padding.state = captured.state_at_capture` (the fix from
+///   ticket 004 — preserved rows were captured at that state so new rows must
+///   be evaluated at the same state for a consistent basis).
+/// - `stored_cut_row_offset` — number of entries at the start of
+///   `stored.cut_row_slots` to skip.  Pass `0` for the forward path and the
+///   legacy backward path.  On the baked-template backward path, pass
+///   `baked_cut_count` (= `baked_template_num_rows - template_num_rows`) so
+///   the baked-row slots — which the caller has absorbed into
+///   `target.base_row_count` by passing `baked.num_rows` there — are not
+///   treated as reconcilable delta rows.
 /// - `out` — destination basis (caller owns; cleared and refilled in place).
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
 ///   at least `max_slot + 1`.  Grown in place if undersized (hot path should
@@ -155,6 +165,7 @@ pub fn reconstruct_basis<'a, I>(
     target: ReconstructionTarget,
     current_cut_rows: I,
     padding: PaddingContext<'_>,
+    stored_cut_row_offset: usize,
     out: &mut Basis,
     slot_lookup: &mut Vec<Option<u32>>,
 ) -> ReconstructionStats
@@ -178,6 +189,13 @@ where
         );
     }
 
+    // The reconcilable portion of stored.cut_row_slots starts at stored_cut_row_offset.
+    // On the baked path, the first `stored_cut_row_offset` entries correspond to rows
+    // that are now structural (baked into the template base) and must not be
+    // re-reconciled as delta cut rows.
+    let reconcilable_slots =
+        &stored.cut_row_slots[stored_cut_row_offset.min(stored.cut_row_slots.len())..];
+
     // (a) Column statuses — copy stored, then resize to target if lengths differ.
     out.col_status.clear();
     out.col_status.extend_from_slice(&stored.basis.col_status);
@@ -198,14 +216,14 @@ where
             .resize(target.base_row_count, HIGHS_BASIS_STATUS_BASIC);
     }
 
-    // (c) Build slot → stored-position lookup.
+    // (c) Build slot → reconcilable-position lookup.
     //
     // Grow the scratch if it is too small for the current stored slots.  In
     // normal operation the caller pre-sizes this to `initial_pool_capacity`
     // (via `ScratchBuffers`), so growth only occurs on cold paths.  When
-    // stored.cut_row_slots is empty there is nothing to look up — skip the
+    // reconcilable_slots is empty there is nothing to look up — skip the
     // size check (an empty lookup is correct in that case).
-    if let Some(max_slot_val) = stored.cut_row_slots.iter().copied().max() {
+    if let Some(max_slot_val) = reconcilable_slots.iter().copied().max() {
         let max_slot = max_slot_val as usize;
         if slot_lookup.len() <= max_slot {
             debug_assert!(
@@ -220,8 +238,10 @@ where
         }
     }
     slot_lookup.fill(None);
+    // `position` here is the index within reconcilable_slots (0-based), so the
+    // stored row index is `stored.base_row_count + stored_cut_row_offset + position`.
     #[allow(clippy::cast_possible_truncation)]
-    for (position, &slot) in stored.cut_row_slots.iter().enumerate() {
+    for (position, &slot) in reconcilable_slots.iter().enumerate() {
         slot_lookup[slot as usize] = Some(position as u32);
     }
 
@@ -230,7 +250,9 @@ where
     for (target_slot, intercept, coefficients) in current_cut_rows {
         let row_status_byte = if let Some(pos) = slot_lookup.get(target_slot).and_then(|o| *o) {
             // Slot was in the stored basis — copy its row status.
-            let stored_row_idx = stored.base_row_count + pos as usize;
+            // The stored row index accounts for the offset: baked-path skips
+            // `stored_cut_row_offset` entries before `pos` within the cut section.
+            let stored_row_idx = stored.base_row_count + stored_cut_row_offset + pos as usize;
             stats.preserved += 1;
             stored.basis.row_status[stored_row_idx]
         } else {
@@ -257,122 +279,6 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// pad_basis_for_cuts — retained for forward.rs / backward.rs callers.
-// Tickets 003 and 004 will remove this import and delete this function.
-// ---------------------------------------------------------------------------
-
-/// Extend `basis.row_status` with informed status codes for new cut rows.
-///
-/// For each active cut in `pool` whose row is not yet covered by the existing
-/// `basis.row_status`, evaluates the cut at the warm-start state and assigns:
-///
-/// - `NONBASIC_LOWER` if `theta_value - cut_value <= tolerance` (tight or violated),
-/// - `BASIC` if `theta_value - cut_value > tolerance` (slack).
-///
-/// # Parameters
-///
-/// - `basis`: the cached basis to extend. Only `row_status` is modified;
-///   `col_status` is untouched.
-/// - `pool`: the active cut pool for the current stage.
-/// - `state`: warm-start state vector, length `pool.state_dimension`. Provides
-///   the state-variable values `x̂` at which each cut is evaluated.
-/// - `theta_value`: the future-cost variable value from the warm-start solution,
-///   already unscaled.
-/// - `base_row_count`: number of structural (template) rows. The basis is
-///   expected to already have entries for these rows plus any previously
-///   appended cut rows from earlier iterations.
-/// - `tolerance`: slack threshold. Cuts with `theta_value - cut_value <= tolerance`
-///   are assigned `NONBASIC_LOWER`.
-///
-/// # Returns
-///
-/// `(tight_count, slack_count)` — the number of new rows assigned
-/// `NONBASIC_LOWER` and `BASIC` respectively. Both are 0 when no new rows
-/// are added.
-///
-/// # Panics
-///
-/// Panics (in debug builds only) if `state.len() != pool.state_dimension` or
-/// if `basis.row_status.len() < base_row_count`.
-pub fn pad_basis_for_cuts(
-    basis: &mut Basis,
-    pool: &CutPool,
-    state: &[f64],
-    theta_value: f64,
-    base_row_count: usize,
-    tolerance: f64,
-) -> (usize, usize) {
-    debug_assert!(
-        state.len() == pool.state_dimension,
-        "state length {} != pool.state_dimension {}",
-        state.len(),
-        pool.state_dimension,
-    );
-    debug_assert!(
-        basis.row_status.len() >= base_row_count,
-        "basis.row_status.len() {} < base_row_count {}",
-        basis.row_status.len(),
-        base_row_count,
-    );
-
-    let target_len = base_row_count + pool.active_count();
-
-    if basis.row_status.len() >= target_len {
-        return (0, 0);
-    }
-
-    let old_len = basis.row_status.len();
-
-    // Resize with conservative default BASIC. Entries for previously seen cuts
-    // (between old_len and target_len) will be overwritten below; the resize
-    // ensures the Vec has the correct final length before the loop writes into it.
-    basis
-        .row_status
-        .resize(target_len, HIGHS_BASIS_STATUS_BASIC);
-
-    // The offset of the first cut row from base_row_count in the basis vector.
-    // Previously appended cut rows occupy [base_row_count, old_len).
-    // New cut rows occupy [old_len, target_len).
-    //
-    // We iterate all active cuts in slot order (matching LP row order) and
-    // assign statuses only for those that fall in the new region.
-    let already_padded_cuts = old_len.saturating_sub(base_row_count);
-
-    let mut tight_count: usize = 0;
-    let mut slack_count: usize = 0;
-    let mut cut_index: usize = 0;
-
-    for (_slot, intercept, coefficients) in pool.active_cuts() {
-        if cut_index < already_padded_cuts {
-            // This cut row was already in the basis from a previous padding call.
-            cut_index += 1;
-            continue;
-        }
-
-        let cut_value: f64 = intercept
-            + coefficients
-                .iter()
-                .zip(state)
-                .map(|(c, x)| c * x)
-                .sum::<f64>();
-        let slack = theta_value - cut_value;
-
-        let row_idx = base_row_count + cut_index;
-        if slack <= tolerance {
-            basis.row_status[row_idx] = HIGHS_BASIS_STATUS_LOWER;
-            tight_count += 1;
-        } else {
-            // Already set to BASIC by the resize fill — increment counter only.
-            slack_count += 1;
-        }
-
-        cut_index += 1;
-    }
-
-    (tight_count, slack_count)
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -381,8 +287,8 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        pad_basis_for_cuts, reconstruct_basis, PaddingContext, ReconstructionStats,
-        ReconstructionTarget, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
+        reconstruct_basis, PaddingContext, ReconstructionStats, ReconstructionTarget,
+        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
     };
     use crate::cut::pool::CutPool;
     use crate::workspace::CapturedBasis;
@@ -437,7 +343,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // reconstruct_basis — 8 unit tests
+    // reconstruct_basis — unit tests (offset=0 path, the common case)
     // -----------------------------------------------------------------------
 
     /// AC1: empty stored basis + 3 new cuts (1 tight, 2 slack).
@@ -467,6 +373,7 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -509,6 +416,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -546,6 +454,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -590,6 +499,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -655,6 +565,7 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -694,6 +605,7 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -731,6 +643,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -763,6 +676,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -776,6 +690,78 @@ mod tests {
                 new_tight: 0,
                 new_slack: 1
             }
+        );
+    }
+
+    /// AC (ticket-004): `stored_cut_row_offset` skips baked-row entries.
+    ///
+    /// Given:
+    ///   `stored.cut_row_slots` = [10, 11, 20, 21]
+    ///   `stored.base_row_count` = 2
+    ///   `stored.basis.row_status` = [A, B, C, D, E, F]  (6 rows: 2 base + 4 cut)
+    ///   `stored_cut_row_offset` = 2  (first 2 slots are baked into the base)
+    ///   current cut rows yield slots [20, 21]
+    ///
+    /// Expected: preserved = 2, statuses copied from stored row indices
+    ///   slot 20 at reconcilable pos 0 -> stored row = base(2) + offset(2) + pos(0) = 4 -> E (L)
+    ///   slot 21 at reconcilable pos 1 -> stored row = base(2) + offset(2) + pos(1) = 5 -> F (B)
+    #[test]
+    fn test_stored_cut_row_offset_skips_baked_rows() {
+        // Layout: base_rows=2, cut_slots=[10,11,20,21], statuses=[C,D,E,F] (D=L, F=B here)
+        // Use distinct marker values: row_status = [B,B, L,B,L,B] (base=2, cuts=[L,B,L,B])
+        let stored = make_stored_basis(2, 3, &[10, 11, 20, 21], &[L, B, L, B], &[9.0, 9.0, 9.0]);
+        // stored.basis.row_status = [B, B, L, B, L, B]
+        //   indices:                  0  1  2  3  4  5
+        // base_row_count=2, cut section starts at index 2:
+        //   stored pos 0 (slot 10) -> row 2 -> L
+        //   stored pos 1 (slot 11) -> row 3 -> B
+        //   stored pos 2 (slot 20) -> row 4 -> L
+        //   stored pos 3 (slot 21) -> row 5 -> B
+        // With offset=2: reconcilable = [20, 21]
+        //   slot 20 -> reconcilable pos 0 -> stored_row_idx = 2 + 2 + 0 = 4 -> L
+        //   slot 21 -> reconcilable pos 1 -> stored_row_idx = 2 + 2 + 1 = 5 -> B
+
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (20, 0.0, vec![0.0, 0.0, 0.0]),
+            (21, 0.0, vec![0.0, 0.0, 0.0]),
+        ];
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 32];
+
+        // target_base = baked template rows (includes baked cut rows), e.g. 4
+        // (= stored.base_row_count + baked_cut_count = 2 + 2)
+        let stats = reconstruct_basis(
+            &stored,
+            target(4, 3), // baked template has 4 rows (base=2 + 2 baked cuts)
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[9.0, 9.0, 9.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            2, // stored_cut_row_offset = baked_cut_count
+            &mut out,
+            &mut lookup,
+        );
+
+        assert_eq!(
+            stats,
+            ReconstructionStats {
+                preserved: 2,
+                new_tight: 0,
+                new_slack: 0,
+            },
+            "both delta slots must be preserved from the stored basis"
+        );
+        // out has 4 base rows (from stored) + 2 delta cut rows = 6 total.
+        // The 2 delta rows (indices 4 and 5) must match stored rows 4 and 5.
+        assert_eq!(
+            out.row_status[4], stored.basis.row_status[4],
+            "slot 20: preserved from stored row 4 (L)"
+        );
+        assert_eq!(
+            out.row_status[5], stored.basis.row_status[5],
+            "slot 21: preserved from stored row 5 (B)"
         );
     }
 
@@ -827,6 +813,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -880,6 +867,7 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
+            0,
             &mut out,
             &mut lookup,
         );
@@ -957,108 +945,5 @@ mod tests {
             captured.base_row_count + captured.cut_row_slots.len(),
             "metadata invariant: row_status.len() == base_row_count + cut_row_slots.len()",
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // pad_basis_for_cuts — 6 original tests (kept until tickets 003/004 land)
-    // -----------------------------------------------------------------------
-
-    fn make_pool_with_cuts(cuts: &[(f64, Vec<f64>)], state_dim: usize) -> CutPool {
-        let mut pool = CutPool::new(cuts.len().max(1) * 10, state_dim, 1, 0);
-        for (i, (intercept, coeffs)) in cuts.iter().enumerate() {
-            pool.add_cut(i as u64, 0, *intercept, coeffs);
-        }
-        pool
-    }
-
-    #[test]
-    fn test_tight_and_slack_cuts_get_correct_status() {
-        let pool = make_pool_with_cuts(
-            &[(10.0, vec![1.0]), (20.0, vec![2.0]), (30.0, vec![3.0])],
-            1,
-        );
-
-        let mut basis = Basis::new(5, 2);
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[5.0], 25.0, 2, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 5, "basis must grow to base+active");
-        assert_eq!(basis.row_status[2], B, "cut 0 slack=10 -> BASIC");
-        assert_eq!(basis.row_status[3], L, "cut 1 slack=-5 -> NONBASIC_LOWER");
-        assert_eq!(basis.row_status[4], L, "cut 2 slack=-20 -> NONBASIC_LOWER");
-        assert_eq!(tight, 2, "two tight/violated cuts");
-        assert_eq!(slack, 1, "one slack cut");
-    }
-
-    #[test]
-    fn test_exactly_tight_cut_is_nonbasic_lower() {
-        let pool = make_pool_with_cuts(&[(5.0, vec![1.0, 2.0])], 2);
-
-        let mut basis = Basis::new(3, 0);
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[1.0, 1.0], 8.0, 0, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 1);
-        assert_eq!(basis.row_status[0], L);
-        assert_eq!(tight, 1);
-        assert_eq!(slack, 0);
-    }
-
-    #[test]
-    fn test_empty_pool_is_noop() {
-        let pool = CutPool::new(10, 2, 1, 0);
-        let mut basis = Basis::new(3, 2);
-        basis.row_status[0] = L;
-        basis.row_status[1] = B;
-
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[1.0, 1.0], 5.0, 2, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 2, "row_status unchanged");
-        assert_eq!(basis.row_status[0], L);
-        assert_eq!(basis.row_status[1], B);
-        assert_eq!(tight, 0);
-        assert_eq!(slack, 0);
-    }
-
-    #[test]
-    fn test_already_padded_basis_is_noop() {
-        let pool = make_pool_with_cuts(&[(10.0, vec![1.0]), (20.0, vec![2.0])], 1);
-
-        let mut basis = Basis::new(3, 4);
-        basis.row_status[2] = L;
-        basis.row_status[3] = L;
-
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[1.0], 5.0, 2, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 4, "row_status unchanged");
-        assert_eq!(basis.row_status[2], L, "prior status preserved");
-        assert_eq!(basis.row_status[3], L, "prior status preserved");
-        assert_eq!(tight, 0);
-        assert_eq!(slack, 0);
-    }
-
-    #[test]
-    fn test_all_slack_cuts_get_basic() {
-        let pool = make_pool_with_cuts(&[(1.0, vec![1.0]), (2.0, vec![2.0])], 1);
-
-        let mut basis = Basis::new(3, 2);
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[1.0], 1000.0, 2, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 4);
-        assert_eq!(basis.row_status[2], B);
-        assert_eq!(basis.row_status[3], B);
-        assert_eq!(tight, 0);
-        assert_eq!(slack, 2);
-    }
-
-    #[test]
-    fn test_negative_slack_is_tight() {
-        let pool = make_pool_with_cuts(&[(100.0, vec![10.0])], 1);
-
-        let mut basis = Basis::new(3, 1);
-        let (tight, slack) = pad_basis_for_cuts(&mut basis, &pool, &[5.0], 1.0, 1, 1e-7);
-
-        assert_eq!(basis.row_status.len(), 2);
-        assert_eq!(basis.row_status[1], L);
-        assert_eq!(tight, 1);
-        assert_eq!(slack, 0);
     }
 }

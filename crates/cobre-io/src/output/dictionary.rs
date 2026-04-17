@@ -671,11 +671,17 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "add_rows_time_ms") => "Cumulative add_rows call time",
         ("solver_iterations", "set_bounds_time_ms") => "Cumulative set_bounds call time",
         ("solver_iterations", "basis_set_time_ms") => "Cumulative set_basis call time",
-        ("solver_iterations", "basis_padding_tight") => {
-            "Cut rows assigned NONBASIC_LOWER during basis padding"
+        ("solver_iterations", "basis_preserved") => {
+            "Cut rows whose status was copied from a stored basis via slot reconciliation \
+             (slot identity found in the warm-start basis)"
         }
-        ("solver_iterations", "basis_padding_slack") => {
-            "Cut rows assigned BASIC during basis padding"
+        ("solver_iterations", "basis_new_tight") => {
+            "Newly-added cut rows assigned NONBASIC_LOWER after evaluation at the padding \
+             state (slot not found in stored basis)"
+        }
+        ("solver_iterations", "basis_new_slack") => {
+            "Newly-added cut rows assigned BASIC after evaluation at the padding state \
+             (slot not found in stored basis)"
         }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
@@ -1433,8 +1439,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 193,
-            "variables.csv must have exactly 193 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
+            row_count, 194,
+            "variables.csv must have exactly 194 data rows (one per column across all 16 iteration_timing columns + rest of schemas)"
         );
     }
 

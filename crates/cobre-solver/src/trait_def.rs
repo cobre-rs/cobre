@@ -163,16 +163,6 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.9.
     fn solver_name_version(&self) -> String;
 
-    /// Record application-level basis padding statistics.
-    ///
-    /// Called after each basis padding operation to record padding statistics.
-    /// Default implementation is a no-op; solvers that track statistics
-    /// should override to increment their internal counters.
-    ///
-    /// `tight` is the count of new cut rows assigned `NONBASIC_LOWER` and
-    /// `slack` is the count assigned `BASIC` by the padding pass.
-    fn record_padding_stats(&mut self, _tight: u64, _slack: u64) {}
-
     /// Record slot-tracked basis reconstruction statistics.
     ///
     /// Called after each `reconstruct_basis` call on the forward or backward

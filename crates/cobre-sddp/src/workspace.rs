@@ -226,7 +226,6 @@ pub(crate) struct ScratchBuffers {
     ///
     /// When `initial_pool_capacity == 0` (simulation-only workspaces), this
     /// vec starts empty; tickets 003/004 grow it in-place if needed.
-    #[allow(dead_code)]
     pub(crate) recon_slot_lookup: Vec<Option<u32>>,
 }
 

@@ -1226,16 +1226,10 @@ impl SolverInterface for HighsSolver {
         self.stats.clone()
     }
 
-    fn record_padding_stats(&mut self, tight: u64, slack: u64) {
-        self.stats.basis_padding_tight += tight;
-        self.stats.basis_padding_slack += slack;
-    }
-
     fn record_reconstruction_stats(&mut self, preserved: u32, new_tight: u32, new_slack: u32) {
         self.stats.basis_preserved += u64::from(preserved);
-        // TODO(ticket-005): rename basis_padding_tight/slack to basis_new_tight/slack
-        self.stats.basis_padding_tight += u64::from(new_tight);
-        self.stats.basis_padding_slack += u64::from(new_slack);
+        self.stats.basis_new_tight += u64::from(new_tight);
+        self.stats.basis_new_slack += u64::from(new_slack);
     }
 }
 

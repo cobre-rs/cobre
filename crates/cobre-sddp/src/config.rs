@@ -52,8 +52,8 @@
 //! assert_eq!(config.events.checkpoint_interval, Some(50));
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use cobre_core::TrainingEvent;
 
@@ -167,15 +167,6 @@ pub struct CutManagementConfig {
     /// When `None`, no hard cap is enforced.
     pub budget: Option<u32>,
 
-    /// Enable basis padding for warm-start.
-    ///
-    /// When `true`, the forward pass applies informed basis status assignment for
-    /// new cut rows before warm-starting the LP solver, reducing the number of
-    /// simplex pivots required after each cut addition.
-    ///
-    /// Disabled by default (`false`).
-    pub basis_padding_enabled: bool,
-
     /// Activity tolerance for cut selection deactivation.
     ///
     /// Cuts with activity (dual value) below this threshold across all openings
@@ -203,7 +194,6 @@ impl Default for CutManagementConfig {
         Self {
             cut_selection: None,
             budget: None,
-            basis_padding_enabled: false,
             cut_activity_tolerance: 1e-6,
             warm_start_cuts: 0,
             risk_measures: vec![RiskMeasure::Expectation],

@@ -425,7 +425,6 @@ fn test_stochastic_load_training_completes() {
         cut_management: CutManagementConfig {
             cut_selection: None,
             budget: None,
-            basis_padding_enabled: false,
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: risk_measures.clone(),
@@ -480,7 +479,6 @@ fn test_stochastic_load_training_completes() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,
             stages: &[],
@@ -577,7 +575,6 @@ fn test_deterministic_load_training_matches_baseline() {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
@@ -604,7 +601,6 @@ fn test_deterministic_load_training_matches_baseline() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,
             stages: &[],
@@ -659,7 +655,6 @@ fn test_stochastic_load_seed_determinism() {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
@@ -710,7 +705,6 @@ fn test_stochastic_load_seed_determinism() {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
                 stages: &[],

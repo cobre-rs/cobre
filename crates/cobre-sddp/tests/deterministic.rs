@@ -32,13 +32,13 @@ use std::sync::mpsc;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
+    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
 };
 use cobre_sddp::{
-    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
 };
-use cobre_solver::SolverInterface;
 use cobre_solver::highs::HighsSolver;
+use cobre_solver::SolverInterface;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;
@@ -2849,63 +2849,6 @@ fn d29_pattern_c_weekly_par() {
         1,
         "D29: expected 1 simulation scenario result"
     );
-
-    // AC-4 (basis-padding): padded run must produce a near-identical lower bound
-    // to the baseline. D29 is excluded from the generic sweep because the sweep
-    // uses ScenarioSource::default(), which lacks the OutOfSample seed. Instead
-    // the assertion is inlined here using the same training_source built above.
-    let mut config_padded = config.clone();
-    config_padded.training.cut_selection.basis_padding = Some(true);
-
-    let system_padded = cobre_io::load_case(case_dir).expect("load_case (padded) must succeed");
-    let pr_padded = prepare_stochastic(
-        system_padded,
-        case_dir,
-        &config_padded,
-        42,
-        &training_source,
-    )
-    .expect("prepare_stochastic (padded) must succeed");
-    let system_padded = pr_padded.system;
-    let stochastic_padded = pr_padded.stochastic;
-    let hydro_models_padded = prepare_hydro_models(&system_padded, case_dir)
-        .expect("prepare_hydro_models (padded) must succeed");
-    let mut setup_padded = StudySetup::new(
-        &system_padded,
-        &config_padded,
-        stochastic_padded,
-        hydro_models_padded,
-    )
-    .expect("StudySetup (padded) must build");
-    let mut solver_padded = HighsSolver::new().expect("HighsSolver (padded) must succeed");
-    let outcome_padded = setup_padded
-        .train(&mut solver_padded, &comm, 1, HighsSolver::new, None, None)
-        .expect("train (padded) must return Ok");
-    assert!(
-        outcome_padded.error.is_none(),
-        "D29 padded: expected no training error, got: {:?}",
-        outcome_padded.error
-    );
-    let result_padded = outcome_padded.result;
-
-    let diff = (result_padded.final_lb - result.final_lb).abs();
-    let tol = 1e-9 * result.final_lb.abs().max(1.0);
-    assert!(
-        diff <= tol,
-        "D29: basis_padding lower bound differs from baseline beyond tolerance \
-         (baseline={}, padded={}, diff={:.2e}, tol={:.2e})",
-        result.final_lb,
-        result_padded.final_lb,
-        diff,
-        tol,
-    );
-
-    let stats_padded = solver_padded.statistics();
-    assert_eq!(
-        stats_padded.basis_rejections, 0,
-        "D29: expected 0 basis rejections with basis_padding=true, got {}",
-        stats_padded.basis_rejections,
-    );
 }
 
 /// D30: Pattern D — monthly-to-quarterly resolution transition.
@@ -2921,17 +2864,11 @@ fn d29_pattern_c_weekly_par() {
 ///
 /// - Case loads and trains without error on a Custom-cycle multi-resolution study.
 /// - Training completes at least 1 iteration with a positive lower bound.
-/// - `basis_padding = true` produces a near-identical lower bound to the baseline.
 ///
 /// Full structural and downstream-lag-transition assertions are in the dedicated
 /// `pattern_d_integration.rs` test file, which verifies composition correctness
 /// including noise group IDs, accumulate_downstream flags, rebuild_from_downstream,
 /// and simulation.
-///
-/// D30 is excluded from the generic `basis_padding_regression_sweep` because that
-/// sweep uses `ScenarioSource::default()` (InSample), whereas D30 requires the
-/// OutOfSample PAR(1) noise source declared in its config. The padded assertion is
-/// inlined here using the same training_source — identical to the D29 pattern.
 #[test]
 fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
     let case_dir = Path::new("../../examples/deterministic/d30-pattern-d-monthly-quarterly");
@@ -2979,237 +2916,4 @@ fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
         "D30: lower bound must be positive, got {}",
         result.final_lb
     );
-
-    // AC-4 (basis-padding): padded run must produce a near-identical lower bound
-    // to the baseline. D30 is excluded from the generic sweep because the sweep
-    // uses ScenarioSource::default(), which lacks the OutOfSample seed. Instead
-    // the assertion is inlined here using the same training_source built above.
-    let mut config_padded = config.clone();
-    config_padded.training.cut_selection.basis_padding = Some(true);
-
-    let system_padded = cobre_io::load_case(case_dir).expect("load_case (padded) must succeed");
-    let pr_padded = prepare_stochastic(
-        system_padded,
-        case_dir,
-        &config_padded,
-        42,
-        &training_source,
-    )
-    .expect("prepare_stochastic (padded) must succeed");
-    let system_padded = pr_padded.system;
-    let stochastic_padded = pr_padded.stochastic;
-    let hydro_models_padded = prepare_hydro_models(&system_padded, case_dir)
-        .expect("prepare_hydro_models (padded) must succeed");
-    let mut setup_padded = StudySetup::new(
-        &system_padded,
-        &config_padded,
-        stochastic_padded,
-        hydro_models_padded,
-    )
-    .expect("StudySetup (padded) must build");
-    let mut solver_padded = HighsSolver::new().expect("HighsSolver (padded) must succeed");
-    let outcome_padded = setup_padded
-        .train(&mut solver_padded, &comm, 1, HighsSolver::new, None, None)
-        .expect("train (padded) must return Ok");
-    assert!(
-        outcome_padded.error.is_none(),
-        "D30 padded: expected no training error, got: {:?}",
-        outcome_padded.error
-    );
-    let result_padded = outcome_padded.result;
-
-    let diff = (result_padded.final_lb - result.final_lb).abs();
-    let tol = 1e-9 * result.final_lb.abs().max(1.0);
-    assert!(
-        diff <= tol,
-        "D30: basis_padding lower bound differs from baseline beyond tolerance \
-         (baseline={}, padded={}, diff={:.2e}, tol={:.2e})",
-        result.final_lb,
-        result_padded.final_lb,
-        diff,
-        tol,
-    );
-
-    let stats_padded = solver_padded.statistics();
-    assert_eq!(
-        stats_padded.basis_rejections, 0,
-        "D30: expected 0 basis rejections with basis_padding=true, got {}",
-        stats_padded.basis_rejections,
-    );
-}
-
-// ===========================================================================
-// AC-4: Basis-padding regression sweep (P04)
-// ===========================================================================
-
-/// Execute the full training pipeline with `basis_padding = true` for a case
-/// directory and return both the `TrainingResult` and the `HighsSolver`.
-///
-/// Identical to `run_deterministic_with_solver` except it sets
-/// `config.training.cut_selection.basis_padding = Some(true)` before
-/// constructing `StudySetup`. This lets AC-4 tests verify bit-identical LBs
-/// and zero `basis_rejections` without creating separate fixture directories.
-fn run_deterministic_with_basis_padding(
-    case_dir: &Path,
-) -> (cobre_sddp::TrainingResult, HighsSolver) {
-    let config_path = case_dir.join("config.json");
-    let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
-
-    // Enable basis padding programmatically — no new fixture directory needed.
-    config.training.cut_selection.basis_padding = Some(true);
-
-    let system = cobre_io::load_case(case_dir).expect("load_case must succeed");
-
-    let prepare_result =
-        prepare_stochastic(system, case_dir, &config, 42, &ScenarioSource::default())
-            .expect("prepare_stochastic must succeed");
-    let system = prepare_result.system;
-    let stochastic = prepare_result.stochastic;
-
-    let hydro_models =
-        prepare_hydro_models(&system, case_dir).expect("prepare_hydro_models must succeed");
-
-    let mut setup =
-        StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
-
-    let comm = StubComm;
-    let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
-
-    let outcome = setup
-        .train(&mut solver, &comm, 1, HighsSolver::new, None, None)
-        .expect("train must return Ok");
-    assert!(outcome.error.is_none(), "expected no training error");
-    (outcome.result, solver)
-}
-
-/// Regression sweep: `basis_padding = true` must produce bit-identical lower
-/// bounds to the baseline for all simple deterministic cases (AC-4, ticket P04).
-///
-/// Covered cases: D01–D11, D16, D19–D20, D25–D28.
-/// Complex cases (D12–D15, D21–D24) use custom test-body setup and are excluded
-/// from this sweep; they are exercised individually in their own test functions.
-///
-/// For each case the test asserts:
-/// - The padded lower bound is bit-identical to the baseline (padding changes
-///   only the warm-start path, not the optimal solution).
-/// - Zero `basis_rejections` are recorded (every padded basis is accepted by
-///   HiGHS without falling back to a cold start).
-#[test]
-#[allow(clippy::too_many_lines)]
-fn basis_padding_regression_sweep() {
-    struct Case {
-        id: &'static str,
-        dir: &'static str,
-    }
-
-    let cases = [
-        Case {
-            id: "D01",
-            dir: "../../examples/deterministic/d01-thermal-dispatch",
-        },
-        Case {
-            id: "D02",
-            dir: "../../examples/deterministic/d02-single-hydro",
-        },
-        Case {
-            id: "D03",
-            dir: "../../examples/deterministic/d03-two-hydro-cascade",
-        },
-        Case {
-            id: "D04",
-            dir: "../../examples/deterministic/d04-transmission",
-        },
-        Case {
-            id: "D05",
-            dir: "../../examples/deterministic/d05-fpha-constant-head",
-        },
-        Case {
-            id: "D06",
-            dir: "../../examples/deterministic/d06-fpha-variable-head",
-        },
-        Case {
-            id: "D07",
-            dir: "../../examples/deterministic/d07-fpha-computed",
-        },
-        Case {
-            id: "D08",
-            dir: "../../examples/deterministic/d08-evaporation",
-        },
-        Case {
-            id: "D09",
-            dir: "../../examples/deterministic/d09-multi-deficit",
-        },
-        Case {
-            id: "D10",
-            dir: "../../examples/deterministic/d10-inflow-nonnegativity",
-        },
-        Case {
-            id: "D11",
-            dir: "../../examples/deterministic/d11-water-withdrawal",
-        },
-        Case {
-            id: "D16",
-            dir: "../../examples/deterministic/d16-par1-lag-shift",
-        },
-        Case {
-            id: "D19",
-            dir: "../../examples/deterministic/d19-multi-hydro-par",
-        },
-        Case {
-            id: "D20",
-            dir: "../../examples/deterministic/d20-operational-violations",
-        },
-        Case {
-            id: "D25",
-            dir: "../../examples/deterministic/d25-discount-rate",
-        },
-        Case {
-            id: "D26",
-            dir: "../../examples/deterministic/d26-estimated-par2",
-        },
-        Case {
-            id: "D27",
-            dir: "../../examples/deterministic/d27-per-stage-thermal-cost",
-        },
-        Case {
-            id: "D28",
-            dir: "../../examples/deterministic/d28-decomp-weekly-monthly",
-        },
-    ];
-
-    for case in &cases {
-        let case_dir = Path::new(case.dir);
-
-        // Baseline: padding disabled (canonical run).
-        let baseline = run_deterministic(case_dir);
-
-        // Padded: same case with basis_padding = true.
-        let (padded, solver) = run_deterministic_with_basis_padding(case_dir);
-
-        // AC-4a: near-identical lower bound — padding changes only the warm-start
-        // path, not the optimal LP solution.  A tight relative tolerance (1e-9)
-        // handles the unavoidable ≤1 ULP float rounding that occurs when the
-        // simplex solver follows a different warm-start trajectory (observed in
-        // D16 PAR(1) with lag dynamics).
-        let diff = (padded.final_lb - baseline.final_lb).abs();
-        let tol = 1e-9 * baseline.final_lb.abs().max(1.0);
-        assert!(
-            diff <= tol,
-            "{}: basis_padding lower bound differs from baseline beyond tolerance \
-             (baseline={}, padded={}, diff={:.2e}, tol={:.2e})",
-            case.id,
-            baseline.final_lb,
-            padded.final_lb,
-            diff,
-            tol,
-        );
-
-        // AC-4b: zero basis rejections — HiGHS must accept every padded basis.
-        let stats = solver.statistics();
-        assert_eq!(
-            stats.basis_rejections, 0,
-            "{}: expected 0 basis rejections with basis_padding=true, got {}",
-            case.id, stats.basis_rejections,
-        );
-    }
 }

@@ -5,8 +5,8 @@
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
-    StoppingRule, StoppingRuleSet, StudyParams,
+    CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
+    StudyParams, DEFAULT_MAX_ITERATIONS,
 };
 
 use crate::error::CliError;
@@ -125,10 +125,6 @@ pub(crate) struct BroadcastConfig {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub(crate) budget: Option<u32>,
-    /// Whether basis padding is enabled for warm-start.
-    ///
-    /// Derived from `config.training.cut_selection.basis_padding`.
-    pub(crate) basis_padding_enabled: bool,
     /// Scenario source for the training forward pass, broadcast so non-root
     /// ranks can build the stochastic context with matching sampling schemes.
     pub(crate) training_source: ScenarioSource,
@@ -204,7 +200,6 @@ impl BroadcastConfig {
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
             budget: params.budget,
-            basis_padding_enabled: params.basis_padding_enabled,
             training_source,
             simulation_source,
         })
@@ -313,7 +308,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{BroadcastOpeningTree, broadcast_value};
+    use super::{broadcast_value, BroadcastOpeningTree};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

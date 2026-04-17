@@ -3,9 +3,9 @@
 use cobre_io::config::StoppingRuleConfig;
 
 use crate::{
-    InflowNonNegativityMethod, SddpError,
-    cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
+    cut_selection::{parse_cut_selection_config, CutSelectionStrategy},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
+    InflowNonNegativityMethod, SddpError,
 };
 
 /// Default number of forward-pass trajectories when not specified in config.
@@ -51,11 +51,6 @@ pub struct StudyParams {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub budget: Option<u32>,
-    /// Whether basis padding is enabled for warm-start.
-    ///
-    /// Derived from `config.training.cut_selection.basis_padding`.
-    /// Disabled by default (`false`).
-    pub basis_padding_enabled: bool,
 }
 
 impl StudyParams {
@@ -157,8 +152,6 @@ impl StudyParams {
             }
         }
 
-        let basis_padding_enabled = config.training.cut_selection.basis_padding.unwrap_or(false);
-
         Ok(Self {
             seed,
             forward_passes,
@@ -170,7 +163,6 @@ impl StudyParams {
             cut_selection,
             cut_activity_tolerance,
             budget,
-            basis_padding_enabled,
         })
     }
 
@@ -191,7 +183,6 @@ impl StudyParams {
             cut_selection: self.cut_selection,
             cut_activity_tolerance: self.cut_activity_tolerance,
             budget: self.budget,
-            basis_padding_enabled: self.basis_padding_enabled,
             export_states: false,
         }
     }
@@ -231,11 +222,6 @@ pub struct ConstructionConfig {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub budget: Option<u32>,
-    /// Whether basis padding is enabled for warm-start.
-    ///
-    /// Derived from `config.training.cut_selection.basis_padding`.
-    /// Disabled by default (`false`).
-    pub basis_padding_enabled: bool,
     /// Whether the caller wants the visited-states archive for export.
     ///
     /// When `true`, the archive is allocated during training regardless of the

@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use cobre_core::{
-    EntityId, System,
     scenario::{SamplingScheme, ScenarioSource},
+    EntityId, System,
 };
-use cobre_stochastic::{OpeningTreeInputs, StochasticContext, context::OpeningTree};
+use cobre_stochastic::{context::OpeningTree, OpeningTreeInputs, StochasticContext};
 
 use crate::{EstimationPath, EstimationReport, SddpError};
 

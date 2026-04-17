@@ -74,22 +74,22 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
+    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -756,13 +756,6 @@ struct StageKey<'a> {
     /// to walk active cut rows and by `write_capture_metadata` to record slot
     /// identities for the next iteration's warm-start.
     pool: &'a CutPool,
-    /// Whether basis padding is enabled (config-gated, default false).
-    /// Retained on `StageKey` for the backward path (which still consults it
-    /// in ticket 004) and Epic 02 (final flag disposition).  The forward
-    /// apply path no longer reads this — `reconstruct_basis` runs
-    /// unconditionally when a stored basis exists.
-    #[allow(dead_code)]
-    basis_padding_enabled: bool,
 }
 
 /// Populate `CapturedBasis` metadata after a forward solve.
@@ -830,10 +823,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
         basis_row_capacity,
         terminal_has_boundary_cuts,
         pool,
-        // basis_padding_enabled is no longer consulted on the forward apply
-        // path — reconstruct_basis runs unconditionally when a stored basis
-        // exists.  Field stays on `StageKey` until Epic 02 decides its fate.
-        basis_padding_enabled: _,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -947,8 +936,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         &mut Some(ref captured) => {
             // Slot-tracked reconstruction: copy preserved cut-row statuses by
             // slot identity, and evaluate new cuts at the current state.
-            // Unconditional — does not consult `basis_padding_enabled`; Epic 02
-            // owns the final disposition of that flag.
+            // Runs unconditionally when a stored basis exists.
             let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
             let recon_stats = reconstruct_basis(
                 captured,
@@ -1210,12 +1198,10 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         indexer,
         stochastic,
         initial_state,
-        basis_padding_enabled,
         recent_accum_seed,
         recent_weight_seed,
         ..
     } = training_ctx;
-    let basis_padding_enabled = *basis_padding_enabled;
     let recent_weight_seed = *recent_weight_seed;
     let ForwardPassBatch {
         local_forward_passes,
@@ -1408,7 +1394,6 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         },
                         terminal_has_boundary_cuts,
                         pool: &fcf.pools[t],
-                        basis_padding_enabled,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(
@@ -1524,21 +1509,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch,
-        build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
+        build_cut_row_batch, build_delta_cut_row_batch_into, partition, run_forward_pass,
+        sync_forward, ForwardPassBatch, ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{BakedTemplates, StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
@@ -2280,7 +2265,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
@@ -2346,7 +2330,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2404,7 +2387,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
@@ -2470,7 +2452,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2534,7 +2515,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
@@ -2600,7 +2580,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2976,7 +2955,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
@@ -3039,7 +3017,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3208,7 +3185,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3249,7 +3225,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3357,7 +3332,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3671,7 +3645,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3799,7 +3772,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
@@ -3864,7 +3836,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -4109,7 +4080,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -4246,7 +4216,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -4378,7 +4347,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -4477,7 +4445,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },

@@ -516,7 +516,6 @@ fn run_programmatic(
         cut_selection: None,
         cut_activity_tolerance: 0.0,
         budget: None,
-        basis_padding_enabled: false,
         export_states: false,
     };
     let mut setup =
@@ -840,7 +839,6 @@ fn run_with_setup(
         cut_selection: None,
         cut_activity_tolerance: 0.0,
         budget: None,
-        basis_padding_enabled: false,
         export_states: false,
     };
     let mut setup =

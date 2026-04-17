@@ -8,7 +8,8 @@
 //!
 //! 1. [`basis_reconstruct_churn`] — cross-churn: all three churn types
 //!    (LML1 deactivation, budget eviction, new cuts) active simultaneously
-//!    on D03 (3 stages) with `basis_padding_enabled = true`.
+//!    on D03 (3 stages). Slot-tracked reconstruction is always active
+//!    post-Epic-01.
 //!
 //! 2. [`test_basis_reconstruct_no_churn_full_preservation`] — happy-path:
 //!    no cut selection, no eviction, cuts only grow.  By the third
@@ -214,9 +215,6 @@ fn basis_reconstruct_churn() {
     // Eviction starts after iteration 2 (2 iters × 3 fwd-passes = 6 cuts/stage).
     config.training.cut_selection.max_active_per_stage = Some(6);
 
-    // Enable basis padding so the reconstruction path executes.
-    config.training.cut_selection.basis_padding = Some(true);
-
     let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
     let prepare_result =
         prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())
@@ -349,9 +347,6 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
     config.training.cut_selection.enabled = Some(false);
     config.training.cut_selection.max_active_per_stage = None;
 
-    // Enable basis padding.
-    config.training.cut_selection.basis_padding = Some(true);
-
     let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
     let prepare_result =
         prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())
@@ -430,9 +425,9 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
 ///
 /// ## Setup
 ///
-/// 1. Train D01 (2 stages, 1 scenario/stage) for 1 iteration with
-///    `basis_padding_enabled = true`.  This generates 2 cuts per stage
-///    (from 2 forward passes).
+/// 1. Train D01 (2 stages, 1 scenario/stage) for 1 iteration.  This generates
+///    2 cuts per stage (from 2 forward passes); slot-tracked reconstruction
+///    is always active post-Epic-01.
 /// 2. Deactivate ALL cuts in every pool via direct pool mutation.
 /// 3. Resume training from iteration 2 using `set_start_iteration`.
 ///    Iteration 2's forward pass now sees an empty FCF.
@@ -473,8 +468,6 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
         StoppingRuleConfig::IterationLimit { limit: 2 }, // FCF capacity sizing
         StoppingRuleConfig::IterationLimit { limit: 1 }, // actual stop point
     ]);
-    config.training.cut_selection.basis_padding = Some(true);
-
     let system = cobre_io::load_case(&case_dir).expect("load_case phase1 must succeed");
     let prepare_result =
         prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())

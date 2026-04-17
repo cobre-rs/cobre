@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
+    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
-    provenance::ComponentProvenance,
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -816,7 +816,6 @@ fn build_study_setup(
         cut_selection,
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
         budget: bcast_config.budget,
-        basis_padding_enabled: bcast_config.basis_padding_enabled,
         export_states: bcast_config.export_states,
     };
     StudySetup::from_broadcast_params(

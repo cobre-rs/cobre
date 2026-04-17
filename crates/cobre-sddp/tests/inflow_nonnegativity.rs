@@ -538,7 +538,6 @@ fn train_fixture(
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
@@ -565,7 +564,6 @@ fn train_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
             stages: &[],
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,
@@ -643,7 +641,6 @@ fn simulate_fixture(
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
             stages: &[],
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,

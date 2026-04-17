@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+- Removed `basis_padding` config field (and the corresponding
+  `basis_padding_enabled` Rust struct fields on `CutManagementConfig`,
+  `TrainingContext`, and `StageKey`). Basis reconstruction is now always
+  active when a stored warm-start basis exists. The ticket-007 A/B benchmark
+  on convertido_budget confirmed the flag was inert post-Epic-01 (verdict
+  (b) partial gain; B vs C bit-identical). Config files that still contain
+  `"basis_padding": true` or `false` deserialize without error and emit a
+  one-line deprecation warning on stderr; the value is ignored.
 - Renamed parquet columns in `training/solver/iterations.parquet`:
   `basis_padding_tight` → `basis_new_tight` and
   `basis_padding_slack` → `basis_new_slack`. Added new column

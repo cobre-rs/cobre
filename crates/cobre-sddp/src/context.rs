@@ -1,6 +1,6 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
+use cobre_core::{scenario::SamplingScheme, temporal::StageLagTransition, Stage};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
@@ -144,8 +144,6 @@ pub struct TrainingContext<'a> {
     ///
     /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
     pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,
-    /// Whether basis-aware warm-start padding is enabled (config-gated).
-    pub basis_padding_enabled: bool,
     /// Per-hydro accumulated `value_m3s * hours` seed values from pre-study
     /// `RecentObservation` data.
     ///

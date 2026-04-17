@@ -4,10 +4,10 @@ use cobre_core::scenario::SamplingScheme;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SimulationConfig,
-    StageContext, StageIndexer, StageTemplates, TrainingContext,
     cut_selection::CutSelectionStrategy, hydro_models::PrepareHydroModelsResult,
-    simulation::EntityCounts, stopping_rule::StoppingRuleSet,
+    simulation::EntityCounts, stopping_rule::StoppingRuleSet, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, RiskMeasure, SimulationConfig, StageContext, StageIndexer,
+    StageTemplates, TrainingContext,
 };
 
 use super::StudySetup;
@@ -333,7 +333,6 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
-            basis_padding_enabled: self.basis_padding_enabled,
             recent_accum_seed: &self.recent_observation_seed.accum_seed,
             recent_weight_seed: self.recent_observation_seed.weight_seed,
         }
@@ -390,7 +389,6 @@ impl StudySetup {
             external_inflow_library,
             external_load_library,
             external_ncs_library,
-            basis_padding_enabled: false,
             recent_accum_seed: &self.recent_observation_seed.accum_seed,
             recent_weight_seed: self.recent_observation_seed.weight_seed,
         }

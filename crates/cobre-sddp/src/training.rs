@@ -407,7 +407,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Pre-size ws.scratch_basis to the largest template the reconstruction
     // path might ever populate. reconstruct_basis runs unconditionally on any
     // forward/backward apply with a stored basis; pre-sizing here is what
-    // keeps the hot path allocation-free regardless of basis_padding_enabled.
+    // keeps the hot path allocation-free.
     let max_cols = stage_ctx
         .templates
         .iter()
@@ -1565,7 +1565,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -1616,7 +1615,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -1662,7 +1660,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -1713,7 +1710,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -1777,7 +1773,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -1828,7 +1823,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -1937,7 +1931,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -1988,7 +1981,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2032,7 +2024,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2083,7 +2074,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2124,7 +2114,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2175,7 +2164,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2224,7 +2212,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2275,7 +2262,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2334,7 +2320,6 @@ mod tests {
                     check_frequency: 3,
                 }),
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2385,7 +2370,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2454,7 +2438,6 @@ mod tests {
                     check_frequency: 2,
                 }),
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2505,7 +2488,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2585,7 +2567,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2636,7 +2617,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2686,7 +2666,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2741,7 +2720,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2804,7 +2782,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2855,7 +2832,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -2899,7 +2875,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -2950,7 +2925,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
@@ -3093,7 +3067,6 @@ mod tests {
             cut_management: CutManagementConfig {
                 cut_selection: None,
                 budget: None,
-                basis_padding_enabled: false,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
@@ -3145,7 +3118,6 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },

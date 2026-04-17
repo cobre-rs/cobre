@@ -1,18 +1,18 @@
 //! Orchestration methods: train, simulate, and workspace pool construction.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::Arc;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
 use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
-    CutManagementConfig, EventConfig, LoopConfig, SddpError, SimulationError, SimulationRunResult,
-    SimulationScenarioResult, SolverWorkspace, StageContext, TrainingConfig, TrainingContext,
-    TrainingOutcome, TrainingResult, WorkspacePool, WorkspaceSizing,
-    simulation::SimulationOutputSpec,
+    simulation::SimulationOutputSpec, CutManagementConfig, EventConfig, LoopConfig, SddpError,
+    SimulationError, SimulationRunResult, SimulationScenarioResult, SolverWorkspace, StageContext,
+    TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
+    WorkspaceSizing,
 };
 
 use super::StudySetup;
@@ -48,7 +48,6 @@ impl StudySetup {
             cut_management: CutManagementConfig {
                 cut_selection: self.cut_selection.clone(),
                 budget: self.budget,
-                basis_padding_enabled: self.basis_padding_enabled,
                 cut_activity_tolerance: self.cut_activity_tolerance,
                 warm_start_cuts: 0,
                 risk_measures: self.risk_measures.clone(),
@@ -92,7 +91,6 @@ impl StudySetup {
             external_inflow_library: self.external_inflow_library.as_ref(),
             external_load_library: self.external_load_library.as_ref(),
             external_ncs_library: self.external_ncs_library.as_ref(),
-            basis_padding_enabled: self.basis_padding_enabled,
             recent_accum_seed: &self.recent_observation_seed.accum_seed,
             recent_weight_seed: self.recent_observation_seed.weight_seed,
         };
@@ -197,23 +195,23 @@ impl StudySetup {
             },
             solver_factory,
         )?;
-        if self.basis_padding_enabled {
-            let max_cols = self
-                .stage_templates
-                .templates
-                .iter()
-                .map(|t| t.num_cols)
-                .max()
-                .unwrap_or(0);
-            let max_rows = self
-                .stage_templates
-                .templates
-                .iter()
-                .map(|t| t.num_rows)
-                .max()
-                .unwrap_or(0);
-            pool.resize_scratch_bases(max_cols, max_rows);
-        }
+        // Always pre-size scratch bases — basis reconstruction runs
+        // unconditionally on every forward/backward apply with a stored basis.
+        let max_cols = self
+            .stage_templates
+            .templates
+            .iter()
+            .map(|t| t.num_cols)
+            .max()
+            .unwrap_or(0);
+        let max_rows = self
+            .stage_templates
+            .templates
+            .iter()
+            .map(|t| t.num_rows)
+            .max()
+            .unwrap_or(0);
+        pool.resize_scratch_bases(max_cols, max_rows);
         Ok(pool)
     }
 }

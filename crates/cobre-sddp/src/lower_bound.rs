@@ -30,14 +30,14 @@ use std::ops::Range;
 
 use cobre_comm::Communicator;
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::{evaluate_par_batch, solve_par_noise_batch, OpeningTree, StochasticContext};
+use cobre_stochastic::{OpeningTree, StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
 use crate::{
+    FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
+    StageIndexer,
     forward::build_cut_row_batch_into,
     lp_builder::COST_SCALE_FACTOR,
     noise::{compute_effective_eta, transform_ncs_noise},
-    FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
-    StageIndexer,
 };
 use cobre_solver::StageTemplate;
 
@@ -363,7 +363,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     clippy::cast_precision_loss
 )]
 mod tests {
-    use super::{evaluate_lower_bound, LbEvalSpec};
+    use super::{LbEvalSpec, evaluate_lower_bound};
     use crate::{
         FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
         StageIndexer,
@@ -423,12 +423,12 @@ mod tests {
     fn simple_opening_tree(n_openings: usize) -> OpeningTree {
         use chrono::NaiveDate;
         use cobre_core::{
+            EntityId,
             scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
             temporal::{
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            EntityId,
         };
         use cobre_stochastic::correlation::resolve::DecomposedCorrelation;
         use std::collections::BTreeMap;

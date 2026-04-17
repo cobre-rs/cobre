@@ -89,7 +89,8 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface, SolverStatistics};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
+    FutureCostFunction, SddpError, TrajectoryRecord,
+    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -99,7 +100,6 @@ use crate::{
     solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
-    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -1095,13 +1095,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
+    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
         context::{BakedTemplates, StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
@@ -1430,6 +1430,7 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1438,10 +1439,9 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::{
-            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
         };
         use std::collections::BTreeMap;
 
@@ -3433,7 +3433,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
         };
 
         let bus0 = Bus {

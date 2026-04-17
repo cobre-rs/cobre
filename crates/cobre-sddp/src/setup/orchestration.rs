@@ -1,18 +1,18 @@
 //! Orchestration methods: train, simulate, and workspace pool construction.
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Sender, SyncSender};
-use std::sync::Arc;
 
 use cobre_comm::Communicator;
 use cobre_core::TrainingEvent;
 use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
-    simulation::SimulationOutputSpec, CapturedBasis, CutManagementConfig, EventConfig, LoopConfig,
-    SddpError, SimulationError, SimulationRunResult, SimulationScenarioResult, SolverWorkspace,
-    StageContext, TrainingConfig, TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool,
-    WorkspaceSizing,
+    CapturedBasis, CutManagementConfig, EventConfig, LoopConfig, SddpError, SimulationError,
+    SimulationRunResult, SimulationScenarioResult, SolverWorkspace, StageContext, TrainingConfig,
+    TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool, WorkspaceSizing,
+    simulation::SimulationOutputSpec,
 };
 
 use super::StudySetup;

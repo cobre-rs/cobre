@@ -3,7 +3,8 @@
 **Date:** 2026-04-18
 **Branch:** `feat/highs-integration` (starting point)
 **Scope:** `cobre-sddp`, `cobre-solver`, `cobre-cli`, `cobre-python`
-**Status:** Proposed — awaiting approval before epic planning
+**Status:** Bucket A decisions confirmed 2026-04-18; ready to promote
+to a plan under `plans/architecture-unification/` for epic breakdown.
 
 ## Executive Summary
 
@@ -108,16 +109,18 @@ simulation). At least one wiring has failed in every such ticket.
 
 ### P1 — One hot path. No combinatorial mesh
 
-The hot LP-solve path supports exactly one shape:
+The hot LP-solve path as seen from the driver supports exactly one shape:
 
 ```
-load_model (per worker, per stage)
-  → set_bounds (per trial point)
-  → solve_with_basis (per trial point)
-      → clear_solver_state (per trial point)
-      → install_basis_non_alien
-      → run()
+load_model       (per worker, per stage; re-called when cuts change)
+  → set_bounds   (per trial point)
+  → solve(basis) (per trial point)
 ```
+
+Inside the HiGHS implementation of `solve`, the sequence is
+`Highs_clearSolver` → basis install → `Highs_run`, but that is an
+implementation detail. The driver does not see it, call it, or branch
+on it.
 
 No `match warm_start_mode`, no `if canonical_state ==`, no `if
 baked.ready`. The hot-path code reads top-to-bottom with no branches on
@@ -142,7 +145,18 @@ consistent. No solver-level workaround is permitted.
   If reconstruction produces an inconsistent basis, we fix the
   reconstruction code; we do not mask it with a flag.
 
-### P3 — Baked templates only
+### P3 — Baked templates only (no incremental row mutation)
+
+The trait has **one** method for topology: `load_model(&StageTemplate)`.
+There is no `add_rows`, no `update_appended_rows`, no row-delete surface.
+Cut-set changes are handled driver-side: SDDP tracks active cuts, assembles
+the current `RowBatch` (CSR), calls `bake_rows_into_template(&base, &rows,
+&mut baked_scratch)`, then `solver.load_model(&baked_scratch)`.
+
+Rationale: HiGHS always receives a single homogeneous `Highs_passLp(COLWISE)`
+per cut-set change. Under dual simplex the internal representation stays
+aligned; no COLWISE+ROWWISE merge, no forced transpose, no factorization
+invalidation beyond what a fresh model naturally requires.
 
 - `baked.ready: bool` goes away. Templates are always baked.
 - `stored_cut_row_offset` parameter in `reconstruct_basis` becomes
@@ -151,17 +165,39 @@ consistent. No solver-level workaround is permitted.
   every solve uses baked templates.
 - `basis_row_capacity` simplifies to `baked_templates[t].num_rows`
   everywhere.
+- The `SolverInterface::add_rows` method is deleted outright. Its removal
+  is the forcing function: with no `add_rows` on the trait, the non-baked
+  path is not representable.
 
-### P4 — `ClearSolver` only (determinism by default)
+### P4 — Solve-to-solve independence contract
+
+The trait expresses what SDDP needs in behavioral terms, not in the shape
+of any one backend's API:
+
+> **Each `solve` call is self-contained.** The result depends only on
+> (a) the loaded model, (b) the current column/row bounds, (c) the
+> `basis: Option<&Basis>` argument. It does NOT depend on state left
+> over from prior `solve` calls — not on the previous trial point's
+> optimum, not on the order trial points were submitted, not on any
+> hidden cached data the solver accumulated.
+
+Implementations achieve this however they like: clearing internal state
+before each solve, relying on the underlying solver's natural
+independence, or re-loading the model per solve. What matters to SDDP
+is the guarantee.
 
 - `CanonicalStateStrategy` enum goes away.
-- `SolverInterface::clear_solver_state` is promoted from "optional with
-  `Err(Unsupported)` default" to **required**. Backends that can't
-  implement it can't be Cobre backends.
-- The per-stage worker loop always calls `clear_solver_state()` between
-  trial points.
-- Work-distribution-invariant output is guaranteed by construction, not
+- `SolverInterface::clear_solver_state` is **not on the trait**. The
+  contract is on `solve()`; how the implementation fulfills it is an
+  implementation detail. For HiGHS that means calling `Highs_clearSolver`
+  inside `solve()` before basis install and `Highs_run`. For other
+  backends, whatever delivers the same guarantee.
+- Work-distribution-invariant output is guaranteed by the contract, not
   by configuration.
+- `basis: None` means "warm-start from whatever basis this solver
+  instance currently holds." This does not violate independence — the
+  current basis is itself a deterministic function of the prior
+  (model, bounds, basis-in) tuple on this instance.
 
 ### P5 — Unified run path
 
@@ -297,22 +333,61 @@ remains.
 
 ```rust
 pub trait SolverInterface {
+    // Model topology (cold, called on initial setup and whenever the
+    // driver re-bakes a new template — e.g., after a cut-set change).
     fn load_model(&mut self, template: &StageTemplate);
+
+    // Per-trial-point setup (hot, frequent).
     fn set_col_bounds(&mut self, cols: &[usize], lower: &[f64], upper: &[f64]);
     fn set_row_bounds(&mut self, rows: &[usize], lower: &[f64], upper: &[f64]);
-    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError>;
-    fn solve_with_basis(&mut self, basis: &Basis) -> Result<SolutionView<'_>, SolverError>;
-    fn clear_solver_state(&mut self) -> Result<(), SolverError>;  // required
-    fn get_basis(&self, out: &mut Basis);
+
+    /// Solve the LP.
+    ///
+    /// # Contract — solve-to-solve independence
+    ///
+    /// The result depends only on the currently-loaded model, the current
+    /// column/row bounds, and the `basis` argument. It does NOT depend on
+    /// state left over from prior `solve` calls.
+    ///
+    /// `basis = Some(&b)` installs `b` before running the simplex.
+    /// `basis = None` warm-starts from whatever basis this instance holds
+    /// (itself a deterministic function of the prior inputs on this
+    /// instance).
+    ///
+    /// Implementations fulfill the contract however they like — internal
+    /// state clearing, natural solver independence, per-solve reload.
+    fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError>;
+
+    // Extraction — driver-owned buffers, zero allocation.
+    fn copy_primal_into(&self, out: &mut [f64]);
+    fn copy_duals_into(&self, out: &mut [f64]);
+    fn copy_basis_into(&self, out: &mut Basis);
+    fn objective(&self) -> f64;
+
+    // Observability — borrowed refs / static strings, zero allocation.
     fn statistics(&self) -> &SolverStatistics;
     fn name(&self) -> &'static str;
-    fn solver_name_version(&self) -> String;
+    fn solver_name_version(&self) -> &str;  // cached at construction
 }
 ```
 
-Removed methods: `reset` (replaced by `clear_solver_state` + explicit
-`load_model`), `record_reconstruction_stats` (rolled into `get_basis`
-telemetry or emitted by the driver).
+Removed methods relative to today's trait:
+
+- `add_rows` — cut-set changes are driver-side re-bakes + `load_model`.
+  Eliminating this method is what makes "baked only" unfalsifiable.
+- `clear_solver_state` — contract lives on `solve`; implementation detail.
+- `solve_with_basis` — folded into `solve(Option<&Basis>)`.
+- `reset` — replaced by `load_model` for topology resets; the
+  solve-independence contract handles per-solve state.
+- `record_reconstruction_stats` — rolled into driver-side telemetry.
+
+**Crate-independence follow-up (not blocking this trait work):** the
+current `StageTemplate` carries SDDP-specific semantic fields
+(`n_state`, `n_transfer`, `n_dual_relevant`, `n_hydro`, `max_par_order`)
+in `cobre-solver`. These are pre-existing leaks of algorithm semantics
+into the solver crate. Worth a dedicated cleanup ticket to move them to
+an SDDP-side side-car type keyed by the stage template, but out of scope
+for the unification refactor.
 
 ### LP-solve entry point
 
@@ -334,9 +409,9 @@ Single entry point. The `Phase` enum is used only inside to gate:
 - **Backward**: compute dual values, enqueue cut generation.
 - **Simulation**: serialize outcome for parquet.
 
-No other branching. The `load_model`, `clear_solver_state`, basis
-reconstruction, invariant enforcement, and solve are identical across
-phases.
+No other branching. The bound updates, basis reconstruction, invariant
+enforcement, and solve call are identical across phases — only the
+post-solve extraction differs.
 
 ### Counters
 
@@ -347,11 +422,12 @@ pub struct SolverStatistics {
     pub lp_failures: u64,
     pub simplex_iterations: u64,
     pub solve_time_ns: u64,
-    pub clear_solver_count: u64,
+    pub load_model_count: u64,     // how often the template was re-baked
+    pub load_model_time_ns: u64,
 
     // warm-start observability — one rule, no mode dependency
     pub basis_offered: u64,
-    pub basis_consistency_failures: u64,  // isBasisConsistent failed
+    pub basis_consistency_failures: u64,  // basis-in rejected
     pub basis_solves_successful: u64,     // accepted + solved
 }
 ```
@@ -359,14 +435,15 @@ pub struct SolverStatistics {
 Deleted: `basis_rejections` (misleading under alien), `basis_non_alien_rejections`
 (no longer a separate path), the `basis_preserved` / `basis_new_tight` /
 `basis_new_slack` / `basis_demotions` reconstruction breakdown (rolled into a
-single `basis_reconstructions` + optional detail via a debug build).
+single `basis_reconstructions` + optional detail via a debug build),
+`clear_solver_count` and `add_rows_count` (no longer trait-level operations).
 
 ### Config schema
 
 Removed keys:
 
 - `training.solver.warm_start_basis_mode` (gone — no mode to select)
-- `training.solver.canonical_state` (gone — always enabled)
+- `training.solver.canonical_state` (gone — solve-independence is always on)
 - `training.cut_selection.basis_padding` (seen in `convertido_before`;
   appears to be legacy — audit and remove if unused)
 
@@ -387,6 +464,20 @@ keys emit a clear migration error.
 - `reconstruct_basis`'s `stored_cut_row_offset` parameter (always 0)
 - The fallback (non-baked) arm in `simulation/pipeline.rs:446-467`
 - The "legacy path" comments scattered across forward.rs/backward.rs
+- `SolverInterface::add_rows` method (trait-level) and all call sites.
+  Driver-side cut baking + `load_model` replaces it.
+- `SolverInterface::clear_solver_state` method (trait-level). The
+  solve-independence contract subsumes it; implementations handle state
+  clearing internally.
+- `SolverInterface::solve_with_basis` method (folded into
+  `solve(Option<&Basis>)`).
+- `SolverInterface::reset` method (no caller after `load_model` covers
+  topology reset).
+- `cobre_highs_add_rows` C FFI wrapper and the underlying `Highs_addRows`
+  call site (unused after trait deletion).
+- `add_rows_count` / `total_add_rows_time_seconds` / `load_model_count`
+  bookkeeping specific to the dual-path are consolidated into the new
+  `SolverStatistics` shape.
 
 ### Wire / broadcast fields
 
@@ -458,21 +549,21 @@ illusion of flexibility.
 
 ### R3 — Backend plurality
 
-Requiring `clear_solver_state` as a mandatory trait method precludes
-drop-in backends that don't expose a cheap state-clear (e.g., COIN-OR
-CLP via the C API). Today HiGHS is the only backend.
+The trait's only behavioral requirement is **solve-to-solve
+independence**: `solve(basis)` results depend only on (loaded model,
+bounds, basis-in) and never on prior solves. How a backend delivers this
+is its business — clearing internal state, relying on natural
+independence, re-loading the model per solve, or any combination.
 
-**Mitigation**: Document the requirement. If/when a new backend is
-added, either (a) it implements the semantics via `reset + load_model`
-internally, or (b) we accept that not all backends support Cobre's
-warm-start workflow.
+**Mitigation**: Document the contract. Any LP solver — HiGHS, Gurobi,
+CPLEX, COIN-OR CLP, a future open-source backend — can back Cobre as
+long as it can provide independent solves. This is a far weaker
+restriction than "must expose a cheap explicit state-clear call."
 
-**Open question**: Do we want to keep the door open for Gurobi /
-CPLEX / COIN-OR? If yes, the contract needs to tolerate a `reset +
-load_model` implementation internally but still expose a single
-`clear_solver_state` API. Recommendation: document the behavior, allow
-backends to implement it via whatever means, but fail fast (no
-`Err(Unsupported)`) if not implemented at all.
+**Decision**: No `Err(Unsupported)` escape. A backend either provides
+the independence guarantee or it is not a Cobre backend. For HiGHS the
+implementation is `Highs_clearSolver + Highs_run` inside `solve`; other
+backends pick their own equivalent.
 
 ### R4 — Breaking change for existing users
 
@@ -514,16 +605,14 @@ builder-based API in the migration guide.
 
 ## Proposed Sequencing
 
-**Phase 0a — Finish in-flight work (already planned)**
+**Phase 0a — Finish in-flight work** ✅ complete (2026-04-18)
 
-- Close the two simulation bugs identified in
-  `warm-start-observability-findings.md` (simulation warm-start mode +
-  `enforce_basic_count_invariant`). Ship as part of the current
-  `feat/highs-integration` branch before v0.5.0 planning.
-- Finish the remaining epic-02 tickets (006-010) as originally scoped.
-
-This keeps the rollback levers live for one more release. v0.4.5 ships
-with everything dual-pathed and observable.
+- Simulation bugs closed (simulation warm-start mode +
+  `enforce_basic_count_invariant`).
+- Epic-02 tickets 006-010 landed.
+- `feat/highs-integration` branch merged to `develop`.
+- v0.4.5 remains available to cut when needed; ships with the rollback
+  levers still live and observable.
 
 **Phase 0b — Test inventory and categorization**
 
@@ -549,7 +638,8 @@ six months later.
 - Introduce `run_stage_solve` that calls the current multi-path code.
   No behavior change, but now every site goes through one function.
 - Remove duplicate LP-solve orchestration in forward/backward/simulation.
-- Deliverable: same behavior, ~2,000 lines deleted.
+- Deliverable: same behavior; sum of production LoC across the three
+  drivers strictly decreases.
 
 **Phase 2 — Drop `WarmStartBasisMode::AlienOnly` (P2)**
 
@@ -560,19 +650,28 @@ six months later.
 - Hard-error on `isBasisConsistent` failure.
 - Deliverable: `cobre_highs_set_basis` disappears from the hot path.
 
-**Phase 3 — Drop `CanonicalStateStrategy::Disabled` (P4)**
+**Phase 3 — Collapse to the solve-to-solve independence contract (P4)**
 
 - Flip all call sites to `ClearSolver`.
 - Re-run determinism and convertido.
-- Delete `Disabled` variant; `SolverInterface::clear_solver_state`
-  becomes required.
-- Deliverable: no per-trial-point `load_model` path.
+- Delete `CanonicalStateStrategy::Disabled` variant; delete
+  `SolverInterface::clear_solver_state` from the trait; move the
+  equivalent work (currently `Highs_clearSolver` + basis install +
+  `Highs_run`) inside the HiGHS implementation of `solve`.
+- Fold `solve_with_basis` into `solve(Option<&Basis>)`.
+- Deliverable: trait exposes one solve method; hot path has no
+  configuration branches; the independence contract is enforced by the
+  API surface, not by driver orchestration.
 
 **Phase 4 — Drop the legacy (non-baked) template path (P3)**
 
-- Make baked-template construction unconditional.
+- Delete `SolverInterface::add_rows` from the trait. This is the forcing
+  function — without the method, the non-baked path cannot compile.
+- Make baked-template construction unconditional in the driver.
 - Delete `baked.ready` checks and the legacy `cut_batches` rebuild.
-- Deliverable: `basis_row_capacity = baked[t].num_rows` everywhere.
+- Delete the `cobre_highs_add_rows` FFI wrapper and its call sites.
+- Deliverable: `basis_row_capacity = baked[t].num_rows` everywhere;
+  HiGHS only ever sees `Highs_passLp(COLWISE)`, never `Highs_addRows`.
 
 **Phase 5 — Type-level invariant enforcement (P6)**
 
@@ -742,14 +841,17 @@ assumes them. Irreversible without a second v0.5-class refactor.
 1. **Hard-error on `BasisInconsistent`?** — **YES** (confirmed
    2026-04-18). No escape hatch in any build. Cobre owns basis
    correctness.
-2. **`clear_solver_state` mandatory in `SolverInterface`?** — confirms
-   the backend-plurality restriction. Backends must implement the
-   semantics (via whatever internal means, including `reset +
-load_model`) rather than falling back on `Err(Unsupported)`.
-3. **Baked templates only, no legacy path?** — confirms that mid-run
-   structural changes are permanently unsupported. Not a regression
-   (today's legacy path doesn't support them either) but it codifies
-   the assumption.
+2. **Solve-to-solve independence as the trait contract?** — **YES**
+   (confirmed 2026-04-18). The trait has no `clear_solver_state`
+   method; instead, `solve(basis)` is contractually self-contained and
+   implementations deliver the guarantee however they like. Any solver
+   that can provide independent solves can back Cobre.
+3. **Baked templates only, no `add_rows` on the trait?** — **YES**
+   (confirmed 2026-04-18). Cut-set changes are driver-side re-bakes +
+   `load_model`. Deleting `add_rows` from the trait is the forcing
+   function that makes the non-baked path unrepresentable. Mid-run
+   structural changes remain unsupported (no regression — today's
+   legacy path doesn't support them either).
 
 ### Bucket B — Phase-boundary calibration
 

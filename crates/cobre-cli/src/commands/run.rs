@@ -294,13 +294,27 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
         }
 
         if setup.n_scenarios() > 0 {
-            run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
+            run_simulation_phase(
+                ctx,
+                &system,
+                &mut setup,
+                &training.result,
+                &hostname,
+                warm_start_basis_mode,
+            )?;
         }
     } else if setup.n_scenarios() > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(ctx, &system, &mut setup, root_config.as_ref())?;
-        run_simulation_phase(ctx, &system, &mut setup, &training_result, &hostname)?;
+        run_simulation_phase(
+            ctx,
+            &system,
+            &mut setup,
+            &training_result,
+            &hostname,
+            warm_start_basis_mode,
+        )?;
     } else {
         // Both training and simulation disabled — nothing to do.
         if ctx.is_root && !ctx.quiet {
@@ -1119,8 +1133,10 @@ fn run_simulation_phase(
     setup: &mut StudySetup,
     training_result: &cobre_sddp::TrainingResult,
     hostname: &str,
+    warm_start_basis_mode: cobre_solver::highs::WarmStartBasisMode,
 ) -> Result<(), CliError> {
-    let solver_factory = HighsSolver::new;
+    let solver_factory =
+        move || HighsSolver::new().map(|s| s.with_warm_start_mode(warm_start_basis_mode));
     let n_scenarios = setup.n_scenarios();
     let sim_config = setup.simulation_config();
 

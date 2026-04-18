@@ -60,9 +60,9 @@ use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::config::StoppingRuleConfig;
 use cobre_sddp::{
-    SolverStatsDelta, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    hydro_models::prepare_hydro_models, setup::prepare_stochastic, SolverStatsDelta, StudySetup,
 };
-use cobre_solver::highs::HighsSolver;
+use cobre_solver::highs::{HighsSolver, WarmStartBasisMode};
 
 // ---------------------------------------------------------------------------
 // StubComm — single-rank communicator for testing
@@ -809,4 +809,146 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
         "simulate_warm_start: expected 0 basis_rejections in simulation, got {total_rejections} \
          (reconstructed bases must always be accepted by HiGHS)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Simulation invariant fix — cut-set churn + enforce_basic_count_invariant
+// ---------------------------------------------------------------------------
+
+/// Runs a training + simulation cycle with cut-selection churn enabled under
+/// both `WarmStartBasisMode` variants and asserts that the simulation pipeline
+/// produces zero `basis_non_alien_rejections`.
+///
+/// ## What this guards
+///
+/// Two bugs from `docs/assessments/warm-start-observability-findings.md`:
+///
+/// 1. **Simulation warm-start wiring**: under `AlienOnly` the simulation must
+///    never call the non-alien setter, so `basis_non_alien_rejections == 0`
+///    is structural.  A regression that drops the `with_warm_start_mode`
+///    threading from a workspace-pool factory will reach the non-alien path
+///    and, on a large enough workload, record non-zero rejections.
+///
+/// 2. **`enforce_basic_count_invariant` in simulation**: under
+///    `NonAlienFirst`, dropped non-BASIC cuts inflate `total_basic` beyond
+///    `num_row` and trip `HiGHS`'s `isBasisConsistent` check.  The simulation
+///    pipeline must mirror the forward-path demotion pass.
+///
+/// Sensitivity to a missing invariant pass is covered by the unit tests in
+/// `basis_reconstruct.rs::tests::reconstructed_basis_preserves_basic_count_invariant_*`.
+/// This integration test is the smoke-level guard that the simulation
+/// pipeline actually reaches `enforce_basic_count_invariant` on both arms.
+///
+/// ## Setup
+///
+/// D03 with LML1 cut selection (`memory_window=2`, `check_frequency=1`) and a
+/// `max_active_per_stage` budget of 6.  4 training iterations give three
+/// rounds of cut-selection churn before simulation.
+#[test]
+fn simulate_invariant_zero_non_alien_rejections_under_churn() {
+    for mode in [
+        WarmStartBasisMode::NonAlienFirst,
+        WarmStartBasisMode::AlienOnly,
+    ] {
+        let case_dir = d03_case_dir();
+        let config_path = case_dir.join("config.json");
+        let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
+
+        // Cut-set churn: LML1 + budget eviction.  4 iterations × 3 forward
+        // passes produces enough churn to expose stale-basis behaviour in
+        // simulation.
+        config.training.forward_passes = Some(3);
+        config.training.stopping_rules =
+            Some(vec![StoppingRuleConfig::IterationLimit { limit: 4 }]);
+        config.training.cut_selection.enabled = Some(true);
+        config.training.cut_selection.method = Some("lml1".to_string());
+        config.training.cut_selection.memory_window = Some(2);
+        config.training.cut_selection.check_frequency = Some(1);
+        config.training.cut_selection.max_active_per_stage = Some(6);
+
+        // 2 simulation scenarios is enough to exercise the warm-start path.
+        config.simulation.enabled = true;
+        config.simulation.num_scenarios = 2;
+
+        let system = cobre_io::load_case(&case_dir).expect("load_case must succeed");
+        let prepare_result =
+            prepare_stochastic(system, &case_dir, &config, 42, &ScenarioSource::default())
+                .expect("prepare_stochastic must succeed");
+        let system = prepare_result.system;
+        let stochastic = prepare_result.stochastic;
+
+        let hydro_models =
+            prepare_hydro_models(&system, &case_dir).expect("prepare_hydro_models must succeed");
+
+        let mut setup = StudySetup::new(&system, &config, stochastic, hydro_models)
+            .expect("StudySetup must build");
+
+        let comm = StubComm;
+        let mut train_solver = HighsSolver::new()
+            .expect("HighsSolver for training must succeed")
+            .with_warm_start_mode(mode);
+
+        let outcome = setup
+            .train(
+                &mut train_solver,
+                &comm,
+                1,
+                move || HighsSolver::new().map(|s| s.with_warm_start_mode(mode)),
+                None,
+                None,
+            )
+            .expect("train must return Ok");
+        assert!(
+            outcome.error.is_none(),
+            "simulate_invariant[{mode:?}]: unexpected training error: {:?}",
+            outcome.error
+        );
+
+        let mut pool = setup
+            .create_workspace_pool(1, move || {
+                HighsSolver::new().map(|s| s.with_warm_start_mode(mode))
+            })
+            .expect("simulation workspace pool must build");
+
+        let io_capacity = setup.io_channel_capacity().max(1);
+        let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
+        let drain_handle = std::thread::spawn(move || result_rx.into_iter().count());
+
+        let sim_result = setup
+            .simulate(
+                &mut pool.workspaces,
+                &comm,
+                &result_tx,
+                None,
+                // Fallback (non-baked) path: exercises the delta-cut-row arm
+                // where stale-basis inflation can occur.
+                None,
+                &outcome.result.basis_cache,
+            )
+            .expect("simulate must return Ok");
+
+        drop(result_tx);
+        drain_handle.join().expect("drain thread must not panic");
+
+        let total_non_alien: u64 = sim_result
+            .solver_stats
+            .iter()
+            .map(|(_, delta)| delta.basis_non_alien_rejections)
+            .sum();
+        let total_rejections: u64 = sim_result
+            .solver_stats
+            .iter()
+            .map(|(_, delta)| delta.basis_rejections)
+            .sum();
+
+        assert_eq!(
+            total_non_alien, 0,
+            "simulate_invariant[{mode:?}]: expected 0 non-alien rejections, got \
+             {total_non_alien} (invariant fix or warm-start-mode wiring regressed)"
+        );
+        assert_eq!(
+            total_rejections, 0,
+            "simulate_invariant[{mode:?}]: expected 0 basis rejections, got {total_rejections}"
+        );
+    }
 }

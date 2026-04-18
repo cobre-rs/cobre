@@ -155,7 +155,24 @@ pub struct SolverStatistics {
     /// Cumulative wall-clock time spent in solver calls, in seconds.
     pub total_solve_time_seconds: f64,
 
-    /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
+    /// Number of times `solve_with_basis` fell back to cold-start because the
+    /// chosen `HiGHS` setter returned `HIGHS_STATUS_ERROR`.
+    ///
+    /// This counter measures whichever setter was actually invoked, which
+    /// depends on the warm-start mode:
+    ///
+    /// - **`WarmStartBasisMode::AlienOnly`**: fires only on dimension
+    ///   mismatch (`isBasisRightSize` failure). `HiGHS` silently repairs any
+    ///   dimensionally-correct but structurally-inconsistent basis via
+    ///   `accommodateAlienBasis` and returns `kOk`, so this counter is
+    ///   **structurally zero in production**. `basis_rejections == 0` under
+    ///   `AlienOnly` does *not* imply good warm-start quality — `HiGHS` may
+    ///   have rewritten many bases via LU refactorisation.
+    /// - **`WarmStartBasisMode::NonAlienFirst`**: fires only after both the
+    ///   non-alien and alien setters reject. The non-alien path enforces
+    ///   `isBasisConsistent` (a real structural check), and its rejections
+    ///   are counted separately in
+    ///   [`basis_non_alien_rejections`](Self::basis_non_alien_rejections).
     pub basis_rejections: u64,
 
     /// Number of times `solve_with_basis` fell back from the non-alien path

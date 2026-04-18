@@ -56,7 +56,9 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelI
 
 use crate::{
     FutureCostFunction,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
+    basis_reconstruct::{
+        PaddingContext, ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
+    },
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -436,11 +438,23 @@ fn solve_simulation_stage<S: SolverInterface>(
                 &mut ws.scratch_basis,
                 &mut ws.scratch.recon_slot_lookup,
             );
+            // Mirrors the forward-path fix (ticket-009): stored bases capture
+            // the iteration-K forward LP, but the simulation cut set reflects
+            // post-backward / post-selection churn.  Dropped non-BASIC cuts
+            // inflate total_basic beyond num_row and trip HiGHS's
+            // isBasisConsistent check, producing non-alien rejections.  In the
+            // baked path the cut rows are structural, so num_row == base row
+            // count and eligible demotion indices would be empty; pass the
+            // structural row count in both slots so the helper is a no-op
+            // when the basis already balances.
+            let num_row = baked.num_rows;
+            let demotions =
+                enforce_basic_count_invariant(&mut ws.scratch_basis, num_row, baked.num_rows);
             ws.solver.record_reconstruction_stats(
                 recon_stats.preserved,
                 recon_stats.new_tight,
                 recon_stats.new_slack,
-                0, // simulation baked path: no demotion pass
+                demotions,
             );
             ws.solver.solve_with_basis(&ws.scratch_basis)
         } else {
@@ -457,11 +471,21 @@ fn solve_simulation_stage<S: SolverInterface>(
                 &mut ws.scratch_basis,
                 &mut ws.scratch.recon_slot_lookup,
             );
+            // Mirrors the forward-path fix (ticket-009): see note in the baked
+            // arm above.  Here the cut rows are appended after the template,
+            // so demotions may be non-zero when the stored basis is stale
+            // relative to the current cut pool.
+            let num_row = ctx.templates[t].num_rows + pool.active_cuts().count();
+            let demotions = enforce_basic_count_invariant(
+                &mut ws.scratch_basis,
+                num_row,
+                ctx.templates[t].num_rows,
+            );
             ws.solver.record_reconstruction_stats(
                 recon_stats.preserved,
                 recon_stats.new_tight,
                 recon_stats.new_slack,
-                0, // simulation fallback path: no demotion pass
+                demotions,
             );
             ws.solver.solve_with_basis(&ws.scratch_basis)
         }

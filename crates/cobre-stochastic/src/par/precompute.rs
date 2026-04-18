@@ -32,7 +32,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
+use cobre_core::{scenario::InflowModel, temporal::Stage, EntityId};
 
 use crate::StochasticError;
 
@@ -580,15 +580,15 @@ fn fill_stage_arrays(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
-    use super::{PrecomputedPar, resolve_season_id};
+    use super::{resolve_season_id, PrecomputedPar};
 
     fn dummy_date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -857,6 +857,7 @@ mod tests {
         assert!((lp.sigma(0, 1)).abs() < f64::EPSILON);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stage index 1 is out of bounds")]
     fn deterministic_base_out_of_bounds_panics() {
@@ -866,6 +867,7 @@ mod tests {
         let _ = lp.deterministic_base(1, 0);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stage index 1 is out of bounds")]
     fn sigma_out_of_bounds_panics() {

@@ -395,9 +395,8 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
-        ReconstructionStats, ReconstructionTarget, enforce_basic_count_invariant,
-        reconstruct_basis,
+        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, ReconstructionStats,
+        ReconstructionTarget, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
     };
     use crate::cut::pool::CutPool;
     use crate::workspace::CapturedBasis;
@@ -771,18 +770,23 @@ mod tests {
         assert_eq!(out.row_status.len(), 3, "only template rows");
     }
 
-    /// AC8: slot 999 with undersized lookup — grown in place, treated as new (slack).
+    /// AC8: stored basis with a high-numbered slot + undersized lookup —
+    /// release-mode defensive growth kicks in.
     ///
     /// Only meaningful in release mode: in debug mode the `debug_assert!(false)`
-    /// inside `reconstruct_basis` would panic, which is the intended signal that
-    /// the caller under-sized the scratch buffer.
+    /// inside `reconstruct_basis` panics, which is the intended signal that the
+    /// caller under-sized the scratch buffer. Growth is triggered by the
+    /// `reconcilable_slots.max()` branch — i.e. stored-slot max, not target
+    /// slot — which is why the stored basis carries slot 999 here.
     #[cfg(not(debug_assertions))]
     #[test]
     fn test_slot_lookup_growth_safe_in_release() {
-        // Stored has no cut rows (shim). Undersized lookup triggers growth.
-        let stored = CapturedBasis::new(3, 3, 3, 0, 0);
-        // slot 999 is a new cut evaluated as slack (theta=100, value=0).
-        let cuts: Vec<(usize, f64, Vec<f64>)> = vec![(999, 0.0, vec![])];
+        // Stored basis has one cut row at slot 999 (LOWER). Undersized lookup
+        // (len=5) triggers release-mode growth when reconcilable max = 999.
+        let stored = make_stored_basis(3, 3, &[999], &[L], &[]);
+        // Current target has a different, fresh slot (500) — classified new slack
+        // via the empty-coefficients slack path (theta=100, value=0).
+        let cuts: Vec<(usize, f64, Vec<f64>)> = vec![(500, 0.0, vec![])];
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 5]; // too small for slot 999
 
@@ -800,7 +804,7 @@ mod tests {
             &mut lookup,
         );
 
-        // Growth path: lookup must have grown to >= 1000 entries.
+        // Growth path: lookup must have grown to >= max_stored_slot + 1 = 1000.
         assert!(lookup.len() >= 1000, "lookup must have grown");
         assert_eq!(
             stats,

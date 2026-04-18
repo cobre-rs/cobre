@@ -395,8 +395,9 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, ReconstructionStats,
-        ReconstructionTarget, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
+        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
+        ReconstructionStats, ReconstructionTarget, enforce_basic_count_invariant,
+        reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::workspace::CapturedBasis;

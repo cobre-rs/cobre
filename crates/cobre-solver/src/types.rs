@@ -173,6 +173,19 @@ pub struct SolverStatistics {
     /// rejections (pathological misconfigurations).
     pub basis_non_alien_rejections: u64,
 
+    /// Total number of `clear_solver_state` calls on this solver instance.
+    ///
+    /// Non-zero under `CanonicalStateStrategy::ClearSolver`; exactly zero
+    /// under `Disabled`. Used as a runtime confirmation that the
+    /// `ClearSolver` path is active.
+    pub clear_solver_count: u64,
+
+    /// Number of `clear_solver_state` calls that returned an FFI error.
+    ///
+    /// Should be zero in a healthy `HiGHS` build. Non-zero values indicate
+    /// an FFI regression or a HiGHS-internal inconsistency.
+    pub clear_solver_failures: u64,
+
     /// Number of solves that returned optimal on the first attempt (before any retry).
     ///
     /// Enables first-try rate computation: `first_try_rate = first_try_successes / solve_count`.
@@ -502,6 +515,12 @@ pub enum SolverError {
         /// Solver-specific error code, if available.
         error_code: Option<i32>,
     },
+
+    /// The backend does not implement the requested operation.
+    ///
+    /// The caller should fall back to an alternate code path (e.g.,
+    /// `reset` + `load_model`).
+    Unsupported(&'static str),
 }
 
 impl fmt::Display for SolverError {
@@ -525,6 +544,7 @@ impl fmt::Display for SolverError {
                 Some(code) => write!(f, "internal solver error (code {code}): {message}"),
                 None => write!(f, "internal solver error: {message}"),
             },
+            Self::Unsupported(msg) => write!(f, "unsupported operation: {msg}"),
         }
     }
 }
@@ -629,6 +649,13 @@ mod tests {
     fn default_stats_has_zero_non_alien_rejections() {
         let s = SolverStatistics::default();
         assert_eq!(s.basis_non_alien_rejections, 0);
+    }
+
+    #[test]
+    fn default_stats_has_zero_clear_solver_counters() {
+        let s = SolverStatistics::default();
+        assert_eq!(s.clear_solver_count, 0);
+        assert_eq!(s.clear_solver_failures, 0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

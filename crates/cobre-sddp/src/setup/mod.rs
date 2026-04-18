@@ -53,8 +53,8 @@ use cobre_core::{
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
-    StageIndexer, StageTemplates, build_stage_templates,
+    CanonicalStateStrategy, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
+    RiskMeasure, SddpError, StageIndexer, StageTemplates, build_stage_templates,
     cut_selection::CutSelectionStrategy,
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     simulation::EntityCounts,
@@ -170,6 +170,12 @@ pub struct StudySetup {
     /// `None` means no cap is enforced. Set from
     /// `config.training.cut_selection.max_active_per_stage` via `StudyParams`.
     pub(crate) budget: Option<u32>,
+
+    /// Canonical-state strategy for the backward pass.
+    ///
+    /// Propagated from [`ConstructionConfig::canonical_state_strategy`].
+    /// Defaults to `Disabled` (legacy per-trial-point `load_model`).
+    pub(crate) canonical_state_strategy: CanonicalStateStrategy,
 
     /// Whether the caller wants the visited-states archive for export.
     ///
@@ -302,6 +308,7 @@ impl StudySetup {
             cut_selection,
             cut_activity_tolerance,
             budget,
+            canonical_state_strategy,
             export_states,
         } = config;
 
@@ -691,6 +698,7 @@ impl StudySetup {
             cut_activity_tolerance,
             stopping_rule_set,
             budget,
+            canonical_state_strategy,
             export_states,
             stage_lag_transitions,
             noise_group_ids,

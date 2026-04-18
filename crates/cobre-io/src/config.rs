@@ -276,6 +276,14 @@ pub struct TrainingSolverConfig {
     /// `"alien_only"` skips the consistency check (pre-ticket-010 behaviour).
     #[serde(default)]
     pub warm_start_basis_mode: WarmStartBasisMode,
+
+    /// Canonical-state strategy: `"disabled"` (default) or `"clear_solver"`.
+    ///
+    /// Controls whether the backward pass uses the legacy per-trial-point
+    /// `load_model` (`"disabled"`) or the per-(worker, stage) `load_model`
+    /// with per-trial-point `clear_solver_state` (`"clear_solver"`).
+    #[serde(default = "TrainingSolverConfig::default_canonical_state")]
+    pub canonical_state: String,
 }
 
 impl Default for TrainingSolverConfig {
@@ -284,7 +292,14 @@ impl Default for TrainingSolverConfig {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
             warm_start_basis_mode: WarmStartBasisMode::default(),
+            canonical_state: Self::default_canonical_state(),
         }
+    }
+}
+
+impl TrainingSolverConfig {
+    fn default_canonical_state() -> String {
+        "disabled".to_string()
     }
 }
 

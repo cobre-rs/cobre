@@ -601,6 +601,7 @@ fn run_one_deterministic_pass(
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -659,6 +660,7 @@ fn train_converges_with_mock_solver() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,
@@ -767,6 +769,7 @@ fn train_lb_monotonically_nondecreasing() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -866,6 +869,7 @@ fn train_emits_correct_event_sequence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -984,6 +988,7 @@ fn train_stops_at_iteration_limit() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1072,6 +1077,7 @@ fn train_stops_on_graceful_shutdown() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1150,6 +1156,7 @@ fn train_propagates_infeasible_error() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1235,6 +1242,7 @@ fn d17_level1_cut_selection_convergence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -1411,6 +1419,7 @@ fn d17_level1_cut_selection_reconstruction() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1500,6 +1509,7 @@ fn d18_lml1_cut_selection_convergence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -2070,9 +2080,9 @@ fn forward_pass_uses_baked_template_on_iter_2() {
 #[allow(clippy::too_many_lines)]
 fn backward_pass_uses_delta_batch_on_iter_2() {
     use cobre_sddp::{
-        BackwardPassSpec, BakedTemplates, BasisStore, CutSyncBuffers, ExchangeBuffers,
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure,
-        SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
+        BackwardPassSpec, BakedTemplates, BasisStore, CanonicalStateStrategy, CutSyncBuffers,
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
+        RiskMeasure, SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
         build_cut_row_batch_into, run_backward_pass,
     };
     use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
@@ -2288,6 +2298,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
+            canonical_state_strategy: CanonicalStateStrategy::default(),
         },
         &StubComm,
     )
@@ -2347,6 +2358,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
+            canonical_state_strategy: CanonicalStateStrategy::default(),
         },
         &StubComm,
     )
@@ -2425,6 +2437,7 @@ fn baked_backward_pass_smoke_test() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,

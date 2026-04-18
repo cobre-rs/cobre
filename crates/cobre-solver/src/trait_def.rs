@@ -115,6 +115,30 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.6.
     fn reset(&mut self);
 
+    /// Clears the solver's derived state (factorization, warm-start weights,
+    /// PRNG state, cycle-avoidance taboos, all simplex status flags) while
+    /// keeping the loaded LP intact. After this call the next solve behaves
+    /// as if it were the first solve on a fresh instance with the same LP.
+    ///
+    /// This is the deterministic-reset primitive for warm-start chains that
+    /// span work-distribution variations — specifically, the backward pass
+    /// reusing a solver across trial points at a single stage.
+    ///
+    /// Contract: caller does NOT need to call `load_model` before the next
+    /// solve. Bounds should be set (via `set_row_bounds` /
+    /// `set_col_bounds`) and a warm-start basis may be installed via
+    /// `solve_with_basis`.
+    ///
+    /// # Errors
+    /// `SolverError::Unsupported` on backends without an equivalent cheap
+    /// reset. Such backends should be invoked via the `reset` +
+    /// `load_model` path instead.
+    fn clear_solver_state(&mut self) -> Result<(), SolverError> {
+        Err(SolverError::Unsupported(
+            "clear_solver_state not implemented for this backend",
+        ))
+    }
+
     /// Writes solver-native `i32` status codes into a caller-owned [`Basis`] buffer.
     ///
     /// The caller pre-allocates a [`Basis`] with [`Basis::new`] and reuses it
@@ -290,6 +314,28 @@ mod tests {
         let raw = Basis::new(0, 0);
         let result = solver.solve_with_basis(&raw);
         assert!(matches!(result, Err(SolverError::InternalError { .. })));
+    }
+
+    #[test]
+    fn test_noop_solver_clear_solver_state_returns_unsupported() {
+        use crate::types::SolverError;
+        let mut solver = NoopSolver;
+        let result = solver.clear_solver_state();
+        match result {
+            Err(SolverError::Unsupported(msg)) => {
+                assert!(msg.contains("clear_solver_state"));
+            }
+            _ => panic!("expected Unsupported, got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_unsupported_display_format() {
+        use crate::types::SolverError;
+        let err = SolverError::Unsupported("test message");
+        let formatted = format!("{err}");
+        assert!(formatted.contains("unsupported"), "got {formatted}");
+        assert!(formatted.contains("test message"), "got {formatted}");
     }
 
     #[test]

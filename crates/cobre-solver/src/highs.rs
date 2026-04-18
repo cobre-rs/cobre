@@ -1195,6 +1195,36 @@ impl SolverInterface for HighsSolver {
         // lifetime of the instance (per trait contract, SS4.3).
     }
 
+    fn clear_solver_state(&mut self) -> Result<(), SolverError> {
+        // Calling clear_solver on an unloaded instance would succeed at
+        // the FFI level but leaves the solver in a state the caller did
+        // not expect (no LP to solve). Assert the precondition.
+        assert!(
+            self.has_model,
+            "clear_solver_state called without a loaded model — call load_model first"
+        );
+
+        self.stats.clear_solver_count += 1;
+
+        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+        // `cobre_highs_clear_solver` wraps `Highs::clearSolver`, which
+        // clears derived state (factorization, simplex flags, PRNG,
+        // taboo list) while leaving `lp_.a_matrix_` and bounds intact.
+        // Per Finding 7 in the risk assessment, this is the canonical
+        // deterministic reset for cross-work-distribution invariance.
+        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
+        if status == ffi::HIGHS_STATUS_ERROR {
+            self.stats.clear_solver_failures += 1;
+            return Err(SolverError::InternalError {
+                message: "cobre_highs_clear_solver returned HIGHS_STATUS_ERROR".to_string(),
+                error_code: Some(status),
+            });
+        }
+        // `num_cols`, `num_rows`, and `has_model` are intentionally NOT
+        // modified. The LP remains loaded and usable for the next solve.
+        Ok(())
+    }
+
     fn get_basis(&mut self, out: &mut crate::types::Basis) {
         assert!(
             self.has_model,
@@ -2002,13 +2032,11 @@ mod tests {
         // Assert
         let after = solver.statistics();
         assert_eq!(
-            after.basis_non_alien_rejections,
-            before.basis_non_alien_rejections,
+            after.basis_non_alien_rejections, before.basis_non_alien_rejections,
             "basis_non_alien_rejections must not change in AlienOnly mode"
         );
         assert_eq!(
-            after.basis_rejections,
-            before.basis_rejections,
+            after.basis_rejections, before.basis_rejections,
             "alien setter must accept a self-extracted basis (basis_rejections unchanged)"
         );
         // Confirm solve_with_basis ran (not a cold-start bypass).
@@ -2064,11 +2092,9 @@ mod tests {
         // `solver.statistics()` afterwards would overlap immutable and mutable
         // borrows. Extracting the scalar value first ends the borrow.
         let objective = {
-            let result = solver
-                .solve_with_basis(&bad_basis)
-                .expect(
-                    "solve_with_basis must succeed via alien fallback even with inconsistent basis",
-                );
+            let result = solver.solve_with_basis(&bad_basis).expect(
+                "solve_with_basis must succeed via alien fallback even with inconsistent basis",
+            );
             result.objective
         };
 
@@ -2088,6 +2114,88 @@ mod tests {
         assert!(
             objective.is_finite(),
             "objective must be finite after alien-fallback repair"
+        );
+    }
+
+    /// After a successful solve, `clear_solver_state` must return `Ok(())` and
+    /// leave `has_model` true. The LP must remain usable for a second solve
+    /// without an intervening `load_model`.
+    #[test]
+    fn test_clear_solver_state_keeps_model_loaded() {
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver.load_model(&template);
+        let _ = solver.solve().expect("first solve must succeed");
+        solver
+            .clear_solver_state()
+            .expect("clear_solver_state must return Ok(()) after a successful solve");
+        // has_model must still be true; the LP is still loaded.
+        // Confirm by re-solving without calling load_model.
+        let _ = solver
+            .solve()
+            .expect("second solve must succeed without reloading the model");
+    }
+
+    /// `clear_solver_state` must panic with the expected message when called on
+    /// a solver that has no loaded LP (immediately after construction).
+    #[test]
+    #[should_panic(expected = "clear_solver_state called without a loaded model")]
+    fn test_clear_solver_state_panics_without_model() {
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let _ = solver.clear_solver_state();
+    }
+
+    /// `clear_solver_count` must increment by exactly 1 on each successful call to
+    /// `clear_solver_state`. `clear_solver_failures` must remain zero when the FFI
+    /// call succeeds.
+    #[test]
+    fn test_clear_solver_state_increments_count() {
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver.load_model(&template);
+        let before = solver.statistics().clear_solver_count;
+        solver
+            .clear_solver_state()
+            .expect("clear_solver_state must return Ok(()) after load_model");
+        let after = solver.statistics().clear_solver_count;
+        assert_eq!(after - before, 1, "clear_solver_count must increment by 1");
+        assert_eq!(
+            solver.statistics().clear_solver_failures,
+            0,
+            "clear_solver_failures must remain zero on success"
+        );
+    }
+
+    /// After solving once, `clear_solver_state` must preserve the loaded model so
+    /// that a second solve (without reloading) produces the same primal values and
+    /// objective as the first solve.
+    ///
+    /// Validates SS1.4: `clear_solver_state` clears derived solver state
+    /// (factorization, simplex flags, PRNG) while keeping the LP matrix and
+    /// bounds intact.
+    #[test]
+    fn test_clear_solver_state_keeps_model_loaded_cross_solve_consistency() {
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver.load_model(&template);
+        let first = solver
+            .solve()
+            .expect("first solve must succeed")
+            .to_owned();
+        solver
+            .clear_solver_state()
+            .expect("clear_solver_state must return Ok(()) after a successful solve");
+        let second = solver
+            .solve()
+            .expect("second solve must succeed after clear_solver_state")
+            .to_owned();
+        assert_eq!(
+            first.primal, second.primal,
+            "primal variables must be identical before and after clear_solver_state"
+        );
+        assert_eq!(
+            first.objective, second.objective,
+            "objective value must be identical before and after clear_solver_state"
         );
     }
 }

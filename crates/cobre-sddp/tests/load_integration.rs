@@ -428,6 +428,7 @@ fn test_stochastic_load_training_completes() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -578,6 +579,7 @@ fn test_deterministic_load_training_matches_baseline() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -658,6 +660,7 @@ fn test_stochastic_load_seed_determinism() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
+                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),

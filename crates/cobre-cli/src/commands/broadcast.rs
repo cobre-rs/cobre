@@ -5,8 +5,8 @@
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
-    StudyParams, DEFAULT_MAX_ITERATIONS,
+    CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
+    StoppingRule, StoppingRuleSet, StudyParams,
 };
 
 use crate::error::CliError;
@@ -165,6 +165,11 @@ pub(crate) struct BroadcastConfig {
     /// Broadcast so all ranks construct their solver workspace with the same
     /// mode. Defaults to `NonAlienFirst` (post-ticket-010).
     pub(crate) warm_start_basis_mode: BroadcastWarmStartBasisMode,
+    /// Canonical-state strategy for the backward pass.
+    ///
+    /// Broadcast so all ranks apply the same per-(worker, stage) `load_model`
+    /// cadence. Defaults to `Disabled`.
+    pub(crate) canonical_state_strategy: cobre_sddp::CanonicalStateStrategy,
 }
 
 impl BroadcastConfig {
@@ -238,6 +243,7 @@ impl BroadcastConfig {
             training_source,
             simulation_source,
             warm_start_basis_mode: config.training.solver.warm_start_basis_mode.into(),
+            canonical_state_strategy: params.canonical_state_strategy,
         })
     }
 }
@@ -344,7 +350,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{broadcast_value, BroadcastOpeningTree};
+    use super::{BroadcastOpeningTree, broadcast_value};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

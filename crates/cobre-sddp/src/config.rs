@@ -61,6 +61,28 @@ use crate::cut_selection::CutSelectionStrategy;
 use crate::risk_measure::RiskMeasure;
 use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
 
+/// Strategy for resetting solver state between trial points in the backward
+/// pass to preserve deterministic results across work-distribution variations.
+///
+/// - [`CanonicalStateStrategy::Disabled`]: legacy behavior. Each trial point
+///   re-loads the LP template via `load_model`. Guarantees byte-identical
+///   output but re-copies the O(nnz) matrix per trial point.
+/// - [`CanonicalStateStrategy::ClearSolver`]: hoist `load_model` to
+///   per-(worker, stage) cadence. Between trial points, `clear_solver_state`
+///   resets `HiGHS`'s derived state (factorization, PRNG, taboo list) while
+///   keeping the LP loaded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CanonicalStateStrategy {
+    /// Per-trial-point `load_model` (legacy default).
+    #[default]
+    Disabled,
+    /// Per-(worker, stage) `load_model` with per-trial-point
+    /// `clear_solver_state`. Requires the backend to implement
+    /// `clear_solver_state` (`Err(Unsupported)` falls back to
+    /// `Disabled` at the call site).
+    ClearSolver,
+}
+
 /// Controls the iteration loop and convergence.
 ///
 /// Construct via [`Default::default()`] for tests, or explicitly set all fields
@@ -187,6 +209,13 @@ pub struct CutManagementConfig {
     /// `CVaR`, or a convex combination thereof. The length must equal
     /// `num_stages`.
     pub risk_measures: Vec<RiskMeasure>,
+
+    /// Canonical-state strategy for the backward pass.
+    ///
+    /// Defaults to `Disabled` (legacy behavior). Set to `ClearSolver`
+    /// once cross-work-distribution byte-identicality has been
+    /// validated for the target workload.
+    pub canonical_state_strategy: CanonicalStateStrategy,
 }
 
 impl Default for CutManagementConfig {
@@ -197,6 +226,7 @@ impl Default for CutManagementConfig {
             cut_activity_tolerance: 1e-6,
             warm_start_cuts: 0,
             risk_measures: vec![RiskMeasure::Expectation],
+            canonical_state_strategy: CanonicalStateStrategy::default(),
         }
     }
 }

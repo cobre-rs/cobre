@@ -60,7 +60,7 @@ use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::config::StoppingRuleConfig;
 use cobre_sddp::{
-    hydro_models::prepare_hydro_models, setup::prepare_stochastic, SolverStatsDelta, StudySetup,
+    SolverStatsDelta, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
 

@@ -569,6 +569,7 @@ fn train_simulate_write_cycle() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -1336,6 +1337,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,

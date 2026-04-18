@@ -244,6 +244,8 @@ fn delta_to_stats_row(
         basis_offered: delta.basis_offered as u32,
         basis_rejections: delta.basis_rejections as u32,
         basis_non_alien_rejections: delta.basis_non_alien_rejections as u32,
+        clear_solver_count: delta.clear_solver_count,
+        clear_solver_failures: delta.clear_solver_failures,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,

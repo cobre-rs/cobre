@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
+    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
+    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
-    OpeningTreeInputs,
+    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
+    provenance::ComponentProvenance,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
-    BroadcastOpeningTree,
+    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
+    stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -825,6 +825,7 @@ fn build_study_setup(
         cut_selection,
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
         budget: bcast_config.budget,
+        canonical_state_strategy: bcast_config.canonical_state_strategy,
         export_states: bcast_config.export_states,
     };
     StudySetup::from_broadcast_params(
@@ -983,6 +984,8 @@ fn run_training_phase(
         local_basis_rejections,
         local_basis_non_alien_rejections,
         local_simplex_iter,
+        local_clear_solver_count,
+        local_clear_solver_failures,
     ) = aggregate_solver_stats(&training_result.solver_stats_log);
 
     #[allow(clippy::cast_precision_loss)]
@@ -995,8 +998,10 @@ fn run_training_phase(
         local_basis_rejections as f64,
         local_basis_non_alien_rejections as f64,
         local_simplex_iter as f64,
+        local_clear_solver_count as f64,
+        local_clear_solver_failures as f64,
     ];
-    let mut recv_stats = [0.0_f64; 8];
+    let mut recv_stats = [0.0_f64; 10];
     ctx.comm
         .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
@@ -1012,6 +1017,8 @@ fn run_training_phase(
         total_basis_rejections,
         total_basis_non_alien_rejections,
         total_simplex_iter,
+        total_clear_solver_count,
+        total_clear_solver_failures,
     ) = (
         recv_stats[0] as u64,
         recv_stats[1] as u64,
@@ -1021,6 +1028,8 @@ fn run_training_phase(
         recv_stats[5] as u64,
         recv_stats[6] as u64,
         recv_stats[7] as u64,
+        recv_stats[8] as u64,
+        recv_stats[9] as u64,
     );
 
     // Print training summary on rank 0.
@@ -1048,6 +1057,8 @@ fn run_training_phase(
         total_basis_offered: Some(total_basis_offered),
         total_basis_rejections: Some(total_basis_rejections),
         total_basis_non_alien_rejections: Some(total_basis_non_alien_rejections),
+        total_clear_solver_count: Some(total_clear_solver_count),
+        total_clear_solver_failures: Some(total_clear_solver_failures),
         total_simplex_iterations: Some(total_simplex_iter),
     };
     if !ctx.quiet && ctx.is_root {
@@ -1064,7 +1075,7 @@ fn run_training_phase(
 /// Aggregate solver statistics from the training stats log.
 fn aggregate_solver_stats(
     stats_log: &[(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)],
-) -> (u64, u64, u64, f64, u64, u64, u64, u64) {
+) -> (u64, u64, u64, f64, u64, u64, u64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
     let mut failed = 0u64;
@@ -1073,6 +1084,8 @@ fn aggregate_solver_stats(
     let mut basis_rejections = 0u64;
     let mut basis_non_alien_rejections = 0u64;
     let mut simplex = 0u64;
+    let mut clear_solver_count = 0u64;
+    let mut clear_solver_failures = 0u64;
     for (_, _, _, delta) in stats_log {
         first_try += delta.first_try_successes;
         retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
@@ -1082,6 +1095,8 @@ fn aggregate_solver_stats(
         basis_rejections += delta.basis_rejections;
         basis_non_alien_rejections += delta.basis_non_alien_rejections;
         simplex += delta.simplex_iterations;
+        clear_solver_count += delta.clear_solver_count;
+        clear_solver_failures += delta.clear_solver_failures;
     }
     (
         first_try,
@@ -1092,6 +1107,8 @@ fn aggregate_solver_stats(
         basis_rejections,
         basis_non_alien_rejections,
         simplex,
+        clear_solver_count,
+        clear_solver_failures,
     )
 }
 
@@ -1304,6 +1321,8 @@ fn print_sim_summary(
             total_basis_offered: Some(agg.basis_offered),
             total_basis_rejections: Some(agg.basis_rejections),
             total_basis_non_alien_rejections: Some(agg.basis_non_alien_rejections),
+            total_clear_solver_count: Some(agg.clear_solver_count),
+            total_clear_solver_failures: Some(agg.clear_solver_failures),
             total_simplex_iterations: Some(agg.simplex_iterations),
         },
     );
@@ -1511,6 +1530,8 @@ fn delta_to_stats_row(
         basis_offered: delta.basis_offered as u32,
         basis_rejections: delta.basis_rejections as u32,
         basis_non_alien_rejections: delta.basis_non_alien_rejections as u32,
+        clear_solver_count: delta.clear_solver_count,
+        clear_solver_failures: delta.clear_solver_failures,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,

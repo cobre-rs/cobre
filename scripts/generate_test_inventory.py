@@ -27,10 +27,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 
-# ---------------------------------------------------------------------------
-# Guard detection: exact marker strings from ticket spec section 4
-# ---------------------------------------------------------------------------
-
 GUARD_MARKERS: list[tuple[str, str]] = [
     ("WarmStartBasisMode::AlienOnly", "alien-only"),
     ("WarmStartBasisMode::NonAlienFirst", "non-alien-first"),
@@ -47,23 +43,13 @@ GUARD_MARKERS: list[tuple[str, str]] = [
     ("TrainingResult { ", "training-result-struct-literal"),
 ]
 
-# D-case fixture reference patterns (file names and function names)
-_D_CASE_FILE_PATTERN = re.compile(
-    r"deterministic\.rs|d\d{2}[-_]|d_case|conformance"
-)
-_D_CASE_FN_PATTERN = re.compile(
-    r"^d\d{2}_|^d\d{2}$|conformance_|determinism_"
-)
+# D-case fixture reference patterns
+_D_CASE_FILE_PATTERN = re.compile(r"deterministic\.rs|d\d{2}[-_]|d_case|conformance")
+_D_CASE_FN_PATTERN = re.compile(r"^d\d{2}_|^d\d{2}$|conformance_|determinism_")
 
 # fpha slow-test patterns
-_FPHA_FILE_PATTERN = re.compile(
-    r"fpha_fitting\.rs|fpha_computed\.rs|fpha_evaporation\.rs"
-)
+_FPHA_FILE_PATTERN = re.compile(r"fpha_fitting\.rs|fpha_computed\.rs|fpha_evaporation\.rs")
 _FPHA_FN_PATTERN = re.compile(r"^fpha_")
-
-# ---------------------------------------------------------------------------
-# Category taxonomy labels (all 7)
-# ---------------------------------------------------------------------------
 
 VALID_CATEGORIES = frozenset(
     [
@@ -76,10 +62,6 @@ VALID_CATEGORIES = frozenset(
         "coverage-matrix",
     ]
 )
-
-# ---------------------------------------------------------------------------
-# Guard taxonomy labels (all 19 + generic)
-# ---------------------------------------------------------------------------
 
 VALID_GUARDS = frozenset(
     [
@@ -106,10 +88,6 @@ VALID_GUARDS = frozenset(
     ]
 )
 
-# ---------------------------------------------------------------------------
-# Epic 03/04/05 deletion mappings (from taxonomy)
-# ---------------------------------------------------------------------------
-
 EPIC03_GUARDS = frozenset(
     ["alien-only", "warm-start-config-flag", "broadcast-warm-start-field"]
 )
@@ -125,11 +103,6 @@ EPIC04_GUARDS = frozenset(
 EPIC05_GUARDS = frozenset(["non-baked", "stored-cut-row-offset", "add-rows-trait"])
 
 
-# ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
-
 class InventoryRow(NamedTuple):
     crate: str
     file: str
@@ -142,13 +115,8 @@ class InventoryRow(NamedTuple):
     notes: str
 
 
-# ---------------------------------------------------------------------------
-# Body extraction
-# ---------------------------------------------------------------------------
-
-
 def _read_file_lines(repo_root: Path, rel_path: str) -> list[str]:
-    """Read source file lines (cached per file path)."""
+    """Read source file lines."""
     full_path = repo_root / rel_path
     try:
         return full_path.read_text(encoding="utf-8").splitlines()
@@ -169,11 +137,7 @@ def get_file_lines(repo_root: Path, rel_path: str) -> list[str]:
 def extract_body_text(
     repo_root: Path, rel_path: str, attr_line: int, body_loc: int
 ) -> str:
-    """Extract function body text starting from attr_line (1-based).
-
-    Returns the concatenated lines from attr_line through attr_line + body_loc + 20
-    (generous window to cover fn signature + body).
-    """
+    """Extract lines around function (fn signature + body)."""
     lines = get_file_lines(repo_root, rel_path)
     # attr_line is 1-based; grab from the #[test] line through fn body
     start = max(0, attr_line - 1)
@@ -181,17 +145,8 @@ def extract_body_text(
     return "\n".join(lines[start:end])
 
 
-# ---------------------------------------------------------------------------
-# Guard assignment
-# ---------------------------------------------------------------------------
-
-
 def assign_guards(body_text: str, file_path: str, fn_name: str) -> str:
-    """Assign comma-separated guard labels based on marker grep.
-
-    Applies guards from GUARD_MARKERS first, then file/function pattern guards.
-    Returns 'generic' if no guards match.
-    """
+    """Assign comma-separated guard labels. Returns 'generic' if no match."""
     guards: list[str] = []
 
     # Apply exact marker guards
@@ -199,24 +154,13 @@ def assign_guards(body_text: str, file_path: str, fn_name: str) -> str:
         if marker in body_text:
             guards.append(guard)
 
-    # D-case determinism: function name or file matches D-case patterns
-    # but only apply for tests that appear to be in the deterministic test suite
-    if _D_CASE_FILE_PATTERN.search(file_path) or _D_CASE_FN_PATTERN.match(fn_name):
-        # Only tag actual D-case test functions (d01_, d02_, ..., d30_)
-        if re.match(r"^d\d{2}_", fn_name) or re.match(r"^d\d{2}$", fn_name):
-            guards.append("d-case-determinism")
+    if (re.match(r"^d\d{2}_", fn_name) or re.match(r"^d\d{2}$", fn_name)):
+        guards.append("d-case-determinism")
 
-    # convertido determinism: check for convertido fixture references
-    if "convertido" in body_text.lower() or "convertido" in file_path.lower():
-        if "convertido" in body_text.lower():
-            guards.append("convertido-determinism")
+    if "convertido" in body_text.lower():
+        guards.append("convertido-determinism")
 
-    # fpha slow tests: files under fpha_fitting.rs and fpha_* integration tests
-    if _FPHA_FILE_PATTERN.search(file_path) or _FPHA_FN_PATTERN.match(fn_name):
-        guards.append("fpha-slow")
-
-    # Also check body for fpha test patterns
-    if "fpha_fitting" in file_path:
+    if _FPHA_FILE_PATTERN.search(file_path) or _FPHA_FN_PATTERN.match(fn_name) or "fpha_fitting" in file_path:
         if "fpha-slow" not in guards:
             guards.append("fpha-slow")
 
@@ -233,22 +177,10 @@ def assign_guards(body_text: str, file_path: str, fn_name: str) -> str:
     return ",".join(unique_guards)
 
 
-# ---------------------------------------------------------------------------
-# Category assignment
-# ---------------------------------------------------------------------------
-
-# D-case test function patterns in deterministic.rs
 _DCASE_FN = re.compile(r"^d\d{2}_|^d\d{2}$")
-# Regression-related patterns
 _REGRESSION_FN = re.compile(r"^regression_|_regression$|_regression_")
 _REGRESSION_FILE = re.compile(r"regression\.rs$")
-
-# E2E: functions that run full train+simulate pipeline
-_E2E_FN = re.compile(
-    r"converges$|_e2e$|_pipeline$|full_pipeline|end_to_end"
-)
-
-# Integration test files (the /tests/ directory)
+_E2E_FN = re.compile(r"converges$|_e2e$|_pipeline$|full_pipeline|end_to_end")
 _INTEGRATION_TEST_FILES: frozenset[str] = frozenset(
     [
         "crates/cobre-sddp/tests/integration.rs",
@@ -285,14 +217,8 @@ _INTEGRATION_TEST_FILES: frozenset[str] = frozenset(
     ]
 )
 
-# Conformance test files (D-cases, numerical snapshot tests)
-_CONFORMANCE_FILES: frozenset[str] = frozenset(
-    [
-        "crates/cobre-sddp/tests/deterministic.rs",
-    ]
-)
+_CONFORMANCE_FILES: frozenset[str] = frozenset(["crates/cobre-sddp/tests/deterministic.rs"])
 
-# E2E test files (full pipeline tests)
 _E2E_FILES: frozenset[str] = frozenset(
     [
         "crates/cobre-sddp/tests/fpha_computed.rs",
@@ -307,61 +233,22 @@ def assign_category(
     body_text: str,
     test_module: str,
 ) -> str:
-    """Assign a single category label per taxonomy rules.
-
-    Rules applied in order (first match wins):
-    1. regression: fn name or file contains regression marker
-    2. conformance: D-case test files or D-case fn pattern
-    3. e2e: full pipeline test files or fn name matches e2e pattern
-    4. integration: in /tests/ directory (non-conformance, non-e2e)
-    5. unit: everything else (in-src #[cfg(test)] mod)
-    """
-    # Rule 1: regression
+    """Assign category label (regression, conformance, e2e, integration, unit)."""
     if _REGRESSION_FN.search(fn_name) or _REGRESSION_FILE.search(file_path):
         return "regression"
 
-    # Rule 2: conformance — D-case deterministic tests
     if file_path in _CONFORMANCE_FILES:
-        # Most tests in deterministic.rs are conformance (D-cases)
-        if _DCASE_FN.match(fn_name):
-            return "conformance"
-        # Some tests in deterministic.rs are integration (model_persistence, etc.)
-        return "integration"
+        return "conformance" if _DCASE_FN.match(fn_name) else "integration"
 
-    # Rule 3: e2e — full pipeline tests in fpha_* integration test files
-    if file_path in _E2E_FILES:
+    if file_path in _E2E_FILES or (_E2E_FN.search(fn_name) and "/tests/" in file_path):
         return "e2e"
 
-    # Rule 3b: e2e — functions that clearly run full pipeline
-    if _E2E_FN.search(fn_name) and "/tests/" in file_path:
-        return "e2e"
-
-    # Rule 4: integration — tests in /tests/ directory
-    if "/tests/" in file_path:
-        return "integration"
-
-    # Rule 5: unit — in-src tests
-    return "unit"
-
-
-# ---------------------------------------------------------------------------
-# Parameter-sweep detection (heuristic)
-# ---------------------------------------------------------------------------
+    return "integration" if "/tests/" in file_path else "unit"
 
 
 def is_parameter_sweep(fn_name: str, body_text: str, all_rows: list[InventoryRow]) -> bool:
-    """Detect if a test is a parameter sweep based on naming and body patterns.
-
-    Simple heuristic: look for multiple similar test names in the same file
-    that share a common prefix and differ only in a suffix number/variant.
-    """
-    # Pattern: fn name ends in a number or has _N suffix variants
-    return False  # conservative: don't auto-tag, use guard-based approach
-
-
-# ---------------------------------------------------------------------------
-# Row processing
-# ---------------------------------------------------------------------------
+    """Detect parameter-sweep patterns (conservative)."""
+    return False
 
 
 def process_rows(
@@ -405,13 +292,8 @@ def process_rows(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-
 def validate_rows(rows: list[InventoryRow]) -> list[str]:
-    """Return list of validation error messages (empty = all OK)."""
+    """Validate rows. Return empty list if all valid."""
     errors: list[str] = []
     for i, row in enumerate(rows):
         if row.category not in VALID_CATEGORIES:
@@ -427,13 +309,8 @@ def validate_rows(rows: list[InventoryRow]) -> list[str]:
     return errors
 
 
-# ---------------------------------------------------------------------------
-# Markdown generation
-# ---------------------------------------------------------------------------
-
-
 def _escape_md(s: str) -> str:
-    """Escape pipe characters in Markdown table cells."""
+    """Escape pipe characters for Markdown tables."""
     return s.replace("|", "\\|")
 
 
@@ -453,24 +330,14 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
             if g:
                 guard_counts[g] += 1
 
-    # -------------------------------------------------------------------------
-    # Section 1: Summary header
-    # -------------------------------------------------------------------------
     lines.append("# Test Inventory — Architecture Unification")
     lines.append("")
-    lines.append(
-        "Canonical test-suite inventory for the architecture-unification plan. "
-        "Taxonomy vocabulary is frozen in "
-        "[`docs/assessments/test-inventory-taxonomy.md`](test-inventory-taxonomy.md). "
-        "Generated by `scripts/generate_test_inventory.py`."
-    )
+    lines.append("Canonical test-suite inventory. Taxonomy in `docs/assessments/test-inventory-taxonomy.md`.")
     lines.append("")
     lines.append("## 1. Summary")
     lines.append("")
-    lines.append(f"**Total `#[test]` functions:** {total}")
+    lines.append(f"**Total tests:** {total}")
     lines.append("")
-
-    # Per-crate breakdown
     lines.append("### Per-crate breakdown")
     lines.append("")
     lines.append("| Crate | Count |")
@@ -510,24 +377,14 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
             epic = "05"
         elif guard == "fpha-slow":
             epic = "09"
-        elif guard == "d-case-determinism" or guard == "convertido-determinism":
-            epic = "—"
-        elif guard == "generic":
-            epic = "—"
         else:
             epic = "—"
         lines.append(f"| `{guard}` | {count:,} | {epic} |")
     lines.append("")
 
-    # -------------------------------------------------------------------------
-    # Section 2: Inventory table
-    # -------------------------------------------------------------------------
     lines.append("## 2. Inventory Table")
     lines.append("")
-    lines.append(
-        "All 2,680 `#[test]` functions. Sorted by `(crate, file, line)`. "
-        "Category and Guards columns use the frozen vocabulary from the taxonomy file."
-    )
+    lines.append(f"All {total} tests sorted by (crate, file, line).")
     lines.append("")
     lines.append(
         "| Crate | File | Line | Function | Body LoC | Test module | Category | Guards | Notes |"
@@ -549,15 +406,7 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
         )
     lines.append("")
 
-    # -------------------------------------------------------------------------
-    # Section 3: Deletion candidates by epic
-    # -------------------------------------------------------------------------
     lines.append("## 3. Deletion Candidates (by Epic)")
-    lines.append("")
-    lines.append(
-        "Tests flagged for review at each refactoring step. "
-        "Every row listed here also appears in Section 2 with a matching guard."
-    )
     lines.append("")
 
     for epic_num, epic_guards, epic_title in [
@@ -598,15 +447,8 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
             lines.append("_No tests flagged for this epic._")
         lines.append("")
 
-    # -------------------------------------------------------------------------
-    # Section 4: Parameterization candidates
-    # -------------------------------------------------------------------------
     lines.append("## 4. Parameterization Candidates")
     lines.append("")
-    lines.append(
-        "Tests tagged `parameter-sweep` that share body structure and differ only in "
-        "input parameters. Candidates for consolidation in Epic 09."
-    )
     lines.append("")
 
     sweep_rows = [r for r in rows if r.category == "parameter-sweep"]
@@ -629,16 +471,8 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
         )
         lines.append("")
 
-    # -------------------------------------------------------------------------
-    # Section 5: Slow-test roster
-    # -------------------------------------------------------------------------
     lines.append("## 5. Slow-Test Roster")
     lines.append("")
-    lines.append(
-        "Tests observed to run > 10 s on a reference machine or flagged as long-running. "
-        "Exact timing measurements live in ticket 004. "
-        "Tests tagged `fpha-slow` missing the slow-tests feature gate are flagged as cleanup items for Epic 09."
-    )
     lines.append("")
 
     # Find all fpha-slow tests
@@ -695,18 +529,10 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
 
     lines.append("### Parse errors")
     lines.append("")
-    lines.append(
-        "_No parse errors reported by `scripts/test_inventory.py`. "
-        "All 2,680 tests were successfully inventoried._"
-    )
+    lines.append("_No parse errors reported._")
     lines.append("")
 
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

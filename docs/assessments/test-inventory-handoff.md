@@ -8,7 +8,7 @@
 
 ## 1. Inventory Summary
 
-The committed inventory (`test-inventory.md`) covers 2,680 `#[test]` functions across six crates. The Phase 0b wall-time baseline measured a cold build-and-run at 175.16 s and an incremental median of 10.80 s (Cargo counts 3,676 test cases when fork tests and doc-tests are included). Of the 2,680 inventoried `#[test]` functions, **81 carry at least one deletion-relevant guard** from the taxonomy's Deletion-mapping rows for steps 3, 4, and 5 (Epics 03, 04, and 05 respectively). The remaining 2,599 tests are tagged `generic` or carry a retain-path guard (`baked`, `non-alien-first`, `canonical-clearsolver`, `d-case-determinism`, etc.) and are unaffected by those three epics.
+The committed inventory (`test-inventory.md`) covers 3,413 `#[test]` functions across all eight test-carrying workspace crates (`cobre-sddp`, `cobre-io`, `cobre-stochastic`, `cobre-core`, `cobre-cli`, `cobre-comm`, `cobre-solver`, `cobre-python`). The Phase 0b wall-time baseline measured a cold build-and-run at 175.16 s and an incremental median of 10.80 s (Cargo's summary reports 3,676 test cases — the extra ≈263 come from doc-tests and integration-test binary frames that are not standalone `#[test]` functions). Of the 3,413 inventoried `#[test]` functions, **81 carry at least one deletion-relevant guard** from the taxonomy's Deletion-mapping rows for steps 3, 4, and 5 (Epics 03, 04, and 05 respectively). The remaining 3,332 tests are tagged `generic` or carry a retain-path guard (`baked`, `non-alien-first`, `canonical-clearsolver`, `d-case-determinism`, etc.) and are unaffected by those three epics.
 
 ---
 

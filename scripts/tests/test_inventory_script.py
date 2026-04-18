@@ -22,13 +22,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import test_inventory as inv
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _run_on_fixture(rs_source: str, filename: str = "fixture.rs") -> list[dict[str, str]]:
-    """Write *rs_source* to a temp dir, run the inventory, and return parsed CSV rows."""
+    """Write source to temp, run inventory, return CSV rows."""
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
 
@@ -63,7 +58,7 @@ def _run_on_fixture(rs_source: str, filename: str = "fixture.rs") -> list[dict[s
 
 
 def _run_on_fixture_tests_dir(rs_source: str, filename: str = "foo.rs") -> list[dict[str, str]]:
-    """Place *rs_source* inside tests/ (not src/) so test_module should be ''."""
+    """Write source to tests/, run inventory, return CSV rows."""
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
         (tmp / "Cargo.toml").write_text('[workspace]\nmembers = []\n', encoding="utf-8")
@@ -93,13 +88,8 @@ def _run_on_fixture_tests_dir(rs_source: str, filename: str = "foo.rs") -> list[
         return list(reader)
 
 
-# ---------------------------------------------------------------------------
-# Test 1: single #[test] in a top-level tests/foo.rs (no enclosing mod)
-# ---------------------------------------------------------------------------
-
-
 class TestSingleTopLevelTest(unittest.TestCase):
-    """Fixture: one #[test] fn foo() in tests/foo.rs — no enclosing mod."""
+    """Single #[test] in tests/foo.rs (no enclosing mod)."""
 
     _RS = """\
 #[test]
@@ -117,10 +107,6 @@ fn foo() {
         self.assertEqual(rows[0]["function"], "foo")
 
     def test_body_loc_correct(self) -> None:
-        # fn foo() {          <- fn line (not counted as body line)
-        #     assert!(true);  <- line 1 of body
-        # }                   <- last line of body
-        # body_loc = lines from opening { line through closing } line = 3
         rows = _run_on_fixture_tests_dir(self._RS, filename="foo.rs")
         self.assertEqual(int(rows[0]["body_loc"]), 3)
 
@@ -136,13 +122,8 @@ fn foo() {
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 2: two #[test]s inside a mod tests block
-# ---------------------------------------------------------------------------
-
-
 class TestTwoTestsInsideModTests(unittest.TestCase):
-    """Fixture: two #[test] functions inside mod tests { ... }."""
+    """Two #[test] functions inside mod tests."""
 
     _RS = """\
 fn production_code() {}
@@ -191,18 +172,11 @@ mod tests {
             )
 
     def test_body_loc_alpha(self) -> None:
-        # fn alpha() {          <- fn line
-        #     assert_eq!(1, 1); <- 1
-        # }                     <- 2
-        # body_loc should be 3 (opening { line, body line, closing } line)
         rows = _run_on_fixture(self._RS)
         alpha = next(r for r in rows if r["function"] == "alpha")
         self.assertEqual(int(alpha["body_loc"]), 3)
 
     def test_body_loc_beta(self) -> None:
-        # fn beta() {  <- fn line (body starts here)
-        # 10 lines of body content + closing }
-        # body_loc = lines from { to } inclusive
         rows = _run_on_fixture(self._RS)
         beta = next(r for r in rows if r["function"] == "beta")
         self.assertEqual(int(beta["body_loc"]), 12)
@@ -239,13 +213,8 @@ mod tests {
             )
 
 
-# ---------------------------------------------------------------------------
-# Test 3: #[test] with "}" inside a string literal (state machine exercise)
-# ---------------------------------------------------------------------------
-
-
 class TestStringLiteralBraceSkip(unittest.TestCase):
-    """Fixture: #[test] body contains ``"}"`` — state machine must not end early."""
+    """#[test] body with "}" in string (state machine exercise)."""
 
     _RS = '''\
 #[test]
@@ -264,20 +233,10 @@ fn tricky() {
         self.assertEqual(rows[0]["function"], "tricky")
 
     def test_body_loc_correct_despite_string_braces(self) -> None:
-        # fn tricky() {              <- fn line (body_start = this line)
-        #     let s = "}";           <- 1
-        #     assert_eq!(s, "}");    <- 2
-        # }                          <- body end (matching })
-        # body_loc = 4 (fn line through closing })
         rows = _run_on_fixture(self._RS)
-        self.assertEqual(
-            int(rows[0]["body_loc"]),
-            4,
-            f"body_loc={rows[0]['body_loc']} — string-literal '}}' incorrectly closed the body",
-        )
+        self.assertEqual(int(rows[0]["body_loc"]), 4)
 
     def test_raw_string_brace_skip(self) -> None:
-        """``r#"}"#`` raw string braces must not terminate the body early."""
         rs = '''\
 #[test]
 fn raw_str_test() {
@@ -288,17 +247,11 @@ fn raw_str_test() {
         rows = _run_on_fixture(rs)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["function"], "raw_str_test")
-        # body: fn line + 3 body lines = 4 lines total
         self.assertEqual(int(rows[0]["body_loc"]), 4)
 
 
-# ---------------------------------------------------------------------------
-# Test 4: --include-slow-marker flag adds slow_marker column
-# ---------------------------------------------------------------------------
-
-
 class TestSlowMarkerFlag(unittest.TestCase):
-    """When --include-slow-marker is set, a slow_marker column is appended."""
+    """--include-slow-marker flag adds slow_marker column."""
 
     _RS = """\
 #[ignore]
@@ -363,13 +316,8 @@ fn fast_test() {
         self.assertEqual(fast_row["slow_marker"], "")
 
 
-# ---------------------------------------------------------------------------
-# Test 5: --crates filter restricts output to named crates
-# ---------------------------------------------------------------------------
-
-
 class TestCratesFilter(unittest.TestCase):
-    """--crates flag limits output to the named crates only."""
+    """--crates flag limits output to named crates."""
 
     def test_only_named_crate_in_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_str:

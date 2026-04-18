@@ -35,10 +35,6 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 DEFAULT_CRATES: list[str] = [
     "cobre-sddp",
     "cobre-solver",
@@ -46,6 +42,8 @@ DEFAULT_CRATES: list[str] = [
     "cobre-cli",
     "cobre-python",
     "cobre-comm",
+    "cobre-stochastic",
+    "cobre-core",
 ]
 
 CSV_COLUMNS: list[str] = [
@@ -77,11 +75,6 @@ _RE_SLOW = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
-
 class TestEntry(NamedTuple):
     """One detected ``#[test]`` function."""
 
@@ -98,25 +91,11 @@ class ParseError(Exception):
     """Raised when a .rs file cannot be fully parsed (e.g. unbalanced braces)."""
 
 
-# ---------------------------------------------------------------------------
-# Brace / string-literal state machine
-# ---------------------------------------------------------------------------
-
-
 def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
-    """Count lines from opening ``{`` on *fn_line_idx* through the matching ``}``.
+    """Count lines from opening ``{`` through the matching ``}``.
 
-    The parser tracks the following lexical states to avoid counting braces
-    inside non-code contexts:
-    - ``in_line_comment``  — from ``//`` to end-of-line
-    - ``in_block_comment`` — from ``/*`` to ``*/`` (nesting counted)
-    - ``in_raw_string``    — from ``r"`` / ``r#"``/ ``r##"`` … to matching terminator
-    - ``in_string``        — from ``"`` to ``"`` with ``\\`` escapes
-
-    Returns the body LoC (number of lines from the opening ``{`` up to and
-    including the line containing the matching ``}``).
-
-    Raises ``ParseError`` if EOF is reached before braces balance.
+    Tracks lexical states (comments, strings) to avoid counting braces
+    inside non-code contexts. Raises ``ParseError`` if braces unbalanced.
     """
     # States
     in_line_comment = False
@@ -140,24 +119,14 @@ def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
         while j < line_len:
             ch = line[j]
 
-            # ----------------------------------------------------------------
-            # Priority 1: raw string mode
-            # ----------------------------------------------------------------
             if in_raw_string:
-                # Look for the closing terminator: " followed by raw_string_hashes #
-                if ch == '"':
-                    # Check if followed by the right number of #
-                    suffix = line[j + 1 : j + 1 + raw_string_hashes]
-                    if suffix == "#" * raw_string_hashes:
-                        in_raw_string = False
-                        j += 1 + raw_string_hashes
-                        continue
+                if ch == '"' and line[j + 1 : j + 1 + raw_string_hashes] == "#" * raw_string_hashes:
+                    in_raw_string = False
+                    j += 1 + raw_string_hashes
+                    continue
                 j += 1
                 continue
 
-            # ----------------------------------------------------------------
-            # Priority 2: regular string mode
-            # ----------------------------------------------------------------
             if in_string:
                 if ch == "\\" and j + 1 < line_len:
                     j += 2  # skip escaped char
@@ -167,17 +136,10 @@ def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
                 j += 1
                 continue
 
-            # ----------------------------------------------------------------
-            # Priority 3: line comment — rest of line is comment
-            # ----------------------------------------------------------------
             if in_line_comment:
-                break  # skip to next line
+                break
 
-            # ----------------------------------------------------------------
-            # Priority 4: block comment
-            # ----------------------------------------------------------------
             if in_block_comment > 0:
-                # Check for nested /* or closing */
                 if ch == "/" and j + 1 < line_len and line[j + 1] == "*":
                     in_block_comment += 1
                     j += 2
@@ -189,22 +151,14 @@ def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
                 j += 1
                 continue
 
-            # ----------------------------------------------------------------
-            # Normal code: detect state transitions and count braces
-            # ----------------------------------------------------------------
-
-            # Line comment?
             if ch == "/" and j + 1 < line_len and line[j + 1] == "/":
                 in_line_comment = True
                 break
 
-            # Block comment open?
             if ch == "/" and j + 1 < line_len and line[j + 1] == "*":
                 in_block_comment += 1
                 j += 2
                 continue
-
-            # Raw string: r" or r#" or r##" …
             if ch == "r" and j + 1 < line_len and line[j + 1] in ('"', "#"):
                 hashes = 0
                 k = j + 1
@@ -217,23 +171,20 @@ def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
                     j = k + 1
                     continue
 
-            # Regular string?
             if ch == '"':
                 in_string = True
                 j += 1
                 continue
 
-            # Char literal? (single quotes) — skip to closing '
             if ch == "'":
                 j += 1
                 if j < line_len and line[j] == "\\":
-                    j += 1  # escaped char
+                    j += 1
                 while j < line_len and line[j] != "'":
                     j += 1
-                j += 1  # closing '
+                j += 1
                 continue
 
-            # Brace counting
             if ch == "{":
                 if depth == 0:
                     body_start_line = i
@@ -258,17 +209,8 @@ def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
     )
 
 
-# ---------------------------------------------------------------------------
-# Module-context tracker
-# ---------------------------------------------------------------------------
-
-
 class _ModuleStack:
-    """Track ``mod <name> { ... }`` nesting as we scan lines.
-
-    This is a simplified tracker: it only records mod entries when the opening
-    ``{`` is on the same line as ``mod``.  This covers all normal Rust style.
-    """
+    """Track ``mod <name> { ... }`` nesting for inline-brace style only."""
 
     def __init__(self) -> None:
         # Each element: (name, brace_depth_at_open)
@@ -276,33 +218,22 @@ class _ModuleStack:
         self._brace_depth: int = 0
 
     def feed_line(self, line: str) -> None:
-        """Update brace depth and module stack from a single line of code."""
-        # Quick skip: track braces from the simplified (non-state-machine) view.
-        # For module tracking we just need gross depth; this is good enough for
-        # the common indentation-aligned style used in this codebase.
+        """Update brace depth and module stack."""
         open_count = line.count("{") - line.count(r"\{")
         close_count = line.count("}") - line.count(r"\}")
 
-        # Detect mod push BEFORE updating depth (opening { on same line)
         m = _RE_MOD.search(line)
         if m and "{" in line:
-            mod_name = m.group(1)
-            self._stack.append((mod_name, self._brace_depth))
+            self._stack.append((m.group(1), self._brace_depth))
 
         self._brace_depth += open_count - close_count
 
-        # Pop mods that are now closed
         while self._stack and self._brace_depth <= self._stack[-1][1]:
             self._stack.pop()
 
     def current_module(self) -> str:
         """Return the innermost module name, or '' if at top level."""
         return self._stack[-1][0] if self._stack else ""
-
-
-# ---------------------------------------------------------------------------
-# File parser
-# ---------------------------------------------------------------------------
 
 
 def _collect_slow_markers(
@@ -326,10 +257,7 @@ def parse_file(
     crate_name: str,
     include_slow_marker: bool,
 ) -> list[TestEntry]:
-    """Parse a single ``.rs`` file and return a ``TestEntry`` for each ``#[test]``.
-
-    Raises ``ParseError`` on unbalanced braces or UTF-8 decode failure.
-    """
+    """Parse .rs file for #[test] functions. Raises ParseError on invalid input."""
     try:
         text = rs_file.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
@@ -349,22 +277,17 @@ def parse_file(
     while i < n:
         line = lines[i]
 
-        # Update module context first
         mod_stack.feed_line(line)
 
         if not _RE_TEST_ATTR.match(line):
             i += 1
             continue
 
-        # Found #[test] at line i (1-based: i+1)
-        test_attr_line = i + 1  # 1-based
+        test_attr_line = i + 1
         test_module = mod_stack.current_module()
 
-        slow_marker = ""
-        if include_slow_marker:
-            slow_marker = _collect_slow_markers(lines, i)
+        slow_marker = _collect_slow_markers(lines, i) if include_slow_marker else ""
 
-        # Scan forward (up to 20 lines) for the ``fn <name>`` declaration
         fn_name = ""
         fn_line_idx = -1
         for k in range(i + 1, min(i + 20, n)):
@@ -375,12 +298,9 @@ def parse_file(
                 break
 
         if not fn_name or fn_line_idx < 0:
-            # No fn found within lookahead — skip this #[test]
             i += 1
             continue
 
-        # Feed the lines between the #[test] and the fn declaration to the
-        # module stack so the brace depth stays consistent when we jump.
         for k in range(i + 1, fn_line_idx + 1):
             mod_stack.feed_line(lines[k])
 
@@ -407,22 +327,13 @@ def parse_file(
     return entries
 
 
-# ---------------------------------------------------------------------------
-# Walk crate subtrees
-# ---------------------------------------------------------------------------
-
-
 def walk_crate(
     crates_dir: Path,
     crate_name: str,
     repo_root: Path,
     include_slow_marker: bool,
 ) -> tuple[list[TestEntry], list[str]]:
-    """Walk ``{src,tests}`` under ``crates_dir / crate_name``.
-
-    Returns ``(entries, errors)`` where errors is a list of human-readable
-    error strings for any file that failed to parse.
-    """
+    """Walk crate src/tests for #[test] functions. Returns (entries, errors)."""
     crate_root = crates_dir / crate_name
     entries: list[TestEntry] = []
     errors: list[str] = []
@@ -432,7 +343,6 @@ def walk_crate(
         if not subtree.exists():
             continue
         for rs_file in sorted(subtree.rglob("*.rs")):
-            # Skip build artifacts
             if "target" in rs_file.parts:
                 continue
             try:
@@ -446,11 +356,6 @@ def walk_crate(
     return entries, errors
 
 
-# ---------------------------------------------------------------------------
-# CSV output
-# ---------------------------------------------------------------------------
-
-
 def write_csv(
     entries: list[TestEntry],
     dest: Path | None,
@@ -460,23 +365,10 @@ def write_csv(
     columns = CSV_COLUMNS_WITH_SLOW if include_slow_marker else CSV_COLUMNS
 
     if dest is None:
-        # Write directly to sys.stdout (text mode).  Using sys.stdout directly
-        # (rather than sys.stdout.buffer) keeps the function testable when
-        # stdout is replaced with io.StringIO in unit tests.
         writer = csv.writer(sys.stdout)
         writer.writerow(columns)
         for e in entries:
-            row = [
-                e.crate,
-                e.file,
-                e.line,
-                e.function,
-                e.body_loc,
-                e.test_module,
-                "",  # category
-                "",  # guards
-                "",  # notes
-            ]
+            row = [e.crate, e.file, e.line, e.function, e.body_loc, e.test_module, "", "", ""]
             if include_slow_marker:
                 row.append(e.slow_marker)
             writer.writerow(row)
@@ -486,25 +378,10 @@ def write_csv(
             writer = csv.writer(fh)
             writer.writerow(columns)
             for e in entries:
-                row = [
-                    e.crate,
-                    e.file,
-                    e.line,
-                    e.function,
-                    e.body_loc,
-                    e.test_module,
-                    "",  # category
-                    "",  # guards
-                    "",  # notes
-                ]
+                row = [e.crate, e.file, e.line, e.function, e.body_loc, e.test_module, "", "", ""]
                 if include_slow_marker:
                     row.append(e.slow_marker)
                 writer.writerow(row)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

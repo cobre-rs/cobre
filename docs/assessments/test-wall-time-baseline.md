@@ -1,6 +1,6 @@
 # Test Wall-Time Baseline — Phase 0b
 
-Reference wall-time measurement of the default `cargo test --workspace --all-features --release` suite, captured after the HiGHS-integration merge and the test-inventory commits (Epic 01 tickets 001–003) and before any Epic 02 work. Every later epic in the architecture-unification plan compares against these numbers. The companion artifact is [`test-inventory.md`](test-inventory.md) (2,680 `#[test]` functions inventoried).
+Reference wall-time measurement of the default `cargo test --workspace --all-features --release` suite, captured after the HiGHS-integration merge and the test-inventory commits (Epic 01 tickets 001–003) and before any Epic 02 work. Every later epic in the architecture-unification plan compares against these numbers. The companion artifact is [`test-inventory.md`](test-inventory.md) (3,413 `#[test]` functions inventoried across all eight test-carrying workspace crates).
 
 ## 1. Machine spec
 
@@ -46,7 +46,7 @@ Reported metrics:
 
 Notes:
 
-- The inventory script (`scripts/test_inventory.py`) counts 2,680 `#[test]` functions. Cargo reports 3,676 because fork tests and doc-tests are counted separately; the inventory covers the static `#[test]` annotations that Epic 09 will prune.
+- The inventory script (`scripts/test_inventory.py`) counts 3,413 `#[test]` functions across all eight test-carrying workspace crates. Cargo reports 3,676 because doc-tests and integration-test binary frames are counted separately; the inventory covers the static `#[test]` annotations that Epic 09 will prune.
 - The 6 ignored tests are the workspace's baseline set (no `--include-ignored` in measurement); they do not vary across runs.
 - Pre-measurement test fixes (committed alongside this baseline): `#[cfg(debug_assertions)]` gates on 7 `#[should_panic]` tests whose expected messages come from `debug_assert!` (no release substring match); fixed `test_slot_lookup_growth_safe_in_release` to exercise the growth path via a stored reconcilable slot. Without these fixes, the suite reported 8 release-mode failures and no baseline was recordable.
 

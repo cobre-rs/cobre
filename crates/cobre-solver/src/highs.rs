@@ -2178,10 +2178,7 @@ mod tests {
         let template = make_fixture_stage_template();
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         solver.load_model(&template);
-        let first = solver
-            .solve()
-            .expect("first solve must succeed")
-            .to_owned();
+        let first = solver.solve().expect("first solve must succeed").to_owned();
         solver
             .clear_solver_state()
             .expect("clear_solver_state must return Ok(()) after a successful solve");

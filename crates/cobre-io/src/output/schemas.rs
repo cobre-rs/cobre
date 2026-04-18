@@ -847,7 +847,7 @@ mod tests {
             ("iteration_timing", 16),
             ("rank_timing", 8),
             ("cut_selection", 9),
-            ("solver_iterations", 21),
+            ("solver_iterations", 23),
             ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {

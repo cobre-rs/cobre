@@ -2305,8 +2305,10 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
     .expect("legacy backward pass must not error");
     let add_rows_delta_legacy = workspaces_legacy[0].solver.add_rows_count - add_rows_before_legacy;
 
-    // Legacy path adds rows each time (once per worker pre-loop + once per
-    // trial-point reload × stages with a successor).
+    // Legacy path under CanonicalStateStrategy::Disabled calls add_rows once
+    // per trial-point reload per stage with a successor. (Pre-loop
+    // load_backward_lp is gated on ClearSolver strategy and no longer runs
+    // on the Disabled path.)
     assert!(
         add_rows_delta_legacy > 0,
         "legacy path must call add_rows; got {add_rows_delta_legacy}"
@@ -2321,9 +2323,9 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
     //
     // Key invariant: baked path total add_rows calls < legacy total add_rows
     // calls, because the baked path skips add_rows entirely for stages with
-    // zero delta. In this 3-stage, n_fwd=4 scenario, the legacy path calls
-    // add_rows 10 times (5 per successor) while the baked path calls it only
-    // 5 times (0 for successor=2, 5 for successor=1).
+    // zero delta. In this 3-stage, n_fwd=4 scenario the legacy Disabled path
+    // calls add_rows 8 times (4 per successor × 2 successors) while the baked
+    // path calls it only 4 times (0 for successor=2, 4 for successor=1).
     let mut workspaces_baked = vec![make_workspace()];
     let mut exchange_baked = make_exchange();
     let mut cut_batches_baked: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
@@ -2378,9 +2380,12 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
         workspaces_baked[0].solver.load_model_count > 0,
         "baked path must still call load_model"
     );
-    // Legacy path must have called add_rows for EVERY stage with a successor.
-    // (n_successors × (1 pre-loop + n_fwd trial-point reloads) = 2 × 5 = 10)
-    let expected_legacy_add_rows = 2 * (1 + n_fwd) as u64;
+    // Legacy path must have called add_rows once per trial-point reload for
+    // every stage with a successor. Under CanonicalStateStrategy::Disabled
+    // the pre-loop load_backward_lp is skipped (gated on ClearSolver), so
+    // only the inner reloads are counted.
+    // (n_successors × n_fwd trial-point reloads = 2 × 4 = 8)
+    let expected_legacy_add_rows = 2 * n_fwd as u64;
     assert_eq!(
         add_rows_delta_legacy, expected_legacy_add_rows,
         "legacy path must call add_rows {expected_legacy_add_rows} times; \

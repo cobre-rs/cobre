@@ -1,4 +1,4 @@
-//! Integration tests for `CanonicalStateStrategy` Disabled and ClearSolver variants.
+//! Integration tests for `CanonicalStateStrategy` `Disabled` and `ClearSolver` variants.
 //!
 //! Validates end-to-end correctness of the A.1 mechanism:
 //!
@@ -276,12 +276,19 @@ fn make_stochastic_context(n_stages: usize) -> StochasticContext {
 
     let stages: Vec<Stage> = (0..n_stages).map(make_stage).collect();
 
+    // mean_m3s=0 and std_m3s=0 keep z_inflow_rhs == 0 for every scenario:
+    // transform_inflow_noise takes the PAR path (has_par=true because the
+    // PAR model has the same stage/hydro counts) and pushes
+    // base + sigma*eta = 0 + 0*eta = 0 into z_inflow_rhs_buf. Together with
+    // noise_scale=0 on the water-balance row, the LP stays at the trivial
+    // all-zero solution. Non-zero values here would make the LP infeasible
+    // once storage accumulates across stages.
     let inflow_models: Vec<_> = (0..n_stages)
         .map(|i| InflowModel {
             hydro_id: EntityId(1),
             stage_id: i as i32,
-            mean_m3s: 100.0,
-            std_m3s: 30.0,
+            mean_m3s: 0.0,
+            std_m3s: 0.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
         })
@@ -339,7 +346,7 @@ fn make_stochastic_context(n_stages: usize) -> StochasticContext {
 /// - Row 1: z-inflow definition at `N*(1+L)=1` — `x_z = 0` (Category 5 patches)
 /// - Row 2: water-balance at `base_rows[s]=2` — `x_s - x_z - x_si = 0` (Category 3)
 ///
-/// All three rows have at least one non-zero coefficient so HiGHS builds a
+/// All three rows have at least one non-zero coefficient so `HiGHS` builds a
 /// non-degenerate basis structure. Rows 1 and 2 are patched to RHS=0 throughout
 /// the test (Category 5 gives `z_inflow_rhs=0`; Category 3 uses `noise_scale=0`),
 /// so the only feasible solution is the all-zero point.
@@ -348,7 +355,7 @@ fn make_stochastic_context(n_stages: usize) -> StochasticContext {
 ///
 /// Column layout:
 /// - Col 0 `x_s`:   outgoing storage  [0, 100]  — state variable
-/// - Col 1 `x_z`:   z_inflow          [0, 200]  — inflow variable
+/// - Col 1 `x_z`:   `z_inflow`          [0, 200]  — inflow variable
 /// - Col 2 `x_si`:  incoming storage  [0, 100]  — patched to `state` by Category 1
 /// - Col 3 `theta`: future cost       [0, ∞]    — objective variable
 ///
@@ -455,7 +462,7 @@ where
         n_state,
         FORWARD_PASSES,
         FCF_CAPACITY,
-        &vec![0; N_STAGES],
+        &[0; N_STAGES],
     );
 
     let stage_ctx = StageContext {

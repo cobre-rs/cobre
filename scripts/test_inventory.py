@@ -92,11 +92,7 @@ class ParseError(Exception):
 
 
 def _count_body_loc(lines: list[str], fn_line_idx: int) -> int:
-    """Count lines from opening ``{`` through the matching ``}``.
-
-    Tracks lexical states (comments, strings) to avoid counting braces
-    inside non-code contexts. Raises ``ParseError`` if braces unbalanced.
-    """
+    """Count function body lines, tracking lexical states to skip string/comment braces."""
     # States
     in_line_comment = False
     in_block_comment = 0  # nesting depth
@@ -239,10 +235,7 @@ class _ModuleStack:
 def _collect_slow_markers(
     lines: list[str], attr_line_idx: int, lookahead: int = 5
 ) -> str:
-    """Scan a few lines *before* the ``#[test]`` line for slow-marker attributes.
-
-    Returns a space-separated string of all detected markers, or ``""``.
-    """
+    """Extract slow-marker attributes (e.g., #[ignore], #[cfg(feature)]) near the test line."""
     markers: list[str] = []
     start = max(0, attr_line_idx - lookahead)
     for line in lines[start:attr_line_idx]:
@@ -333,7 +326,7 @@ def walk_crate(
     repo_root: Path,
     include_slow_marker: bool,
 ) -> tuple[list[TestEntry], list[str]]:
-    """Walk crate src/tests for #[test] functions. Returns (entries, errors)."""
+    """Collect #[test] functions from a crate's src/ and tests/ directories."""
     crate_root = crates_dir / crate_name
     entries: list[TestEntry] = []
     errors: list[str] = []
@@ -361,7 +354,7 @@ def write_csv(
     dest: Path | None,
     include_slow_marker: bool,
 ) -> None:
-    """Write the inventory CSV to *dest* (file) or stdout."""
+    """Write inventory CSV to file or stdout."""
     columns = CSV_COLUMNS_WITH_SLOW if include_slow_marker else CSV_COLUMNS
 
     if dest is None:
@@ -386,20 +379,13 @@ def write_csv(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Enumerate every #[test]-annotated function in the six in-scope crates "
-            "and emit a CSV inventory.  The category, guards, and notes columns are "
-            "left empty for the human tagger (ticket 003)."
-        )
+        description="Enumerate #[test] functions in workspace crates and emit CSV inventory."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=None,
-        help=(
-            "Path to the repository root (default: current working directory). "
-            "Must contain a Cargo.toml workspace file."
-        ),
+        help="Repository root containing Cargo.toml (default: current directory).",
     )
     parser.add_argument(
         "--output",
@@ -413,27 +399,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         metavar="LIST",
-        help=(
-            "Comma-separated list of crate names to include "
-            "(default: all six in-scope crates). "
-            "The 'cobre-' prefix is optional. "
-            "Example: --crates sddp,solver  or  --crates cobre-sddp,cobre-io"
-        ),
+        help="Comma-separated list of crate names (default: all 8 in-scope crates). "
+             "The 'cobre-' prefix is optional.",
     )
     parser.add_argument(
         "--include-slow-marker",
         action="store_true",
         default=False,
-        help=(
-            "Append a slow_marker column listing any #[cfg(feature = \"...\")] "
-            "or #[ignore] attribute found near the #[test] line."
-        ),
+        help="Add slow_marker column with #[cfg(feature)] and #[ignore] attributes.",
     )
     return parser.parse_args(argv)
 
 
 def _resolve_crates(raw: str | None) -> list[str]:
-    """Normalise the --crates argument to full crate names with 'cobre-' prefix."""
+    """Normalize --crates argument to full crate names with 'cobre-' prefix."""
     if raw is None:
         return list(DEFAULT_CRATES)
     names: list[str] = []
@@ -453,12 +432,10 @@ def main(argv: list[str] | None = None) -> None:
     repo_root: Path = args.repo_root if args.repo_root is not None else Path.cwd()
     repo_root = repo_root.resolve()
 
-    # Validate repo root
     cargo_toml = repo_root / "Cargo.toml"
     if not cargo_toml.exists():
         print(
-            f"test_inventory: error: {repo_root} does not contain a Cargo.toml "
-            f"workspace file",
+            f"test_inventory: error: {repo_root} does not contain Cargo.toml",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -486,11 +463,9 @@ def main(argv: list[str] | None = None) -> None:
         all_entries.extend(entries)
         all_errors.extend(errors)
 
-    # Report parse errors to stderr
     for err in all_errors:
         print(f"test_inventory: parse error: {err}", file=sys.stderr)
 
-    # Summary to stderr
     print(
         f"test_inventory: inventoried {len(all_entries)} tests across {file_count} files",
         file=sys.stderr,

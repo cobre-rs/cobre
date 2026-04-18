@@ -43,11 +43,8 @@ GUARD_MARKERS: list[tuple[str, str]] = [
     ("TrainingResult { ", "training-result-struct-literal"),
 ]
 
-# D-case fixture reference patterns
 _D_CASE_FILE_PATTERN = re.compile(r"deterministic\.rs|d\d{2}[-_]|d_case|conformance")
 _D_CASE_FN_PATTERN = re.compile(r"^d\d{2}_|^d\d{2}$|conformance_|determinism_")
-
-# fpha slow-test patterns
 _FPHA_FILE_PATTERN = re.compile(r"fpha_fitting\.rs|fpha_computed\.rs|fpha_evaporation\.rs")
 _FPHA_FN_PATTERN = re.compile(r"^fpha_")
 
@@ -128,56 +125,40 @@ _file_cache: dict[str, list[str]] = {}
 
 
 def get_file_lines(repo_root: Path, rel_path: str) -> list[str]:
-    """Return cached file lines."""
-    if rel_path not in _file_cache:
-        _file_cache[rel_path] = _read_file_lines(repo_root, rel_path)
+    """Return cached file lines, reading on first access."""
+    _file_cache.setdefault(rel_path, _read_file_lines(repo_root, rel_path))
     return _file_cache[rel_path]
 
 
 def extract_body_text(
     repo_root: Path, rel_path: str, attr_line: int, body_loc: int
 ) -> str:
-    """Extract lines around function (fn signature + body)."""
+    """Extract function signature and body text for guard detection."""
     lines = get_file_lines(repo_root, rel_path)
-    # attr_line is 1-based; grab from the #[test] line through fn body
     start = max(0, attr_line - 1)
     end = min(len(lines), start + body_loc + 30)
     return "\n".join(lines[start:end])
 
 
 def assign_guards(body_text: str, file_path: str, fn_name: str) -> str:
-    """Assign comma-separated guard labels. Returns 'generic' if no match."""
+    """Assign comma-separated guard labels from marker strings, patterns, and heuristics."""
     guards: list[str] = []
-
-    # Apply exact marker guards
     for marker, guard in GUARD_MARKERS:
         if marker in body_text:
             guards.append(guard)
-
-    if (re.match(r"^d\d{2}_", fn_name) or re.match(r"^d\d{2}$", fn_name)):
+    if re.match(r"^d\d{2}[_$]|^d\d{2}$", fn_name):
         guards.append("d-case-determinism")
-
     if "convertido" in body_text.lower():
         guards.append("convertido-determinism")
-
-    if _FPHA_FILE_PATTERN.search(file_path) or _FPHA_FN_PATTERN.match(fn_name) or "fpha_fitting" in file_path:
-        if "fpha-slow" not in guards:
-            guards.append("fpha-slow")
-
-    # Deduplicate while preserving order
+    if (_FPHA_FILE_PATTERN.search(file_path) or _FPHA_FN_PATTERN.match(fn_name)
+            or "fpha_fitting" in file_path):
+        guards.append("fpha-slow")
     seen: set[str] = set()
-    unique_guards: list[str] = []
-    for g in guards:
-        if g not in seen:
-            seen.add(g)
-            unique_guards.append(g)
-
-    if not unique_guards:
-        return "generic"
-    return ",".join(unique_guards)
+    unique = [g for g in guards if not (g in seen or seen.add(g))]
+    return ",".join(unique) if unique else "generic"
 
 
-_DCASE_FN = re.compile(r"^d\d{2}_|^d\d{2}$")
+_DCASE_FN = re.compile(r"^d\d{2}[_$]|^d\d{2}$")
 _REGRESSION_FN = re.compile(r"^regression_|_regression$|_regression_")
 _REGRESSION_FILE = re.compile(r"regression\.rs$")
 _E2E_FN = re.compile(r"converges$|_e2e$|_pipeline$|full_pipeline|end_to_end")
@@ -246,49 +227,29 @@ def assign_category(
     return "integration" if "/tests/" in file_path else "unit"
 
 
-def is_parameter_sweep(fn_name: str, body_text: str, all_rows: list[InventoryRow]) -> bool:
-    """Detect parameter-sweep patterns (conservative)."""
-    return False
 
 
 def process_rows(
     raw_rows: list[dict[str, str]],
     repo_root: Path,
 ) -> list[InventoryRow]:
-    """Tag each raw CSV row with category and guards."""
+    """Assign category and guards to each CSV row."""
     result: list[InventoryRow] = []
-
     for row in raw_rows:
-        file_path = row["file"]
-        fn_name = row["function"]
-        attr_line = int(row["line"])
-        body_loc = int(row["body_loc"])
-        test_module = row["test_module"]
-        crate = row["crate"]
-
-        # Extract body text for guard detection
-        body_text = extract_body_text(repo_root, file_path, attr_line, body_loc)
-
-        # Assign guards
-        guards = assign_guards(body_text, file_path, fn_name)
-
-        # Assign category
-        category = assign_category(file_path, fn_name, body_text, test_module)
-
+        body_text = extract_body_text(repo_root, row["file"], int(row["line"]), int(row["body_loc"]))
         result.append(
             InventoryRow(
-                crate=crate,
-                file=file_path,
-                line=attr_line,
-                function=fn_name,
-                body_loc=body_loc,
-                test_module=test_module,
-                category=category,
-                guards=guards,
+                crate=row["crate"],
+                file=row["file"],
+                line=int(row["line"]),
+                function=row["function"],
+                body_loc=int(row["body_loc"]),
+                test_module=row["test_module"],
+                category=assign_category(row["file"], row["function"], body_text, row["test_module"]),
+                guards=assign_guards(body_text, row["file"], row["function"]),
                 notes="",
             )
         )
-
     return result
 
 
@@ -537,42 +498,33 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Generate docs/assessments/test-inventory.md from the ticket-002 CSV output. "
-            "Assigns category and guards columns programmatically."
-        )
+        description="Generate test-inventory.md with category and guard assignments."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=None,
-        help="Path to the repository root (default: current working directory).",
+        help="Repository root (default: current directory).",
     )
     parser.add_argument(
         "--csv",
         type=Path,
         default=None,
         metavar="PATH",
-        help=(
-            "Path to the raw inventory CSV (default: run scripts/test_inventory.py "
-            "and use its stdout)."
-        ),
+        help="Path to raw inventory CSV (default: run test_inventory.py).",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
         metavar="PATH",
-        help=(
-            "Write Markdown to PATH (default: docs/assessments/test-inventory.md "
-            "relative to repo root)."
-        ),
+        help="Write Markdown to PATH (default: docs/assessments/test-inventory.md).",
     )
     parser.add_argument(
         "--validate-only",
         action="store_true",
         default=False,
-        help="Run tagging and validation but do not write output file.",
+        help="Validate without writing output.",
     )
     return parser.parse_args(argv)
 
@@ -641,19 +593,15 @@ def main(argv: list[str] | None = None) -> None:
         file=sys.stderr,
     )
 
-    # Summary stats
     cat_counts = Counter(r.category for r in rows)
     guard_counts: Counter[str] = Counter()
     for row in rows:
         for g in row.guards.split(","):
-            g = g.strip()
-            if g:
+            if (g := g.strip()):
                 guard_counts[g] += 1
-
     print("  Category breakdown:", file=sys.stderr)
     for cat, count in sorted(cat_counts.items()):
         print(f"    {cat}: {count}", file=sys.stderr)
-
     print("  Top guards:", file=sys.stderr)
     for guard, count in guard_counts.most_common(10):
         print(f"    {guard}: {count}", file=sys.stderr)

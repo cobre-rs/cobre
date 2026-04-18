@@ -116,10 +116,15 @@ fn main() {
     build
         .file("csrc/highs_wrapper.c")
         .include("csrc")
-        .include(&highs_include)
-        .include(&highs_include_highs)
         .warnings(true)
         .extra_warnings(true);
+
+    // Treat HiGHS headers as system includes so that their warnings
+    // (unused-parameter on setHotStart/freezeBasis/unfreezeBasis inlines) do
+    // not surface while we keep full warning coverage on our own wrappers.
+    // MSVC lacks -isystem; fall back to -I and accept the vendor noise there.
+    add_system_or_include(&mut build, target_env == "msvc", &highs_include);
+    add_system_or_include(&mut build, target_env == "msvc", &highs_include_highs);
 
     // GCC/Clang-specific warning suppression.
     if target_env != "msvc" {
@@ -139,10 +144,11 @@ fn main() {
         .file("csrc/highs_wrapper_cpp.cpp")
         .cpp(true)
         .include("csrc")
-        .include(&highs_include)
-        .include(&highs_include_highs)
         .warnings(true)
         .extra_warnings(true);
+
+    add_system_or_include(&mut build_cpp, target_env == "msvc", &highs_include);
+    add_system_or_include(&mut build_cpp, target_env == "msvc", &highs_include_highs);
 
     build_cpp.flag_if_supported("-std=c++17");
 
@@ -154,4 +160,17 @@ fn main() {
     }
 
     build_cpp.compile("highs_wrapper_cpp");
+}
+
+/// Add an include path, preferring `-isystem` on GCC/Clang so warnings from
+/// third-party headers are suppressed while warnings on our own wrappers stay
+/// active.  MSVC does not accept `-isystem`, so fall back to a regular
+/// `.include()` there.
+fn add_system_or_include(build: &mut cc::Build, is_msvc: bool, path: &std::path::Path) {
+    if is_msvc {
+        build.include(path);
+    } else {
+        build.flag("-isystem");
+        build.flag(path.to_str().expect("HiGHS include path must be UTF-8"));
+    }
 }

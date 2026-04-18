@@ -125,16 +125,22 @@ backend capability or rollback lever.
 
 ### P2 — `NonAlien` only, no fallback
 
+**Cobre owns basis correctness.** The solver is not responsible for
+salvaging a malformed basis; a basis we hand it must already be
+consistent. No solver-level workaround is permitted.
+
 - `cobre_highs_set_basis_non_alien` is the only warm-start entry point.
 - If `isBasisConsistent` fails, we return
   `Err(SolverError::BasisInconsistent { ... })` — no silent rewrite via
   `accommodateAlienBasis`, no fallback to the alien setter.
-- **This means every caller that supplies a basis is responsible for
-  proving it consistent.** `enforce_basic_count_invariant` becomes
-  load-bearing (runs on every reconstruction, period) rather than
-  conditional.
+- **Every caller that supplies a basis is responsible for proving it
+  consistent.** `enforce_basic_count_invariant` becomes load-bearing
+  (runs on every reconstruction, period) rather than conditional.
 - **`AlienOnly` is deleted from `WarmStartBasisMode`**. In fact the
   whole enum goes away — there is no mode.
+- **No escape hatch in any build**, not even `#[cfg(debug_assertions)]`.
+  If reconstruction produces an inconsistent basis, we fix the
+  reconstruction code; we do not mask it with a flag.
 
 ### P3 — Baked templates only
 
@@ -433,11 +439,11 @@ becomes an observable test failure.
 acceptance. If the hard-error mode surfaces new inconsistencies,
 fix them before wider rollout.
 
-**Open question**: Should there be a debug-only escape hatch
-(`COBRE_ALLOW_BASIS_FALLBACK=1` env var) for research workflows that
-want to attempt a run despite an inconsistent basis? Recommendation:
-**no** — research workflows should fix the reconstruction code, not
-mask it.
+**Decision**: No escape hatch in any build. Not an env var, not
+`#[cfg(debug_assertions)]`, not a build feature. The hot path is
+literally the same code in debug and release. If reconstruction is
+buggy, fix reconstruction. Consequence of P2's "Cobre owns basis
+correctness" — there is nowhere to hide an inconsistent basis.
 
 ### R2 — Baked-only removes config-less flexibility for structural changes
 
@@ -508,7 +514,7 @@ builder-based API in the migration guide.
 
 ## Proposed Sequencing
 
-**Phase 0 — Finish in-flight work (already planned)**
+**Phase 0a — Finish in-flight work (already planned)**
 
 - Close the two simulation bugs identified in
   `warm-start-observability-findings.md` (simulation warm-start mode +
@@ -518,6 +524,25 @@ builder-based API in the migration guide.
 
 This keeps the rollback levers live for one more release. v0.4.5 ships
 with everything dual-pathed and observable.
+
+**Phase 0b — Test inventory and categorization**
+
+Before any deletion, label every test in `cobre-sddp/src` and
+`cobre-sddp/tests/` (plus related crates) with two tags:
+
+- **Intent**: `unit` / `integration` / `regression-for-<X>` /
+  `conformance` / `parameter-sweep` / `coverage-matrix`.
+- **Guards**: which code path the test depends on — e.g., `AlienOnly`,
+  `Disabled`, `non-baked`, `unified-path`, `generic`.
+
+Output is an inventory committed to
+`docs/assessments/test-inventory.md`. No deletions in this phase.
+
+This makes phase 2-4 deletions mechanical ("tests tagged
+`guards: AlienOnly` go with phase 2") and gives phase 8 a clean
+starting point for judgment-based consolidation. Forcing the pass now
+— while context is fresh — is cheaper than re-deriving test intent
+six months later.
 
 **Phase 1 — Unified run path (P5) on top of existing switches**
 
@@ -613,10 +638,17 @@ judgment per test and is the longest-wall-clock of the set.
 
 - **Hot path audit**: `rg "match.*WarmStartBasisMode|if.*canonical_state|if.*baked\.ready"
 crates/cobre-{sddp,solver}/src` returns zero results after phase 4.
-- **File sizes**: `forward.rs`, `backward.rs`, and
-  `simulation/pipeline.rs` each shrink by ≥ 20% after phase 1
-  (conservative estimate; real savings likely larger once the legacy
-  paths are gone).
+- **Single entry point**: exactly one `run_stage_solve` function;
+  `forward.rs`, `backward.rs`, and `simulation/pipeline.rs` contain
+  only phase-specific capture logic (what to do with the solution),
+  never orchestration (load, basis, solve, clear).
+- **Straight-line hot path**: reading `run_stage_solve` top-to-bottom
+  contains no `match` on `WarmStartBasisMode`, no `if
+canonical_state ==`, no `if baked.ready`. Configuration does not
+  enter the hot path.
+- **Monotonic LoC**: sum of production LoC across the three driver
+  files decreases at every phase 1-4 boundary. No target number — the
+  commitment is direction, not magnitude.
 - **Read-through time**: a new engineer can trace one LP solve from
   `run_stage_solve` to `highs::solve` without a cross-reference table.
 - **No hidden invariants**: `CLAUDE.md` loses all three of the
@@ -636,14 +668,16 @@ crates/cobre-{sddp,solver,io,cli,python}/src` returns zero results
   read any hot-path file without knowing project history and still
   understand what it does.
 - **Test suite right-sized (P8)**:
-  - `cobre-sddp/tests/` line count reduced by ≥ 30% (current: 17,263
-    lines; target: ≤ 12,000).
-  - Default `cargo test --workspace` wall time reduced by ≥ 50%.
+  - `cobre-sddp/tests/` line count strictly decreases from its
+    phase-0b baseline; the concrete target is set at the phase-8
+    boundary once the inventory is in hand.
+  - Default `cargo test --workspace` wall time strictly decreases;
+    the concrete target is likewise set at phase 8.
   - No in-source test module exceeds the production code of its host
     file; oversized modules have been extracted to
     `tests/<module>_tests.rs`.
-  - D01-D30 + `fpha_*` still pass, but are gated behind `--features
-slow-tests` so default runs stay snappy.
+  - D01-D30 + `fpha_*` still pass, gated behind `--features
+slow-tests` (or equivalent) so default runs stay snappy.
 
 ---
 
@@ -678,35 +712,73 @@ state.
 
 ---
 
+## Alternative Considered: `#[cfg(debug_assertions)]`-gated levers
+
+Delete the rollback levers from release builds but keep them behind
+`#[cfg(debug_assertions)]` for in-tree A/B debugging. Zero
+release-build cost; preserves the ability to re-enable `AlienOnly` or
+`Disabled` for a single comparison run.
+
+**Rejected because**: the hot path must be literally the same code in
+debug and release. Two shapes drift — the debug shape rots silently,
+and the moment we need it for comparison we discover it doesn't match
+release anymore. If a post-refactor A/B is ever needed, capture a
+convertido or D-case artifact from v0.4.x and diff out-of-tree; the
+in-tree escape hatch costs more maintenance than it saves.
+
+---
+
 ## Decision Points Requiring User Approval
 
-Before planning epics for this refactor, the following need a
-yes/no from the user:
+Decisions are bucketed by when the answer is needed and how reversible
+the commitment is. The upfront approval gate is exactly three
+questions (Bucket A); the rest are answered as their phase opens.
 
-1. **Target release: v0.5.0 (breaking)?** ← confirm hard break vs
-   deprecation window.
-2. **Hard-error on `BasisInconsistent`?** ← confirm no debug escape
-   hatch.
-3. **`clear_solver_state` mandatory in the trait?** ← confirm backend
-   plurality restriction.
-4. **Baked templates only, no legacy path?** ← confirm no user relies
-   on the legacy for structural flexibility.
-5. **Phase ordering**: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8, as proposed?
-   ← or a different ordering if there's a known downstream constraint.
-6. **Comment-hygiene scope (P7)**: strip all historical references
-   from production code only, or also from `crates/*/tests/`?
-   Recommendation: production-only. Test modules legitimately use
-   AC traceability (`// AC4 for ticket-004`) as a design note, and
-   they're not hot-path reading.
-7. **Test-audit aggressiveness (P8)**: target 30% reduction in
-   `cobre-sddp/tests/` line count, with ≥ 50% reduction in default
-   `cargo test` wall time, as proposed? If the user wants more
-   conservative (retain-everything-that-passes) or more aggressive
-   (target 50%+ line reduction), adjust before planning.
-8. **Slow-test gating**: move `fpha_*` and D01-D30 behind a
-   `slow-tests` cargo feature? Recommendation: yes — they're the
-   primary drag on default `cargo test`, and CI can still run them
-   with `--all-features` or an explicit `--features slow-tests`.
+### Bucket A — Architectural, decide before phase 1 starts
 
-Once these are confirmed, the refactor becomes a plan under
+These change the trait shape and failure model. Every subsequent phase
+assumes them. Irreversible without a second v0.5-class refactor.
+
+1. **Hard-error on `BasisInconsistent`?** — **YES** (confirmed
+   2026-04-18). No escape hatch in any build. Cobre owns basis
+   correctness.
+2. **`clear_solver_state` mandatory in `SolverInterface`?** — confirms
+   the backend-plurality restriction. Backends must implement the
+   semantics (via whatever internal means, including `reset +
+load_model`) rather than falling back on `Err(Unsupported)`.
+3. **Baked templates only, no legacy path?** — confirms that mid-run
+   structural changes are permanently unsupported. Not a regression
+   (today's legacy path doesn't support them either) but it codifies
+   the assumption.
+
+### Bucket B — Phase-boundary calibration
+
+Set when the relevant phase opens, after phase-0b inventory data is
+in hand. Pre-committing specific numbers now is guessing.
+
+4. **Comment-hygiene scope (P7)**: production only, or also
+   `crates/*/tests/`? Default recommendation: production only. Test
+   modules legitimately use AC traceability as a design note and
+   aren't hot-path reading. Revisit at phase 7 if the test modules
+   turn out to carry rot too.
+5. **Test-audit aggressiveness (P8)**: set reduction targets once
+   phase-0b categorization reports what's actually in the 17,263
+   lines of `cobre-sddp/tests/`. No pre-commitment to 30% / 50%.
+6. **Slow-test gating**: gate `fpha_*` and full D01-D30 behind a
+   `slow-tests` cargo feature? Default recommendation: yes — they're
+   the primary drag on default `cargo test`. Finalize at phase 8
+   based on what the categorization surfaces.
+
+### Bucket C — Release-time decisions
+
+Stable enough to wait until release planning.
+
+7. **Target release: v0.5.0 (breaking)?** Default: yes. Confirm at
+   release-branch cut, not now.
+8. **Phase ordering**: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 as proposed,
+   unless phase-0b reveals test-suite drag is blocking iteration
+   speed; in that case, hoist phase 8 earlier.
+
+Once Bucket A is confirmed, the refactor becomes a plan under
 `plans/architecture-unification/` with concrete epic breakdowns.
+Buckets B and C are revisited as their phases open.

@@ -236,6 +236,28 @@ pub struct CutSelectionConfig {
     pub max_active_per_stage: Option<u32>,
 }
 
+/// Controls which `HiGHS` basis-setter is called on each warm-start.
+///
+/// `NonAlienFirst` (the default) calls `cobre_highs_set_basis_non_alien`
+/// first and falls back to the alien setter on rejection.  `AlienOnly`
+/// reproduces the pre-ticket-010 behaviour: always call
+/// `cobre_highs_set_basis` without the consistency check.
+///
+/// Set in `config.json → training.solver.warm_start_basis_mode`.
+/// Existing files that omit this field receive `NonAlienFirst` via
+/// `#[serde(default)]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WarmStartBasisMode {
+    /// Call `cobre_highs_set_basis` (alien) directly — pre-ticket-010 behaviour.
+    AlienOnly,
+    /// Call `cobre_highs_set_basis_non_alien` first; fall back to alien on
+    /// `HIGHS_STATUS_ERROR`.  Default after ticket-010.
+    #[default]
+    NonAlienFirst,
+}
+
 /// LP solver retry settings (`config.json → training.solver`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -246,6 +268,14 @@ pub struct TrainingSolverConfig {
 
     /// Total time budget in seconds across all retry attempts for one solve.
     pub retry_time_budget_seconds: f64,
+
+    /// Which `HiGHS` basis-setter to use on each warm-start.
+    ///
+    /// `"non_alien_first"` (default) tries the consistency-checking setter first
+    /// and falls back to the alien setter on rejection.
+    /// `"alien_only"` skips the consistency check (pre-ticket-010 behaviour).
+    #[serde(default)]
+    pub warm_start_basis_mode: WarmStartBasisMode,
 }
 
 impl Default for TrainingSolverConfig {
@@ -253,6 +283,7 @@ impl Default for TrainingSolverConfig {
         Self {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
+            warm_start_basis_mode: WarmStartBasisMode::default(),
         }
     }
 }

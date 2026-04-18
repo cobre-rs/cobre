@@ -5,8 +5,8 @@
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    CutSelectionStrategy, DEFAULT_MAX_ITERATIONS, InflowNonNegativityMethod, StoppingMode,
-    StoppingRule, StoppingRuleSet, StudyParams,
+    CutSelectionStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
+    StudyParams, DEFAULT_MAX_ITERATIONS,
 };
 
 use crate::error::CliError;
@@ -24,6 +24,36 @@ pub(crate) enum BroadcastStoppingRule {
 pub(crate) enum BroadcastStoppingMode {
     Any,
     All,
+}
+
+/// Postcard-serializable warm-start basis mode.
+///
+/// Mirrors [`cobre_io::config::WarmStartBasisMode`] for postcard broadcast.
+/// The I/O type uses `#[serde(rename_all = "snake_case")]` which is not
+/// compatible with postcard's non-self-describing format; this plain enum
+/// round-trips cleanly.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(crate) enum BroadcastWarmStartBasisMode {
+    AlienOnly,
+    NonAlienFirst,
+}
+
+impl From<cobre_io::config::WarmStartBasisMode> for BroadcastWarmStartBasisMode {
+    fn from(mode: cobre_io::config::WarmStartBasisMode) -> Self {
+        match mode {
+            cobre_io::config::WarmStartBasisMode::AlienOnly => Self::AlienOnly,
+            cobre_io::config::WarmStartBasisMode::NonAlienFirst => Self::NonAlienFirst,
+        }
+    }
+}
+
+impl From<BroadcastWarmStartBasisMode> for cobre_solver::highs::WarmStartBasisMode {
+    fn from(mode: BroadcastWarmStartBasisMode) -> Self {
+        match mode {
+            BroadcastWarmStartBasisMode::AlienOnly => Self::AlienOnly,
+            BroadcastWarmStartBasisMode::NonAlienFirst => Self::NonAlienFirst,
+        }
+    }
 }
 
 /// Postcard-serializable cut selection strategy.
@@ -130,6 +160,11 @@ pub(crate) struct BroadcastConfig {
     pub(crate) training_source: ScenarioSource,
     /// Scenario source for the post-training simulation forward pass.
     pub(crate) simulation_source: ScenarioSource,
+    /// Which `HiGHS` basis-setter to call on each warm-start.
+    ///
+    /// Broadcast so all ranks construct their solver workspace with the same
+    /// mode. Defaults to `NonAlienFirst` (post-ticket-010).
+    pub(crate) warm_start_basis_mode: BroadcastWarmStartBasisMode,
 }
 
 impl BroadcastConfig {
@@ -202,6 +237,7 @@ impl BroadcastConfig {
             budget: params.budget,
             training_source,
             simulation_source,
+            warm_start_basis_mode: config.training.solver.warm_start_basis_mode.into(),
         })
     }
 }
@@ -308,7 +344,7 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
-    use super::{BroadcastOpeningTree, broadcast_value};
+    use super::{broadcast_value, BroadcastOpeningTree};
 
     /// A minimal serializable struct for testing the broadcast helper.
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

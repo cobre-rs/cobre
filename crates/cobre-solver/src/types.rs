@@ -227,6 +227,15 @@ pub struct SolverStatistics {
     /// Ticket 005 adds the parquet column and writer wiring.
     pub basis_preserved: u64,
 
+    /// Number of BASIC row statuses demoted to LOWER by
+    /// `enforce_basic_count_invariant` on the forward path to restore
+    /// `col_basic + row_basic == num_row` after cut-set churn (ticket-009).
+    ///
+    /// Incremented by the calling algorithm, not by the solver itself.
+    /// A non-zero value on the forward path is expected when dropped cuts had
+    /// BASIC status; zero on the backward path (no demotion pass applied there).
+    pub basis_demotions: u64,
+
     /// Per-level retry success histogram. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
     /// were recovered at retry level `k`. The sum equals

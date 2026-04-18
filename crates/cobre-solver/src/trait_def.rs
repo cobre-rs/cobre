@@ -174,7 +174,17 @@ pub trait SolverInterface: Send {
     /// - `new_tight`: new cut rows (slot not in stored basis) evaluated as
     ///   tight or violated at the padding state.
     /// - `new_slack`: new cut rows evaluated as slack at the padding state.
-    fn record_reconstruction_stats(&mut self, _preserved: u32, _new_tight: u32, _new_slack: u32) {}
+    /// - `demotions`: BASIC row statuses demoted to LOWER by
+    ///   `enforce_basic_count_invariant` on the forward path (ticket-009).
+    ///   Pass `0` on the backward path where no demotion pass is applied.
+    fn record_reconstruction_stats(
+        &mut self,
+        _preserved: u32,
+        _new_tight: u32,
+        _new_slack: u32,
+        _demotions: u32,
+    ) {
+    }
 }
 
 #[cfg(test)]

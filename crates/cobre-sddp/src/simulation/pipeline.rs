@@ -49,14 +49,13 @@ use cobre_core::{EntityId, TrainingEvent};
 use cobre_solver::{RowBatch, SolverError, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
+    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -66,13 +65,14 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            accumulate_category_costs, assign_scenarios, extract_stage_result, SolutionView,
+            StageExtractionSpec,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
     workspace::{CapturedBasis, SolverWorkspace},
+    FutureCostFunction,
 };
 
 /// Offset added to the simulation scenario ID before passing to [`ForwardSampler::sample`].
@@ -440,6 +440,7 @@ fn solve_simulation_stage<S: SolverInterface>(
                 recon_stats.preserved,
                 recon_stats.new_tight,
                 recon_stats.new_slack,
+                0, // simulation baked path: no demotion pass
             );
             ws.solver.solve_with_basis(&ws.scratch_basis)
         } else {
@@ -460,6 +461,7 @@ fn solve_simulation_stage<S: SolverInterface>(
                 recon_stats.preserved,
                 recon_stats.new_tight,
                 recon_stats.new_slack,
+                0, // simulation fallback path: no demotion pass
             );
             ws.solver.solve_with_basis(&ws.scratch_basis)
         }
@@ -1190,12 +1192,12 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::{simulate, SimulationOutputSpec};
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
         simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
         workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
     };
 
     // ── Stub communicator ────────────────────────────────────────────────────
@@ -1381,6 +1383,7 @@ mod tests {
             preserved: u32,
             _new_tight: u32,
             _new_slack: u32,
+            _demotions: u32,
         ) {
             self.preserved_counter += preserved;
         }
@@ -1480,7 +1483,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
 
         let bus = Bus {
@@ -3278,7 +3281,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
 
         let bus0 = Bus {
@@ -3905,7 +3908,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
 
         let bus = Bus {

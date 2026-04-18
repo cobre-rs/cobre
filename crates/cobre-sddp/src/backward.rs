@@ -89,8 +89,7 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface, SolverStatistics};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
+    basis_reconstruct::{reconstruct_basis, PaddingContext, ReconstructionTarget},
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -100,6 +99,7 @@ use crate::{
     solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
+    FutureCostFunction, SddpError, TrajectoryRecord,
 };
 
 /// Result produced by the backward pass on a single rank.
@@ -490,30 +490,38 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 };
                 let theta_value = succ.successor_pool.evaluate_at_state(padding_state);
 
-                // Reconstruct basis by path: baked uses delta cuts only (rows
-                // already baked into the template base are skipped via offset);
-                // legacy uses the full active-cut set with offset 0.
-                let target = ReconstructionTarget {
-                    base_row_count: succ.template_num_rows,
-                    num_cols: ctx.templates[s].num_cols,
-                };
+                // Reconstruct basis by path:
+                // - Baked: base_row_count = baked template rows (not the non-baked
+                //   base), offset = 0. The stored basis was captured from a baked-
+                //   template LP, so all baked rows are "base" rows — no offset needed.
+                //   Only delta cuts (iter-N) are reconciled; tight ones will be
+                //   discovered via simplex pivots.
+                // - Legacy (non-baked): base_row_count = non-baked template rows,
+                //   full active-cut set, offset = 0.
                 let padding = PaddingContext {
                     state: padding_state,
                     theta: theta_value,
                     tolerance: 1e-7,
                 };
                 let recon_stats = if succ.baked_template.is_some() {
-                    let baked_cut_count = succ.baked_template_num_rows - succ.template_num_rows;
+                    let target = ReconstructionTarget {
+                        base_row_count: succ.baked_template_num_rows,
+                        num_cols: ctx.templates[s].num_cols,
+                    };
                     reconstruct_basis(
                         captured,
                         target,
                         succ.successor_pool.active_delta_cuts(spec.iteration),
                         padding,
-                        baked_cut_count,
+                        0,
                         &mut ws.scratch_basis,
                         &mut ws.scratch.recon_slot_lookup,
                     )
                 } else {
+                    let target = ReconstructionTarget {
+                        base_row_count: succ.template_num_rows,
+                        num_cols: ctx.templates[s].num_cols,
+                    };
                     reconstruct_basis(
                         captured,
                         target,
@@ -528,6 +536,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                     recon_stats.preserved,
                     recon_stats.new_tight,
                     recon_stats.new_slack,
+                    0, // backward path: delta==0 by construction (ticket-008); no demotion pass
                 );
 
                 ws.solver.solve_with_basis(&ws.scratch_basis)
@@ -1095,13 +1104,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{BakedTemplates, StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
@@ -1430,7 +1439,6 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
-            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1439,9 +1447,10 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
+            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
         use std::collections::BTreeMap;
 
@@ -3433,7 +3442,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
         };
 
         let bus0 = Bus {

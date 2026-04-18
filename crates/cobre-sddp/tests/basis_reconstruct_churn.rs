@@ -60,7 +60,7 @@ use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::config::StoppingRuleConfig;
 use cobre_sddp::{
-    SolverStatsDelta, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    hydro_models::prepare_hydro_models, setup::prepare_stochastic, SolverStatsDelta, StudySetup,
 };
 use cobre_solver::highs::HighsSolver;
 
@@ -184,11 +184,14 @@ fn basis_reconstruct_churn() {
     // Pinned regression values — declared first to satisfy `clippy::items_after_statements`.
     //
     // AC-5: simplex-iteration pin (±5 % tolerance).
-    // Pinned from local run 2026-04-17 (commit b866acb9), `HiGHS` 1.x.
+    // Pinned from local run 2026-04-18 (ticket-009 enforce_basic_count_invariant).
+    // The forward-path invariant fix reduces simplex iterations by ~9 % vs the
+    // pre-fix pin of 198: demoting excess BASIC rows gives HiGHS a tighter warm
+    // start, requiring fewer pivots.
     // Regenerate if `HiGHS` major version changes or the fixture parameters change.
     // Sensitivity: a padding_state = x_hat regression (ticket-004) raises this
     // count by ~+6 %, which exceeds the ±5 % band and trips this assertion.
-    const PINNED_SIMPLEX_ITERS: u64 = 198;
+    const PINNED_SIMPLEX_ITERS: u64 = 180;
     // ±5 % expressed as integer fractions to avoid `clippy::cast_sign_loss`.
     const LO_SIMPLEX: u64 = PINNED_SIMPLEX_ITERS * 95 / 100; // floor of 0.95×pin
     const HI_SIMPLEX: u64 = PINNED_SIMPLEX_ITERS * 105 / 100; // floor of 1.05×pin
@@ -260,12 +263,15 @@ fn basis_reconstruct_churn() {
         fwd.basis_preserved
     );
 
-    // AC-2: at least one new cut was tight at the padding state.
+    // AC-2: at least one new cut was slack (BASIC) at the padding state.
+    // After ticket-008, all new-cut rows are unconditionally assigned BASIC status
+    // in reconstruct_basis, so basis_new_tight is always 0. The meaningful signal
+    // is now basis_new_slack (new cuts classified as BASIC = not tight).
     assert!(
-        fwd.basis_new_tight > 0,
-        "basis_reconstruct_churn: expected basis_new_tight > 0, got {} \
-         (at least one new cut must be classified as NONBASIC_LOWER across 8 iterations)",
-        fwd.basis_new_tight
+        fwd.basis_new_slack > 0,
+        "basis_reconstruct_churn: expected basis_new_slack > 0, got {} \
+         (at least one new cut must be classified as BASIC across 8 iterations)",
+        fwd.basis_new_slack
     );
 
     // AC-3: at least one new cut was slack at the padding state.

@@ -687,6 +687,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
             "Newly-added cut rows assigned BASIC after evaluation at the padding state \
              (slot not found in stored basis)"
         }
+        ("solver_iterations", "basis_demotions") => {
+            "BASIC row statuses demoted to LOWER by enforce_basic_count_invariant on the \
+             forward path to restore col_basic + row_basic == num_row after cut-set churn \
+             (ticket-009). Zero on backward and simulation paths."
+        }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
         ("retry_histogram", "phase") => "Solver phase (forward, backward, lower_bound, simulation)",
@@ -1443,8 +1448,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 195,
-            "variables.csv must have exactly 195 data rows (one per column across all 16 iteration_timing columns + rest of schemas, including basis_non_alien_rejections)"
+            row_count, 196,
+            "variables.csv must have exactly 196 data rows (one per column across all 16 iteration_timing columns + rest of schemas, including basis_non_alien_rejections and basis_demotions)"
         );
     }
 

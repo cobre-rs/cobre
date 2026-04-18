@@ -253,6 +253,7 @@ fn delta_to_stats_row(
         basis_preserved: delta.basis_preserved,
         basis_new_tight: delta.basis_new_tight,
         basis_new_slack: delta.basis_new_slack,
+        basis_demotions: delta.basis_demotions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }
@@ -269,16 +270,27 @@ struct TrainingPhaseResult {
 fn run_training_phase_py(
     setup: &mut StudySetup,
     n_threads: usize,
+    warm_start_basis_mode: cobre_io::config::WarmStartBasisMode,
 ) -> Result<TrainingPhaseResult, String> {
+    use cobre_solver::highs::WarmStartBasisMode as SolverMode;
+
+    // Convert from the I/O config type to the solver-crate mirrored type.
+    let solver_mode = match warm_start_basis_mode {
+        cobre_io::config::WarmStartBasisMode::AlienOnly => SolverMode::AlienOnly,
+        cobre_io::config::WarmStartBasisMode::NonAlienFirst => SolverMode::NonAlienFirst,
+    };
+
     let started_at = cobre_io::now_iso8601();
-    let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
+    let mut solver = HighsSolver::new()
+        .map_err(|e| format!("HiGHS initialisation failed: {e}"))?
+        .with_warm_start_mode(solver_mode);
     let (event_tx, event_rx) = mpsc::channel();
     let training_outcome = setup
         .train(
             &mut solver,
             &LocalBackend,
             n_threads,
-            HighsSolver::new,
+            move || HighsSolver::new().map(|s| s.with_warm_start_mode(solver_mode)),
             Some(event_tx),
             None,
         )
@@ -613,7 +625,11 @@ fn run_inner(
             cobre_sddp::inject_boundary_cuts(&mut setup, &boundary_records);
         }
 
-        let training = run_training_phase_py(&mut setup, n_threads)?;
+        let training = run_training_phase_py(
+            &mut setup,
+            n_threads,
+            config.training.solver.warm_start_basis_mode,
+        )?;
 
         write_training_artifacts(
             &output_dir,

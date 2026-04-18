@@ -80,6 +80,13 @@ pub struct SolverStatsDelta {
     /// Application-level counter: not included in MPI packing or allreduce.
     pub basis_preserved: u64,
 
+    /// Number of BASIC row statuses demoted to LOWER by
+    /// `enforce_basic_count_invariant` on the forward path (ticket-009).
+    ///
+    /// Application-level counter: not included in MPI packing or allreduce.
+    /// Zero on the backward and simulation paths where no demotion pass is applied.
+    pub basis_demotions: u64,
+
     /// Per-level retry success histogram delta. Length depends on the solver
     /// backend (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -129,6 +136,7 @@ impl SolverStatsDelta {
             basis_new_tight: after.basis_new_tight.saturating_sub(before.basis_new_tight),
             basis_new_slack: after.basis_new_slack.saturating_sub(before.basis_new_slack),
             basis_preserved: after.basis_preserved.saturating_sub(before.basis_preserved),
+            basis_demotions: after.basis_demotions.saturating_sub(before.basis_demotions),
             retry_level_histogram: after
                 .retry_level_histogram
                 .iter()
@@ -164,6 +172,7 @@ impl SolverStatsDelta {
             result.basis_new_tight += d.basis_new_tight;
             result.basis_new_slack += d.basis_new_slack;
             result.basis_preserved += d.basis_preserved;
+            result.basis_demotions += d.basis_demotions;
             ensure_histogram_capacity(&mut result.retry_level_histogram, &d.retry_level_histogram);
             for (dst, src) in result
                 .retry_level_histogram
@@ -207,6 +216,7 @@ pub fn aggregate_solver_statistics(
         result.basis_new_tight += s.basis_new_tight;
         result.basis_new_slack += s.basis_new_slack;
         result.basis_preserved += s.basis_preserved;
+        result.basis_demotions += s.basis_demotions;
         ensure_histogram_capacity(&mut result.retry_level_histogram, &s.retry_level_histogram);
         for (dst, src) in result
             .retry_level_histogram
@@ -306,6 +316,7 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         basis_new_tight: 0,
         basis_new_slack: 0,
         basis_preserved: 0,
+        basis_demotions: 0,
         retry_level_histogram: Vec::new(),
     }
 }
@@ -391,6 +402,7 @@ mod tests {
             basis_new_tight: 0,
             basis_new_slack: 0,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         };
         let after = SolverStatistics {
@@ -413,6 +425,7 @@ mod tests {
             basis_new_tight: 0,
             basis_new_slack: 0,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -456,6 +469,7 @@ mod tests {
             basis_new_tight: 0,
             basis_new_slack: 0,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
@@ -503,6 +517,7 @@ mod tests {
             basis_new_tight: 3,
             basis_new_slack: 7,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         };
         let d2 = SolverStatsDelta {
@@ -525,6 +540,7 @@ mod tests {
             basis_new_tight: 5,
             basis_new_slack: 2,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -570,6 +586,7 @@ mod tests {
             basis_new_tight: 4,
             basis_new_slack: 6,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let s2 = SolverStatistics {
@@ -592,6 +609,7 @@ mod tests {
             basis_new_tight: 10,
             basis_new_slack: 20,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
@@ -639,6 +657,7 @@ mod tests {
             basis_new_tight: 0,
             basis_new_slack: 0,
             basis_preserved: 0,
+            basis_demotions: 0,
             retry_level_histogram: vec![0; 12],
         }
     }

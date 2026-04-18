@@ -63,6 +63,10 @@ pub struct SolverStatsRow {
     /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
     /// padding state.
     pub basis_new_slack: u64,
+    /// Number of BASIC row statuses demoted to LOWER by
+    /// `enforce_basic_count_invariant` on the forward path (ticket-009).
+    /// Zero on backward and simulation paths.
+    pub basis_demotions: u64,
     /// Per-level retry success counts. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -148,6 +152,8 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         UInt64Array::from(rows.iter().map(|r| r.basis_new_tight).collect::<Vec<_>>());
     let basis_new_slack_arr =
         UInt64Array::from(rows.iter().map(|r| r.basis_new_slack).collect::<Vec<_>>());
+    let basis_demotions_arr =
+        UInt64Array::from(rows.iter().map(|r| r.basis_demotions).collect::<Vec<_>>());
 
     vec![
         Arc::new(iteration_arr),
@@ -170,6 +176,7 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(basis_preserved_arr),
         Arc::new(basis_new_tight_arr),
         Arc::new(basis_new_slack_arr),
+        Arc::new(basis_demotions_arr),
     ]
 }
 
@@ -292,6 +299,7 @@ mod tests {
                 basis_preserved: 0,
                 basis_new_tight: 0,
                 basis_new_slack: 0,
+                basis_demotions: 0,
                 retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
@@ -315,6 +323,7 @@ mod tests {
                 basis_preserved: 0,
                 basis_new_tight: 0,
                 basis_new_slack: 0,
+                basis_demotions: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ]
@@ -340,7 +349,7 @@ mod tests {
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 20);
+        assert_eq!(batch.num_columns(), 21);
 
         let iteration_col = batch
             .column(0)
@@ -392,7 +401,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 20);
+        assert_eq!(builder.schema().fields().len(), 21);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -426,6 +435,7 @@ mod tests {
                 basis_preserved: 0,
                 basis_new_tight: 0,
                 basis_new_slack: 0,
+                basis_demotions: 0,
                 // Level 0: 5 recoveries, level 2: 1 recovery
                 retry_level_histogram: vec![5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             },
@@ -450,6 +460,7 @@ mod tests {
                 basis_preserved: 0,
                 basis_new_tight: 0,
                 basis_new_slack: 0,
+                basis_demotions: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ];

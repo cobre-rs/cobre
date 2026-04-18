@@ -169,6 +169,8 @@ struct LoadBroadcastResult {
     training_enabled: bool,
     /// Policy initialization mode (broadcast from rank 0).
     policy_mode: cobre_io::PolicyMode,
+    /// Which `HiGHS` basis-setter to call on each warm-start (broadcast from rank 0).
+    warm_start_basis_mode: cobre_solver::highs::WarmStartBasisMode,
 }
 
 /// Output of [`run_training_phase`]: result, training output, and optional error.
@@ -218,6 +220,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
         root_estimation_path,
         training_enabled,
         policy_mode,
+        warm_start_basis_mode,
     } = broadcast_and_build_setup(ctx, args)?;
 
     // Pre-training outputs (estimation artifacts, scaling report) run
@@ -238,7 +241,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
     if training_enabled {
         apply_training_policy(ctx, &system, &mut setup, root_config.as_ref(), policy_mode)?;
         let training_started_at = cobre_io::now_iso8601();
-        let training = run_training_phase(ctx, &mut setup)?;
+        let training = run_training_phase(ctx, &mut setup, warm_start_basis_mode)?;
         let training_completed_at = cobre_io::now_iso8601();
 
         // Write training outputs immediately (before simulation), so training
@@ -782,6 +785,8 @@ fn broadcast_and_build_setup(
 
     let training_enabled = bcast_config.training_enabled;
     let policy_mode = bcast_config.policy_mode;
+    let warm_start_basis_mode =
+        cobre_solver::highs::WarmStartBasisMode::from(bcast_config.warm_start_basis_mode);
     let setup = build_study_setup(&system, &mut bcast_config, stochastic, hydro_models)?;
 
     Ok(LoadBroadcastResult {
@@ -792,6 +797,7 @@ fn broadcast_and_build_setup(
         root_estimation_path,
         training_enabled,
         policy_mode,
+        warm_start_basis_mode,
     })
 }
 
@@ -899,12 +905,16 @@ fn run_pre_training(
 fn run_training_phase(
     ctx: &RunContext<impl Communicator>,
     setup: &mut StudySetup,
+    warm_start_basis_mode: cobre_solver::highs::WarmStartBasisMode,
 ) -> Result<TrainingPhaseResult, CliError> {
-    let solver_factory = HighsSolver::new;
+    let solver_factory =
+        move || HighsSolver::new().map(|s| s.with_warm_start_mode(warm_start_basis_mode));
 
-    let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
-        message: format!("HiGHS initialisation failed: {e}"),
-    })?;
+    let mut solver = HighsSolver::new()
+        .map_err(|e| CliError::Solver {
+            message: format!("HiGHS initialisation failed: {e}"),
+        })?
+        .with_warm_start_mode(warm_start_basis_mode);
 
     let (event_tx, event_rx) = mpsc::channel::<TrainingEvent>();
 
@@ -1510,6 +1520,7 @@ fn delta_to_stats_row(
         basis_preserved: delta.basis_preserved,
         basis_new_tight: delta.basis_new_tight,
         basis_new_slack: delta.basis_new_slack,
+        basis_demotions: delta.basis_demotions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }

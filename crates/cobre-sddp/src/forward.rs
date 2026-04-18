@@ -74,22 +74,24 @@ use cobre_core::WelfordAccumulator;
 use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ClassSampleRequest, ForwardSampler,
+    ForwardSamplerConfig, SampleRequest,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
+    basis_reconstruct::{
+        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, ReconstructionTarget,
+    },
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
 };
 
 /// Local statistics from one rank's forward pass.
@@ -954,10 +956,23 @@ fn run_forward_stage<S: SolverInterface + Send>(
                 &mut ws.scratch_basis,
                 &mut ws.scratch.recon_slot_lookup,
             );
+            // Forward-path invariant fix (ticket-009): after cut-set churn,
+            // col_basic + row_basic may exceed num_row when dropped cuts had
+            // BASIC status.  Demote trailing cut-row BASIC statuses to LOWER
+            // to restore the HiGHS isBasisConsistent invariant.
+            // Do NOT apply on the backward path — ticket-008 proved delta == 0
+            // there by construction.
+            let num_row = ctx.templates[t].num_rows + pool.active_cuts().count();
+            let demotions = enforce_basic_count_invariant(
+                &mut ws.scratch_basis,
+                num_row,
+                ctx.templates[t].num_rows,
+            );
             ws.solver.record_reconstruction_stats(
                 recon_stats.preserved,
                 recon_stats.new_tight,
                 recon_stats.new_slack,
+                demotions,
             );
             ws.solver.solve_with_basis(&ws.scratch_basis)
         }
@@ -1526,21 +1541,21 @@ mod tests {
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
+    use cobre_stochastic::context::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
     use cobre_stochastic::StochasticContext;
-    use cobre_stochastic::context::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use cobre_comm::LocalBackend;
 
     use super::{
-        ForwardPassBatch, ForwardResult, SyncResult, build_cut_row_batch,
-        build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
+        build_cut_row_batch, build_delta_cut_row_batch_into, partition, run_forward_pass,
+        sync_forward, ForwardPassBatch, ForwardResult, SyncResult,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{BakedTemplates, StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
     };
 
     /// Return a `BakedTemplates` that signals the legacy (non-baked) path.

@@ -26,6 +26,25 @@
 //! `stored.cut_row_slots` and reads row statuses at the correct position.  For
 //! the forward path and the legacy backward path, pass `0`.
 //!
+//! ## Forward-path basic-count invariant (ticket-009)
+//!
+//! On the forward path, cut selection may drop cuts whose stored row status was
+//! `HIGHS_BASIS_STATUS_LOWER`.  Each such LOWER drop reduces the running basic
+//! count by zero (LOWER is non-basic), but each preserved BASIC drop reduces it
+//! by 1.  `reconstruct_basis` assigns BASIC unconditionally to new cuts, so new
+//! cuts never cause a deficit.  However, if `excess = col_basic + row_basic -
+//! num_row > 0` after reconstruction, it means dropped cuts were all BASIC, and
+//! the reconstructed basis has too many BASIC statuses.
+//!
+//! [`enforce_basic_count_invariant`] corrects this by scanning from the end of
+//! `out.row_status` (the cut rows, indices `>= base_row_count`) and demoting
+//! trailing `HIGHS_BASIS_STATUS_BASIC` entries to `HIGHS_BASIS_STATUS_LOWER`
+//! until `col_basic + row_basic == num_row` exactly.  The demotion count equals
+//! `excess = dropped_lower >= 0` and is always non-negative (never a deficit).
+//!
+//! This pass is applied **only on the forward path**; the backward path produces
+//! `delta == 0` by construction (ticket-008) and does not need it.
+//!
 //! ## Usage
 //!
 //! ```rust
@@ -256,26 +275,115 @@ where
             stats.preserved += 1;
             stored.basis.row_status[stored_row_idx]
         } else {
-            // New cut — evaluate at padding.state.
-            let cut_value: f64 = intercept
-                + coefficients
-                    .iter()
-                    .zip(padding.state)
-                    .map(|(c, x)| c * x)
-                    .sum::<f64>();
-            let slack = padding.theta - cut_value;
-            if slack <= padding.tolerance {
-                stats.new_tight += 1;
-                HIGHS_BASIS_STATUS_LOWER
-            } else {
-                stats.new_slack += 1;
-                HIGHS_BASIS_STATUS_BASIC
-            }
+            // New cut — classify as BASIC (slack) unconditionally to preserve
+            // basic_count == num_row. Each appended cut grows num_row by 1, so
+            // marking it BASIC grows basic_count by 1 and keeps the invariant
+            // exact. The simplex discovers tight cuts via pivots during the solve.
+            //
+            // NOTE: `new_tight` is always 0 after ticket-008 (backward path no
+            // longer uses cut-value evaluation for new cuts). Scheduled for
+            // removal in a follow-up cleanup ticket.
+            let _ = (intercept, coefficients); // suppress unused-variable warnings
+            stats.new_slack += 1;
+            HIGHS_BASIS_STATUS_BASIC
         };
         out.row_status.push(row_status_byte);
     }
 
     stats
+}
+
+// ---------------------------------------------------------------------------
+// enforce_basic_count_invariant
+// ---------------------------------------------------------------------------
+
+/// Restore `col_basic + row_basic == num_row` after [`reconstruct_basis`]
+/// on the forward path.
+///
+/// ## Algebraic invariant
+///
+/// Let `excess = col_basic + row_basic - num_row` after reconstruction.
+///
+/// On the forward path, cut selection may drop cuts whose stored row status
+/// was `HIGHS_BASIS_STATUS_BASIC`.  Each such BASIC drop leaves one fewer
+/// BASIC row, but `reconstruct_basis` assigns BASIC unconditionally to new
+/// cuts.  If more cuts were preserved with BASIC status than the LP now has
+/// room for, `excess > 0`.
+///
+/// The investigation proved that `excess = dropped_basic >= 0` always.
+/// There is never a deficit.  Therefore:
+///
+/// - If `excess == 0`: no-op, return 0.
+/// - If `excess > 0`: scan `out.row_status` from the end, flipping
+///   `HIGHS_BASIS_STATUS_BASIC` to `HIGHS_BASIS_STATUS_LOWER` only for
+///   cut rows (indices `>= base_row_count`) until exactly `excess` demotions
+///   have been applied.
+///
+/// ## Parameters
+///
+/// - `out` — the [`Basis`] returned by [`reconstruct_basis`].
+/// - `num_row` — the total row count of the target LP
+///   (`base_row_count + active_cut_count`).
+/// - `base_row_count` — the number of template (non-cut) rows.  Only rows
+///   at indices `>= base_row_count` are eligible for demotion.
+///
+/// ## Returns
+///
+/// The number of demotions applied (0 in the no-op case).
+///
+/// ## Assertions
+///
+/// `debug_assert!` checks that `num_row == out.row_status.len()` and
+/// `base_row_count <= num_row`.
+pub fn enforce_basic_count_invariant(
+    out: &mut Basis,
+    num_row: usize,
+    base_row_count: usize,
+) -> u32 {
+    debug_assert_eq!(
+        num_row,
+        out.row_status.len(),
+        "enforce_basic_count_invariant: num_row ({num_row}) != out.row_status.len() ({})",
+        out.row_status.len(),
+    );
+    debug_assert!(
+        base_row_count <= num_row,
+        "enforce_basic_count_invariant: base_row_count ({base_row_count}) > num_row ({num_row})",
+    );
+
+    let col_basic = out
+        .col_status
+        .iter()
+        .filter(|&&s| s == HIGHS_BASIS_STATUS_BASIC)
+        .count();
+    let row_basic = out
+        .row_status
+        .iter()
+        .filter(|&&s| s == HIGHS_BASIS_STATUS_BASIC)
+        .count();
+
+    let total_basic = col_basic + row_basic;
+    if total_basic <= num_row {
+        // Invariant holds (or excess == 0): nothing to do.
+        return 0;
+    }
+
+    let mut excess = total_basic - num_row;
+    let mut demotions: u32 = 0;
+
+    // Scan from the end of row_status, touching only cut rows (>= base_row_count).
+    for idx in (base_row_count..out.row_status.len()).rev() {
+        if excess == 0 {
+            break;
+        }
+        if out.row_status[idx] == HIGHS_BASIS_STATUS_BASIC {
+            out.row_status[idx] = HIGHS_BASIS_STATUS_LOWER;
+            excess -= 1;
+            demotions += 1;
+        }
+    }
+
+    demotions
 }
 
 // ---------------------------------------------------------------------------
@@ -287,8 +395,8 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
-        ReconstructionStats, ReconstructionTarget, reconstruct_basis,
+        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, ReconstructionStats,
+        ReconstructionTarget, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
     };
     use crate::cut::pool::CutPool;
     use crate::workspace::CapturedBasis;
@@ -346,16 +454,19 @@ mod tests {
     // reconstruct_basis — unit tests (offset=0 path, the common case)
     // -----------------------------------------------------------------------
 
-    /// AC1: empty stored basis + 3 new cuts (1 tight, 2 slack).
+    /// AC1: empty stored basis + 3 new cuts — all classified BASIC regardless
+    /// of cut-value evaluation (ticket-008: unconditional-BASIC for new cuts).
     #[test]
     fn test_empty_stored_all_new_cuts() {
         // stored: shim state — no cut rows, base_rows=2, num_cols=3.
         let stored = CapturedBasis::new(3, 2, 2, 0, 0);
 
-        // Cuts at padding_state=[1.0, 2.0], theta=10.0, tolerance=1e-7:
-        //   slot 5: value = 3.0 + 1.0*1.0 + 2.0*2.0 = 8.0,  slack = 10-8=2   -> BASIC
-        //   slot 6: value = 8.0 + 1.0*1.0 + 0.5*2.0 = 10.0, slack = 10-10=0  -> LOWER (tight)
-        //   slot 7: value = 0.0 + 0.0*1.0 + 0.0*2.0 = 0.0,  slack = 10-0=10  -> BASIC
+        // Cuts at padding_state=[1.0, 2.0], theta=10.0, tolerance=1e-7.
+        // Post ticket-008: cut-value evaluation is no longer performed for new
+        // cuts; all three slots are BASIC regardless of their slack/tightness.
+        //   slot 5: would have been BASIC (slack=2)
+        //   slot 6: would have been LOWER (tight, slack=0) — now BASIC
+        //   slot 7: would have been BASIC (slack=10)
         let cuts: Vec<(usize, f64, Vec<f64>)> = vec![
             (5, 3.0, vec![1.0, 2.0]),
             (6, 8.0, vec![1.0, 0.5]),
@@ -382,15 +493,18 @@ mod tests {
             stats,
             ReconstructionStats {
                 preserved: 0,
-                new_tight: 1,
-                new_slack: 2
+                new_tight: 0,
+                new_slack: 3
             }
         );
-        // Template rows come first (2 BASIC), then the 3 cut statuses.
+        // Template rows come first (2 BASIC), then all 3 new cuts are BASIC.
         assert_eq!(out.row_status.len(), 5);
-        assert_eq!(out.row_status[2], B, "slot 5 slack=2 -> BASIC");
-        assert_eq!(out.row_status[3], L, "slot 6 tight -> LOWER");
-        assert_eq!(out.row_status[4], B, "slot 7 slack=10 -> BASIC");
+        assert_eq!(out.row_status[2], B, "slot 5 -> BASIC");
+        assert_eq!(
+            out.row_status[3], B,
+            "slot 6 -> BASIC (tight by value, but BASIC by invariant)"
+        );
+        assert_eq!(out.row_status[4], B, "slot 7 -> BASIC");
     }
 
     /// AC2: all 5 cuts preserved — same slots, same order.
@@ -539,14 +653,14 @@ mod tests {
         );
     }
 
-    /// AC5: adds only — target has slots [10, 11, 12, 13] with 12 tight, 13 slack.
+    /// AC5: adds only — target has slots [10, 11, 12, 13]; 10 and 11 preserved,
+    /// 12 and 13 are new cuts classified BASIC unconditionally (ticket-008).
     #[test]
     fn test_adds_only() {
         // Stored has only slots 10 and 11.
         let stored = make_stored_basis(3, 4, &[10, 11], &[L, B], &[1.0, 2.0]);
-        // padding_state=[1.0, 2.0], theta=10.0:
-        //   slot 12: value=9.0+0.5*1+0.5*2=10.5, slack=10-10.5=-0.5 -> tight
-        //   slot 13: value=0.0+0.0*1+0.0*2=0.0,  slack=10-0=10       -> slack
+        // Post ticket-008: slots 12 and 13 are new; both get BASIC regardless of
+        // cut-value evaluation (slot 12 would have been LOWER, slot 13 BASIC).
         let cuts: Vec<(usize, f64, Vec<f64>)> = vec![
             (10, 0.0, vec![0.0, 0.0]),
             (11, 0.0, vec![0.0, 0.0]),
@@ -574,14 +688,18 @@ mod tests {
             stats,
             ReconstructionStats {
                 preserved: 2,
-                new_tight: 1,
-                new_slack: 1
+                new_tight: 0,
+                new_slack: 2
             }
         );
-        // Template rows 0..3; out[3..5] = stored[3..5] = [L, B]
+        // Template rows 0..3; out[3..5] = stored[3..5] = [L, B] (preserved).
         assert_eq!(&out.row_status[3..5], &stored.basis.row_status[3..5]);
-        assert_eq!(out.row_status[5], L, "slot 12 tight");
-        assert_eq!(out.row_status[6], B, "slot 13 slack");
+        // New cuts are unconditionally BASIC.
+        assert_eq!(
+            out.row_status[5], B,
+            "slot 12 -> BASIC (tight by value, BASIC by invariant)"
+        );
+        assert_eq!(out.row_status[6], B, "slot 13 -> BASIC");
     }
 
     /// AC6: mixed drop+add — stored has [10, 11], target has [11, 12].
@@ -944,6 +1062,417 @@ mod tests {
             captured.basis.row_status.len(),
             captured.base_row_count + captured.cut_row_slots.len(),
             "metadata invariant: row_status.len() == base_row_count + cut_row_slots.len()",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Ticket-008: basic-count invariant on the baked-template backward path
+    //
+    // HiGHS isBasisConsistent requires: basic_count == num_row, where
+    //   basic_count = col_status.count(BASIC) + row_status.count(BASIC)
+    //   num_row     = base_row_count + delta_count
+    //
+    // The stored basis is captured from a fully solved baked-template LP, so it
+    // already satisfies the invariant for its own shape.  reconstruct_basis must
+    // preserve it after (a) all cuts preserved, and (b) new cuts appended.
+    //
+    // Setup chosen so the invariant holds exactly for sub-scenario (a):
+    //   baked_base_rows=10, num_cols=6, stored delta [100,101,102] with [B,L,B]
+    //   col_basic_count=1 (1 BASIC + 5 LOWER cols)
+    //   row_basic_count = 10 base (B) + 2 delta (B) = 12
+    //   1 + 12 = 13 == 10 + 3  (invariant holds for (a))
+    // -----------------------------------------------------------------------
+
+    // Builds a baked-style stored basis whose basic count satisfies the HiGHS
+    // invariant for 3 delta cuts: 1 BASIC col + (10 base + 2 delta) BASIC rows
+    // = 13 == base_rows(10) + delta(3).
+    fn make_baked_consistent_stored() -> CapturedBasis {
+        let mut s = make_stored_basis(10, 6, &[100, 101, 102], &[B, L, B], &[1.0, 2.0, 3.0]);
+        s.basis.col_status.clear();
+        s.basis.col_status.extend_from_slice(&[B, L, L, L, L, L]);
+        s
+    }
+
+    /// (a) Stored basis exactly matches the target delta set — all cuts preserved.
+    ///
+    /// Verifies `col_basic_count + row_basic_count == base_row_count + delta_count`
+    /// when no new cuts are appended (all 3 delta slots are in the stored basis).
+    #[test]
+    fn reconstructed_basis_preserves_basic_count_invariant_backward_all_preserved() {
+        let stored = make_baked_consistent_stored();
+        let baked_base_rows = 10usize;
+        let num_cols = 6usize;
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (100, 0.0, vec![0.0, 0.0, 0.0]),
+            (101, 0.0, vec![0.0, 0.0, 0.0]),
+            (102, 0.0, vec![0.0, 0.0, 0.0]),
+        ];
+        let delta_count = delta_cuts.len();
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 200];
+
+        let stats = reconstruct_basis(
+            &stored,
+            target(baked_base_rows, num_cols),
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0, 2.0, 3.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            0, // baked path: offset = 0
+            &mut out,
+            &mut lookup,
+        );
+
+        assert_eq!(stats.preserved, 3, "all delta cuts preserved");
+        assert_eq!(stats.new_tight, 0, "new_tight is always 0 post ticket-008");
+        assert_eq!(stats.new_slack, 0, "no new cuts");
+
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            baked_base_rows + delta_count,
+            "basic_count invariant: col_basic({col_basic}) + row_basic({row_basic}) \
+             == base_rows({baked_base_rows}) + delta({delta_count})",
+        );
+    }
+
+    /// (b) Target adds 2 new delta cuts beyond the stored set.
+    ///
+    /// Verifies that each new cut increments `row_basic_count` by 1 (unconditional
+    /// BASIC classification), keeping `col_basic_count + row_basic_count ==
+    /// base_row_count + delta_count` exactly.
+    #[test]
+    fn reconstructed_basis_preserves_basic_count_invariant_backward_with_new_cuts() {
+        let stored = make_baked_consistent_stored();
+        let baked_base_rows = 10usize;
+        let num_cols = 6usize;
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+
+        // 3 preserved slots + 2 new cuts (slot 200 would be tight by value, 201 slack).
+        // Both must become BASIC unconditionally (ticket-008 invariant).
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (100, 0.0, vec![0.0, 0.0, 0.0]),
+            (101, 0.0, vec![0.0, 0.0, 0.0]),
+            (102, 0.0, vec![0.0, 0.0, 0.0]),
+            (200, 5.0, vec![1.0, 0.0, 0.0]), // new; would be tight by value
+            (201, 0.0, vec![0.0, 0.0, 0.0]), // new; slack
+        ];
+        let delta_count = delta_cuts.len();
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 300];
+
+        let stats = reconstruct_basis(
+            &stored,
+            target(baked_base_rows, num_cols),
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0, 2.0, 3.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            0,
+            &mut out,
+            &mut lookup,
+        );
+
+        assert_eq!(stats.preserved, 3, "three preserved delta cuts");
+        assert_eq!(stats.new_tight, 0, "new_tight is always 0 post ticket-008");
+        assert_eq!(stats.new_slack, 2, "two new cuts classified BASIC");
+
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            baked_base_rows + delta_count,
+            "basic_count invariant: col_basic({col_basic}) + row_basic({row_basic}) \
+             == base_rows({baked_base_rows}) + delta({delta_count})",
+        );
+        // New delta cuts sit at rows [base+3] and [base+4]; both must be BASIC.
+        assert_eq!(
+            out.row_status[baked_base_rows + 3],
+            B,
+            "slot 200 must be BASIC"
+        );
+        assert_eq!(
+            out.row_status[baked_base_rows + 4],
+            B,
+            "slot 201 must be BASIC"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Ticket-009: basic-count invariant on the forward path
+    //
+    // On the forward path, cut selection can drop cuts whose stored status was
+    // BASIC, causing col_basic + row_basic to exceed num_row after
+    // reconstruct_basis.  enforce_basic_count_invariant restores equality by
+    // demoting trailing cut-row BASIC statuses to LOWER.
+    //
+    // Three sub-scenarios (split per clippy::too_many_lines):
+    //   (a) all_preserved — no drops, delta == 0, demotions == 0
+    //   (b) drops_with_lower — drops include LOWER statuses; only BASIC drops
+    //       cause excess; demotions == dropped_basic
+    //   (c) new_cuts_after_drops — new cuts are always BASIC (ticket-008),
+    //       so they never cause excess; only preserved BASIC drops do
+    //
+    // Setup for (a) and (b):
+    //   base_rows=3, num_cols=4
+    //   stored 5 cuts [10,11,12,13,14] with statuses [B,L,B,L,B]
+    //   col_status = [B,L,L,L] => col_basic = 1
+    //   stored row_basic = 3 (template) + 3 (cut B: slots 10,12,14) = 6
+    //   invariant for stored LP: col_basic(1) + row_basic(6) = 7 == 3+3+1=7 ✓
+    //   (stored LP had 5 delta cuts: num_row = 3+5 = 8, but we use a subset
+    //    in the reconstruction targets below)
+    // -----------------------------------------------------------------------
+
+    // (a) All cuts preserved — no drops, excess == 0, demotions must be 0.
+    //
+    // Stored: 3 cuts [10,12,14] with statuses [B,B,B], col_basic=1.
+    // Target: same 3 cuts => all preserved, 0 new.
+    // num_row = base(3) + cuts(3) = 6
+    // col_basic=1, row_basic = 3 (template B) + 3 (cuts B) = 6 => total=7 > 6 ?
+    //
+    // To make (a) a clean no-op, choose stored so that invariant holds:
+    //   col_basic=1, template_basic=2 (two template rows BASIC, one LOWER),
+    //   cut_basic=3 => total = 1+2+3 = 6 == num_row(6). ✓
+    #[test]
+    fn reconstructed_basis_preserves_basic_count_invariant_forward_all_preserved() {
+        // stored: base_rows=3 (2 BASIC, 1 LOWER via explicit row_status),
+        //         col=[B,L,L,L], cuts [10,12,14] all BASIC.
+        // We set template rows explicitly: first build then override row_status.
+        let num_cols = 4usize;
+        let base_rows = 3usize;
+        let mut stored = make_stored_basis(base_rows, num_cols, &[10, 12, 14], &[B, B, B], &[1.0]);
+        // Override col_status: only col 0 is BASIC (col_basic=1).
+        stored.basis.col_status.clear();
+        stored.basis.col_status.extend_from_slice(&[B, L, L, L]);
+        // Override template rows so row_basic for template = 2 (rows 0,1 = BASIC, row 2 = LOWER).
+        stored.basis.row_status[0] = B;
+        stored.basis.row_status[1] = B;
+        stored.basis.row_status[2] = L;
+        // Total: col_basic=1, row_basic(template)=2, row_basic(cuts)=3 => 1+2+3=6 == 3+3 ✓
+
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+
+        // Target: same 3 cuts, all preserved.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (12, 0.0, vec![0.0]),
+            (14, 0.0, vec![0.0]),
+        ];
+        let num_cut = delta_cuts.len();
+        let num_row = base_rows + num_cut;
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 20];
+
+        let stats = reconstruct_basis(
+            &stored,
+            target(base_rows, num_cols),
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            0,
+            &mut out,
+            &mut lookup,
+        );
+        assert_eq!(stats.preserved, 3, "all 3 cuts preserved");
+        assert_eq!(stats.new_tight, 0);
+        assert_eq!(stats.new_slack, 0);
+
+        let demotions = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+
+        assert_eq!(
+            demotions, 0,
+            "no excess when all preserved and invariant holds"
+        );
+        let row_basic_after = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_after,
+            num_row,
+            "invariant holds: col_basic({col_basic}) + row_basic({row_basic_after}) \
+             == num_row({num_row})",
+        );
+    }
+
+    // (b) Cuts dropped include LOWER statuses — excess equals count of dropped
+    // BASIC cuts (not the LOWER drops), demotions restore the invariant.
+    //
+    // Concrete working fixture (derived from ticket-009 algebraic proof):
+    //   base_rows=1, col=[B] => col_basic=1, row_basic_tmpl=1.
+    //   stored: 4 cuts [10,11,12,13] statuses [B,B,L,B] (3 BASIC, 1 LOWER).
+    //   stored LP: 1+1+3=5 == 1+4=5 (consistent)
+    //   Target: 2 cuts [10,11] (slots 12,13 dropped — statuses L,B).
+    //   preserved: [B,B] => preserved_basic=2.
+    //   col(1)+row(1+2)=4; num_row=1+2=3; excess=4-3=1.
+    //   dropped_lower count = 1 (slot 12 was L), dropped_basic=1 (slot 13).
+    //   The ticket's proof: excess = dropped_lower = 1. demotions expected = 1.
+    #[test]
+    fn reconstructed_basis_preserves_basic_count_invariant_forward_drops_with_lower() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        // stored: 4 cuts, statuses [B,B,L,B]; col=[B]; template row=[B].
+        let mut stored = make_stored_basis(
+            base_rows,
+            num_cols,
+            &[10, 11, 12, 13],
+            &[B, B, L, B],
+            &[1.0],
+        );
+        stored.basis.col_status.clear();
+        stored.basis.col_status.extend_from_slice(&[B]);
+        stored.basis.row_status[0] = B; // template row
+
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(col_basic, 1);
+
+        // Stored LP invariant check: 1 + (1 template + 3 cut BASIC) = 5 == 1+4=5 ✓
+        let stored_row_basic = stored.basis.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + stored_row_basic,
+            1 + 4,
+            "stored LP invariant sanity"
+        );
+
+        // Target: only slots [10, 11] — slots 12 (L) and 13 (B) are dropped.
+        // dropped_lower = 1 (slot 12), dropped_basic = 1 (slot 13).
+        // excess = dropped_lower = 1 by the ticket's proof.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> =
+            vec![(10, 0.0, vec![0.0]), (11, 0.0, vec![0.0])];
+        let num_cut = delta_cuts.len();
+        let num_row = base_rows + num_cut; // 1+2=3
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 20];
+
+        let stats = reconstruct_basis(
+            &stored,
+            target(base_rows, num_cols),
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            0,
+            &mut out,
+            &mut lookup,
+        );
+        assert_eq!(stats.preserved, 2, "both surviving cuts preserved");
+        assert_eq!(stats.new_tight, 0);
+        assert_eq!(stats.new_slack, 0);
+
+        // Before enforce: col(1)+row(1+2)=4 > num_row(3) => excess=1
+        let row_basic_before = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_before,
+            4,
+            "pre-enforce: total basic = 4"
+        );
+
+        let demotions = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+
+        // excess=1 => 1 demotion; demotions == dropped_lower = 1 ✓
+        assert_eq!(demotions, 1, "demotions == dropped_lower == 1");
+
+        let row_basic_after = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_after,
+            num_row,
+            "invariant restored: col_basic({col_basic}) + row_basic({row_basic_after}) \
+             == num_row({num_row})",
+        );
+    }
+
+    // (c) New cuts added after drops.
+    //
+    // New cuts are always classified BASIC (ticket-008). They grow num_row by 1
+    // each, so they cannot create excess — each new cut adds 1 to row_basic and
+    // 1 to num_row simultaneously. Excess is derived solely from drops.
+    //
+    // Fixture extends (b): same stored/dropped setup but the target includes
+    // 2 new cuts (slots 20, 21) in addition to the 2 preserved ones.
+    //   base_rows=1, col=[B], template=[B].
+    //   stored: 4 cuts [10,11,12,13] statuses [B,B,L,B].
+    //   Target: slots [10,11,20,21] — slots 12(L),13(B) dropped + 2 new.
+    //   preserved: [B,B], new: [B,B] (ticket-008 unconditional BASIC).
+    //   col(1)+row(1+2+2)=6; num_row=1+4=5; excess=6-5=1.
+    //   demotions expected = 1 (new cuts do not contribute to excess).
+    #[test]
+    fn reconstructed_basis_preserves_basic_count_invariant_forward_new_cuts_after_drops() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let mut stored = make_stored_basis(
+            base_rows,
+            num_cols,
+            &[10, 11, 12, 13],
+            &[B, B, L, B],
+            &[1.0],
+        );
+        stored.basis.col_status.clear();
+        stored.basis.col_status.extend_from_slice(&[B]);
+        stored.basis.row_status[0] = B;
+
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+
+        // Target: 2 preserved + 2 new.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (11, 0.0, vec![0.0]),
+            (20, 0.0, vec![0.0]), // new
+            (21, 0.0, vec![0.0]), // new
+        ];
+        let num_cut = delta_cuts.len();
+        let num_row = base_rows + num_cut; // 1+4=5
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 32];
+
+        let stats = reconstruct_basis(
+            &stored,
+            target(base_rows, num_cols),
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 100.0,
+                tolerance: 1e-7,
+            },
+            0,
+            &mut out,
+            &mut lookup,
+        );
+        assert_eq!(stats.preserved, 2, "slots 10,11 preserved");
+        assert_eq!(stats.new_tight, 0);
+        assert_eq!(stats.new_slack, 2, "slots 20,21 new (BASIC)");
+
+        // Verify pre-enforce excess: col(1)+row(1+2+2)=6 > num_row(5) => excess=1.
+        let row_basic_before = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_before,
+            6,
+            "pre-enforce total basic = 6"
+        );
+
+        let demotions = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+
+        // New cuts do not contribute to excess; only dropped_lower=1 does.
+        assert_eq!(
+            demotions, 1,
+            "demotions == dropped_lower == 1 (new cuts don't add excess)"
+        );
+
+        let row_basic_after = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_after,
+            num_row,
+            "invariant restored: col_basic({col_basic}) + row_basic({row_basic_after}) \
+             == num_row({num_row})",
         );
     }
 }

@@ -173,16 +173,27 @@ impl StudySetup {
     /// Create a [`WorkspacePool`] sized for this study.
     ///
     /// Pool size equals `n_threads`. Each workspace gets a fresh solver instance.
+    /// `comm` is used to read the MPI rank that is stamped into each workspace's
+    /// `rank` field for downstream per-worker observability (epic-04b).
     ///
     /// # Errors
     ///
     /// Returns `SolverError` if solver creation fails.
-    pub fn create_workspace_pool<S: SolverInterface + Send>(
+    ///
+    /// # Panics
+    ///
+    /// Panics if `comm.rank() > i32::MAX`. MPI world sizes are bounded well
+    /// below this on all real systems.
+    #[allow(clippy::expect_used)]
+    pub fn create_workspace_pool<S: SolverInterface + Send, C: Communicator>(
         &self,
+        comm: &C,
         n_threads: usize,
         solver_factory: impl Fn() -> Result<S, SolverError>,
     ) -> Result<WorkspacePool<S>, SolverError> {
+        let rank = i32::try_from(comm.rank()).expect("MPI rank fits in i32");
         let mut pool = WorkspacePool::try_new(
+            rank,
             n_threads,
             self.indexer.n_state,
             WorkspaceSizing {

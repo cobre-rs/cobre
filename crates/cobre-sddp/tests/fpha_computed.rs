@@ -367,7 +367,7 @@ fn fpha_computed_case_converges() {
     );
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("workspace pool must build");
     let io_capacity = setup.io_channel_capacity().max(1);
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);

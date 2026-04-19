@@ -30,10 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
-    ArOrderSummary, DEFAULT_SEED, EstimationReport, FutureCostFunction, HydroModelSummary,
-    ModelProvenanceReport, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
+    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
+    StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -75,7 +75,7 @@ fn write_policy_checkpoint(
     export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyCheckpointMetadata, write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -239,6 +239,8 @@ fn delta_to_stats_row(
         phase: phase.to_string(),
         stage,
         opening,
+        rank: None,      // populated in T005 (MPI allgatherv per-worker stats)
+        worker_id: None, // populated in T005 (MPI allgatherv per-worker stats)
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
@@ -381,7 +383,7 @@ fn run_simulation_phase_py(
     let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
-        .create_workspace_pool(n_threads, HighsSolver::new)
+        .create_workspace_pool(&LocalBackend, n_threads, HighsSolver::new)
         .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 

@@ -758,7 +758,7 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     // Diagnostic: inspect the FCF pool state after training.
     // Build a simulation workspace pool (1 thread, HighsSolver).
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     let io_capacity = setup.io_channel_capacity().max(1);

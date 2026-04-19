@@ -361,6 +361,8 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new()");
         solver.load_model(template);
         SolverWorkspace::new(
+            0,
+            0,
             solver,
             PatchBuffer::new(0, 0, 0, 0),
             0,

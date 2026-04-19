@@ -723,6 +723,8 @@ fn train_simulate_write_cycle() {
     let io_thread = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         sim_solver,
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
@@ -1386,6 +1388,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     sim_solver.set_primal(slack_col, sentinel_m3s);
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         sim_solver,
         PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0),
         indexer.n_state,

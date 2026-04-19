@@ -2244,6 +2244,8 @@ mod tests {
     /// Build a single-workspace from a solver sized for the given `indexer`.
     fn single_workspace(solver: MockSolver, indexer: &StageIndexer) -> SolverWorkspace<MockSolver> {
         SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: crate::lp_builder::PatchBuffer::new(
                 indexer.hydro_count,
@@ -4218,6 +4220,8 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
         let mut ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(fixed_solution(4, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),
@@ -4349,6 +4353,8 @@ mod tests {
         let indexer = StageIndexer::new(1, 0);
         let patch_buf = crate::lp_builder::PatchBuffer::new(1, 0, n_load_buses, 1);
         let mut ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(fixed_solution(4, 100.0, indexer.theta, 30.0)),
             patch_buf,
             current_state: Vec::with_capacity(indexer.n_state),

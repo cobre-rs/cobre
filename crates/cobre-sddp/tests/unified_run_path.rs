@@ -47,9 +47,9 @@ use cobre_sddp::{
     BackwardPassSpec, BakedTemplates, BasisStore, CutManagementConfig, CutSyncBuffers,
     EntityCounts, EventConfig, ExchangeBuffers, ForwardPassBatch, FutureCostFunction, HorizonMode,
     InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, TrajectoryRecord, WorkspaceSizing,
-    run_backward_pass, run_forward_pass, simulate, train,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StageWorkerStatsBuffer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, TrajectoryRecord,
+    WorkspaceSizing, run_backward_pass, run_forward_pass, simulate, train,
 };
 
 // ---------------------------------------------------------------------------
@@ -408,6 +408,8 @@ fn forward_uses_stage_solve() {
         n_state: indexer.n_state,
     };
     let workspace = SolverWorkspace::new(
+        0,
+        0,
         solver,
         PatchBuffer::new(indexer.n_state, 0, 1, 0),
         indexer.n_state,
@@ -570,6 +572,8 @@ fn backward_uses_stage_solve() {
         n_state: indexer.n_state,
     };
     let workspace = SolverWorkspace::new(
+        0,
+        0,
         solver,
         PatchBuffer::new(indexer.n_state, 0, 1, 0),
         indexer.n_state,
@@ -661,6 +665,7 @@ fn backward_uses_stage_solve() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
+            stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
         },
         &comm,
     )
@@ -870,6 +875,8 @@ fn simulation_zero_rejections_on_cut_churn() {
     let mut sim_solver = HighsSolver::new().expect("HighsSolver::new for simulation");
     sim_solver.load_model(&templates[0]);
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         sim_solver,
         PatchBuffer::new(indexer.n_state, 0, 1, 0),
         indexer.n_state,
@@ -981,6 +988,8 @@ fn eq_workspace(template: &StageTemplate, pool_capacity: usize) -> SolverWorkspa
     let mut solver = HighsSolver::new().expect("HighsSolver::new");
     solver.load_model(template);
     SolverWorkspace::new(
+        0,
+        0,
         solver,
         PatchBuffer::new(0, 0, 0, 0),
         0,

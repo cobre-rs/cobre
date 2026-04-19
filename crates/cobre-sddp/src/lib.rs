@@ -130,8 +130,8 @@ pub use simulation::{
 };
 pub use solver_stats::{
     SCENARIO_STATS_STRIDE, SOLVER_STATS_DELTA_SCALAR_FIELDS, SolverStatsDelta, SolverStatsEntry,
-    aggregate_solver_statistics, pack_delta_scalars, pack_scenario_stats, unpack_delta_scalars,
-    unpack_scenario_stats,
+    StageWorkerStatsBuffer, aggregate_solver_statistics, pack_delta_scalars, pack_scenario_stats,
+    unpack_delta_scalars, unpack_scenario_stats,
 };
 pub use state_exchange::ExchangeBuffers;
 pub use stochastic_summary::{

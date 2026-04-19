@@ -588,6 +588,8 @@ fn simulate_fixture(
     });
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         HighsSolver::new().expect("HighsSolver::new must succeed"),
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,

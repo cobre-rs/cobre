@@ -1613,6 +1613,8 @@ mod tests {
     /// assertions about scenario ordering and call counts remain valid.
     fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, 0, 0), // N=1, L=0
             current_state: Vec::with_capacity(1),
@@ -2430,8 +2432,10 @@ mod tests {
 
         // Run with 4 workspaces.
         let (tx4, _rx4) = mpsc::sync_channel(64);
-        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
-            .map(|_| SolverWorkspace {
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4_i32)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: idx,
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(1),
@@ -3440,6 +3444,8 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(4);
 
         let mut workspaces = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
@@ -3751,6 +3757,8 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(4);
 
         let mut workspaces = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
@@ -4053,6 +4061,8 @@ mod tests {
         hydro_count: usize,
     ) -> Vec<SolverWorkspace<MockSolver>> {
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0),
             current_state: Vec::with_capacity(hydro_count),

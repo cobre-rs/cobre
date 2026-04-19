@@ -303,7 +303,7 @@ fn pattern_d_structural_properties_and_training() {
     // ── 5. Simulate ───────────────────────────────────────────────────────────
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("D30: workspace pool must build");
     let io_capacity = setup.io_channel_capacity().max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);

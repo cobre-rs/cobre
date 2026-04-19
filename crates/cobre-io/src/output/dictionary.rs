@@ -692,6 +692,14 @@ fn description_for(file: &str, column: &str) -> &'static str {
              rows. NULL for forward, lower_bound, and simulation rows — these phases \
              do not have an opening dimension. Backward rows range 0..n_openings."
         }
+        ("solver_iterations", "rank") => {
+            "MPI rank that produced this row. NULL until epic-04b T005 wires the \
+             per-(rank, worker_id) aggregation into the writer."
+        }
+        ("solver_iterations", "worker_id") => {
+            "Rayon worker index within the rank's pool that produced this row. NULL \
+             until epic-04b T005 wires the per-(rank, worker_id) aggregation into the writer."
+        }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
         ("retry_histogram", "phase") => "Solver phase (forward, backward, lower_bound, simulation)",
@@ -1448,8 +1456,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 196,
-            "variables.csv must have exactly 196 data rows (one per column across all schemas)"
+            row_count, 198,
+            "variables.csv must have exactly 198 data rows (one per column across all schemas)"
         );
     }
 

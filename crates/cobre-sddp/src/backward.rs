@@ -96,7 +96,7 @@ use crate::{
     forward::{build_cut_row_batch_into, build_delta_cut_row_batch_into},
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
-    solver_stats::SolverStatsDelta,
+    solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer},
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
 };
@@ -274,6 +274,21 @@ pub struct BackwardPassSpec<'a> {
     /// never archived. Pass `&mut Vec::new()` when `visited_archive` is
     /// `None`.
     pub real_states_buf: &'a mut Vec<f64>,
+
+    /// Per-(worker, opening) gather buffer for backward-pass solver stats.
+    ///
+    /// Shape: `n_workers_local × max_openings`. After the parallel region at
+    /// each stage, each worker's `per_opening_stats` slice is copied into this
+    /// buffer via `set(ws.worker_id, omega, ...)`. The summed-over-workers view
+    /// used by the parquet writer is then derived from the buffer instead of
+    /// summing the worker arrays directly, preserving byte-identical output.
+    ///
+    /// `reset()` is called at the **start of each stage** (inside the stage loop,
+    /// before the parallel region) so stale data from the previous stage never
+    /// accumulates.
+    ///
+    /// Allocated once at training setup; never reallocated on the hot path.
+    pub stage_worker_stats_buf: &'a mut StageWorkerStatsBuffer,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -1079,32 +1094,41 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             scheduling_ms += stage_scheduling_ms as u64;
         }
 
-        // Merge per-worker per_opening_stats into a single Vec<SolverStatsDelta>
-        // of length n_openings by summing element-wise across workers.
-        // The worker buffers were initialised to Default::default() at the start
-        // of this stage's parallel region and accumulated per-opening deltas
-        // inside `process_trial_point_backward`.
-        //
-        // We build the merged vec by starting from the first worker's buffer
-        // (cloned to avoid aliasing) and folding in the remaining workers.
-        let stage_per_opening: Vec<SolverStatsDelta> = {
-            let mut merged: Vec<SolverStatsDelta> = workspaces.first().map_or_else(
-                || vec![SolverStatsDelta::default(); n_openings],
-                |ws| ws.backward_accum.per_opening_stats.clone(),
+        // Gather per-worker per_opening_stats into the flat buffer (T003).
+        // The buffer is reset at the top of each stage so stale data from the
+        // previous stage never accumulates.  After gathering, derive the
+        // summed-over-workers Vec<SolverStatsDelta> that the parquet writer
+        // currently expects — byte-identical to the pre-T003 direct sum.
+        spec.stage_worker_stats_buf.reset();
+        for ws in workspaces.iter() {
+            debug_assert_eq!(
+                ws.backward_accum.per_opening_stats.len(),
+                n_openings,
+                "per_opening_stats length must equal n_openings on every worker"
             );
-            // Grow merged to n_openings if the first worker had fewer (empty case).
-            merged.resize_with(n_openings, SolverStatsDelta::default);
-            for ws in workspaces.iter().skip(1) {
-                debug_assert_eq!(
-                    ws.backward_accum.per_opening_stats.len(),
-                    n_openings,
-                    "per_opening_stats length must equal n_openings on every worker"
+            #[allow(clippy::cast_sign_loss)]
+            let wid = ws.worker_id as usize;
+            for omega in 0..n_openings {
+                spec.stage_worker_stats_buf.set(
+                    wid,
+                    omega,
+                    ws.backward_accum.per_opening_stats[omega].clone(),
                 );
-                for (dst, src) in merged.iter_mut().zip(&ws.backward_accum.per_opening_stats) {
-                    SolverStatsDelta::accumulate_into(dst, src);
+            }
+        }
+        // Derive the summed-over-workers view (parquet writer contract preserved).
+        let stage_per_opening: Vec<SolverStatsDelta> = {
+            let n_w = spec.stage_worker_stats_buf.n_workers();
+            let mut sum_vec = vec![SolverStatsDelta::default(); n_openings];
+            for (omega, slot) in sum_vec.iter_mut().enumerate().take(n_openings) {
+                for w in 0..n_w {
+                    SolverStatsDelta::accumulate_into(
+                        slot,
+                        spec.stage_worker_stats_buf.get(w, omega),
+                    );
                 }
             }
-            merged
+            sum_vec
         };
 
         stage_stats.push((successor, stage_per_opening));
@@ -1146,6 +1170,7 @@ mod tests {
         StageIndexer, TrajectoryRecord,
         context::{BakedTemplates, StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
+        solver_stats::StageWorkerStatsBuffer,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -1385,6 +1410,8 @@ mod tests {
     fn single_workspace(solver: MockSolver, n_state: usize) -> Vec<SolverWorkspace<MockSolver>> {
         use crate::lp_builder::PatchBuffer;
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
@@ -1783,6 +1810,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -1881,6 +1909,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -1979,6 +2008,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2073,6 +2103,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2167,6 +2198,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2259,6 +2291,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         );
@@ -2395,6 +2428,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2509,6 +2543,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2628,6 +2663,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2734,6 +2770,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2849,6 +2886,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -2959,6 +2997,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -3063,6 +3102,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -3174,6 +3214,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         );
@@ -3234,6 +3275,8 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let solver_1 = MockSolver::always_ok(solution.clone());
         let mut workspaces_1 = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: solver_1,
             patch_buf: PatchBuffer::new(1, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
@@ -3321,6 +3364,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -3329,8 +3373,10 @@ mod tests {
         // --- Run with 4 workspaces ---
         let mut fcf_4 =
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
-        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
-            .map(|_| SolverWorkspace {
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4_i32)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: idx,
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(n_state),
@@ -3403,6 +3449,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -3683,6 +3730,8 @@ mod tests {
         let solution = solution_1_0(100.0, -2.0);
 
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -3778,6 +3827,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -3849,6 +3899,8 @@ mod tests {
 
         let solution = solution_1_0(100.0, -2.0);
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -3938,6 +3990,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -4010,6 +4063,8 @@ mod tests {
 
         let solution = solution_1_0(80.0, -3.0);
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -4103,6 +4158,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -4224,6 +4280,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -4354,6 +4411,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )
@@ -4439,7 +4497,9 @@ mod tests {
         // every call regardless of call order or worker identity.
         let solution = solution_1_0(100.0, -5.0);
         let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
-            .map(|_| SolverWorkspace {
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("worker_id fits in i32"),
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(n_state),
@@ -4530,6 +4590,7 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
             },
             &comm,
         )

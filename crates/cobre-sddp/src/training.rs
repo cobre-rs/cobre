@@ -52,7 +52,9 @@ use crate::{
     forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
-    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
+    solver_stats::{
+        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, aggregate_solver_statistics,
+    },
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
@@ -445,12 +447,15 @@ fn broadcast_basis_cache<C: Communicator>(
 /// println!("converged in {} iterations, gap={:.4}", result.result.iterations, result.result.final_gap);
 /// ```
 ///
-/// # Panics (debug builds only)
+/// # Panics
 ///
-/// Panics if `templates.len() != horizon.num_stages()` or if
+/// In debug builds, panics if `templates.len() != horizon.num_stages()` or if
 /// `config.cut_management.risk_measures.len() != horizon.num_stages()` or if
 /// `training_ctx.stochastic.opening_tree().n_openings(0) == 0`.
-#[allow(clippy::too_many_lines, clippy::similar_names)]
+///
+/// Always panics if `comm.rank() > i32::MAX`. MPI world sizes are bounded well
+/// below this on all real systems.
+#[allow(clippy::too_many_lines, clippy::similar_names, clippy::expect_used)]
 pub fn train<S: SolverInterface + Send, C: Communicator>(
     solver: &mut S,
     config: TrainingConfig,
@@ -495,7 +500,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // an independent solver, patch buffer, and current-state buffer. The pool
     // is allocated once and reused across all iterations.
     let n_threads = n_fwd_threads.max(1);
+    let fwd_rank = i32::try_from(comm.rank()).expect("MPI rank fits in i32");
     let mut fwd_pool = WorkspacePool::try_new(
+        fwd_rank,
         n_threads,
         n_state,
         WorkspaceSizing {
@@ -733,6 +740,16 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // reallocation; capacity is preserved across iterations.
     let mut bwd_real_states_buf: Vec<f64> =
         Vec::with_capacity(exchange_bufs.real_total_scenarios() * n_state);
+    // Per-(worker, opening) flat buffer for backward stats gather (epic-04b T003).
+    // Allocated once at training setup, reset per stage. Sized to the worst-case
+    // openings across all stages so the slot index `worker_id * max_openings + omega`
+    // is stable for the run.
+    let bwd_max_openings = (0..num_stages)
+        .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
+        .max()
+        .unwrap_or(0);
+    let mut bwd_stage_worker_stats_buf =
+        StageWorkerStatsBuffer::new(fwd_pool.workspaces.len(), bwd_max_openings);
 
     for iteration in (start_iteration + 1)..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
@@ -848,6 +865,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             metadata_sync_buf: &mut bwd_metadata_sync_buf,
             global_increments_buf: &mut bwd_global_increments_buf,
             real_states_buf: &mut bwd_real_states_buf,
+            stage_worker_stats_buf: &mut bwd_stage_worker_stats_buf,
         };
 
         let backward_result = match run_backward_pass(

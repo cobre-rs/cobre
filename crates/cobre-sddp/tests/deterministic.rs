@@ -190,7 +190,7 @@ fn run_with_simulation(
     let result = outcome.result;
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     let io_capacity = setup.io_channel_capacity().max(1);
@@ -1077,7 +1077,7 @@ fn d12_checkpoint_round_trip() {
     // ── Step 8: simulate using the FCF already in setup ───────────────────────
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     let io_capacity = setup.io_channel_capacity().max(1);
@@ -2824,7 +2824,7 @@ fn d29_pattern_c_weekly_par() {
 
     // Simulate.
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     let io_capacity = setup.io_channel_capacity().max(1);
@@ -2980,7 +2980,7 @@ fn baked_vs_fallback_simulation_costs_are_identical() {
     );
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     // ── Baked path ────────────────────────────────────────────────────────────

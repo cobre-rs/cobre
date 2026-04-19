@@ -1092,7 +1092,7 @@ fn run_simulation_phase(
     let sim_config = setup.simulation_config();
 
     let mut sim_pool = setup
-        .create_workspace_pool(ctx.n_threads, solver_factory)
+        .create_workspace_pool(&ctx.comm, ctx.n_threads, solver_factory)
         .map_err(|e| CliError::Solver {
             message: format!("HiGHS initialisation failed for simulation pool: {e}"),
         })?;
@@ -1493,6 +1493,8 @@ fn delta_to_stats_row(
         phase: phase.to_string(),
         stage,
         opening,
+        rank: None,      // populated in T005 (MPI allgatherv per-worker stats)
+        worker_id: None, // populated in T005 (MPI allgatherv per-worker stats)
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,

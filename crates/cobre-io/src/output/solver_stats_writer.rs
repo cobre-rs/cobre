@@ -29,6 +29,12 @@ pub struct SolverStatsRow {
     /// backward rows, `None` for forward, `lower_bound`, and simulation
     /// rows (which have no opening dimension).
     pub opening: Option<i32>,
+    /// MPI rank that produced this row. `None` for rank-aggregated rows (the
+    /// current state in T002); populated with real values in T005.
+    pub rank: Option<i32>,
+    /// Worker thread ID within the rank. `None` for rank-aggregated rows (the
+    /// current state in T002); populated with real values in T005.
+    pub worker_id: Option<i32>,
     /// Number of LP solves in this phase.
     pub lp_solves: u32,
     /// Solves that returned optimal.
@@ -112,6 +118,12 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
     let stage_arr = Int32Array::from(rows.iter().map(|r| r.stage).collect::<Vec<_>>());
     let opening_arr =
         Int32Array::from(rows.iter().map(|r| r.opening).collect::<Vec<Option<i32>>>());
+    let rank_arr = Int32Array::from(rows.iter().map(|r| r.rank).collect::<Vec<Option<i32>>>());
+    let worker_id_arr = Int32Array::from(
+        rows.iter()
+            .map(|r| r.worker_id)
+            .collect::<Vec<Option<i32>>>(),
+    );
     let lp_solves_arr = UInt32Array::from(rows.iter().map(|r| r.lp_solves).collect::<Vec<_>>());
     let lp_successes_arr =
         UInt32Array::from(rows.iter().map(|r| r.lp_successes).collect::<Vec<_>>());
@@ -161,6 +173,8 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(phase_arr),
         Arc::new(stage_arr),
         Arc::new(opening_arr),
+        Arc::new(rank_arr),
+        Arc::new(worker_id_arr),
         Arc::new(lp_solves_arr),
         Arc::new(lp_successes_arr),
         Arc::new(lp_retries_arr),
@@ -284,6 +298,8 @@ mod tests {
                 phase: "forward".to_string(),
                 stage: 0, // ticket-011a: forward rows use real stage index, not -1
                 opening: None,
+                rank: None,
+                worker_id: None,
                 lp_solves: 100,
                 lp_successes: 98,
                 lp_retries: 2,
@@ -308,6 +324,8 @@ mod tests {
                 phase: "backward".to_string(),
                 stage: 2,
                 opening: Some(0),
+                rank: None,
+                worker_id: None,
                 lp_solves: 200,
                 lp_successes: 200,
                 lp_retries: 0,
@@ -344,13 +362,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        // iterations.parquet — 21 scalar columns (added opening: Int32, nullable)
+        // iterations.parquet — 23 scalar columns (opening + rank + worker_id: Int32, nullable)
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         assert!(iter_path.exists());
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 21);
+        assert_eq!(batch.num_columns(), 23);
 
         let iteration_col = batch
             .column(0)
@@ -360,12 +378,12 @@ mod tests {
         assert_eq!(iteration_col.value(0), 1);
         assert_eq!(iteration_col.value(1), 1);
 
-        // Column indices (after adding opening at index 3):
-        // 0 = iteration, 1 = phase, 2 = stage, 3 = opening,
-        // 4 = lp_solves, ..., 10 = basis_consistency_failures,
-        // 11 = simplex_iterations, 12 = solve_time_ms
+        // Column indices (after adding opening at index 3, rank at 4, worker_id at 5):
+        // 0 = iteration, 1 = phase, 2 = stage, 3 = opening, 4 = rank, 5 = worker_id,
+        // 6 = lp_solves, ..., 12 = basis_consistency_failures,
+        // 13 = simplex_iterations, 14 = solve_time_ms
         let solve_time_col = batch
-            .column(12)
+            .column(14)
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
@@ -373,7 +391,7 @@ mod tests {
         assert!((solve_time_col.value(1) - 85.0).abs() < 1e-10);
 
         let simplex_col = batch
-            .column(11)
+            .column(13)
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
@@ -403,7 +421,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 21);
+        assert_eq!(builder.schema().fields().len(), 23);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -421,6 +439,8 @@ mod tests {
                 phase: "forward".to_string(),
                 stage: 0, // ticket-011a: forward rows use real stage index, not -1
                 opening: None,
+                rank: None,
+                worker_id: None,
                 lp_solves: 50,
                 lp_successes: 48,
                 lp_retries: 2,
@@ -446,6 +466,8 @@ mod tests {
                 phase: "backward".to_string(),
                 stage: 0,
                 opening: Some(0),
+                rank: None,
+                worker_id: None,
                 lp_solves: 100,
                 lp_successes: 100,
                 lp_retries: 0,
@@ -502,6 +524,8 @@ mod tests {
             phase: "forward".to_string(),
             stage: 0,
             opening: None,
+            rank: None,
+            worker_id: None,
             lp_solves: 10,
             lp_successes: 10,
             lp_retries: 0,
@@ -537,6 +561,74 @@ mod tests {
         assert!(opening_col.is_null(0), "forward row must have NULL opening");
     }
 
+    #[test]
+    fn test_solver_stats_row_builds_with_none_rank_and_worker_id() {
+        // Verify a row with rank=None, worker_id=None, opening=Some(3) can be
+        // written and read back without error. Both new nullable columns must
+        // appear as NULL in the output parquet (T002 produces all-NULL values;
+        // T005 will populate them with real values).
+        let dir = tempfile::TempDir::new().unwrap();
+        let rows = vec![SolverStatsRow {
+            iteration: 1,
+            phase: "backward".to_string(),
+            stage: 0,
+            opening: Some(3),
+            rank: None,
+            worker_id: None,
+            lp_solves: 1,
+            lp_successes: 1,
+            lp_retries: 0,
+            lp_failures: 0,
+            retry_attempts: 0,
+            basis_offered: 0,
+            basis_consistency_failures: 0,
+            simplex_iterations: 0,
+            solve_time_ms: 0.0,
+            load_model_time_ms: 0.0,
+            add_rows_time_ms: 0.0,
+            set_bounds_time_ms: 0.0,
+            basis_set_time_ms: 0.0,
+            basis_preserved: 0,
+            basis_new_tight: 0,
+            basis_new_slack: 0,
+            basis_demotions: 0,
+            retry_level_histogram: vec![0; 12],
+        }];
+
+        write_solver_stats(dir.path(), &rows).unwrap();
+
+        let iter_path = dir.path().join("training/solver/iterations.parquet");
+        let batch = read_parquet(&iter_path);
+
+        // Schema must have exactly 23 columns after T002.
+        assert_eq!(batch.num_columns(), 23);
+
+        // rank column is at index 4, must be NULL.
+        let rank_col = batch.column_by_name("rank").unwrap();
+        assert_eq!(
+            rank_col.null_count(),
+            1,
+            "rank must be NULL for every T002 row"
+        );
+
+        // worker_id column is at index 5, must be NULL.
+        let worker_col = batch.column_by_name("worker_id").unwrap();
+        assert_eq!(
+            worker_col.null_count(),
+            1,
+            "worker_id must be NULL for every T002 row"
+        );
+
+        // opening column must carry the value we set (Some(3) → not NULL).
+        let opening_col = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(!opening_col.is_null(0), "opening must be non-NULL");
+        assert_eq!(opening_col.value(0), 3, "opening value must be 3");
+    }
+
     #[allow(clippy::too_many_lines)]
     #[test]
     fn test_opening_column_sum_invariant() {
@@ -554,6 +646,8 @@ mod tests {
                 phase: "forward".to_string(),
                 stage: 0,
                 opening: None,
+                rank: None,
+                worker_id: None,
                 lp_solves: 50,
                 lp_successes: 50,
                 lp_retries: 0,
@@ -579,6 +673,8 @@ mod tests {
                 phase: "backward".to_string(),
                 stage: 0,
                 opening: Some(0),
+                rank: None,
+                worker_id: None,
                 lp_solves: 10,
                 lp_successes: 10,
                 lp_retries: 0,
@@ -603,6 +699,8 @@ mod tests {
                 phase: "backward".to_string(),
                 stage: 0,
                 opening: Some(1),
+                rank: None,
+                worker_id: None,
                 lp_solves: 20,
                 lp_successes: 20,
                 lp_retries: 0,
@@ -627,6 +725,8 @@ mod tests {
                 phase: "backward".to_string(),
                 stage: 0,
                 opening: Some(2),
+                rank: None,
+                worker_id: None,
                 lp_solves: 30,
                 lp_successes: 30,
                 lp_retries: 0,
@@ -656,9 +756,9 @@ mod tests {
         // 4 rows: 1 forward + 3 backward-opening rows.
         assert_eq!(batch.num_rows(), 4);
 
-        // lp_solves is at column index 4 (after: iteration, phase, stage, opening).
+        // lp_solves is at column index 6 (after: iteration, phase, stage, opening, rank, worker_id).
         let lp_col = batch
-            .column(4)
+            .column(6)
             .as_any()
             .downcast_ref::<UInt32Array>()
             .unwrap();
@@ -710,6 +810,8 @@ mod tests {
                 phase: "forward".to_string(),
                 stage,
                 opening: None, // forward has no opening dimension
+                rank: None,
+                worker_id: None,
                 lp_solves,
                 lp_successes: lp_solves,
                 lp_retries: 0,
@@ -758,7 +860,7 @@ mod tests {
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         let lp_col = batch
-            .column(4)
+            .column(6)
             .as_any()
             .downcast_ref::<UInt32Array>()
             .unwrap();

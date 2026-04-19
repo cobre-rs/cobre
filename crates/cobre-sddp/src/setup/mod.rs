@@ -1615,6 +1615,7 @@ mod tests {
     /// `workspaces.len()` equals 2.
     #[test]
     fn create_workspace_pool_returns_correct_size() {
+        use cobre_comm::LocalBackend;
         use cobre_solver::highs::HighsSolver;
 
         let system = minimal_system(2);
@@ -1642,8 +1643,9 @@ mod tests {
         )
         .expect("setup");
 
+        let comm = LocalBackend;
         let pool = setup
-            .create_workspace_pool(2, HighsSolver::new)
+            .create_workspace_pool(&comm, 2, HighsSolver::new)
             .expect("workspace pool");
 
         assert_eq!(pool.workspaces.len(), 2);
@@ -1755,7 +1757,7 @@ mod tests {
 
         // Build simulation pool.
         let mut pool = setup
-            .create_workspace_pool(1, HighsSolver::new)
+            .create_workspace_pool(&comm, 1, HighsSolver::new)
             .expect("sim pool");
 
         // Create the result channel and drain thread.

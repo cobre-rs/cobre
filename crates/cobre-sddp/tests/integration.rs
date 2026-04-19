@@ -49,8 +49,9 @@ use cobre_stochastic::{
 
 use cobre_sddp::{
     CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-    RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
+    RiskMeasure, SddpError, StageContext, StageIndexer, StageWorkerStatsBuffer, StoppingMode,
+    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
+    train,
 };
 
 // ===========================================================================
@@ -1894,6 +1895,8 @@ fn forward_pass_uses_baked_template_on_iter_2() {
             n_state: indexer.n_state,
         };
         SolverWorkspace::new(
+            0,
+            0,
             TrackingMockSolver::new(),
             PatchBuffer::new(0, 0, 0, 0),
             indexer.n_state,
@@ -2173,6 +2176,8 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             n_state: indexer.n_state,
         };
         SolverWorkspace::new(
+            0,
+            0,
             TrackingMockSolver::new(),
             PatchBuffer::new(0, 0, 0, 0),
             indexer.n_state,
@@ -2266,6 +2271,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
+            stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
         },
         &StubComm,
     )
@@ -2326,6 +2332,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
+            stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
         },
         &StubComm,
     )

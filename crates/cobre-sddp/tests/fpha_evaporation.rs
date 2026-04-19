@@ -174,7 +174,7 @@ fn fpha_evaporation_case_converges() {
     // ── Step 7: simulate ──────────────────────────────────────────────────────
 
     let mut pool = setup
-        .create_workspace_pool(1, HighsSolver::new)
+        .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
     let io_capacity = setup.io_channel_capacity().max(1);

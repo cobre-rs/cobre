@@ -281,6 +281,23 @@ pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 15;
 /// Each scenario occupies `scenario_id_as_f64` + the 15 scalar fields = 16 values.
 pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
+/// Number of `f64` values per entry in [`pack_worker_opening_stats`].
+///
+/// Each entry encodes `[worker_id, slot_idx, 15 scalar fields]` for a fixed
+/// stride of `2 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 17`. Used by epic-04b T005's
+/// `allgatherv` of per-`(rank, worker_id, opening)` backward statistics.
+pub const WORKER_STATS_ENTRY_STRIDE: usize = 2 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
+
+/// Required `f64` buffer length for a per-worker per-slot pack payload.
+///
+/// Returns `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`. Use to preallocate
+/// MPI send/recv buffers at training setup.
+#[must_use]
+#[inline]
+pub fn worker_opening_stats_buffer_size(n_workers: usize, n_slots: usize) -> usize {
+    n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE
+}
+
 /// Pack the 15 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
 ///
 /// The packing order matches the declaration order of [`SolverStatsDelta`]:
@@ -511,6 +528,223 @@ pub fn unpack_backward_opening_stats(buf: &[f64]) -> Vec<(usize, Vec<SolverStats
         "cursor must end exactly at buf.len() for a well-formed buffer"
     );
     out
+}
+
+/// Pack a worker-preserving per-slot buffer into a flat `f64` buffer for `allgatherv`.
+///
+/// Buffer layout (fixed stride of [`WORKER_STATS_ENTRY_STRIDE`] per entry):
+///
+/// ```text
+/// entry(w, k) = [w as f64, k as f64, <15 scalar fields>]
+/// ```
+///
+/// Entries are laid out in `(worker_id, slot_idx)` row-major order. `out` must
+/// be a caller-allocated slice of length
+/// `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`. Use
+/// [`worker_opening_stats_buffer_size`] to compute the size.
+///
+/// `stats` is a slice of length `n_workers * n_slots` laid out in the same
+/// `(worker_id, slot_idx)` row-major order; i.e. `stats[w * n_slots + k]` is
+/// the delta for worker `w` and slot `k`.
+///
+/// # Panics
+///
+/// Panics in debug builds if `out.len() != n_workers * n_slots *
+/// WORKER_STATS_ENTRY_STRIDE` or `stats.len() != n_workers * n_slots`.
+#[allow(clippy::cast_precision_loss)]
+pub fn pack_worker_opening_stats(
+    out: &mut [f64],
+    stats: &[SolverStatsDelta],
+    n_workers: usize,
+    n_slots: usize,
+) {
+    debug_assert_eq!(stats.len(), n_workers * n_slots);
+    debug_assert_eq!(out.len(), n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE);
+    for w in 0..n_workers {
+        for k in 0..n_slots {
+            let entry_base = (w * n_slots + k) * WORKER_STATS_ENTRY_STRIDE;
+            out[entry_base] = w as f64;
+            out[entry_base + 1] = k as f64;
+            let scalars = pack_delta_scalars(&stats[w * n_slots + k]);
+            out[entry_base + 2..entry_base + WORKER_STATS_ENTRY_STRIDE].copy_from_slice(&scalars);
+        }
+    }
+}
+
+/// Unpack a flat `f64` buffer (from [`pack_worker_opening_stats`]) back into
+/// the caller-owned `SolverStatsDelta` slice.
+///
+/// `buf` must be `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE` floats in
+/// the exact layout emitted by [`pack_worker_opening_stats`].
+///
+/// `out` must be a slice of length `n_workers * n_slots` laid out in
+/// `(worker_id, slot_idx)` row-major order. Existing slot contents are
+/// overwritten.
+///
+/// The `worker_id` / `slot_idx` prefix floats in `buf` are used as
+/// debug-asserted consistency checks; they must match the layout index.
+///
+/// # Panics
+///
+/// Panics in debug builds if:
+/// - `buf.len() != n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`
+/// - `out.len() != n_workers * n_slots`
+/// - `buf[base] != w as f64` or `buf[base + 1] != k as f64` for some entry.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::expect_used
+)]
+pub fn unpack_worker_opening_stats(
+    buf: &[f64],
+    out: &mut [SolverStatsDelta],
+    n_workers: usize,
+    n_slots: usize,
+) {
+    debug_assert_eq!(buf.len(), n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE);
+    debug_assert_eq!(out.len(), n_workers * n_slots);
+    for w in 0..n_workers {
+        for k in 0..n_slots {
+            let entry_base = (w * n_slots + k) * WORKER_STATS_ENTRY_STRIDE;
+            debug_assert_eq!(buf[entry_base] as usize, w);
+            debug_assert_eq!(buf[entry_base + 1] as usize, k);
+            let scalars: [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] = buf
+                [entry_base + 2..entry_base + WORKER_STATS_ENTRY_STRIDE]
+                .try_into()
+                .expect("slice length equals SOLVER_STATS_DELTA_SCALAR_FIELDS");
+            out[w * n_slots + k] = unpack_delta_scalars(&scalars);
+        }
+    }
+}
+
+/// Flat per-(worker, slot) gather buffer for a single training pass.
+///
+/// Shape: `n_workers × n_slots`. Indexed by `worker_id * n_slots + slot`.
+///
+/// Used in three configurations:
+/// - **Backward pass**: `n_slots = max_openings` — each worker writes its
+///   per-opening stats for the current stage. Cleared via [`reset`] between
+///   stages (one stage per backward iteration step).
+/// - **Forward pass**: `n_slots = n_stages` — each worker writes its
+///   per-stage total for the full forward pass. Cleared between iterations.
+/// - **Lower-bound pass**: `n_slots = 1` — each worker writes a single root-stage
+///   delta. Cleared between iterations.
+///
+/// Allocated once at training setup (`train`) and reused across stages and
+/// iterations without any hot-path allocation.
+///
+/// # Zero-allocation guarantee
+///
+/// `new` performs exactly one allocation. `reset`, `get`, `set`, and
+/// `as_slice` perform no allocations. There are no `Vec::push` or
+/// `Vec::new` calls on any path that touches this buffer after
+/// construction.
+///
+/// # Reset cadence
+///
+/// - Backward buffer: call `reset()` at the **start of each backward stage**
+///   (before the parallel region), so that stale data from the previous stage
+///   does not accumulate.
+/// - Forward and lower-bound buffers: call `reset()` at the **start of each
+///   training iteration** (before the parallel region), so that data from the
+///   previous iteration does not accumulate.
+#[derive(Debug)]
+pub struct StageWorkerStatsBuffer {
+    data: Vec<SolverStatsDelta>,
+    n_workers: usize,
+    n_slots: usize,
+}
+
+impl StageWorkerStatsBuffer {
+    /// Allocate a new buffer of shape `n_workers × n_slots`, initialised to
+    /// `SolverStatsDelta::default()` (all zeros).
+    #[must_use]
+    pub fn new(n_workers: usize, n_slots: usize) -> Self {
+        Self {
+            data: vec![SolverStatsDelta::default(); n_workers * n_slots],
+            n_workers,
+            n_slots,
+        }
+    }
+
+    /// Compute the flat index for `(worker_id, slot)`.
+    ///
+    /// Equivalent to `worker_id * n_slots + slot`. Used by [`get`] and
+    /// [`set`] internally; exposed so callers can do bulk slice arithmetic
+    /// without re-deriving the formula.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Panics if `worker_id >= self.n_workers` or `slot >= self.n_slots`.
+    #[inline]
+    #[must_use]
+    pub fn index(&self, worker_id: usize, slot: usize) -> usize {
+        debug_assert!(
+            worker_id < self.n_workers,
+            "worker_id {worker_id} >= n_workers {}",
+            self.n_workers
+        );
+        debug_assert!(
+            slot < self.n_slots,
+            "slot {slot} >= n_slots {}",
+            self.n_slots
+        );
+        worker_id * self.n_slots + slot
+    }
+
+    /// Return a shared reference to the delta at `(worker_id, slot)`.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Panics if indices are out of bounds.
+    #[must_use]
+    pub fn get(&self, worker_id: usize, slot: usize) -> &SolverStatsDelta {
+        let idx = self.index(worker_id, slot);
+        &self.data[idx]
+    }
+
+    /// Write `delta` into the slot at `(worker_id, slot)`.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Panics if indices are out of bounds.
+    pub fn set(&mut self, worker_id: usize, slot: usize, delta: SolverStatsDelta) {
+        let idx = self.index(worker_id, slot);
+        self.data[idx] = delta;
+    }
+
+    /// Zero all slots.
+    ///
+    /// Call between stages (backward path) or between iterations (forward and
+    /// lower-bound paths). Does not re-allocate; always `O(n_workers * n_slots)`.
+    pub fn reset(&mut self) {
+        for slot in &mut self.data {
+            *slot = SolverStatsDelta::default();
+        }
+    }
+
+    /// Return the flat backing slice of length `n_workers * n_slots`.
+    ///
+    /// Layout: `data[worker_id * n_slots + slot]`.
+    #[must_use]
+    pub fn as_slice(&self) -> &[SolverStatsDelta] {
+        &self.data
+    }
+
+    /// Number of workers in the buffer (first dimension).
+    #[must_use]
+    pub fn n_workers(&self) -> usize {
+        self.n_workers
+    }
+
+    /// Number of slots per worker (second dimension).
+    ///
+    /// Equal to `max_openings` on the backward path, `n_stages` on the
+    /// forward path, and `1` on the lower-bound path.
+    #[must_use]
+    pub fn n_slots(&self) -> usize {
+        self.n_slots
+    }
 }
 
 #[cfg(test)]
@@ -1145,5 +1379,100 @@ mod tests {
             );
             assert_eq!(*opening, -1, "forward rows have no opening dimension");
         }
+    }
+
+    /// T003: verify `index(w, k) = w * n_slots + k` for several values.
+    #[test]
+    fn test_stage_worker_stats_buffer_index_layout() {
+        let buf = StageWorkerStatsBuffer::new(3, 4);
+        assert_eq!(buf.index(0, 0), 0);
+        assert_eq!(buf.index(0, 3), 3);
+        assert_eq!(buf.index(1, 0), 4);
+        assert_eq!(buf.index(2, 3), 11);
+        assert_eq!(buf.as_slice().len(), 12);
+        assert_eq!(buf.n_workers(), 3);
+        assert_eq!(buf.n_slots(), 4);
+    }
+
+    /// T003: verify `reset()` zeros every slot, even after non-default writes.
+    #[test]
+    fn test_stage_worker_stats_buffer_reset_zeroes_all_slots() {
+        let mut buf = StageWorkerStatsBuffer::new(2, 3);
+        for w in 0..2 {
+            for k in 0..3 {
+                let d = SolverStatsDelta {
+                    lp_solves: 7,
+                    ..SolverStatsDelta::default()
+                };
+                buf.set(w, k, d);
+            }
+        }
+        for slot in buf.as_slice() {
+            assert_eq!(slot.lp_solves, 7);
+        }
+        buf.reset();
+        for slot in buf.as_slice() {
+            assert_eq!(slot.lp_solves, 0);
+        }
+    }
+
+    /// T004: round-trip pack→unpack must preserve every scalar field for every (w,k) pair.
+    #[test]
+    fn test_pack_worker_opening_stats_roundtrip() {
+        let n_workers = 3;
+        let n_slots = 4;
+        let mut input: Vec<SolverStatsDelta> = Vec::with_capacity(n_workers * n_slots);
+        for w in 0..n_workers {
+            for k in 0..n_slots {
+                input.push(SolverStatsDelta {
+                    lp_solves: (w * 10 + k) as u64,
+                    ..SolverStatsDelta::default()
+                });
+            }
+        }
+        let mut buf = vec![0.0_f64; worker_opening_stats_buffer_size(n_workers, n_slots)];
+        assert_eq!(buf.len(), n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE);
+        pack_worker_opening_stats(&mut buf, &input, n_workers, n_slots);
+
+        let mut recovered = vec![SolverStatsDelta::default(); n_workers * n_slots];
+        unpack_worker_opening_stats(&buf, &mut recovered, n_workers, n_slots);
+
+        for w in 0..n_workers {
+            for k in 0..n_slots {
+                assert_eq!(
+                    recovered[w * n_slots + k].lp_solves,
+                    (w * 10 + k) as u64,
+                    "lp_solves mismatch at (w={w}, k={k})"
+                );
+            }
+        }
+    }
+
+    /// T004: helper returns the precise `stride * n_workers * n_slots` size in `f64` units.
+    #[test]
+    fn test_pack_worker_opening_stats_buffer_size() {
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 17);
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 3400);
+    }
+
+    /// T004: layout invariants — `[w as f64, k as f64, ...]` per entry, row-major.
+    #[test]
+    fn test_pack_worker_opening_stats_layout_invariant() {
+        let n_workers = 2;
+        let n_slots = 4;
+        let input = vec![SolverStatsDelta::default(); n_workers * n_slots];
+        let mut buf = vec![0.0_f64; worker_opening_stats_buffer_size(n_workers, n_slots)];
+        pack_worker_opening_stats(&mut buf, &input, n_workers, n_slots);
+
+        // entry(w=0, k=0) at offset 0
+        assert_eq!(buf[0], 0.0);
+        assert_eq!(buf[1], 0.0);
+        // entry(w=0, k=1) at offset 17
+        assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE], 0.0);
+        assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE + 1], 1.0);
+        // entry(w=1, k=0) at offset 17 * 4 (n_slots=4 entries per worker)
+        let w1_k0 = WORKER_STATS_ENTRY_STRIDE * n_slots;
+        assert_eq!(buf[w1_k0], 1.0);
+        assert_eq!(buf[w1_k0 + 1], 0.0);
     }
 }

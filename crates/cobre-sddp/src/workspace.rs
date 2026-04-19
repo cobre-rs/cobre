@@ -245,7 +245,24 @@ pub(crate) struct ScratchBuffers {
 /// Each field is exclusively owned by the thread — there is no shared state
 /// between workspaces. Distributed to worker threads via mutable references
 /// from a [`WorkspacePool`].
+///
+/// # Identity fields
+///
+/// `rank` and `worker_id` are assigned at [`WorkspacePool::new`] construction
+/// time and never change. They provide a stable identity for per-worker
+/// observability without any thread-local lookup at call sites. Later epic-04b
+/// tickets (T003, T005, T006) key their buffers on these fields.
 pub struct SolverWorkspace<S: SolverInterface> {
+    /// MPI rank that owns this workspace. Stable across the run.
+    ///
+    /// Set to `i32::try_from(comm.rank()).expect("rank fits in i32")` at
+    /// [`WorkspacePool::new`] time. MPI world sizes are bounded well below
+    /// `i32::MAX` in practice.
+    pub rank: i32,
+    /// Rayon worker index within this rank's pool, assigned at
+    /// [`WorkspacePool::new`]. Stable across the run. Range:
+    /// `0..n_workers_local`.
+    pub worker_id: i32,
     /// LP solver instance owned exclusively by this workspace.
     pub solver: S,
     /// Pre-allocated row-bound patch buffer.
@@ -271,7 +288,11 @@ pub struct SolverWorkspace<S: SolverInterface> {
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
-    /// Construct a workspace with the given solver, patch buffer, and state capacity.
+    /// Construct a workspace with explicit identity, solver, patch buffer, and state capacity.
+    ///
+    /// `rank` is the MPI rank that owns this workspace (stable across the run).
+    /// `worker_id` is the rayon worker index within the rank's pool (range
+    /// `0..n_workers_local`, assigned sequentially at [`WorkspacePool::new`]).
     ///
     /// `sizing` provides the buffer-dimension parameters shared between the
     /// [`PatchBuffer`], the internal `ScratchBuffers`, and the
@@ -282,8 +303,17 @@ impl<S: SolverInterface> SolverWorkspace<S> {
     /// The `scratch_basis` starts empty. Call `WorkspacePool::resize_scratch_bases`
     /// after construction to pre-allocate for backward-pass padding.
     #[must_use]
-    pub fn new(solver: S, patch_buf: PatchBuffer, n_state: usize, sizing: WorkspaceSizing) -> Self {
+    pub fn new(
+        rank: i32,
+        worker_id: i32,
+        solver: S,
+        patch_buf: PatchBuffer,
+        n_state: usize,
+        sizing: WorkspaceSizing,
+    ) -> Self {
         Self {
+            rank,
+            worker_id,
             solver,
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -365,36 +395,52 @@ pub struct WorkspacePool<S: SolverInterface> {
 impl<S: SolverInterface> WorkspacePool<S> {
     /// Construct a pool of `n_threads` independently allocated workspaces.
     ///
+    /// `rank` is the MPI rank that owns this pool. Each workspace in the pool
+    /// receives a sequentially assigned `worker_id` in `0..n_threads`.
+    ///
     /// Each workspace receives a fresh solver instance, patch buffer, and state buffer.
     /// `solver_factory` is called once per thread.
     ///
     /// `sizing` provides all buffer-dimension parameters; pass
     /// `WorkspaceSizing { n_load_buses: 0, max_blocks: 0, .. }` when there is
     /// no stochastic load.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_threads > i32::MAX`. Rayon pools are bounded by CPU count,
+    /// so this is physically impossible on any real system.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(
+        rank: i32,
         n_threads: usize,
         n_state: usize,
         sizing: WorkspaceSizing,
         solver_factory: impl Fn() -> S,
     ) -> Self {
         let workspaces = (0..n_threads)
-            .map(|_| SolverWorkspace {
-                solver: solver_factory(),
-                patch_buf: PatchBuffer::new(
-                    sizing.hydro_count,
-                    sizing.max_par_order,
-                    sizing.n_load_buses,
-                    sizing.max_blocks,
-                ),
-                current_state: Vec::with_capacity(n_state),
-                scratch: ScratchBuffers::new(sizing),
-                scratch_basis: Basis::new(0, 0),
-                backward_accum: BackwardAccumulators::new(
-                    sizing.max_openings,
-                    sizing.initial_pool_capacity,
-                    sizing.n_state,
-                ),
+            .map(|idx| {
+                let worker_id =
+                    i32::try_from(idx).expect("worker_id fits in i32 (rayon pools are small)");
+                SolverWorkspace {
+                    rank,
+                    worker_id,
+                    solver: solver_factory(),
+                    patch_buf: PatchBuffer::new(
+                        sizing.hydro_count,
+                        sizing.max_par_order,
+                        sizing.n_load_buses,
+                        sizing.max_blocks,
+                    ),
+                    current_state: Vec::with_capacity(n_state),
+                    scratch: ScratchBuffers::new(sizing),
+                    scratch_basis: Basis::new(0, 0),
+                    backward_accum: BackwardAccumulators::new(
+                        sizing.max_openings,
+                        sizing.initial_pool_capacity,
+                        sizing.n_state,
+                    ),
+                }
             })
             .collect();
         Self { workspaces }
@@ -403,6 +449,9 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// Construct a pool of `n_threads` independently allocated workspaces using
     /// a fallible factory.
     ///
+    /// `rank` is the MPI rank that owns this pool. Each workspace in the pool
+    /// receives a sequentially assigned `worker_id` in `0..n_threads`.
+    ///
     /// Identical to [`WorkspacePool::new`] except that `solver_factory` returns
     /// `Result<S, E>`. The first error from any factory call is returned
     /// immediately and no partial pool is produced.
@@ -410,15 +459,26 @@ impl<S: SolverInterface> WorkspacePool<S> {
     /// # Errors
     ///
     /// Returns `Err(E)` if any call to `solver_factory` fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_threads > i32::MAX`. Rayon pools are bounded by CPU count,
+    /// so this is physically impossible on any real system.
+    #[allow(clippy::expect_used)]
     pub fn try_new<E>(
+        rank: i32,
         n_threads: usize,
         n_state: usize,
         sizing: WorkspaceSizing,
         solver_factory: impl Fn() -> Result<S, E>,
     ) -> Result<Self, E> {
         let mut workspaces = Vec::with_capacity(n_threads);
-        for _ in 0..n_threads {
+        for idx in 0..n_threads {
+            let worker_id =
+                i32::try_from(idx).expect("worker_id fits in i32 (rayon pools are small)");
             workspaces.push(SolverWorkspace {
+                rank,
+                worker_id,
                 solver: solver_factory()?,
                 patch_buf: PatchBuffer::new(
                     sizing.hydro_count,
@@ -688,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_size() {
-        let pool = WorkspacePool::new(4, 9, sizing(3, 2, 0), || MockSolver);
+        let pool = WorkspacePool::new(0, 4, 9, sizing(3, 2, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 4);
     }
 
@@ -696,7 +756,7 @@ mod tests {
     fn test_workspace_buffer_dimensions() {
         // N=3, L=2 → patch_buf length = 3*(2+2) + 3 (z-inflow) = 15
         // n_state=9 → current_state capacity = 9
-        let pool = WorkspacePool::new(4, 9, sizing(3, 2, 0), || MockSolver);
+        let pool = WorkspacePool::new(0, 4, 9, sizing(3, 2, 0), || MockSolver);
         for ws in &pool.workspaces {
             assert_eq!(ws.patch_buf.indices.len(), 15, "patch_buf length");
             assert_eq!(ws.current_state.capacity(), 9, "current_state capacity");
@@ -706,13 +766,13 @@ mod tests {
 
     #[test]
     fn test_workspace_pool_zero_threads() {
-        let pool = WorkspacePool::new(0, 9, sizing(3, 2, 0), || MockSolver);
+        let pool = WorkspacePool::new(0, 0, 9, sizing(3, 2, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 0);
     }
 
     #[test]
     fn test_workspace_pool_single_thread() {
-        let pool = WorkspacePool::new(1, 0, sizing(0, 0, 0), || MockSolver);
+        let pool = WorkspacePool::new(0, 1, 0, sizing(0, 0, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), 1);
         assert_eq!(pool.workspaces[0].patch_buf.indices.len(), 0);
     }
@@ -722,7 +782,7 @@ mod tests {
         // Factory is called n_threads times; each workspace gets its own instance.
         // Verify by checking pool size matches factory call expectation.
         let n = 6;
-        let pool = WorkspacePool::new(n, 1, sizing(1, 0, 0), || MockSolver);
+        let pool = WorkspacePool::new(0, n, 1, sizing(1, 0, 0), || MockSolver);
         assert_eq!(pool.workspaces.len(), n);
     }
 
@@ -792,6 +852,7 @@ mod tests {
     fn test_workspace_pool_propagates_downstream_par_order() {
         // AC: WorkspacePool propagates downstream_par_order=2, hydro_count=3.
         let pool = WorkspacePool::new(
+            0,
             2,
             6,
             WorkspaceSizing {
@@ -1005,6 +1066,7 @@ mod tests {
         //   WorkspaceSizing { initial_pool_capacity: 50, .. }
         //   must have recon_slot_lookup.len() == 50 and every entry is None.
         let pool = WorkspacePool::new(
+            0,
             4,
             0,
             WorkspaceSizing {
@@ -1025,11 +1087,30 @@ mod tests {
             );
         }
         // Verify zero initial_pool_capacity produces an empty vec.
-        let pool_empty = WorkspacePool::new(1, 0, WorkspaceSizing::default(), || MockSolver);
+        let pool_empty = WorkspacePool::new(0, 1, 0, WorkspaceSizing::default(), || MockSolver);
         assert_eq!(
             pool_empty.workspaces[0].scratch.recon_slot_lookup.len(),
             0,
             "initial_pool_capacity=0 must produce empty recon_slot_lookup"
         );
+    }
+
+    #[test]
+    fn test_workspace_pool_assigns_sequential_worker_ids() {
+        let pool = WorkspacePool::new(
+            /* rank = */ 3,
+            /* n_workers = */ 5,
+            /* n_state = */ 0,
+            WorkspaceSizing::default(),
+            || MockSolver,
+        );
+        let ws_slice = &pool.workspaces;
+        assert_eq!(ws_slice.len(), 5);
+        let mut seen: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for ws in ws_slice {
+            assert_eq!(ws.rank, 3);
+            assert!(ws.worker_id >= 0 && ws.worker_id < 5);
+            assert!(seen.insert(ws.worker_id), "worker_id duplicated");
+        }
     }
 }

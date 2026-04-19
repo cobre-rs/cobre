@@ -623,26 +623,17 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
-            Err(crate::types::SolverError::InternalError {
-                message: "mock".to_string(),
-                error_code: None,
-            })
-        }
-
-        fn reset(&mut self) {}
-
-        fn get_basis(&mut self, _out: &mut crate::types::Basis) {}
-
-        fn solve_with_basis(
+        fn solve(
             &mut self,
-            _basis: &crate::types::Basis,
+            _basis: Option<&crate::types::Basis>,
         ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "mock".to_string(),
                 error_code: None,
             })
         }
+
+        fn get_basis(&mut self, _out: &mut crate::types::Basis) {}
 
         fn statistics(&self) -> SolverStatistics {
             self.stats.clone()

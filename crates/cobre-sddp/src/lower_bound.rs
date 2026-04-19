@@ -332,7 +332,7 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
                 }
             }
 
-            let view = solver.solve().map_err(|e| match e {
+            let view = solver.solve(None).map_err(|e| match e {
                 SolverError::Infeasible => SddpError::Infeasible {
                     stage: 0,
                     iteration: 0,
@@ -633,7 +633,10 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            _basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_call == Some(call) {
@@ -652,18 +655,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {
-            self.call_count = 0;
-        }
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()

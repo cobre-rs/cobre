@@ -459,18 +459,18 @@ pub struct TrainingSummary {
     /// Total LP solve wall-clock time in seconds.
     pub total_solve_time_seconds: Option<f64>,
 
-    /// Total number of `solve_with_basis` calls.
+    /// Total number of warm-start `solve(Some(&basis))` calls.
     pub total_basis_offered: Option<u64>,
 
-    /// Number of `solve_with_basis` calls in which the basis was rejected because
+    /// Number of warm-start solve calls in which the basis was rejected because
     /// `isBasisConsistent` returned false. Replaces two counters removed in v0.5.0
     /// (see CHANGELOG).
     pub total_basis_consistency_failures: Option<u64>,
 
-    /// Total `clear_solver_state` calls across all solvers in the training phase.
+    /// Total `Highs_clearSolver` calls across all solvers in the training phase.
     pub total_clear_solver_count: Option<u64>,
 
-    /// `clear_solver_state` calls that returned an FFI error during the training phase.
+    /// `Highs_clearSolver` calls that returned an FFI error during the training phase.
     pub total_clear_solver_failures: Option<u64>,
 
     /// Total simplex iterations across all solves.
@@ -512,18 +512,18 @@ pub struct SimulationSummary {
     /// Cumulative LP solve wall-clock time in seconds.
     pub total_solve_time_seconds: Option<f64>,
 
-    /// Number of `solve_with_basis` calls.
+    /// Total number of warm-start `solve(Some(&basis))` calls.
     pub total_basis_offered: Option<u64>,
 
-    /// Number of `solve_with_basis` calls in which the basis was rejected because
+    /// Number of warm-start solve calls in which the basis was rejected because
     /// `isBasisConsistent` returned false. Replaces two counters removed in v0.5.0
     /// (see CHANGELOG).
     pub total_basis_consistency_failures: Option<u64>,
 
-    /// Total `clear_solver_state` calls across all solvers in the simulation phase.
+    /// Total `Highs_clearSolver` calls across all solvers in the simulation phase.
     pub total_clear_solver_count: Option<u64>,
 
-    /// `clear_solver_state` calls that returned an FFI error during the simulation phase.
+    /// `Highs_clearSolver` calls that returned an FFI error during the simulation phase.
     pub total_clear_solver_failures: Option<u64>,
 
     /// Total simplex iterations across all solves.

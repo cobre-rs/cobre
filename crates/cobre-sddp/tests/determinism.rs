@@ -147,7 +147,10 @@ impl SolverInterface for MockSolver3H {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         Ok(cobre_solver::SolutionView {
             objective: self.objective,
             primal: PRIMAL_3H,
@@ -158,16 +161,7 @@ impl SolverInterface for MockSolver3H {
         })
     }
 
-    fn reset(&mut self) {}
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -506,7 +500,6 @@ fn run_training(
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,

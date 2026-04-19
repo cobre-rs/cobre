@@ -246,7 +246,7 @@ pub struct SolverWorkspace<S: SolverInterface> {
     /// Pre-allocated scratch basis for backward-pass padding (P03).
     ///
     /// Used to copy-then-pad a read-only basis from `BasisStore` before
-    /// passing it to `solve_with_basis`. Sized after construction via
+    /// passing it to `solve(Some(&basis))`. Sized after construction via
     /// [`WorkspacePool::resize_scratch_bases`] to the maximum LP dimensions
     /// so that `Basis::clone_from` never reallocates on the hot path.
     pub(crate) scratch_basis: Basis,
@@ -463,7 +463,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
 /// current LP row layout.
 ///
 /// **Current behavior (option 1):** We accept the degraded warm-start.
-/// `HiGHS` detects the dimension mismatch when `solve_with_basis` is called
+/// `HiGHS` detects the dimension mismatch when `solve(Some(&basis))` is called
 /// with a basis whose row count differs from the current LP row count and
 /// falls back to a crash start. This is tracked as a `basis_rejection` in
 /// [`SolverStatistics`]. The template (non-cut) row statuses remain valid;
@@ -637,20 +637,13 @@ mod tests {
         fn add_rows(&mut self, _r: &RowBatch) {}
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
         fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
-        fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
+        fn solve(&mut self, _basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError> {
             Err(SolverError::InternalError {
                 message: "mock".into(),
                 error_code: None,
             })
         }
-        fn reset(&mut self) {}
         fn get_basis(&mut self, _out: &mut Basis) {}
-        fn solve_with_basis(&mut self, _b: &Basis) -> Result<SolutionView<'_>, SolverError> {
-            Err(SolverError::InternalError {
-                message: "mock".into(),
-                error_code: None,
-            })
-        }
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
         }

@@ -160,11 +160,11 @@ pub struct HighsSolver {
     /// Never shrunk -- only grows -- to prevent reallocation churn on the hot path.
     scratch_i32: Vec<i32>,
     /// Pre-allocated i32 buffer for column basis status codes.
-    /// Reused across `solve_with_basis` and `get_basis` calls to avoid per-call allocation.
+    /// Reused across warm-start `solve` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_cols`; never shrunk.
     basis_col_i32: Vec<i32>,
     /// Pre-allocated i32 buffer for row basis status codes.
-    /// Reused across `solve_with_basis` and `get_basis` calls to avoid per-call allocation.
+    /// Reused across warm-start `solve` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_rows` and grown in `add_rows`.
     basis_row_i32: Vec<i32>,
     /// Current number of LP columns (decision variables), updated by `load_model` and `add_rows`.
@@ -774,6 +774,109 @@ impl HighsSolver {
             _ => unreachable!(),
         }
     }
+
+    /// Internal helper: call `cobre_highs_clear_solver` and update stats.
+    ///
+    /// Delivers the solve-to-solve independence contract (AD-4): clears `HiGHS`
+    /// derived state (factorization, simplex flags, PRNG, taboo list) while
+    /// leaving the LP matrix and bounds intact. Called at the start of every
+    /// `solve()` call so each solve is self-contained.
+    ///
+    /// Does NOT assert `has_model` — callers must guard that precondition themselves
+    /// (`solve` already does so before reaching this helper).
+    fn clear_solver_internal(&mut self) -> Result<(), SolverError> {
+        self.stats.clear_solver_count += 1;
+
+        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+        // `cobre_highs_clear_solver` wraps `Highs::clearSolver`, which
+        // clears derived state (factorization, simplex flags, PRNG,
+        // taboo list) while leaving `lp_.a_matrix_` and bounds intact.
+        // Per Finding 7 in the risk assessment, this is the canonical
+        // deterministic reset for cross-work-distribution invariance.
+        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
+        if status == ffi::HIGHS_STATUS_ERROR {
+            self.stats.clear_solver_failures += 1;
+            return Err(SolverError::InternalError {
+                message: "cobre_highs_clear_solver returned HIGHS_STATUS_ERROR".to_string(),
+                error_code: Some(status),
+            });
+        }
+        Ok(())
+    }
+
+    /// Core simplex execution, called after solver state has been cleared and
+    /// (for warm-start) the basis has been installed. Does NOT call
+    /// `clear_solver_internal` — callers are responsible for that.
+    fn solve_inner(&mut self) -> Result<SolutionView<'_>, SolverError> {
+        // Safeguard: apply iteration limits before the initial attempt.
+        // Time limits are NOT set here — HiGHS tracks time cumulatively from
+        // instance creation, so a per-solve time_limit would fire spuriously
+        // on long-running solver instances. Instead, wall-clock time is checked
+        // after run_once() to detect stuck solves.
+        self.set_iteration_limits();
+
+        let t0 = Instant::now();
+        let model_status = self.run_once();
+        let solve_time = t0.elapsed().as_secs_f64();
+
+        self.stats.solve_count += 1;
+
+        if model_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
+            // Read iteration count from FFI BEFORE establishing the shared borrow
+            // via extract_solution_view, so stats can be updated without violating
+            // the aliasing rules.
+            // SAFETY: handle is valid non-null HiGHS pointer.
+            #[allow(clippy::cast_sign_loss)]
+            let iterations =
+                unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
+            self.stats.success_count += 1;
+            self.stats.first_try_successes += 1;
+            self.stats.total_iterations += iterations;
+            self.stats.total_solve_time_seconds += solve_time;
+            self.restore_iteration_limits();
+            return Ok(self.extract_solution_view(solve_time));
+        }
+
+        // Check for a definitive terminal status (not a retry-able error).
+        // UNBOUNDED is retried: HiGHS dual simplex can report spurious UNBOUNDED
+        // on numerically difficult LPs with wide coefficient ranges. The retry
+        // escalation (especially presolve in the core sequence) often resolves these.
+        // ITERATION_LIMIT from the initial attempt is retryable — the retry
+        // sequence uses different strategies that may converge faster.
+        // TIME_LIMIT is retryable — HiGHS tracks time cumulatively from instance
+        // creation; a spurious TIME_LIMIT can fire even with time_limit=Infinity
+        // in edge cases. Retry level 0 (cold restart) recovers from this.
+        // Wall-clock > 15s is also retryable — detects stuck initial solves.
+        let is_unbounded = model_status == ffi::HIGHS_MODEL_STATUS_UNBOUNDED;
+        let initial_retryable = is_unbounded
+            || model_status == ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT
+            || model_status == ffi::HIGHS_MODEL_STATUS_TIME_LIMIT
+            || solve_time > 15.0;
+        if !initial_retryable {
+            if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
+                self.restore_iteration_limits();
+                self.stats.failure_count += 1;
+                return Err(terminal_err);
+            }
+        }
+
+        // Delegate to the retry escalation method (restores limits internally).
+        match self.retry_escalation(is_unbounded) {
+            Ok(outcome) => {
+                self.stats.retry_count += outcome.attempts;
+                self.stats.success_count += 1;
+                self.stats.total_iterations += outcome.iterations;
+                self.stats.total_solve_time_seconds += outcome.solve_time;
+                self.stats.retry_level_histogram[outcome.level as usize] += 1;
+                Ok(self.extract_solution_view(outcome.solve_time))
+            }
+            Err((attempts, err)) => {
+                self.stats.retry_count += attempts;
+                self.stats.failure_count += 1;
+                Err(err)
+            }
+        }
+    }
 }
 
 impl Drop for HighsSolver {
@@ -1039,129 +1142,98 @@ impl SolverInterface for HighsSolver {
         self.stats.total_set_bounds_time_seconds += t0.elapsed().as_secs_f64();
     }
 
-    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        basis: Option<&crate::types::Basis>,
+    ) -> Result<SolutionView<'_>, SolverError> {
         assert!(
             self.has_model,
             "solve called without a loaded model — call load_model first"
         );
 
-        // Safeguard: apply iteration limits before the initial attempt.
-        // Time limits are NOT set here — HiGHS tracks time cumulatively from
-        // instance creation, so a per-solve time_limit would fire spuriously
-        // on long-running solver instances. Instead, wall-clock time is checked
-        // after run_once() to detect stuck solves.
-        self.set_iteration_limits();
+        // Self-contained-solve contract (AD-4): clear HiGHS derived state before
+        // every solve so each call is independent of prior solver history.
+        // Failure here means HiGHS is in an inconsistent state — fail fast.
+        self.clear_solver_internal()?;
 
-        let t0 = Instant::now();
-        let model_status = self.run_once();
-        let solve_time = t0.elapsed().as_secs_f64();
+        if let Some(basis) = basis {
+            assert!(
+                basis.col_status.len() == self.num_cols,
+                "basis column count {} does not match LP column count {}",
+                basis.col_status.len(),
+                self.num_cols
+            );
 
-        self.stats.solve_count += 1;
+            // Track every warm-start call as a basis offer for diagnostics.
+            self.stats.basis_offered += 1;
 
-        if model_status == ffi::HIGHS_MODEL_STATUS_OPTIMAL {
-            // Read iteration count from FFI BEFORE establishing the shared borrow
-            // via extract_solution_view, so stats can be updated without violating
-            // the aliasing rules.
-            // SAFETY: handle is valid non-null HiGHS pointer.
-            #[allow(clippy::cast_sign_loss)]
-            let iterations =
-                unsafe { ffi::cobre_highs_get_simplex_iteration_count(self.handle) } as u64;
-            self.stats.success_count += 1;
-            self.stats.first_try_successes += 1;
-            self.stats.total_iterations += iterations;
-            self.stats.total_solve_time_seconds += solve_time;
-            self.restore_iteration_limits();
-            return Ok(self.extract_solution_view(solve_time));
-        }
+            // Copy raw i32 codes directly into the pre-allocated buffers — no enum
+            // translation. Zero-copy warm-start path.
+            self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
 
-        // Check for a definitive terminal status (not a retry-able error).
-        // UNBOUNDED is retried: HiGHS dual simplex can report spurious UNBOUNDED
-        // on numerically difficult LPs with wide coefficient ranges. The retry
-        // escalation (especially presolve in the core sequence) often resolves these.
-        // ITERATION_LIMIT from the initial attempt is retryable — the retry
-        // sequence uses different strategies that may converge faster.
-        // TIME_LIMIT is retryable — HiGHS tracks time cumulatively from instance
-        // creation; a spurious TIME_LIMIT can fire even with time_limit=Infinity
-        // in edge cases. Retry level 0 (cold restart) recovers from this.
-        // Wall-clock > 15s is also retryable — detects stuck initial solves.
-        let is_unbounded = model_status == ffi::HIGHS_MODEL_STATUS_UNBOUNDED;
-        let initial_retryable = is_unbounded
-            || model_status == ffi::HIGHS_MODEL_STATUS_ITERATION_LIMIT
-            || model_status == ffi::HIGHS_MODEL_STATUS_TIME_LIMIT
-            || solve_time > 15.0;
-        if !initial_retryable {
-            if let Some(terminal_err) = self.interpret_terminal_status(model_status, solve_time) {
-                self.restore_iteration_limits();
-                self.stats.failure_count += 1;
-                return Err(terminal_err);
+            // Handle dimension mismatch for dynamic cuts:
+            // - Fewer rows than LP: extend with BASIC.
+            // - More rows than LP: truncate (extra entries ignored).
+            let basis_rows = basis.row_status.len();
+            let lp_rows = self.num_rows;
+            let copy_len = basis_rows.min(lp_rows);
+            self.basis_row_i32[..copy_len].copy_from_slice(&basis.row_status[..copy_len]);
+            if lp_rows > basis_rows {
+                self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
             }
-        }
 
-        // Delegate to the retry escalation method (restores limits internally).
-        match self.retry_escalation(is_unbounded) {
-            Ok(outcome) => {
-                self.stats.retry_count += outcome.attempts;
-                self.stats.success_count += 1;
-                self.stats.total_iterations += outcome.iterations;
-                self.stats.total_solve_time_seconds += outcome.solve_time;
-                self.stats.retry_level_histogram[outcome.level as usize] += 1;
-                Ok(self.extract_solution_view(outcome.solve_time))
+            // SAFETY:
+            // - `self.handle` is a valid, non-null HiGHS pointer obtained from
+            //   `cobre_highs_create()` and kept alive by `HighsSolver`.
+            // - `basis_col_i32` was sized to `num_cols` in `load_model` and grown in
+            //   `add_rows`; the slice written above covers exactly `num_cols` entries.
+            // - `basis_row_i32` was sized to `num_rows` in `load_model` and grown in
+            //   `add_rows`; the slice written above covers exactly `num_rows` entries
+            //   (with missing rows extended to BASIC).
+            let basis_set_start = Instant::now();
+            let set_status = unsafe {
+                ffi::cobre_highs_set_basis_non_alien(
+                    self.handle,
+                    self.basis_col_i32.as_ptr(),
+                    self.basis_row_i32.as_ptr(),
+                )
+            };
+            if set_status == ffi::HIGHS_STATUS_ERROR {
+                // Non-alien rejected: the offered basis failed
+                // `isBasisConsistent` (total_basic != num_row).
+                // Count the rejection and surface it as a hard error.
+                self.stats.basis_consistency_failures += 1;
+                // Count basic entries from the already-populated buffers.
+                //
+                // `usize` -> `i64` is lossless for any basis that fits in memory:
+                // realistic LP sizes are bounded well below 2^63.
+                #[allow(clippy::cast_possible_wrap)]
+                let col_basic = self.basis_col_i32[..self.num_cols]
+                    .iter()
+                    .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
+                    .count() as i64;
+                #[allow(clippy::cast_possible_wrap)]
+                let row_basic = self.basis_row_i32[..self.num_rows]
+                    .iter()
+                    .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
+                    .count() as i64;
+                // Accumulate the elapsed time even on early return.
+                self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
+                #[allow(clippy::cast_possible_wrap)]
+                return Err(SolverError::BasisInconsistent {
+                    num_row: self.num_rows as i64,
+                    total_basic: col_basic + row_basic,
+                    col_basic,
+                    row_basic,
+                });
             }
-            Err((attempts, err)) => {
-                self.stats.retry_count += attempts;
-                self.stats.failure_count += 1;
-                Err(err)
-            }
+            self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
         }
-    }
 
-    fn reset(&mut self) {
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer. `cobre_highs_clear_solver`
-        // discards the cached basis and factorization. HiGHS preserves the model data
-        // internally, but Cobre's `reset` contract requires `load_model` before the
-        // next solve — enforced by setting `has_model = false`.
-        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
-        debug_assert_ne!(
-            status,
-            ffi::HIGHS_STATUS_ERROR,
-            "cobre_highs_clear_solver failed — HiGHS internal state may be inconsistent"
-        );
-        // Force `load_model` to be called before the next solve.
-        self.num_cols = 0;
-        self.num_rows = 0;
-        self.has_model = false;
-        // Intentionally do NOT zero `self.stats` -- statistics accumulate for the
-        // lifetime of the instance (per trait contract, SS4.3).
-    }
-
-    fn clear_solver_state(&mut self) -> Result<(), SolverError> {
-        // Calling clear_solver on an unloaded instance would succeed at
-        // the FFI level but leaves the solver in a state the caller did
-        // not expect (no LP to solve). Assert the precondition.
-        assert!(
-            self.has_model,
-            "clear_solver_state called without a loaded model — call load_model first"
-        );
-
-        self.stats.clear_solver_count += 1;
-
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
-        // `cobre_highs_clear_solver` wraps `Highs::clearSolver`, which
-        // clears derived state (factorization, simplex flags, PRNG,
-        // taboo list) while leaving `lp_.a_matrix_` and bounds intact.
-        // Per Finding 7 in the risk assessment, this is the canonical
-        // deterministic reset for cross-work-distribution invariance.
-        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            self.stats.clear_solver_failures += 1;
-            return Err(SolverError::InternalError {
-                message: "cobre_highs_clear_solver returned HIGHS_STATUS_ERROR".to_string(),
-                error_code: Some(status),
-            });
-        }
-        // `num_cols`, `num_rows`, and `has_model` are intentionally NOT
-        // modified. The LP remains loaded and usable for the next solve.
-        Ok(())
+        // Basis is installed (warm path) or not needed (cold path); run the simplex.
+        // `clear_solver_internal` was already called above — the installed basis
+        // is preserved because clear happened before setBasis.
+        self.solve_inner()
     }
 
     fn get_basis(&mut self, out: &mut crate::types::Basis) {
@@ -1191,94 +1263,6 @@ impl SolverInterface for HighsSolver {
             ffi::HIGHS_STATUS_ERROR,
             "cobre_highs_get_basis failed: basis must exist after a successful solve (programming error)"
         );
-    }
-
-    fn solve_with_basis(
-        &mut self,
-        basis: &crate::types::Basis,
-    ) -> Result<crate::types::SolutionView<'_>, SolverError> {
-        assert!(
-            self.has_model,
-            "solve_with_basis called without a loaded model — call load_model first"
-        );
-        assert!(
-            basis.col_status.len() == self.num_cols,
-            "basis column count {} does not match LP column count {}",
-            basis.col_status.len(),
-            self.num_cols
-        );
-
-        // Track every call as a basis offer for diagnostics.
-        self.stats.basis_offered += 1;
-
-        // Copy raw i32 codes directly into the pre-allocated buffers — no enum
-        // translation. Zero-copy warm-start path.
-        self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
-
-        // Handle dimension mismatch for dynamic cuts:
-        // - Fewer rows than LP: extend with BASIC.
-        // - More rows than LP: truncate (extra entries ignored).
-        let basis_rows = basis.row_status.len();
-        let lp_rows = self.num_rows;
-        let copy_len = basis_rows.min(lp_rows);
-        self.basis_row_i32[..copy_len].copy_from_slice(&basis.row_status[..copy_len]);
-        if lp_rows > basis_rows {
-            self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
-        }
-
-        // SAFETY:
-        // - `self.handle` is a valid, non-null HiGHS pointer obtained from
-        //   `cobre_highs_create()` and kept alive by `HighsSolver`.
-        // - `basis_col_i32` was sized to `num_cols` in `load_model` and grown in
-        //   `add_rows`; the slice written above covers exactly `num_cols` entries.
-        // - `basis_row_i32` was sized to `num_rows` in `load_model` and grown in
-        //   `add_rows`; the slice written above covers exactly `num_rows` entries
-        //   (with missing rows extended to BASIC).
-        let basis_set_start = Instant::now();
-        let set_status = unsafe {
-            ffi::cobre_highs_set_basis_non_alien(
-                self.handle,
-                self.basis_col_i32.as_ptr(),
-                self.basis_row_i32.as_ptr(),
-            )
-        };
-        if set_status == ffi::HIGHS_STATUS_ERROR {
-            // Non-alien rejected: the offered basis failed
-            // `isBasisConsistent` (total_basic != num_row).
-            // Count the rejection and surface it as a hard error —
-            // no alien-setter fallback (ticket-003 BasisInconsistent path).
-            self.stats.basis_consistency_failures += 1;
-            // Count basic entries from the already-populated buffers.
-            // `basis_col_i32[..num_cols]` and `basis_row_i32[..num_rows]`
-            // were filled by the copy block above before this setter call.
-            //
-            // `usize` -> `i64` is lossless for any basis that fits in memory:
-            // realistic LP sizes are bounded well below 2^63.
-            #[allow(clippy::cast_possible_wrap)]
-            let col_basic = self.basis_col_i32[..self.num_cols]
-                .iter()
-                .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
-                .count() as i64;
-            #[allow(clippy::cast_possible_wrap)]
-            let row_basic = self.basis_row_i32[..self.num_rows]
-                .iter()
-                .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
-                .count() as i64;
-            // Accumulate the elapsed time even on early return — otherwise
-            // rejected solves lose their wall-clock accounting.
-            self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
-            #[allow(clippy::cast_possible_wrap)]
-            return Err(SolverError::BasisInconsistent {
-                num_row: self.num_rows as i64,
-                total_basic: col_basic + row_basic,
-                col_basic,
-                row_basic,
-            });
-        }
-        self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
-
-        // Delegate to solve() which handles retry escalation and statistics updates.
-        self.solve()
     }
 
     fn statistics(&self) -> SolverStatistics {
@@ -1497,7 +1481,7 @@ mod tests {
         solver.load_model(&template);
 
         let solution = solver
-            .solve()
+            .solve(None)
             .expect("solve() must succeed on a feasible LP");
 
         assert!(
@@ -1535,7 +1519,7 @@ mod tests {
         solver.add_rows(&cuts);
 
         let solution = solver
-            .solve()
+            .solve(None)
             .expect("solve() must succeed on a feasible LP with cuts");
 
         assert!(
@@ -1574,7 +1558,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[4.0], &[4.0]);
 
         let solution = solver
-            .solve()
+            .solve(None)
             .expect("solve() must succeed after RHS patch");
 
         assert!(
@@ -1591,8 +1575,8 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        solver.solve().expect("first solve must succeed");
-        solver.solve().expect("second solve must succeed");
+        solver.solve(None).expect("first solve must succeed");
+        solver.solve(None).expect("second solve must succeed");
 
         let stats = solver.statistics();
         assert_eq!(stats.solve_count, 2, "solve_count must be 2");
@@ -1604,34 +1588,26 @@ mod tests {
         );
     }
 
-    /// After `reset()`, statistics counters must be unchanged.
+    /// After a cold solve, statistics counters must reflect the single solve.
     #[test]
-    fn test_highs_reset_preserves_stats() {
+    fn test_highs_solve_preserves_stats() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("solve must succeed");
+        solver.solve(None).expect("solve must succeed");
 
-        let stats_before = solver.statistics();
+        let stats = solver.statistics();
         assert_eq!(
-            stats_before.solve_count, 1,
-            "solve_count must be 1 before reset"
-        );
-
-        solver.reset();
-
-        let stats_after = solver.statistics();
-        assert_eq!(
-            stats_after.solve_count, stats_before.solve_count,
-            "solve_count must be unchanged after reset"
+            stats.solve_count, 1,
+            "solve_count must be 1 after one solve"
         );
         assert_eq!(
-            stats_after.success_count, stats_before.success_count,
-            "success_count must be unchanged after reset"
+            stats.success_count, 1,
+            "success_count must be 1 after one successful solve"
         );
-        assert_eq!(
-            stats_after.total_iterations, stats_before.total_iterations,
-            "total_iterations must be unchanged after reset"
+        assert!(
+            stats.total_iterations > 0,
+            "total_iterations must be positive after a successful solve"
         );
     }
 
@@ -1642,7 +1618,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        let solution = solver.solve().expect("solve must succeed");
+        let solution = solver.solve(None).expect("solve must succeed");
         assert!(
             solution.iterations > 0,
             "iterations must be positive, got {}",
@@ -1657,7 +1633,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        let solution = solver.solve().expect("solve must succeed");
+        let solution = solver.solve(None).expect("solve must succeed");
         assert!(
             solution.solve_time_seconds > 0.0,
             "solve_time_seconds must be positive, got {}",
@@ -1673,7 +1649,7 @@ mod tests {
         let template = make_fixture_stage_template();
         solver.load_model(&template);
 
-        solver.solve().expect("solve must succeed");
+        solver.solve(None).expect("solve must succeed");
 
         let stats = solver.statistics();
         assert_eq!(stats.solve_count, 1, "solve_count must be 1");
@@ -1692,7 +1668,9 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("solve must succeed before get_basis");
+        solver
+            .solve(None)
+            .expect("solve must succeed before get_basis");
 
         let mut basis = Basis::new(0, 0);
         solver.get_basis(&mut basis);
@@ -1718,7 +1696,9 @@ mod tests {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("solve must succeed before get_basis");
+        solver
+            .solve(None)
+            .expect("solve must succeed before get_basis");
 
         let mut basis = Basis::new(0, 0);
         assert_eq!(
@@ -1746,14 +1726,14 @@ mod tests {
         );
     }
 
-    /// Warm-start via `solve_with_basis` on the same LP must reproduce
+    /// Warm-start via `solve(Some(&basis))` on the same LP must reproduce
     /// the optimal objective and complete in at most 1 simplex iteration.
     #[test]
-    fn test_solve_with_basis_warm_start() {
+    fn test_solve_warm_start_reproduces_cold_objective() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         solver.load_model(&template);
-        solver.solve().expect("cold-start solve must succeed");
+        solver.solve(None).expect("cold-start solve must succeed");
 
         let mut basis = Basis::new(0, 0);
         solver.get_basis(&mut basis);
@@ -1761,7 +1741,7 @@ mod tests {
         // Reload the same model to reset HiGHS internal state.
         solver.load_model(&template);
         let result = solver
-            .solve_with_basis(&basis)
+            .solve(Some(&basis))
             .expect("warm-start solve must succeed");
 
         assert!(
@@ -1781,20 +1761,24 @@ mod tests {
             "basis_consistency_failures must be 0 when raw basis is accepted, got {}",
             stats.basis_consistency_failures
         );
+        assert_eq!(
+            stats.basis_offered, 1,
+            "basis_offered must be 1 after one warm-start call"
+        );
     }
 
     /// When the basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
-    /// `solve_with_basis` must extend missing rows as Basic and solve correctly.
+    /// `solve(Some(&basis))` must extend missing rows as Basic and solve correctly.
     /// SS1.2 objective with both cuts active is 162.0.
     #[test]
-    fn test_solve_with_basis_dimension_mismatch() {
+    fn test_solve_warm_start_extends_missing_rows_as_basic() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         let template = make_fixture_stage_template();
         let cuts = make_fixture_row_batch();
 
         // First solve on 2-row LP to capture a 2-row basis.
         solver.load_model(&template);
-        solver.solve().expect("SS1.1 solve must succeed");
+        solver.solve(None).expect("SS1.1 solve must succeed");
         let mut basis = Basis::new(0, 0);
         solver.get_basis(&mut basis);
         assert_eq!(
@@ -1810,7 +1794,7 @@ mod tests {
 
         // Warm-start with the 2-row basis; extra rows are extended as Basic.
         let result = solver
-            .solve_with_basis(&basis)
+            .solve(Some(&basis))
             .expect("solve with dimension-mismatched basis must succeed");
 
         assert!(
@@ -1823,17 +1807,17 @@ mod tests {
     /// Non-alien path accepts a self-extracted basis: counter must stay at zero.
     ///
     /// Solves SS1.1 cold, extracts the optimal basis, reloads the model, and
-    /// warm-starts via `solve_with_basis`.  The non-alien FFI call
+    /// warm-starts via `solve(Some(&basis))`.  The non-alien FFI call
     /// (`cobre_highs_set_basis_non_alien`) should accept a basis that was just
     /// produced by `HiGHS` itself, so `basis_consistency_failures` must not
     /// increase.
     #[test]
-    fn test_solve_with_basis_non_alien_success() {
+    fn test_solve_warm_start_non_alien_success() {
         // Arrange
         let template = make_fixture_stage_template();
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
         solver.load_model(&template);
-        let _ = solver.solve().expect("cold-start solve must succeed");
+        let _ = solver.solve(None).expect("cold-start solve must succeed");
         let mut basis = Basis::new(template.num_cols, template.num_rows);
         solver.get_basis(&mut basis);
 
@@ -1843,7 +1827,7 @@ mod tests {
 
         // Act
         let _ = solver
-            .solve_with_basis(&basis)
+            .solve(Some(&basis))
             .expect("warm-start solve must succeed with self-extracted basis");
 
         // Assert
@@ -1855,7 +1839,7 @@ mod tests {
         );
     }
 
-    /// `solve_with_basis` returns `Err(SolverError::BasisInconsistent)` when given
+    /// `solve(Some(&basis))` returns `Err(SolverError::BasisInconsistent)` when given
     /// an inconsistent basis instead of silently falling back to the alien setter.
     ///
     /// Builds a deliberately inconsistent basis (all column statuses set to
@@ -1870,7 +1854,7 @@ mod tests {
     /// - The result is `Err(SolverError::BasisInconsistent { num_row: 2,
     ///   total_basic: 5, col_basic: 3, row_basic: 2 })`.
     #[test]
-    fn test_solve_with_basis_non_alien_rejects_return_basis_inconsistent() {
+    fn test_solve_warm_start_rejects_inconsistent_basis() {
         use crate::ffi;
         use crate::types::SolverError;
 
@@ -1898,9 +1882,9 @@ mod tests {
         // `statistics()` afterwards would overlap borrows.  On the error path
         // `SolverError` contains no solver references, so mapping Ok → () breaks
         // the mutable borrow before the statistics call.
-        let err_variant: Result<(), SolverError> = solver.solve_with_basis(&bad_basis).map(|_| ());
+        let err_variant: Result<(), SolverError> = solver.solve(Some(&bad_basis)).map(|_| ());
 
-        // Assert counters — the mutable borrow from solve_with_basis is gone.
+        // Assert counters — the mutable borrow from solve(Some(&bad_basis)) is gone.
         let after = solver.statistics();
         assert_eq!(
             after.basis_consistency_failures - before.basis_consistency_failures,
@@ -1928,82 +1912,49 @@ mod tests {
         }
     }
 
-    /// After a successful solve, `clear_solver_state` must return `Ok(())` and
-    /// leave `has_model` true. The LP must remain usable for a second solve
-    /// without an intervening `load_model`.
-    #[test]
-    fn test_clear_solver_state_keeps_model_loaded() {
-        let template = make_fixture_stage_template();
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        solver.load_model(&template);
-        let _ = solver.solve().expect("first solve must succeed");
-        solver
-            .clear_solver_state()
-            .expect("clear_solver_state must return Ok(()) after a successful solve");
-        // has_model must still be true; the LP is still loaded.
-        // Confirm by re-solving without calling load_model.
-        let _ = solver
-            .solve()
-            .expect("second solve must succeed without reloading the model");
-    }
-
-    /// `clear_solver_state` must panic with the expected message when called on
-    /// a solver that has no loaded LP (immediately after construction).
-    #[test]
-    #[should_panic(expected = "clear_solver_state called without a loaded model")]
-    fn test_clear_solver_state_panics_without_model() {
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        let _ = solver.clear_solver_state();
-    }
-
-    /// `clear_solver_count` must increment by exactly 1 on each successful call to
-    /// `clear_solver_state`. `clear_solver_failures` must remain zero when the FFI
-    /// call succeeds.
-    #[test]
-    fn test_clear_solver_state_increments_count() {
-        let template = make_fixture_stage_template();
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        solver.load_model(&template);
-        let before = solver.statistics().clear_solver_count;
-        solver
-            .clear_solver_state()
-            .expect("clear_solver_state must return Ok(()) after load_model");
-        let after = solver.statistics().clear_solver_count;
-        assert_eq!(after - before, 1, "clear_solver_count must increment by 1");
-        assert_eq!(
-            solver.statistics().clear_solver_failures,
-            0,
-            "clear_solver_failures must remain zero on success"
-        );
-    }
-
-    /// After solving once, `clear_solver_state` must preserve the loaded model so
-    /// that a second solve (without reloading) produces the same primal values and
-    /// objective as the first solve.
+    /// `HighsSolver::solve` must increment `clear_solver_count` by one on every
+    /// call, regardless of whether a basis is offered.
     ///
-    /// Validates SS1.4: `clear_solver_state` clears derived solver state
-    /// (factorization, simplex flags, PRNG) while keeping the LP matrix and
-    /// bounds intact.
+    /// Solves the SS1.1 LP twice (cold-start, then warm-start) and asserts that
+    /// `stats.clear_solver_count == 2`.  This validates the solve-to-solve
+    /// independence contract: `Highs_clearSolver` is called exactly once per
+    /// `solve()` invocation.
     #[test]
-    fn test_clear_solver_state_keeps_model_loaded_cross_solve_consistency() {
-        let template = make_fixture_stage_template();
+    fn test_solve_increments_clear_solver_count_per_call() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        let template = make_fixture_stage_template();
+
+        // First solve (cold-start).
         solver.load_model(&template);
-        let first = solver.solve().expect("first solve must succeed").to_owned();
         solver
-            .clear_solver_state()
-            .expect("clear_solver_state must return Ok(()) after a successful solve");
-        let second = solver
-            .solve()
-            .expect("second solve must succeed after clear_solver_state")
-            .to_owned();
+            .solve(None)
+            .expect("first cold-start solve must succeed");
+
+        let stats = solver.statistics();
         assert_eq!(
-            first.primal, second.primal,
-            "primal variables must be identical before and after clear_solver_state"
+            stats.clear_solver_count, 1,
+            "clear_solver_count must be 1 after one solve call, got {}",
+            stats.clear_solver_count
+        );
+
+        // Second solve (warm-start with extracted basis).
+        let mut basis = crate::types::Basis::new(template.num_cols, template.num_rows);
+        solver.get_basis(&mut basis);
+        solver.load_model(&template);
+        solver
+            .solve(Some(&basis))
+            .expect("second warm-start solve must succeed");
+
+        let stats = solver.statistics();
+        assert_eq!(
+            stats.clear_solver_count, 2,
+            "clear_solver_count must be 2 after two solve calls, got {}",
+            stats.clear_solver_count
         );
         assert_eq!(
-            first.objective, second.objective,
-            "objective value must be identical before and after clear_solver_state"
+            stats.clear_solver_failures, 0,
+            "clear_solver_failures must be 0 in a healthy build, got {}",
+            stats.clear_solver_failures
         );
     }
 }

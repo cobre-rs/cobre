@@ -246,14 +246,6 @@ pub struct TrainingSolverConfig {
 
     /// Total time budget in seconds across all retry attempts for one solve.
     pub retry_time_budget_seconds: f64,
-
-    /// Canonical-state strategy: `"disabled"` (default) or `"clear_solver"`.
-    ///
-    /// Controls whether the backward pass uses the legacy per-trial-point
-    /// `load_model` (`"disabled"`) or the per-(worker, stage) `load_model`
-    /// with per-trial-point `clear_solver_state` (`"clear_solver"`).
-    #[serde(default = "TrainingSolverConfig::default_canonical_state")]
-    pub canonical_state: String,
 }
 
 impl Default for TrainingSolverConfig {
@@ -261,14 +253,7 @@ impl Default for TrainingSolverConfig {
         Self {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
-            canonical_state: Self::default_canonical_state(),
         }
-    }
-}
-
-impl TrainingSolverConfig {
-    fn default_canonical_state() -> String {
-        "disabled".to_string()
     }
 }
 
@@ -730,6 +715,11 @@ pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
     // guard, producing a silent regression instead of a clear upgrade prompt.
     check_removed_keys(&raw, path)?;
 
+    // Option B: warn (not error) for keys that are now obsolete but harmless.
+    // `canonical_state` was removed in v0.5.0; the solve-to-solve independence
+    // contract is now unconditional inside `HighsSolver::solve`.
+    warn_obsolete_keys(&raw, path);
+
     let config: Config = serde_json::from_str(&raw).map_err(|e| {
         // serde_json errors carry a message that describes the field or syntax problem.
         // Unknown enum variants in a tagged enum produce a deserialization error whose
@@ -794,6 +784,40 @@ fn check_removed_keys(raw: &str, path: &Path) -> Result<(), LoadError> {
     }
 
     Ok(())
+}
+
+/// Emit runtime warnings for config keys that are obsolete but no longer hard errors.
+///
+/// Unlike [`check_removed_keys`], which rejects configs with error, this function
+/// parses the raw JSON and prints a warning to stderr for each key present. The
+/// config still deserialises and runs correctly — the key is simply ignored.
+///
+/// Format: `(json_pointer, dot_path, warning_message)`.
+fn warn_obsolete_keys(raw: &str, _path: &Path) {
+    /// Keys obsolete in v0.5.0: present configs still parse, but the key has no effect.
+    ///
+    /// Format: `(json_pointer, dot_path, warning_message)`.
+    const OBSOLETE_KEYS: &[(&str, &str, &str)] = &[(
+        "/training/solver/canonical_state",
+        "training.solver.canonical_state",
+        "is obsolete and has no effect; please remove it from your config \
+             (see CHANGELOG for details). Solve-to-solve independence is now \
+             an unconditional contract inside `HighsSolver::solve`.",
+    )];
+
+    // Silently skip if JSON is malformed — `check_removed_keys` already validated it.
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return;
+    };
+
+    for (pointer, dot_path, message) in OBSOLETE_KEYS {
+        if !value
+            .pointer(pointer)
+            .is_none_or(serde_json::Value::is_null)
+        {
+            eprintln!("warning: config key `{dot_path}` {message}");
+        }
+    }
 }
 
 /// Extract a field name hint from a `serde_json` error message.
@@ -1872,8 +1896,7 @@ mod tests {
                 "solver": {{
                   "warm_start_basis_mode": "{value}",
                   "retry_max_attempts": 5,
-                  "retry_time_budget_seconds": 30,
-                  "canonical_state": "disabled"
+                  "retry_time_budget_seconds": 30
                 }}
               }}
             }}"#
@@ -1888,8 +1911,7 @@ mod tests {
                 "stopping_rules": [{"type": "iteration_limit", "limit": 50}],
                 "solver": {
                   "retry_max_attempts": 5,
-                  "retry_time_budget_seconds": 30,
-                  "canonical_state": "disabled"
+                  "retry_time_budget_seconds": 30
                 }
               }
             }"#,
@@ -1924,5 +1946,32 @@ mod tests {
         let f = write_minimal_config();
         let cfg = parse_config(f.path()).unwrap();
         assert_eq!(cfg.training.solver.retry_max_attempts, 5);
+    }
+
+    // AC (ticket-004): config with obsolete `canonical_state` key parses
+    // successfully (Option B: warn, not error). The key is silently ignored
+    // by serde; `warn_obsolete_keys` emits a runtime warning to stderr.
+    #[test]
+    fn canonical_state_key_is_obsolete_but_parses_cleanly() {
+        let f = write_config(
+            r#"{
+              "training": {
+                "forward_passes": 4,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+                "solver": {
+                  "retry_max_attempts": 3,
+                  "retry_time_budget_seconds": 10.0,
+                  "canonical_state": "disabled"
+                }
+              }
+            }"#,
+        );
+        // Must parse successfully — the key is obsolete, not an error.
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.training.solver.retry_max_attempts, 3);
+        assert!(
+            (cfg.training.solver.retry_time_budget_seconds - 10.0).abs() < f64::EPSILON,
+            "retry_time_budget_seconds should be 10.0"
+        );
     }
 }

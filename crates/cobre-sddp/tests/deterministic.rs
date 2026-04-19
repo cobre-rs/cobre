@@ -868,7 +868,7 @@ fn d11_water_withdrawal() {
 
 /// Warm-start verification for the D02 system.
 ///
-/// Validates that basis transfer via `solve_with_basis` works end-to-end: after
+/// Validates that basis transfer via `solve(Some(&basis))` works end-to-end: after
 /// the training loop completes, `SolverStatistics.basis_consistency_failures` must be zero.
 /// A non-zero count would indicate silent cold-start fallbacks, which would
 /// degrade performance without surfacing an error.

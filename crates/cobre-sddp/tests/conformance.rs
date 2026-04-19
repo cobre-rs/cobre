@@ -100,7 +100,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
@@ -117,18 +120,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()

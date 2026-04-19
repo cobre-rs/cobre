@@ -2,7 +2,7 @@
 //!
 //! `cobre_highs_set_basis_non_alien` is the sole basis setter used at runtime.
 //! It rejects bases where `col_basic + row_basic != num_row` by returning
-//! `HIGHS_STATUS_ERROR`; `solve_with_basis` maps that rejection to
+//! `HIGHS_STATUS_ERROR`; `solve(Some(&basis))` maps that rejection to
 //! `SolverError::BasisInconsistent`. No alien fallback exists.
 //!
 //! This test exercises the warm-start loop on a well-formed fixture and asserts
@@ -55,11 +55,11 @@ fn make_fixture_stage_template() -> StageTemplate {
 }
 
 /// Simulated warm-start loop: verifies that `basis_consistency_failures` stays
-/// near zero across many `solve_with_basis` calls with a self-consistent basis.
+/// near zero across many warm-start solve calls with a self-consistent basis.
 ///
 /// Structure mirrors the baked-template backward pass:
 ///   1. Cold-solve once to obtain an optimal basis.
-///   2. Loop N times: reload model → `solve_with_basis(&basis)` → `get_basis`.
+///   2. Loop N times: reload model → `solve(Some(&basis))` → `get_basis`.
 ///
 /// The final `get_basis` in each iteration captures any updated basis for the
 /// next iteration, matching how the SDDP pipeline propagates bases forward.
@@ -77,7 +77,7 @@ fn non_alien_basis_loop_low_rejection_rate() {
 
     // Cold-solve to get a consistent basis.
     solver.load_model(&template);
-    solver.solve().expect("cold-start solve must succeed");
+    solver.solve(None).expect("cold-start solve must succeed");
 
     let mut basis = Basis::new(template.num_cols, template.num_rows);
     solver.get_basis(&mut basis);
@@ -88,7 +88,7 @@ fn non_alien_basis_loop_low_rejection_rate() {
     for _ in 0..ITERATIONS {
         solver.load_model(&template);
         solver
-            .solve_with_basis(&basis)
+            .solve(Some(&basis))
             .expect("warm-start solve must succeed");
         // Capture the updated basis for the next iteration, matching the
         // baked-template pipeline's basis propagation.

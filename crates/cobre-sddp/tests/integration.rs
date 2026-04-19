@@ -216,7 +216,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
@@ -233,18 +236,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -299,7 +291,10 @@ impl SolverInterface for ExpandingMockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         let obj = self.objectives[call % self.objectives.len()];
@@ -316,18 +311,7 @@ impl SolverInterface for ExpandingMockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -601,7 +585,6 @@ fn run_one_deterministic_pass(
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -660,7 +643,6 @@ fn train_converges_with_mock_solver() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,
@@ -769,7 +751,6 @@ fn train_lb_monotonically_nondecreasing() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -869,7 +850,6 @@ fn train_emits_correct_event_sequence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -988,7 +968,6 @@ fn train_stops_at_iteration_limit() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1077,7 +1056,6 @@ fn train_stops_on_graceful_shutdown() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1156,7 +1134,6 @@ fn train_propagates_infeasible_error() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1242,7 +1219,6 @@ fn d17_level1_cut_selection_convergence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -1419,7 +1395,6 @@ fn d17_level1_cut_selection_reconstruction() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1509,7 +1484,6 @@ fn d18_lml1_cut_selection_convergence() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -1761,7 +1735,10 @@ impl cobre_solver::SolverInterface for TrackingMockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, cobre_solver::SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&cobre_solver::Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, cobre_solver::SolverError> {
         if self.dual_buf.len() < self.current_num_rows {
             self.dual_buf.resize(self.current_num_rows, 0.0);
         }
@@ -1775,16 +1752,7 @@ impl cobre_solver::SolverInterface for TrackingMockSolver {
         })
     }
 
-    fn reset(&mut self) {}
-
     fn get_basis(&mut self, _out: &mut cobre_solver::Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &cobre_solver::Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, cobre_solver::SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> cobre_solver::SolverStatistics {
         cobre_solver::SolverStatistics {
@@ -2080,9 +2048,9 @@ fn forward_pass_uses_baked_template_on_iter_2() {
 #[allow(clippy::too_many_lines)]
 fn backward_pass_uses_delta_batch_on_iter_2() {
     use cobre_sddp::{
-        BackwardPassSpec, BakedTemplates, BasisStore, CanonicalStateStrategy, CutSyncBuffers,
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-        RiskMeasure, SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
+        BackwardPassSpec, BakedTemplates, BasisStore, CutSyncBuffers, ExchangeBuffers,
+        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, RiskMeasure,
+        SolverWorkspace, StageContext, StageIndexer, TrainingContext, WorkspaceSizing,
         build_cut_row_batch_into, run_backward_pass,
     };
     use cobre_solver::{RowBatch, StageTemplate, bake_rows_into_template};
@@ -2298,20 +2266,18 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
-            canonical_state_strategy: CanonicalStateStrategy::default(),
         },
         &StubComm,
     )
-    .expect("legacy backward pass must not error");
+    .expect("non-baked backward pass must not error");
     let add_rows_delta_legacy = workspaces_legacy[0].solver.add_rows_count - add_rows_before_legacy;
 
-    // Legacy path under CanonicalStateStrategy::Disabled calls add_rows once
-    // per trial-point reload per stage with a successor. (Pre-loop
-    // load_backward_lp is gated on ClearSolver strategy and no longer runs
-    // on the Disabled path.)
+    // Non-baked (unconditional hoist) path calls load_backward_lp once per
+    // stage per worker at stage entry — 1 add_rows per stage with a successor
+    // (2 successors in the 3-stage system = 2 total).
     assert!(
         add_rows_delta_legacy > 0,
-        "legacy path must call add_rows; got {add_rows_delta_legacy}"
+        "non-baked path must call add_rows; got {add_rows_delta_legacy}"
     );
 
     // ── Baked path (iter 2): delta = 0 for the first successor, > 0 for the second ──
@@ -2321,11 +2287,11 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
     // After t=1 finishes, iter-2 cuts are added to stage 1. These become the
     // delta for t=0 (successor=1), so add_rows IS called for that stage.
     //
-    // Key invariant: baked path total add_rows calls < legacy total add_rows
+    // Key invariant: baked path total add_rows calls < non-baked total add_rows
     // calls, because the baked path skips add_rows entirely for stages with
-    // zero delta. In this 3-stage, n_fwd=4 scenario the legacy Disabled path
-    // calls add_rows 8 times (4 per successor × 2 successors) while the baked
-    // path calls it only 4 times (0 for successor=2, 4 for successor=1).
+    // zero delta. In this 3-stage system the non-baked path calls add_rows 2
+    // times (once per successor at hoist) while the baked path calls it only
+    // 1 time (0 for successor=2, 1 for successor=1).
     let mut workspaces_baked = vec![make_workspace()];
     let mut exchange_baked = make_exchange();
     let mut cut_batches_baked: Vec<RowBatch> = (0..n_stages).map(|_| empty_batch()).collect();
@@ -2360,35 +2326,32 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
-            canonical_state_strategy: CanonicalStateStrategy::default(),
         },
         &StubComm,
     )
     .expect("baked backward pass must not error");
     let add_rows_delta_baked = workspaces_baked[0].solver.add_rows_count - add_rows_before_baked;
 
-    // Baked path must call add_rows FEWER times than the legacy path.
-    // The legacy path adds the full active cut set for every stage; the baked
-    // path skips add_rows entirely for stages with zero delta cuts.
+    // Baked path must call add_rows FEWER times than the non-baked path.
+    // The non-baked path hoists add_rows once per stage-with-successor;
+    // the baked path skips add_rows entirely for stages with zero delta cuts.
     assert!(
         add_rows_delta_baked < add_rows_delta_legacy,
-        "baked path must call add_rows fewer times than legacy; \
-         baked={add_rows_delta_baked}, legacy={add_rows_delta_legacy}"
+        "baked path must call add_rows fewer times than non-baked; \
+         baked={add_rows_delta_baked}, non_baked={add_rows_delta_legacy}"
     );
     // Baked path must still have called load_model (for each trial-point reload).
     assert!(
         workspaces_baked[0].solver.load_model_count > 0,
         "baked path must still call load_model"
     );
-    // Legacy path must have called add_rows once per trial-point reload for
-    // every stage with a successor. Under CanonicalStateStrategy::Disabled
-    // the pre-loop load_backward_lp is skipped (gated on ClearSolver), so
-    // only the inner reloads are counted.
-    // (n_successors × n_fwd trial-point reloads = 2 × 4 = 8)
-    let expected_legacy_add_rows = 2 * n_fwd as u64;
+    // Non-baked path calls load_backward_lp unconditionally at stage entry —
+    // once per stage with a successor = 2 add_rows calls (2 successors in
+    // the 3-stage system, regardless of n_fwd).
+    let expected_non_baked_add_rows = 2_u64; // n_successors = n_stages - 1 = 2
     assert_eq!(
-        add_rows_delta_legacy, expected_legacy_add_rows,
-        "legacy path must call add_rows {expected_legacy_add_rows} times; \
+        add_rows_delta_legacy, expected_non_baked_add_rows,
+        "non-baked path must call add_rows {expected_non_baked_add_rows} times; \
          got {add_rows_delta_legacy}"
     );
 }
@@ -2442,7 +2405,6 @@ fn baked_backward_pass_smoke_test() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,

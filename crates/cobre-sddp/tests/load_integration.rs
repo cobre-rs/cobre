@@ -125,7 +125,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         self.call_count += 1;
         Ok(cobre_solver::SolutionView {
             objective: self.objective,
@@ -137,18 +140,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -428,7 +420,6 @@ fn test_stochastic_load_training_completes() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -579,7 +570,6 @@ fn test_deterministic_load_training_matches_baseline() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -660,7 +650,6 @@ fn test_stochastic_load_seed_determinism() {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),

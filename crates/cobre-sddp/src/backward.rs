@@ -85,12 +85,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
-use cobre_solver::{RowBatch, SolverError, SolverInterface, SolverStatistics};
+use cobre_solver::{RowBatch, SolverInterface, SolverStatistics};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
-    config::CanonicalStateStrategy,
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -274,15 +273,6 @@ pub struct BackwardPassSpec<'a> {
     /// never archived. Pass `&mut Vec::new()` when `visited_archive` is
     /// `None`.
     pub real_states_buf: &'a mut Vec<f64>,
-
-    /// Strategy for resetting `HiGHS` state between trial points.
-    ///
-    /// - [`CanonicalStateStrategy::Disabled`]: per-trial-point `load_model`
-    ///   (legacy default, preserves byte-identicality).
-    /// - [`CanonicalStateStrategy::ClearSolver`]: `load_model` hoisted to
-    ///   per-(worker, stage); per-trial-point `clear_solver_state` resets
-    ///   `HiGHS` derived state without re-copying the LP matrix.
-    pub canonical_state_strategy: CanonicalStateStrategy,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -629,13 +619,9 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
 /// Returns `Vec<StagedCut>` in completion order (unsorted); caller sorts by
 /// `trial_point_idx` before inserting into the FCF.
 ///
-/// # Panics
-///
-/// Panics when `spec.canonical_state_strategy == ClearSolver` and the solver
-/// backend returns `SolverError::Unsupported` from `clear_solver_state`. This
-/// indicates a misconfiguration: `ClearSolver` requires a backend that
-/// implements the method (only `HiGHS` supports it). The panic surfaces at the
-/// first trial point of the first backward stage, early in training.
+/// `load_model` is hoisted per-(worker, stage) before the trial-point loop.
+/// Per-trial-point deterministic reset is delivered internally by
+/// `HighsSolver::solve` (AD-4 contract, ticket-002).
 #[allow(clippy::panic)]
 fn process_stage_backward<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
@@ -654,12 +640,10 @@ fn process_stage_backward<S: SolverInterface + Send>(
     workspaces
         .par_iter_mut()
         .map(|ws| {
-            // Per-worker, per-stage: hoist load_model to this worker iff
-            // the strategy is ClearSolver. Under Disabled the per-trial call
-            // below handles it, preserving the legacy code path unchanged.
-            if spec.canonical_state_strategy == CanonicalStateStrategy::ClearSolver {
-                load_backward_lp(ws, ctx, succ);
-            }
+            // Per-worker, per-stage: hoist load_model unconditionally.
+            // Solve-to-solve independence is delivered by `HighsSolver::solve`
+            // internally via `Highs_clearSolver` (AD-4 contract, ticket-002).
+            load_backward_lp(ws, ctx, succ);
 
             // Grow outcomes buffer monotonically to cover this stage's n_openings.
             // Never shrinks — excess capacity from earlier larger stages is reused.
@@ -697,26 +681,6 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 let m = next_trial.fetch_add(1, Ordering::Relaxed);
                 if m >= local_work {
                     break;
-                }
-                match spec.canonical_state_strategy {
-                    CanonicalStateStrategy::Disabled => {
-                        // DETERMINISM INVESTIGATION: reload model per trial point to
-                        // eliminate HiGHS state carry-over between trial points.
-                        // The baked path reloads the baked template + delta batch;
-                        // the legacy path reloads the base template + full batch.
-                        load_backward_lp(ws, ctx, succ);
-                    }
-                    CanonicalStateStrategy::ClearSolver => {
-                        // Deterministic reset: clear HiGHS's derived state (factorization,
-                        // PRNG, taboo list) without re-copying the LP matrix. Preserves
-                        // byte-identicality across work distributions per Finding 7.
-                        ws.solver.clear_solver_state().map_err(|e| match e {
-                            SolverError::Unsupported(msg) => {
-                                panic!("CanonicalStateStrategy::ClearSolver requires a backend that implements clear_solver_state, but got: {msg}");
-                            }
-                            other => SddpError::Solver(other),
-                        })?;
-                    }
                 }
                 // Zero only the live portion of slot_increments (length >= pop).
                 ws.backward_accum.slot_increments[..pop].fill(0);
@@ -1101,8 +1065,8 @@ mod tests {
 
     use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
-        CanonicalStateStrategy, ExchangeBuffers, FutureCostFunction, HorizonMode,
-        InflowNonNegativityMethod, RiskMeasure, StageIndexer, TrajectoryRecord,
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
         context::{BakedTemplates, StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
@@ -1190,7 +1154,7 @@ mod tests {
         call_count: usize,
         /// Tracks the current number of rows (template + appended cuts).
         current_num_rows: usize,
-        /// Number of times `solve_with_basis` was called.
+        /// Number of times `solve(Some(&basis))` was called (warm-start calls).
         warm_start_calls: usize,
         /// Dual padding value for rows beyond the base template (cuts).
         /// Defaults to 0.0 (cuts not binding). Set to a positive value
@@ -1199,11 +1163,6 @@ mod tests {
         buf_primal: Vec<f64>,
         buf_dual: Vec<f64>,
         buf_reduced_costs: Vec<f64>,
-        /// When `true`, `clear_solver_state` returns
-        /// `Err(SolverError::Unsupported(...))` instead of `Ok(())`.
-        /// Used by AC3 tests that verify the `ClearSolver`-on-unsupported-backend
-        /// panic path.
-        fail_clear_solver: bool,
     }
 
     impl MockSolver {
@@ -1222,7 +1181,6 @@ mod tests {
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
-                fail_clear_solver: false,
             }
         }
 
@@ -1241,7 +1199,6 @@ mod tests {
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
-                fail_clear_solver: false,
             }
         }
 
@@ -1250,18 +1207,6 @@ mod tests {
         fn always_ok_with_binding_cuts(solution: LpSolution) -> Self {
             let mut s = Self::always_ok(solution);
             s.cut_dual_padding = 1.0;
-            s
-        }
-
-        /// Like `always_ok` but `clear_solver_state` returns
-        /// `Err(SolverError::Unsupported(...))`.
-        ///
-        /// Used to exercise the AC3 panic path: a `ClearSolver`-strategy
-        /// backward pass must panic immediately when the backend does not
-        /// support `clear_solver_state`.
-        fn always_ok_fail_clear(solution: LpSolution) -> Self {
-            let mut s = Self::always_ok(solution);
-            s.fail_clear_solver = true;
             s
         }
     }
@@ -1281,7 +1226,13 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            if basis.is_some() {
+                self.warm_start_calls += 1;
+            }
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
@@ -1304,25 +1255,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {}
-
-        fn clear_solver_state(&mut self) -> Result<(), SolverError> {
-            if self.fail_clear_solver {
-                return Err(SolverError::Unsupported("test: not implemented"));
-            }
-            // MockSolver has no internal HiGHS state to clear; succeed trivially.
-            Ok(())
-        }
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.warm_start_calls += 1;
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -1773,7 +1706,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -1872,7 +1804,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -1971,7 +1902,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2066,7 +1996,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2161,7 +2090,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2254,7 +2182,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         );
@@ -2391,7 +2318,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2506,7 +2432,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2626,7 +2551,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2733,7 +2657,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2849,7 +2772,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2869,8 +2791,8 @@ mod tests {
 
     /// Warm-start from a pre-populated forward basis: when `BasisStore` has
     /// `Some(Basis)` at `(scenario=0, stage=1)` before the first backward call,
-    /// the first opening at the successor stage must call `solve_with_basis`
-    /// rather than `solve`.
+    /// the first opening at the successor stage must call `solve(Some(&basis))`
+    /// rather than `solve(None)`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 1 opening, with
     /// `basis_store.get(0, 1) = Some(Basis::new(...))` pre-populated,
@@ -2960,7 +2882,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -2969,15 +2890,15 @@ mod tests {
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
             warm_start_calls, 1,
-            "first opening at successor stage must call solve_with_basis \
+            "first opening at successor stage must call solve(Some(&basis)) \
              when basis_store.get(0, 1) is pre-populated (warm_start_calls == 1, got {warm_start_calls})"
         );
     }
 
     /// Multi-opening P3b behavior: given 3 openings at the same successor stage,
     /// the first opening cold-starts (store slot is None via `solve()`), and
-    /// openings 1 and 2 use `HiGHS` internal hot-start via `solve()` instead of
-    /// `solve_with_basis(working_basis)`.
+    /// openings 1 and 2 use `HiGHS` internal hot-start via `solve(None)` instead of
+    /// `solve(Some(&working_basis))`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
     /// then `solver.warm_start_calls == 0` after the backward pass (P3b: no
@@ -3065,19 +2986,18 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
         .unwrap();
 
         // P3b optimization: opening 0 cold-starts (no basis in store),
-        // openings 1 and 2 use solve() (HiGHS internal hot-start) instead of
-        // solve_with_basis. No explicit warm-start calls for subsequent openings.
+        // openings 1 and 2 use solve(None) (HiGHS internal hot-start) instead of
+        // solve(Some(&working_basis)). No explicit warm-start calls for subsequent openings.
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
             warm_start_calls, 0,
-            "P3b: no solve_with_basis calls expected when BasisStore is empty \
+            "P3b: no warm-start calls expected when BasisStore is empty \
              (warm_start_calls == 0, got {warm_start_calls})"
         );
     }
@@ -3177,7 +3097,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         );
@@ -3325,7 +3244,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -3408,7 +3326,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -3784,7 +3701,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -3945,7 +3861,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -4111,7 +4026,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -4233,7 +4147,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -4364,7 +4277,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -4541,7 +4453,6 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::default(),
             },
             &comm,
         )
@@ -4602,341 +4513,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Mirror of [`run_backward_pass_with_n_workers`] with
-    /// `canonical_state_strategy = ClearSolver`.
-    ///
-    /// Used by [`work_stealing_produces_identical_results_across_worker_counts_clear_solver`]
-    /// to verify that the hoisted-`load_model` / per-trial `clear_solver_state` path
-    /// produces the same FCF state regardless of worker count.
-    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-    fn run_backward_pass_with_n_workers_clear_solver(n_workers: usize) -> FutureCostFunction {
-        use crate::lp_builder::PatchBuffer;
-
-        let n_stages = 2_usize;
-        let local_work = 6_usize;
-        let n_openings = 2_usize;
-        let stochastic = make_stochastic_context(n_stages, n_openings);
-        let indexer = StageIndexer::new(1, 0);
-        let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
-        let n_state = indexer.n_state; // 1
-
-        #[allow(clippy::cast_possible_truncation)]
-        let forward_passes = local_work as u32;
-        let mut fcf =
-            FutureCostFunction::new(n_stages, n_state, forward_passes, 64, &vec![0; n_stages]);
-
-        let states: Vec<Vec<f64>> = (0..local_work)
-            .map(|i| vec![(i + 1) as f64 * 10.0])
-            .collect();
-        let mut exchange = exchange_with_states(n_state, states);
-
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-
-        let solution = solution_1_0(100.0, -5.0);
-        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
-            .map(|_| SolverWorkspace {
-                solver: MockSolver::always_ok(solution.clone()),
-                patch_buf: PatchBuffer::new(1, 0, 0, 0),
-                current_state: Vec::with_capacity(n_state),
-                scratch: crate::workspace::ScratchBuffers {
-                    noise_buf: Vec::new(),
-                    inflow_m3s_buf: Vec::new(),
-                    lag_matrix_buf: Vec::new(),
-                    par_inflow_buf: Vec::new(),
-                    eta_floor_buf: Vec::new(),
-                    zero_targets_buf: Vec::new(),
-                    ncs_col_upper_buf: Vec::new(),
-                    ncs_col_lower_buf: Vec::new(),
-                    ncs_col_indices_buf: Vec::new(),
-                    load_rhs_buf: Vec::new(),
-                    row_lower_buf: Vec::new(),
-                    z_inflow_rhs_buf: Vec::new(),
-                    effective_eta_buf: Vec::new(),
-                    unscaled_primal: Vec::new(),
-                    unscaled_dual: Vec::new(),
-                    lag_accumulator: vec![],
-                    lag_weight_accum: 0.0,
-                    downstream_accumulator: Vec::new(),
-                    downstream_weight_accum: 0.0,
-                    downstream_completed_lags: Vec::new(),
-                    downstream_n_completed: 0,
-                    recon_slot_lookup: Vec::new(),
-                },
-                scratch_basis: Basis::new(0, 0),
-                backward_accum: BackwardAccumulators::default(),
-            })
-            .collect();
-
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
-        let comm = StubComm;
-        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
-
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
-                templates: &templates,
-                base_rows: &base_rows,
-                noise_scale: &[],
-                n_hydros: 0,
-                n_load_buses: 0,
-                load_balance_row_starts: &[],
-                load_bus_indices: &[],
-                block_counts_per_stage: &[],
-                ncs_max_gen: &[],
-                discount_factors: &[],
-                cumulative_discount_factors: &[],
-                stage_lag_transitions: &[],
-                noise_group_ids: &[],
-                downstream_par_order: 0,
-            },
-            &not_baked(),
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
-                horizon: &horizon,
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &[],
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &[],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                recent_accum_seed: &[],
-                recent_weight_seed: 0.0,
-            },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::ClearSolver,
-            },
-            &comm,
-        )
-        .unwrap();
-
-        assert_eq!(
-            result.cuts_generated, local_work,
-            "n_workers={n_workers}: expected {local_work} cuts, got {}",
-            result.cuts_generated,
-        );
-
-        fcf
-    }
-
-    #[test]
-    fn work_stealing_produces_identical_results_across_worker_counts_clear_solver() {
-        // Acceptance criterion: the FCF state after running the backward pass
-        // with 1 workspace must be bit-identical to the state after running
-        // with 3 workspaces when `canonical_state_strategy = ClearSolver`.
-        // This verifies that the hoisted `load_model` + per-trial-point
-        // `clear_solver_state` path preserves determinism across work distributions.
-        let fcf_1 = run_backward_pass_with_n_workers_clear_solver(1);
-        let fcf_3 = run_backward_pass_with_n_workers_clear_solver(3);
-
-        let num_stages = 2;
-
-        assert!(
-            fcf_1.active_cuts(0).count() > 0,
-            "1-worker run produced no cuts at stage 0"
-        );
-
-        for stage in 0..num_stages {
-            let cuts_1: Vec<_> = fcf_1.active_cuts(stage).collect();
-            let cuts_3: Vec<_> = fcf_3.active_cuts(stage).collect();
-            assert_eq!(
-                cuts_1.len(),
-                cuts_3.len(),
-                "stage {stage}: cut count mismatch ({} vs {})",
-                cuts_1.len(),
-                cuts_3.len(),
-            );
-            for (i, ((s1, int1, c1), (s3, int3, c3))) in cuts_1.iter().zip(&cuts_3).enumerate() {
-                assert_eq!(
-                    s1, s3,
-                    "stage {stage}, cut {i}: slot mismatch ({s1} vs {s3})"
-                );
-                assert_eq!(
-                    int1, int3,
-                    "stage {stage}, cut {i}: intercept mismatch ({int1} vs {int3})"
-                );
-                assert_eq!(
-                    c1, c3,
-                    "stage {stage}, cut {i}: coefficients mismatch ({c1:?} vs {c3:?})"
-                );
-            }
-        }
-    }
-
-    // ── AC3: panic when ClearSolver strategy meets an unsupported backend ────
-
-    /// AC3 acceptance criterion for ticket-004.
-    ///
-    /// Given a `MockSolver` whose `clear_solver_state` returns
-    /// `Err(SolverError::Unsupported(...))` and a `BackwardPassSpec` with
-    /// `canonical_state_strategy = ClearSolver`, when `run_backward_pass` is
-    /// invoked, the call must panic with a message that contains
-    /// `"CanonicalStateStrategy::ClearSolver"` and
-    /// `"clear_solver_state"`.
-    ///
-    /// This guards the runtime misconfiguration check introduced in the
-    /// `process_stage_backward` worker loop: selecting `ClearSolver` on a
-    /// backend that does not implement the method is a hard programming error
-    /// that should surface at the first trial point, not silently degrade.
-    #[test]
-    #[should_panic(expected = "CanonicalStateStrategy::ClearSolver")]
-    #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-    fn backward_pass_panics_when_clear_solver_unsupported() {
-        use crate::lp_builder::PatchBuffer;
-
-        // Minimal setup: 2 stages, 6 trial points, 1 worker — identical to
-        // `run_backward_pass_with_n_workers_clear_solver(1)` except the solver
-        // returns Err(Unsupported) from `clear_solver_state`.
-        let n_stages = 2_usize;
-        let local_work = 6_usize;
-        let n_openings = 2_usize;
-        let stochastic = make_stochastic_context(n_stages, n_openings);
-        let indexer = StageIndexer::new(1, 0);
-        let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![1_usize; n_stages];
-        let n_state = indexer.n_state;
-
-        #[allow(clippy::cast_possible_truncation)]
-        let forward_passes = local_work as u32;
-        let mut fcf =
-            FutureCostFunction::new(n_stages, n_state, forward_passes, 64, &vec![0; n_stages]);
-
-        let states: Vec<Vec<f64>> = (0..local_work)
-            .map(|i| vec![(i + 1) as f64 * 10.0])
-            .collect();
-        let mut exchange = exchange_with_states(n_state, states);
-
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-
-        // Use the unsupported-clear solver: `clear_solver_state` returns
-        // `Err(SolverError::Unsupported("test: not implemented"))`.
-        let solution = solution_1_0(100.0, -5.0);
-        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = vec![SolverWorkspace {
-            solver: MockSolver::always_ok_fail_clear(solution),
-            patch_buf: PatchBuffer::new(1, 0, 0, 0),
-            current_state: Vec::with_capacity(n_state),
-            scratch: crate::workspace::ScratchBuffers {
-                noise_buf: Vec::new(),
-                inflow_m3s_buf: Vec::new(),
-                lag_matrix_buf: Vec::new(),
-                par_inflow_buf: Vec::new(),
-                eta_floor_buf: Vec::new(),
-                zero_targets_buf: Vec::new(),
-                ncs_col_upper_buf: Vec::new(),
-                ncs_col_lower_buf: Vec::new(),
-                ncs_col_indices_buf: Vec::new(),
-                load_rhs_buf: Vec::new(),
-                row_lower_buf: Vec::new(),
-                z_inflow_rhs_buf: Vec::new(),
-                effective_eta_buf: Vec::new(),
-                unscaled_primal: Vec::new(),
-                unscaled_dual: Vec::new(),
-                lag_accumulator: vec![],
-                lag_weight_accum: 0.0,
-                downstream_accumulator: Vec::new(),
-                downstream_weight_accum: 0.0,
-                downstream_completed_lags: Vec::new(),
-                downstream_n_completed: 0,
-                recon_slot_lookup: Vec::new(),
-            },
-            scratch_basis: Basis::new(0, 0),
-            backward_accum: BackwardAccumulators::default(),
-        }];
-
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
-        let comm = StubComm;
-        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
-
-        // Expected: panics with "CanonicalStateStrategy::ClearSolver requires a
-        // backend that implements clear_solver_state, but got: test: not implemented"
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
-                templates: &templates,
-                base_rows: &base_rows,
-                noise_scale: &[],
-                n_hydros: 0,
-                n_load_buses: 0,
-                load_balance_row_starts: &[],
-                load_bus_indices: &[],
-                block_counts_per_stage: &[],
-                ncs_max_gen: &[],
-                discount_factors: &[],
-                cumulative_discount_factors: &[],
-                stage_lag_transitions: &[],
-                noise_group_ids: &[],
-                downstream_par_order: 0,
-            },
-            &not_baked(),
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
-                horizon: &horizon,
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &[],
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &[],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                recent_accum_seed: &[],
-                recent_weight_seed: 0.0,
-            },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                canonical_state_strategy: CanonicalStateStrategy::ClearSolver,
-            },
-            &comm,
-        );
     }
 
     // ── Parallel overhead decomposition unit tests ────────────────────────────

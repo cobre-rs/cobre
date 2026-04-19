@@ -60,6 +60,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cobre.results.load_policy(...)` per-cut dict no longer includes the
   `"domination_count"` key.
 
+#### Canonical-State Strategy
+
+- **Deleted `CanonicalStateStrategy` enum** (`Disabled` / `ClearSolver`) and
+  the `canonical_state_strategy` field on `CutManagementConfig`,
+  `BackwardPassSpec`, `StudySetup`, `StudyParams`, `ConstructionConfig`,
+  and `BroadcastConfig`. Solve-to-solve independence is now an unconditional
+  contract on `SolverInterface::solve`, delivered by `HighsSolver::solve`
+  via an internal `Highs_clearSolver` call on every solve.
+- Removed `training.solver.canonical_state` from the config schema.
+  Configs that still include the key parse successfully — the key is silently
+  ignored by serde — but a one-line warning is emitted to stderr at parse
+  time. Remove the key from `config.json` to suppress the warning.
+
 ### Added
 
 #### Basis Reconstruction

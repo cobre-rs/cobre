@@ -4,19 +4,19 @@ Canonical test-suite inventory. Taxonomy in `docs/assessments/test-inventory-tax
 
 ## 1. Summary
 
-**Total tests:** 3413
+**Total tests:** 3438
 
 ### Per-crate breakdown
 
 | Crate | Count |
 | ----- | ----: |
-| `cobre-cli` | 186 |
+| `cobre-cli` | 187 |
 | `cobre-comm` | 129 |
 | `cobre-core` | 210 |
-| `cobre-io` | 948 |
+| `cobre-io` | 952 |
 | `cobre-python` | 1 |
-| `cobre-sddp` | 1,307 |
-| `cobre-solver` | 109 |
+| `cobre-sddp` | 1,334 |
+| `cobre-solver` | 102 |
 | `cobre-stochastic` | 523 |
 
 ### Per-category breakdown
@@ -26,10 +26,10 @@ Canonical test-suite inventory. Taxonomy in `docs/assessments/test-inventory-tax
 | `conformance` | 31 |
 | `coverage-matrix` | 0 |
 | `e2e` | 4 |
-| `integration` | 276 |
+| `integration` | 278 |
 | `parameter-sweep` | 0 |
-| `regression` | 5 |
-| `unit` | 3,097 |
+| `regression` | 32 |
+| `unit` | 3,093 |
 
 ### Per-guard breakdown
 
@@ -37,89 +37,87 @@ Guards relevant to Epic 03/04/05 deletions are highlighted. Tests carrying multi
 
 | Guard | Count | Epic |
 | ----- | ----: | ---- |
-| `add-rows-trait` | 33 | 05 |
-| `alien-only` | 3 | 03 |
+| `add-rows-trait` | 34 | 05 |
+| `alien-only` | 0 | 03 |
 | `baked` | 0 | — |
 | `broadcast-canonical-field` | 0 | 04 |
 | `broadcast-warm-start-field` | 0 | 03 |
-| `canonical-clearsolver` | 7 | — |
-| `canonical-config-flag` | 28 | 04 |
-| `canonical-disabled` | 5 | 04 |
-| `clear-solver-state-trait` | 9 | 04 |
-| `convertido-determinism` | 2 | — |
+| `canonical-clearsolver` | 0 | — |
+| `canonical-config-flag` | 4 | 04 |
+| `canonical-disabled` | 0 | 04 |
+| `clear-solver-state-trait` | 0 | 04 |
+| `convertido-determinism` | 3 | — |
 | `d-case-determinism` | 35 | — |
 | `fpha-slow` | 164 | 09 |
-| `generic` | 3,135 | — |
-| `non-alien-first` | 3 | — |
+| `generic` | 3,198 | — |
+| `non-alien-first` | 0 | — |
 | `non-baked` | 0 | 05 |
-| `solve-with-basis-trait` | 14 | 04 |
+| `solve-with-basis-trait` | 0 | 04 |
 | `stored-cut-row-offset` | 2 | 05 |
 | `training-result-struct-literal` | 0 | — |
 | `unified-path` | 0 | — |
-| `warm-start-config-flag` | 2 | 03 |
+| `warm-start-config-flag` | 7 | 03 |
 
 ## 2. Inventory Table
 
-All 3413 tests sorted by (crate, file, line).
+All 3438 tests sorted by (crate, file, line).
 
 | Crate | File | Line | Function | Body LoC | Test module | Category | Guards | Notes |
 | ----- | ---- | ---: | -------- | -------: | ----------- | -------- | ------ | ----- |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1659 | `backward_result_fields_accessible` | 23 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1684 | `backward_result_clone_and_debug` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1704 | `dual_extraction_formula_coefficients_are_negated_duals` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1717 | `intercept_formula_matches_spec` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1734 | `single_stage_system_produces_no_cuts` | 90 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1826 | `two_stage_system_two_trial_points_generates_two_cuts_at_stage_0` | 100 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1928 | `cut_inserted_with_correct_stage_iteration_and_forward_pass_index` | 97 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2027 | `no_cuts_generated_at_last_stage` | 95 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2124 | `elapsed_ms_is_non_negative` | 88 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2214 | `infeasible_solver_returns_sddp_infeasible_error` | 92 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2308 | `expectation_aggregation_mean_of_per_opening_intercepts` | 29 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2341 | `cut_coefficients_and_intercept_match_dual_extraction_formula` | 113 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2456 | `cut_gradient_sign_physically_correct` | 116 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2574 | `cut_is_tight_at_trial_point` | 116 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2692 | `single_rank_backward_pass_with_local_backend_produces_correct_fcf` | 96 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2790 | `forward_pass_index_matches_global_scenario_index` | 116 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2918 | `warm_start_uses_prepopulated_forward_basis` | 97 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3025 | `multi_opening_subsequent_openings_use_internal_hotstart` | 98 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3135 | `backward_solver_error_propagates` | 101 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3243 | `test_backward_pass_parallel_cut_determinism` | 250 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3676 | `backward_pass_load_patches_applied` | 168 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3851 | `backward_pass_no_load_buses_unchanged` | 154 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4014 | `backward_pass_cut_coefficients_unaffected` | 159 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4193 | `per_stage_cut_sync_invariant_after_bug1_fix` | 113 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4316 | `metadata_sync_updates_active_count_and_last_active_iter` | 128 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4600 | `work_stealing_produces_identical_results_across_worker_counts` | 45 | `tests` | `unit` | `canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4789 | `work_stealing_produces_identical_results_across_worker_counts_clear_solver` | 42 | `tests` | `unit` | `canonical-clearsolver,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4848 | `backward_pass_panics_when_clear_solver_unsupported` | 130 | `tests` | `unit` | `canonical-clearsolver,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 5067 | `decompose_four_workers_different_solve_times` | 20 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 5094 | `decompose_setup_time_is_aggregate_non_solve_work` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 5122 | `decompose_identical_workers_zero_imbalance` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 5140 | `decompose_single_worker` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 5159 | `decompose_scheduling_clamped_when_worker_exceeds_wall` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 459 | `test_empty_stored_all_new_cuts` | 49 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 511 | `test_all_preserved_same_slots_same_order` | 36 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 550 | `test_drops_only` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 593 | `test_reorder` | 61 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 658 | `test_adds_only` | 45 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 706 | `test_mixed_drop_and_add` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 748 | `test_empty_iterator_preserves_template_rows` | 23 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 782 | `test_slot_lookup_growth_safe_in_release` | 35 | `tests` | `unit` | `stored-cut-row-offset` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 831 | `test_stored_cut_row_offset_skips_baked_rows` | 58 | `tests` | `unit` | `stored-cut-row-offset` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 901 | `test_forward_reconstruct_preserves_slots_after_churn` | 59 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 966 | `test_forward_reconstruct_three_new_slack_cuts` | 45 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1019 | `test_capture_metadata_invariants` | 52 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1105 | `reconstructed_basis_preserves_basic_count_invariant_backward_all_preserved` | 41 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1153 | `reconstructed_basis_preserves_basic_count_invariant_backward_with_new_cuts` | 56 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1246 | `reconstructed_basis_preserves_basic_count_invariant_forward_all_preserved` | 61 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1321 | `reconstructed_basis_preserves_basic_count_invariant_forward_drops_with_lower` | 75 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1412 | `reconstructed_basis_preserves_basic_count_invariant_forward_new_cuts_after_drops` | 70 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 332 | `field_access_forward_passes_and_max_iterations` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 347 | `checkpoint_interval_none_and_some` | 26 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 375 | `warm_start_cuts_field_accessible` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 394 | `event_sender_none` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 404 | `event_sender_some_can_send_training_event` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 447 | `debug_output_non_empty` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1552 | `backward_result_fields_accessible` | 23 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1577 | `backward_result_clone_and_debug` | 18 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1597 | `dual_extraction_formula_coefficients_are_negated_duals` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1610 | `intercept_formula_matches_spec` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1627 | `single_stage_system_produces_no_cuts` | 89 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1718 | `two_stage_system_two_trial_points_generates_two_cuts_at_stage_0` | 99 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1819 | `cut_inserted_with_correct_stage_iteration_and_forward_pass_index` | 96 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1917 | `no_cuts_generated_at_last_stage` | 94 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2013 | `elapsed_ms_is_non_negative` | 87 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2102 | `infeasible_solver_returns_sddp_infeasible_error` | 91 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2195 | `expectation_aggregation_mean_of_per_opening_intercepts` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2228 | `cut_coefficients_and_intercept_match_dual_extraction_formula` | 112 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2342 | `cut_gradient_sign_physically_correct` | 115 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2459 | `cut_is_tight_at_trial_point` | 115 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2576 | `single_rank_backward_pass_with_local_backend_produces_correct_fcf` | 95 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2673 | `forward_pass_index_matches_global_scenario_index` | 115 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2800 | `warm_start_uses_prepopulated_forward_basis` | 96 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2906 | `multi_opening_subsequent_openings_use_internal_hotstart` | 97 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3015 | `backward_solver_error_propagates` | 100 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3122 | `test_backward_pass_parallel_cut_determinism` | 248 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3553 | `backward_pass_load_patches_applied` | 167 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3727 | `backward_pass_no_load_buses_unchanged` | 153 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3889 | `backward_pass_cut_coefficients_unaffected` | 158 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4067 | `per_stage_cut_sync_invariant_after_bug1_fix` | 112 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4189 | `metadata_sync_updates_active_count_and_last_active_iter` | 127 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4471 | `work_stealing_produces_identical_results_across_worker_counts` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4603 | `decompose_four_workers_different_solve_times` | 20 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4630 | `decompose_setup_time_is_aggregate_non_solve_work` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4658 | `decompose_identical_workers_zero_imbalance` | 14 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4676 | `decompose_single_worker` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4695 | `decompose_scheduling_clamped_when_worker_exceeds_wall` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 460 | `test_empty_stored_all_new_cuts` | 49 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 512 | `test_all_preserved_same_slots_same_order` | 36 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 551 | `test_drops_only` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 594 | `test_reorder` | 61 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 659 | `test_adds_only` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 707 | `test_mixed_drop_and_add` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 749 | `test_empty_iterator_preserves_template_rows` | 23 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 783 | `test_slot_lookup_growth_safe_in_release` | 35 | `tests` | `unit` | `stored-cut-row-offset` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 832 | `test_stored_cut_row_offset_skips_baked_rows` | 58 | `tests` | `unit` | `stored-cut-row-offset` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 902 | `test_forward_reconstruct_preserves_slots_after_churn` | 59 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 967 | `test_forward_reconstruct_three_new_slack_cuts` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1020 | `test_capture_metadata_invariants` | 52 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1106 | `reconstructed_basis_preserves_basic_count_invariant_backward_all_preserved` | 41 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1154 | `reconstructed_basis_preserves_basic_count_invariant_backward_with_new_cuts` | 56 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1247 | `reconstructed_basis_preserves_basic_count_invariant_forward_all_preserved` | 61 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1322 | `reconstructed_basis_preserves_basic_count_invariant_forward_drops_with_lower` | 75 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 1413 | `reconstructed_basis_preserves_basic_count_invariant_forward_new_cuts_after_drops` | 70 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 302 | `field_access_forward_passes_and_max_iterations` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 317 | `checkpoint_interval_none_and_some` | 26 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 345 | `warm_start_cuts_field_accessible` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 364 | `event_sender_none` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 374 | `event_sender_some_can_send_training_event` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/config.rs` | 417 | `debug_output_non_empty` | 24 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/convergence.rs` | 262 | `new_initializes_all_fields_to_default` | 10 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/convergence.rs` | 274 | `update_increments_iteration_count` | 8 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/convergence.rs` | 284 | `update_stores_lb_and_ub_correctly` | 15 | `tests` | `unit` | `generic` |  |
@@ -346,55 +344,55 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/estimation.rs` | 5204 | `test_std_ratio_divergence_not_fires_when_similar` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/estimation.rs` | 5220 | `test_std_ratio_divergence_skips_near_zero_std` | 13 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/estimation.rs` | 5241 | `test_std_ratio_divergence_wraps_last_to_first` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1938 | `forward_result_field_access` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1953 | `forward_result_clone_and_debug` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1975 | `forward_overhead_decomposition_four_workers` | 99 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2077 | `forward_overhead_decomposition_single_worker_zero_imbalance` | 34 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2115 | `forward_overhead_scheduling_clamped_to_zero_on_clock_skew` | 27 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2146 | `build_cut_row_batch_empty_cuts_returns_empty_batch` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2160 | `build_cut_row_batch_one_cut_correct_structure` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2175 | `build_cut_row_batch_two_cuts_correct_row_starts` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2202 | `build_cut_row_batch_zero_coefficient_state_variable` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2289 | `ac_two_scenarios_three_stages_fixed_solution` | 113 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2410 | `ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error` | 112 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2526 | `ac_global_scenario_index_rank1_scenario0` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2542 | `cost_statistics_accumulated_correctly` | 110 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2657 | `sync_result_field_access` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2671 | `sync_result_clone_and_debug` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2695 | `ub_statistics_four_scenarios_correct_mean_and_std` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2736 | `ac_ticket_acceptance_criterion_ub_mean` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2764 | `canonical_summation_identical_regardless_of_partition` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2806 | `bessel_correction_single_scenario_zero_std_and_ci` | 21 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2830 | `negative_variance_guard_produces_zero_std_not_nan` | 35 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2870 | `sync_forward_local_backend_global_equals_local` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2892 | `sync_forward_sync_time_ms_is_valid_u64` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2910 | `sync_forward_comm_error_wraps_as_sddp_communication` | 67 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3089 | `warm_start_first_iteration_cold_second_iteration_warm` | 30 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3130 | `basis_invalidated_on_solver_error` | 36 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3176 | `test_forward_pass_parallel_cost_agreement` | 130 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3321 | `test_forward_pass_work_distribution` | 114 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3729 | `truncation_clamps_negative_inflow_noise` | 29 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3765 | `truncation_no_clamp_when_inflow_positive` | 30 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3801 | `none_method_unchanged_with_truncation_code_present` | 107 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4059 | `test_forward_pass_parallel_infeasibility` | 109 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4181 | `forward_pass_load_noise_positive_realization` | 123 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4312 | `forward_pass_load_noise_clamped_to_zero` | 119 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4439 | `forward_pass_no_load_buses_unchanged` | 85 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4611 | `append_new_cuts_returns_zero_when_no_new_cuts` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4635 | `append_new_cuts_appends_all_on_empty_row_map` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4665 | `append_new_cuts_skips_already_mapped_cuts` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4698 | `append_new_cuts_matches_build_cut_row_batch_into` | 35 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4735 | `append_new_cuts_with_scaling_matches_build` | 29 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4779 | `test_build_delta_empty_pool` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4796 | `test_build_delta_single_iteration_filter` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4823 | `test_build_delta_skips_deactivated_cuts` | 21 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4846 | `test_build_delta_excludes_warm_start_cuts` | 33 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4881 | `test_build_delta_matches_full_batch_when_pool_has_only_current_iter` | 24 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4907 | `test_build_delta_sparse_path` | 37 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4946 | `test_build_delta_reuses_out_buffer` | 21 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4969 | `test_build_delta_clears_row_starts` | 24 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 5003 | `forward_pass_baked_ready_skips_cut_batches_rebuild` | 88 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 5098 | `forward_pass_baked_not_ready_rebuilds_cut_batches` | 93 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1922 | `forward_result_field_access` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1937 | `forward_result_clone_and_debug` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 1959 | `forward_overhead_decomposition_four_workers` | 99 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2061 | `forward_overhead_decomposition_single_worker_zero_imbalance` | 34 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2099 | `forward_overhead_scheduling_clamped_to_zero_on_clock_skew` | 27 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2130 | `build_cut_row_batch_empty_cuts_returns_empty_batch` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2144 | `build_cut_row_batch_one_cut_correct_structure` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2159 | `build_cut_row_batch_two_cuts_correct_row_starts` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2186 | `build_cut_row_batch_zero_coefficient_state_variable` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2273 | `ac_two_scenarios_three_stages_fixed_solution` | 112 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2393 | `ac_infeasible_at_stage_1_scenario_0_returns_infeasible_error` | 111 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2508 | `ac_global_scenario_index_rank1_scenario0` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2524 | `cost_statistics_accumulated_correctly` | 109 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2638 | `sync_result_field_access` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2652 | `sync_result_clone_and_debug` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2676 | `ub_statistics_four_scenarios_correct_mean_and_std` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2717 | `ac_ticket_acceptance_criterion_ub_mean` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2745 | `canonical_summation_identical_regardless_of_partition` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2787 | `bessel_correction_single_scenario_zero_std_and_ci` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2811 | `negative_variance_guard_produces_zero_std_not_nan` | 35 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2851 | `sync_forward_local_backend_global_equals_local` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2873 | `sync_forward_sync_time_ms_is_valid_u64` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 2891 | `sync_forward_comm_error_wraps_as_sddp_communication` | 67 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3069 | `warm_start_first_iteration_cold_second_iteration_warm` | 30 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3110 | `basis_invalidated_on_solver_error` | 36 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3156 | `test_forward_pass_parallel_cost_agreement` | 130 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3301 | `test_forward_pass_work_distribution` | 114 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3709 | `truncation_clamps_negative_inflow_noise` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3745 | `truncation_no_clamp_when_inflow_positive` | 30 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 3781 | `none_method_unchanged_with_truncation_code_present` | 106 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4038 | `test_forward_pass_parallel_infeasibility` | 109 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4160 | `forward_pass_load_noise_positive_realization` | 123 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4291 | `forward_pass_load_noise_clamped_to_zero` | 119 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4418 | `forward_pass_no_load_buses_unchanged` | 85 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4581 | `append_new_cuts_returns_zero_when_no_new_cuts` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4605 | `append_new_cuts_appends_all_on_empty_row_map` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4635 | `append_new_cuts_skips_already_mapped_cuts` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4668 | `append_new_cuts_matches_build_cut_row_batch_into` | 35 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4705 | `append_new_cuts_with_scaling_matches_build` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4749 | `test_build_delta_empty_pool` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4766 | `test_build_delta_single_iteration_filter` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4793 | `test_build_delta_skips_deactivated_cuts` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4816 | `test_build_delta_excludes_warm_start_cuts` | 33 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4851 | `test_build_delta_matches_full_batch_when_pool_has_only_current_iter` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4877 | `test_build_delta_sparse_path` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4916 | `test_build_delta_reuses_out_buffer` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4939 | `test_build_delta_clears_row_starts` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 4973 | `forward_pass_baked_ready_skips_cut_batches_rebuild` | 88 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/forward.rs` | 5068 | `forward_pass_baked_not_ready_rebuilds_cut_batches` | 93 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/fpha_fitting.rs` | 1677 | `valid_five_point_curve_construction_succeeds` | 5 | `tests` | `unit` | `fpha-slow` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/fpha_fitting.rs` | 1688 | `interpolation_at_midpoint_segment_0_to_2000` | 5 | `tests` | `unit` | `fpha-slow` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/fpha_fitting.rs` | 1697 | `interpolation_at_breakpoints_returns_exact_values` | 13 | `tests` | `unit` | `fpha-slow` |  |
@@ -623,26 +621,26 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3066 | `area_derivative_single_point_returns_zero` | 9 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3078 | `area_derivative_at_or_below_first_point_uses_first_interval` | 10 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3091 | `area_derivative_at_or_above_last_point_uses_last_interval` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3172 | `resolve_evaporation_all_none_when_no_hydro_has_coefficients` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3218 | `resolve_evaporation_known_geometry_produces_correct_coefficients` | 69 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3292 | `resolve_evaporation_negative_coefficient_produces_valid_results` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3336 | `resolve_evaporation_missing_geometry_returns_validation_error` | 24 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3365 | `resolve_evaporation_mixed_system_returns_correct_model_mix` | 57 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3426 | `resolve_evaporation_degenerate_geometry_nan_detected` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3471 | `resolve_evaporation_per_season_ref_vols_produces_per_stage_coefficients` | 109 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3584 | `resolve_evaporation_none_ref_vols_produces_default_midpoint_provenance` | 57 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3645 | `resolve_evaporation_mixed_ref_vol_provenance` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3687 | `build_hydro_model_summary_ref_source_counts` | 81 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3999 | `build_hydro_model_summary_all_constant` | 35 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4037 | `build_hydro_model_summary_mixed_counts_and_plane_total` | 38 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4078 | `build_hydro_model_summary_acceptance_criterion` | 119 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4201 | `build_hydro_model_summary_evaporation_counts_from_provenance` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4284 | `computed_source_end_to_end_produces_valid_fpha_planes` | 71 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4362 | `mixed_precomputed_and_computed_sources_resolve_correctly` | 93 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4459 | `computed_source_all_stages_produce_identical_planes` | 68 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4531 | `computed_source_in_summary_counts_correctly` | 65 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4600 | `computed_source_missing_efficiency_returns_validation_error` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4626 | `computed_source_missing_losses_returns_validation_error` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3172 | `resolve_evaporation_all_none_when_no_hydro_has_coefficients` | 33 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3220 | `resolve_evaporation_known_geometry_produces_correct_coefficients` | 69 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3294 | `resolve_evaporation_negative_coefficient_produces_valid_results` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3338 | `resolve_evaporation_missing_geometry_returns_validation_error` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3367 | `resolve_evaporation_mixed_system_returns_correct_model_mix` | 57 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3428 | `resolve_evaporation_degenerate_geometry_nan_detected` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3473 | `resolve_evaporation_per_season_ref_vols_produces_per_stage_coefficients` | 109 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3586 | `resolve_evaporation_none_ref_vols_produces_default_midpoint_provenance` | 57 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3647 | `resolve_evaporation_mixed_ref_vol_provenance` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 3689 | `build_hydro_model_summary_ref_source_counts` | 81 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4001 | `build_hydro_model_summary_all_constant` | 35 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4039 | `build_hydro_model_summary_mixed_counts_and_plane_total` | 38 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4080 | `build_hydro_model_summary_acceptance_criterion` | 119 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4203 | `build_hydro_model_summary_evaporation_counts_from_provenance` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4286 | `computed_source_end_to_end_produces_valid_fpha_planes` | 71 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4364 | `mixed_precomputed_and_computed_sources_resolve_correctly` | 93 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4461 | `computed_source_all_stages_produce_identical_planes` | 68 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4533 | `computed_source_in_summary_counts_correctly` | 65 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4602 | `computed_source_missing_efficiency_returns_validation_error` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/hydro_models.rs` | 4628 | `computed_source_missing_losses_returns_validation_error` | 22 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/indexer.rs` | 1240 | `storage_range_3_2` | 3 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/indexer.rs` | 1245 | `inflow_lags_range_3_2` | 4 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/indexer.rs` | 1251 | `z_inflow_range_3_2` | 4 | `tests` | `unit` | `generic` |  |
@@ -730,17 +728,17 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/lag_transition.rs` | 1194 | `test_noise_groups_mixed_weekly_monthly` | 23 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/lag_transition.rs` | 1219 | `test_noise_groups_none_season_id` | 16 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/lag_transition.rs` | 1238 | `test_noise_groups_cross_year` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 687 | `one_opening_expectation_lb_equals_single_objective` | 44 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 734 | `three_openings_expectation_lb_equals_mean` | 46 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 783 | `two_openings_pure_cvar_alpha_half_lb_equals_worst` | 53 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 839 | `two_openings_cvar_alpha_one_equals_expectation` | 48 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 890 | `infeasible_solve_maps_to_sddp_infeasible` | 43 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 936 | `broadcast_failure_maps_to_communication_error` | 43 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 988 | `integration_two_openings_local_backend_expectation` | 46 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1041 | `integration_monotonicity_more_cuts_yields_higher_or_equal_lb` | 60 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1110 | `test_lb_none_method_unchanged` | 45 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1162 | `test_lb_truncation_no_crash` | 43 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1208 | `test_lb_truncation_with_penalty_no_crash` | 43 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 679 | `one_opening_expectation_lb_equals_single_objective` | 44 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 726 | `three_openings_expectation_lb_equals_mean` | 46 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 775 | `two_openings_pure_cvar_alpha_half_lb_equals_worst` | 53 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 831 | `two_openings_cvar_alpha_one_equals_expectation` | 48 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 882 | `infeasible_solve_maps_to_sddp_infeasible` | 43 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 928 | `broadcast_failure_maps_to_communication_error` | 43 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 980 | `integration_two_openings_local_backend_expectation` | 46 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1033 | `integration_monotonicity_more_cuts_yields_higher_or_equal_lb` | 60 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1102 | `test_lb_none_method_unchanged` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1154 | `test_lb_truncation_no_crash` | 43 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/lower_bound.rs` | 1200 | `test_lb_truncation_with_penalty_no_crash` | 43 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/patch.rs` | 559 | `new_3_2_sizes_to_15` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/patch.rs` | 568 | `new_160_12_sizes_to_2400` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/patch.rs` | 577 | `new_zero_lags_sizes_to_3n` | 5 | `tests` | `unit` | `generic` |  |
@@ -967,45 +965,41 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/scaling_report.rs` | 284 | `test_summarize_scale_factors_empty` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/scaling_report.rs` | 291 | `test_coefficient_range_from_template` | 29 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/scaling_report.rs` | 322 | `test_build_scaling_report_summary` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1152 | `new_minimal_valid_system_returns_ok` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1184 | `new_zero_stages_returns_validation_error` | 32 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1219 | `accessor_methods_return_expected_values` | 55 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1277 | `fcf_mut_allows_cut_insertion` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1311 | `inflow_method_reflects_config` | 34 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1348 | `cut_selection_none_when_disabled` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1381 | `stage_ctx_fields_match_study_setup` | 54 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1437 | `training_ctx_fields_match_study_setup` | 44 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1486 | `train_completes_within_iteration_limit` | 46 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1536 | `train_generates_cuts_in_fcf` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1580 | `simulation_config_reflects_setup_fields` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1624 | `create_workspace_pool_returns_correct_size` | 34 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1663 | `build_training_output_non_empty` | 52 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1719 | `simulate_after_train_returns_nonempty_costs` | 72 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1795 | `study_params_from_config_defaults` | 73 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1872 | `study_params_from_config_explicit` | 78 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2008 | `prepare_stochastic_no_history_no_tree_returns_none_report_and_generated_provenance` | 34 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2047 | `prepare_stochastic_with_stats_file_present_skips_estimation` | 38 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2092 | `prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance` | 29 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2127 | `test_prepare_stochastic_historical_residuals_noise_method` | 250 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2386 | `default_from_system_gives_constant_and_no_evaporation` | 45 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2434 | `hydro_models_accessor_returns_stored_result` | 37 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2728 | `build_initial_state_populates_lags_from_past_inflows` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2771 | `build_initial_state_empty_past_inflows_leaves_zero_lags` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2792 | `build_initial_state_unknown_hydro_in_past_inflows_stays_zero` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2824 | `study_setup_initial_state_has_nonzero_lags_from_past_inflows` | 56 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2883 | `build_initial_state_no_lags_state_is_storage_only` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2904 | `historical_library_none_for_insample` | 43 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3199 | `historical_library_built_when_scheme_is_historical` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3244 | `external_inflow_library_built_when_scheme_is_external` | 259 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3515 | `external_load_library_built_when_scheme_is_external` | 254 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3781 | `external_ncs_library_built_when_scheme_is_external` | 282 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4075 | `historical_library_fails_when_no_valid_windows` | 243 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4331 | `test_simulate_uses_simulation_scheme` | 52 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4389 | `test_sim_historical_library_built_when_sim_scheme_is_historical` | 48 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 296 | `canonical_state_disabled_parses_to_disabled` | 8 | `tests` | `unit` | `canonical-disabled,canonical-clearsolver,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 306 | `canonical_state_clear_solver_parses_to_clear_solver` | 8 | `tests` | `unit` | `canonical-disabled,canonical-clearsolver,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 316 | `canonical_state_missing_key_defaults_to_disabled` | 10 | `tests` | `unit` | `canonical-disabled,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 328 | `canonical_state_invalid_value_returns_validation_error` | 13 | `tests` | `unit` | `canonical-config-flag` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1144 | `new_minimal_valid_system_returns_ok` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1176 | `new_zero_stages_returns_validation_error` | 32 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1211 | `accessor_methods_return_expected_values` | 55 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1269 | `fcf_mut_allows_cut_insertion` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1303 | `inflow_method_reflects_config` | 34 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1340 | `cut_selection_none_when_disabled` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1373 | `stage_ctx_fields_match_study_setup` | 54 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1429 | `training_ctx_fields_match_study_setup` | 44 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1478 | `train_completes_within_iteration_limit` | 46 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1528 | `train_generates_cuts_in_fcf` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1572 | `simulation_config_reflects_setup_fields` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1616 | `create_workspace_pool_returns_correct_size` | 34 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1655 | `build_training_output_non_empty` | 52 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1711 | `simulate_after_train_returns_nonempty_costs` | 72 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1787 | `study_params_from_config_defaults` | 73 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 1864 | `study_params_from_config_explicit` | 78 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2000 | `prepare_stochastic_no_history_no_tree_returns_none_report_and_generated_provenance` | 34 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2039 | `prepare_stochastic_with_stats_file_present_skips_estimation` | 38 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2084 | `prepare_stochastic_no_opening_tree_gives_non_user_supplied_provenance` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2119 | `test_prepare_stochastic_historical_residuals_noise_method` | 250 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2378 | `default_from_system_gives_constant_and_no_evaporation` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2426 | `hydro_models_accessor_returns_stored_result` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2720 | `build_initial_state_populates_lags_from_past_inflows` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2763 | `build_initial_state_empty_past_inflows_leaves_zero_lags` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2784 | `build_initial_state_unknown_hydro_in_past_inflows_stays_zero` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2816 | `study_setup_initial_state_has_nonzero_lags_from_past_inflows` | 56 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2875 | `build_initial_state_no_lags_state_is_storage_only` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 2896 | `historical_library_none_for_insample` | 43 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3191 | `historical_library_built_when_scheme_is_historical` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3236 | `external_inflow_library_built_when_scheme_is_external` | 259 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3507 | `external_load_library_built_when_scheme_is_external` | 254 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 3773 | `external_ncs_library_built_when_scheme_is_external` | 282 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4067 | `historical_library_fails_when_no_valid_windows` | 243 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4323 | `test_simulate_uses_simulation_scheme` | 52 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/setup/mod.rs` | 4381 | `test_sim_historical_library_built_when_sim_scheme_is_historical` | 48 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/aggregation.rs` | 439 | `local_min_max_basic` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/aggregation.rs` | 448 | `local_min_max_multiple` | 10 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/aggregation.rs` | 460 | `local_min_max_empty_returns_infinities` | 5 | `tests` | `unit` | `generic` |  |
@@ -1073,30 +1067,30 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/extraction.rs` | 2935 | `cost_breakdown_sums_to_immediate_identity_scale` | 79 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/extraction.rs` | 3022 | `cost_unscaled_by_col_scale` | 66 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/extraction.rs` | 3092 | `hydro_violation_cost_decomposition` | 152 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1697 | `simulate_single_rank_4_scenarios_produces_4_results` | 96 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1806 | `simulate_infeasible_returns_lp_infeasible_error` | 94 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1906 | `simulate_infeasible_at_scenario2_stage3` | 94 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2003 | `simulate_channel_closed_returns_error` | 88 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2098 | `simulate_total_cost_equals_sum_of_stage_costs` | 97 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2201 | `simulate_cost_buffer_scenario_ids_match_assigned_range` | 95 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2299 | `simulate_channel_receives_results_in_scenario_order` | 85 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2390 | `test_simulation_parallel_cost_determinism` | 208 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2605 | `simulate_emits_progress_events` | 117 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2726 | `simulate_no_events_when_sender_is_none` | 89 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2825 | `simulate_progress_events_received_before_return` | 103 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2936 | `simulate_progress_scenario_cost_equals_total_cost` | 112 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3052 | `simulate_emits_simulation_finished_as_last_event` | 122 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3180 | `simulate_progress_scenario_cost_is_finite` | 103 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3441 | `simulation_load_patches_applied` | 199 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3647 | `simulation_no_load_buses_unchanged` | 96 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3752 | `simulation_inflow_extraction_unaffected` | 163 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4145 | `simulation_truncation_clamps_negative_inflow_noise` | 105 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4258 | `simulation_none_method_produces_raw_negative_noise` | 103 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4368 | `simulate_baked_path_issues_zero_add_rows` | 98 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4487 | `simulate_fallback_path_issues_expected_add_rows` | 99 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4591 | `simulate_baked_length_mismatch_returns_error` | 94 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4704 | `simulate_with_captured_basis_preserves_row_statuses` | 168 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4879 | `simulate_with_empty_stage_bases_cold_starts` | 103 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1643 | `simulate_single_rank_4_scenarios_produces_4_results` | 96 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1752 | `simulate_infeasible_returns_lp_infeasible_error` | 94 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1852 | `simulate_infeasible_at_scenario2_stage3` | 94 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 1949 | `simulate_channel_closed_returns_error` | 88 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2044 | `simulate_total_cost_equals_sum_of_stage_costs` | 97 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2147 | `simulate_cost_buffer_scenario_ids_match_assigned_range` | 95 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2245 | `simulate_channel_receives_results_in_scenario_order` | 85 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2336 | `test_simulation_parallel_cost_determinism` | 208 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2551 | `simulate_emits_progress_events` | 117 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2672 | `simulate_no_events_when_sender_is_none` | 89 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2771 | `simulate_progress_events_received_before_return` | 103 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2882 | `simulate_progress_scenario_cost_equals_total_cost` | 112 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 2998 | `simulate_emits_simulation_finished_as_last_event` | 122 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3126 | `simulate_progress_scenario_cost_is_finite` | 103 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3387 | `simulation_load_patches_applied` | 199 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3593 | `simulation_no_load_buses_unchanged` | 96 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 3698 | `simulation_inflow_extraction_unaffected` | 163 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4091 | `simulation_truncation_clamps_negative_inflow_noise` | 105 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4204 | `simulation_none_method_produces_raw_negative_noise` | 103 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4314 | `simulate_baked_path_issues_zero_add_rows` | 98 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4433 | `simulate_fallback_path_issues_expected_add_rows` | 99 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4537 | `simulate_baked_length_mismatch_returns_error` | 94 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4650 | `simulate_with_captured_basis_preserves_row_statuses` | 168 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/simulation/pipeline.rs` | 4825 | `simulate_with_empty_stage_bases_cold_starts` | 103 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 546 | `cost_result_construction_all_fields` | 51 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 599 | `hydro_result_optional_fields` | 40 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 641 | `thermal_result_gnl_fields_nullable` | 31 | `tests` | `unit` | `generic` |  |
@@ -1115,16 +1109,20 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 910 | `stage_summary_stats_construction` | 13 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 925 | `simulation_summary_construction` | 48 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/simulation/types.rs` | 975 | `simulation_summary_optional_stage_stats` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 403 | `test_from_snapshots_all_deltas` | 71 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 476 | `test_from_snapshots_zero_delta` | 43 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 521 | `test_aggregate_empty_returns_default` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 528 | `test_aggregate_sums_all_fields` | 73 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 603 | `test_aggregate_solver_statistics_sums_all_fields` | 76 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 709 | `test_pack_unpack_delta_scalars_round_trip` | 30 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 741 | `test_pack_unpack_delta_scalars_identity_for_lp_solves_600` | 7 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 750 | `test_pack_unpack_scenario_stats_round_trip_three_entries` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 780 | `test_pack_scenario_stats_empty_round_trip` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 788 | `test_solver_stats_delta_includes_reconstruction_fields` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 395 | `test_from_snapshots_all_deltas` | 69 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 466 | `test_from_snapshots_zero_delta` | 42 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 510 | `test_aggregate_empty_returns_default` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 517 | `test_aggregate_sums_all_fields` | 71 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 590 | `test_aggregate_solver_statistics_sums_all_fields` | 74 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 693 | `test_pack_unpack_delta_scalars_round_trip` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 724 | `test_pack_unpack_delta_scalars_identity_for_lp_solves_600` | 7 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 733 | `test_pack_unpack_scenario_stats_round_trip_three_entries` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 763 | `test_pack_scenario_stats_empty_round_trip` | 6 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/solver_stats.rs` | 771 | `test_solver_stats_delta_includes_reconstruction_fields` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/stage_solve.rs` | 431 | `run_stage_solve_cold_start_returns_outcome` | 32 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/stage_solve.rs` | 469 | `run_stage_solve_warm_start_excess_basic_demotes` | 63 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/stage_solve.rs` | 538 | `run_stage_solve_propagates_infeasible` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/stage_solve.rs` | 586 | `basis_inconsistent_propagates_as_sddp_solver_error` | 55 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/state_exchange.rs` | 404 | `new_allocates_correct_send_buf_length` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/state_exchange.rs` | 411 | `new_allocates_correct_recv_buf_length` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/state_exchange.rs` | 418 | `new_allocates_correct_counts_length_and_values` | 7 | `tests` | `unit` | `generic` |  |
@@ -1181,27 +1179,27 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/stopping_rule.rs` | 702 | `ac_iteration_limit_triggered_at_10` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/stopping_rule.rs` | 711 | `ac_bound_stalling_with_6_history_entries` | 10 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/stopping_rule.rs` | 723 | `ac_rule_set_any_mode_stops_at_iteration_100` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1664 | `ac_train_completes_with_iteration_limit` | 88 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1760 | `ac_train_returns_partial_on_infeasible` | 99 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1872 | `ac_train_emits_correct_event_sequence` | 155 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2033 | `ac_train_result_fields_populated` | 88 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2127 | `ac_train_with_no_event_sender` | 85 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2218 | `ac_total_time_ms_is_non_negative` | 91 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2315 | `cut_selection_none_skips_step` | 97 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2419 | `cut_selection_level1_runs_at_frequency` | 112 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2538 | `cut_selection_stage0_exempt_preserves_cuts` | 129 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2675 | `existing_train_tests_pass_with_none` | 88 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2773 | `ac_train_partial_result_on_mid_iteration_failure` | 115 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2892 | `start_iteration_resumes_from_offset` | 90 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2986 | `start_iteration_at_or_beyond_max_runs_zero_iterations` | 93 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3089 | `ac_broadcast_basis_cache_uses_scenario_0_not_last` | 56 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3152 | `ac_broadcast_basis_cache_none_slots_preserved` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3176 | `broadcast_basis_cache_single_rank_preserves_metadata` | 37 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3418 | `broadcast_basis_cache_multi_rank_round_trips_full_metadata` | 57 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3480 | `broadcast_basis_cache_empty_cut_slots_round_trips_ok` | 37 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3534 | `broadcast_basis_cache_truncated_cut_slots_returns_validation` | 58 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3602 | `broadcast_basis_cache_truncated_state_returns_validation` | 60 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3670 | `template_bake_event_emitted` | 133 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1654 | `ac_train_completes_with_iteration_limit` | 87 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1749 | `ac_train_returns_partial_on_infeasible` | 98 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 1860 | `ac_train_emits_correct_event_sequence` | 154 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2020 | `ac_train_result_fields_populated` | 87 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2113 | `ac_train_with_no_event_sender` | 84 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2203 | `ac_total_time_ms_is_non_negative` | 90 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2299 | `cut_selection_none_skips_step` | 96 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2402 | `cut_selection_level1_runs_at_frequency` | 111 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2520 | `cut_selection_stage0_exempt_preserves_cuts` | 128 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2656 | `existing_train_tests_pass_with_none` | 87 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2753 | `ac_train_partial_result_on_mid_iteration_failure` | 114 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2871 | `start_iteration_resumes_from_offset` | 89 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 2964 | `start_iteration_at_or_beyond_max_runs_zero_iterations` | 92 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3066 | `ac_broadcast_basis_cache_uses_scenario_0_not_last` | 56 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3129 | `ac_broadcast_basis_cache_none_slots_preserved` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3153 | `broadcast_basis_cache_single_rank_preserves_metadata` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3395 | `broadcast_basis_cache_multi_rank_round_trips_full_metadata` | 57 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3457 | `broadcast_basis_cache_empty_cut_slots_round_trips_ok` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3511 | `broadcast_basis_cache_truncated_cut_slots_returns_validation` | 58 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3579 | `broadcast_basis_cache_truncated_state_returns_validation` | 60 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/training.rs` | 3647 | `template_bake_event_emitted` | 132 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/training_output.rs` | 448 | `records_count_matches_iteration_summaries` | 13 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/training_output.rs` | 463 | `converged_true_for_bound_stalling` | 9 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/training_output.rs` | 474 | `converged_true_for_simulation_based` | 9 | `tests` | `unit` | `generic` |  |
@@ -1236,55 +1234,51 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/visited_states.rs` | 228 | `archive_gathered_states_delegates` | 9 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/visited_states.rs` | 239 | `archive_accumulates_across_iterations` | 8 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/src/visited_states.rs` | 249 | `archive_states_for_stage_returns_flat_slice` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 665 | `test_workspace_send_bound` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 685 | `test_workspace_pool_size` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 691 | `test_workspace_buffer_dimensions` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 703 | `test_workspace_pool_zero_threads` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 709 | `test_workspace_pool_single_thread` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 716 | `test_workspace_pool_each_solver_independent` | 7 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 725 | `test_scratch_buffers_zero_downstream_par_order_empty_buffers` | 27 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 754 | `test_scratch_buffers_nonzero_downstream_par_order_allocates_correctly` | 31 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 787 | `test_workspace_pool_propagates_downstream_par_order` | 30 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 823 | `basis_store_new_all_none` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 838 | `basis_store_get_mut_set_and_retrieve` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 848 | `basis_store_zero_scenarios` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 855 | `basis_store_zero_stages` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 862 | `basis_store_split_workers_mut_disjoint_writes` | 27 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 891 | `basis_store_split_single_worker` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 901 | `basis_store_split_more_workers_than_scenarios` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 914 | `basis_store_slice_offset_correct` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 937 | `test_captured_basis_new_capacities` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 964 | `test_basis_store_holds_captured_basis` | 32 | `tests` | `unit` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 998 | `test_recon_slot_lookup_presized` | 32 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 658 | `test_workspace_send_bound` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 678 | `test_workspace_pool_size` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 684 | `test_workspace_buffer_dimensions` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 696 | `test_workspace_pool_zero_threads` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 702 | `test_workspace_pool_single_thread` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 709 | `test_workspace_pool_each_solver_independent` | 7 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 718 | `test_scratch_buffers_zero_downstream_par_order_empty_buffers` | 27 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 747 | `test_scratch_buffers_nonzero_downstream_par_order_allocates_correctly` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 780 | `test_workspace_pool_propagates_downstream_par_order` | 30 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 816 | `basis_store_new_all_none` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 831 | `basis_store_get_mut_set_and_retrieve` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 841 | `basis_store_zero_scenarios` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 848 | `basis_store_zero_stages` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 855 | `basis_store_split_workers_mut_disjoint_writes` | 27 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 884 | `basis_store_split_single_worker` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 894 | `basis_store_split_more_workers_than_scenarios` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 907 | `basis_store_slice_offset_correct` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 930 | `test_captured_basis_new_capacities` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 957 | `test_basis_store_holds_captured_basis` | 32 | `tests` | `unit` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/src/workspace.rs` | 991 | `test_recon_slot_lookup_presized` | 32 | `tests` | `unit` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 182 | `basis_reconstruct_churn` | 127 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 339 | `test_basis_reconstruct_no_churn_full_preservation` | 85 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 458 | `test_basis_reconstruct_full_churn_no_rows_preserved` | 210 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 697 | `simulate_warm_start_basis_preserved_gt_zero` | 115 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 847 | `simulate_invariant_zero_non_alien_rejections_under_churn` | 107 | `` | `integration` | `alien-only,non-alien-first` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/boundary_cuts.rs` | 136 | `boundary_cuts_improve_terminal_stage_objective` | 73 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/canonical_state_strategy.rs` | 545 | `backward_pass_under_disabled_has_zero_clear_solver_count` | 18 | `` | `integration` | `canonical-disabled,canonical-clearsolver` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/canonical_state_strategy.rs` | 571 | `backward_pass_under_clear_solver_increments_counter` | 23 | `` | `integration` | `canonical-clearsolver` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/canonical_state_strategy.rs` | 606 | `noop_solver_backend_rejects_clear_solver_strategy` | 9 | `` | `integration` | `canonical-clearsolver` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 282 | `risk_measure_expectation_aggregate_cut_sums_to_weighted_mean` | 28 | `risk_measure_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 314 | `risk_measure_cvar_alpha_one_equals_expectation` | 41 | `risk_measure_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 359 | `risk_measure_cvar_alpha_half_concentrates_on_worst` | 24 | `risk_measure_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 387 | `risk_measure_cvar_weights_sum_to_one` | 37 | `risk_measure_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 449 | `stopping_rule_bound_stalling_uses_max_guard` | 19 | `stopping_rule_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 472 | `stopping_rule_set_all_mode_requires_simultaneous` | 46 | `stopping_rule_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 524 | `stopping_rule_graceful_shutdown_bypasses_all_mode` | 18 | `stopping_rule_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 557 | `cut_wire_record_serialize_deserialize_round_trip` | 48 | `cut_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 609 | `cut_pool_add_then_active_cuts_returns_correct_data` | 52 | `cut_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 684 | `convergence_monitor_gap_formula_matches_spec` | 21 | `convergence_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 712 | `convergence_monitor_lb_history_grows_monotonically_when_lb_increases` | 44 | `convergence_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 759 | `convergence_monitor_iteration_limit_triggers_at_exact_count` | 30 | `convergence_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 809 | `evaluate_lower_bound_monotonicity_with_additional_cuts` | 83 | `lb_conformance` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 904 | `indexer_constraint_inventory` | 110 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 1028 | `constraint_extraction_regression_guard` | 71 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 274 | `risk_measure_expectation_aggregate_cut_sums_to_weighted_mean` | 28 | `risk_measure_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 306 | `risk_measure_cvar_alpha_one_equals_expectation` | 41 | `risk_measure_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 351 | `risk_measure_cvar_alpha_half_concentrates_on_worst` | 24 | `risk_measure_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 379 | `risk_measure_cvar_weights_sum_to_one` | 37 | `risk_measure_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 441 | `stopping_rule_bound_stalling_uses_max_guard` | 19 | `stopping_rule_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 464 | `stopping_rule_set_all_mode_requires_simultaneous` | 46 | `stopping_rule_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 516 | `stopping_rule_graceful_shutdown_bypasses_all_mode` | 18 | `stopping_rule_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 549 | `cut_wire_record_serialize_deserialize_round_trip` | 48 | `cut_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 601 | `cut_pool_add_then_active_cuts_returns_correct_data` | 52 | `cut_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 676 | `convergence_monitor_gap_formula_matches_spec` | 21 | `convergence_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 704 | `convergence_monitor_lb_history_grows_monotonically_when_lb_increases` | 44 | `convergence_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 751 | `convergence_monitor_iteration_limit_triggers_at_exact_count` | 30 | `convergence_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 801 | `evaluate_lower_bound_monotonicity_with_additional_cuts` | 83 | `lb_conformance` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 896 | `indexer_constraint_inventory` | 110 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/conformance.rs` | 1020 | `constraint_extraction_regression_guard` | 71 | `` | `regression` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/decomp_integration.rs` | 166 | `decomp_structural_properties_and_training` | 151 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/decomp_integration.rs` | 336 | `decomp_boundary_cuts_compose_with_weekly_monthly` | 75 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 714 | `test_training_determinism_across_thread_counts` | 35 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 909 | `test_canonical_ub_determinism_across_rank_counts` | 73 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 994 | `test_simulation_determinism_across_thread_counts` | 34 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 707 | `test_training_determinism_across_thread_counts` | 35 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 902 | `test_canonical_ub_determinism_across_rank_counts` | 73 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/determinism.rs` | 987 | `test_simulation_determinism_across_thread_counts` | 34 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/deterministic.rs` | 253 | `d01_thermal_dispatch` | 15 | `` | `conformance` | `d-case-determinism` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/deterministic.rs` | 288 | `d02_single_hydro` | 15 | `` | `conformance` | `d-case-determinism` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/deterministic.rs` | 311 | `d03_two_hydro_cascade` | 15 | `` | `conformance` | `d-case-determinism` |  |
@@ -1327,48 +1321,81 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/tests/estimation_integration.rs` | 704 | `test_estimation_round_trip_par1` | 82 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/estimation_integration.rs` | 890 | `test_partial_estimation_end_to_end` | 64 | `` | `e2e` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/estimation_integration.rs` | 962 | `test_estimation_round_trip_two_hydros` | 60 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 551 | `insample_equivalence_d01` | 27 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 587 | `out_of_sample_convergence` | 52 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 653 | `out_of_sample_declaration_order_invariance` | 34 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1057 | `historical_convergence` | 18 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1079 | `external_inflow_convergence` | 28 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1111 | `mixed_scheme_convergence` | 30 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1335 | `external_load_library_populated` | 26 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1369 | `external_ncs_library_populated` | 26 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1513 | `monthly_noise_sharing_regression` | 45 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 549 | `insample_equivalence_d01` | 27 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 585 | `out_of_sample_convergence` | 52 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 651 | `out_of_sample_declaration_order_invariance` | 34 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1054 | `historical_convergence` | 18 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1076 | `external_inflow_convergence` | 28 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1108 | `mixed_scheme_convergence` | 30 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1332 | `external_load_library_populated` | 26 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1366 | `external_ncs_library_populated` | 26 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/forward_sampler_integration.rs` | 1510 | `monthly_noise_sharing_regression` | 45 | `` | `regression` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/fpha_computed.rs` | 310 | `fpha_computed_case_converges` | 82 | `` | `e2e` | `fpha-slow` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/fpha_evaporation.rs` | 92 | `fpha_evaporation_case_converges` | 123 | `` | `e2e` | `fpha-slow` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/fpha_evaporation.rs` | 233 | `test_4ree_fpha_evap_seasonal_ref_provenance` | 92 | `` | `e2e` | `fpha-slow` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 686 | `test_penalty_method_prevents_infeasibility` | 8 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 704 | `test_penalty_slack_value_matches_negative_inflow` | 23 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 737 | `test_simulation_slack_output_populated` | 29 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 775 | `truncation_with_penalty_training_completes` | 30 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 815 | `per_plant_inflow_penalty_differentiates_objective_coefficients` | 136 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 641 | `train_converges_with_mock_solver` | 80 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 725 | `train_deterministic_with_same_seed` | 18 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 747 | `train_lb_monotonically_nondecreasing` | 95 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 848 | `train_emits_correct_event_sequence` | 99 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 951 | `train_stops_at_iteration_limit` | 75 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1030 | `train_stops_on_graceful_shutdown` | 85 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1119 | `train_propagates_infeasible_error` | 84 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1216 | `d17_level1_cut_selection_convergence` | 150 | `` | `integration` | `d-case-determinism` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1376 | `d17_level1_cut_selection_reconstruction` | 93 | `` | `integration` | `d-case-determinism` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1483 | `d18_lml1_cut_selection_convergence` | 135 | `` | `integration` | `d-case-determinism` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1628 | `test_forward_basis_reconstruct_bit_identical_d01` | 90 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1808 | `forward_pass_uses_baked_template_on_iter_2` | 263 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 2079 | `backward_pass_uses_delta_batch_on_iter_2` | 314 | `` | `integration` | `canonical-disabled,canonical-config-flag` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 2401 | `baked_backward_pass_smoke_test` | 90 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 369 | `test_stochastic_load_context_construction` | 17 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 390 | `test_stochastic_load_training_completes` | 127 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 524 | `test_deterministic_load_training_matches_baseline` | 100 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 628 | `test_stochastic_load_seed_determinism` | 142 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 685 | `test_penalty_method_prevents_infeasibility` | 8 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 703 | `test_penalty_slack_value_matches_negative_inflow` | 23 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 736 | `test_simulation_slack_output_populated` | 29 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 774 | `truncation_with_penalty_training_completes` | 30 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/inflow_nonnegativity.rs` | 814 | `per_plant_inflow_penalty_differentiates_objective_coefficients` | 136 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 624 | `train_converges_with_mock_solver` | 79 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 707 | `train_deterministic_with_same_seed` | 18 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 729 | `train_lb_monotonically_nondecreasing` | 94 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 829 | `train_emits_correct_event_sequence` | 98 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 931 | `train_stops_at_iteration_limit` | 74 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1009 | `train_stops_on_graceful_shutdown` | 84 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1097 | `train_propagates_infeasible_error` | 83 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1193 | `d17_level1_cut_selection_convergence` | 149 | `` | `integration` | `d-case-determinism` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1352 | `d17_level1_cut_selection_reconstruction` | 92 | `` | `integration` | `d-case-determinism` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1458 | `d18_lml1_cut_selection_convergence` | 134 | `` | `integration` | `d-case-determinism` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1602 | `test_forward_basis_reconstruct_bit_identical_d01` | 90 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 1776 | `forward_pass_uses_baked_template_on_iter_2` | 263 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 2047 | `backward_pass_uses_delta_batch_on_iter_2` | 309 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 2364 | `baked_backward_pass_smoke_test` | 89 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 361 | `test_stochastic_load_context_construction` | 17 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 382 | `test_stochastic_load_training_completes` | 126 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 515 | `test_deterministic_load_training_matches_baseline` | 99 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/load_integration.rs` | 618 | `test_stochastic_load_seed_determinism` | 141 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/pattern_d_integration.rs` | 131 | `pattern_d_structural_properties_and_training` | 203 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/simulation_integration.rs` | 549 | `train_simulate_write_cycle` | 364 | `` | `integration` | `generic` |  |
-| `cobre-sddp` | `crates/cobre-sddp/tests/simulation_integration.rs` | 1220 | `simulation_min_outflow_slack_extracted_from_primal` | 259 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/simulation_integration.rs` | 541 | `train_simulate_write_cycle` | 363 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/simulation_integration.rs` | 1205 | `simulation_min_outflow_slack_extracted_from_primal` | 258 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/simulation_only.rs` | 80 | `simulation_only_fcf_round_trip` | 128 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/sparse_dense.rs` | 44 | `sparse_full_mask_equals_dense` | 91 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/sparse_dense.rs` | 140 | `sparse_partial_mask_produces_correct_subset` | 66 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/sparse_dense.rs` | 209 | `sparse_dense_with_scaling` | 43 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 314 | `forward_uses_stage_solve` | 155 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 482 | `backward_uses_stage_solve` | 216 | `` | `integration` | `convertido-determinism` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 714 | `simulation_zero_rejections_on_cut_churn` | 212 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 1135 | `cross_phase_identical_inputs_identical_reconstruction` | 74 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 1223 | `phase_only_affects_outcome_variant_not_solve_path` | 97 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/unified_run_path.rs` | 1330 | `cold_start_zero_recon_stats` | 33 | `` | `integration` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 294 | `v045_d01_thermal_dispatch` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 300 | `v045_d02_single_hydro` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 306 | `v045_d03_two_hydro_cascade` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 312 | `v045_d04_transmission` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 318 | `v045_d05_fpha_constant_head` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 324 | `v045_d06_fpha_variable_head` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 330 | `v045_d07_fpha_computed` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 336 | `v045_d08_evaporation` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 342 | `v045_d09_multi_deficit` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 348 | `v045_d10_inflow_nonnegativity` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 354 | `v045_d11_water_withdrawal` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 360 | `v045_d13_generic_constraint` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 366 | `v045_d14_block_factors` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 372 | `v045_d15_non_controllable_source` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 378 | `v045_d16_par1_lag_shift` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 384 | `v045_d19_multi_hydro_par` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 390 | `v045_d20_operational_violations` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 396 | `v045_d21_min_outflow_regression` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 402 | `v045_d22_per_block_min_outflow` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 408 | `v045_d23_bidirectional_withdrawal` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 414 | `v045_d24_productivity_override` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 420 | `v045_d25_discount_rate` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 426 | `v045_d26_estimated_par2` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 432 | `v045_d27_per_stage_thermal_cost` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 438 | `v045_d28_decomp_weekly_monthly` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 444 | `v045_d29_pattern_c_weekly_par` | 3 | `` | `regression` | `generic` |  |
+| `cobre-sddp` | `crates/cobre-sddp/tests/v045_regression.rs` | 450 | `v045_d30_pattern_d_monthly_quarterly` | 3 | `` | `regression` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/warm_start.rs` | 133 | `resume_training_from_checkpoint` | 69 | `` | `integration` | `generic` |  |
 | `cobre-sddp` | `crates/cobre-sddp/tests/warm_start.rs` | 205 | `warm_start_training_preserves_cuts_and_trains_further` | 70 | `` | `integration` | `generic` |  |
 | `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 300 | `test_bake_empty_rows_copies_base` | 26 | `tests` | `unit` | `generic` |  |
@@ -1378,150 +1405,147 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 417 | `test_bake_reuses_out_buffer_capacity` | 68 | `tests` | `unit` | `generic` |  |
 | `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 491 | `test_bake_determinism` | 23 | `tests` | `unit` | `generic` |  |
 | `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 520 | `test_bake_multi_column_distribution` | 72 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 660 | `test_bake_load_model_row_count` | 26 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 692 | `test_bake_empty_base_row_scale_with_cut_rows_appends_ones` | 20 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 731 | `test_bake_panics_on_nnz_overflow` | 42 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/ffi.rs` | 306 | `test_ffi_smoke_create_solve_destroy` | 61 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1443 | `test_highs_solver_create_and_name` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1450 | `test_highs_solver_send_bound` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1456 | `test_highs_solver_statistics_initial` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1468 | `test_highs_load_model_updates_dimensions` | 29 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1499 | `test_highs_add_rows_updates_dimensions` | 23 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1524 | `test_highs_set_row_bounds_no_panic` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1534 | `test_highs_set_col_bounds_no_panic` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1544 | `test_highs_set_bounds_empty_no_panic` | 9 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1557 | `test_highs_solve_basic_lp` | 31 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1593 | `test_highs_solve_with_cuts` | 32 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1629 | `test_highs_solve_after_rhs_patch` | 20 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1652 | `test_highs_solve_statistics_increment` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1672 | `test_highs_reset_preserves_stats` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1703 | `test_highs_solve_iterations_positive` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1718 | `test_highs_solve_time_positive` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1734 | `test_highs_solve_statistics_single` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1754 | `test_get_basis_valid_status_codes` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1780 | `test_get_basis_resizes_output` | 31 | `tests` | `unit` | `solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1815 | `test_solve_with_basis_warm_start` | 33 | `tests` | `unit` | `add-rows-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1853 | `test_solve_with_basis_dimension_mismatch` | 32 | `tests` | `unit` | `add-rows-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1894 | `test_solve_with_basis_non_alien_success` | 31 | `tests` | `unit` | `solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1935 | `test_cobre_highs_set_basis_non_alien_ffi_contract` | 51 | `tests` | `unit` | `alien-only,warm-start-config-flag` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2000 | `test_solve_with_basis_respects_alien_only_mode` | 48 | `tests` | `unit` | `alien-only,non-alien-first,solve-with-basis-trait,warm-start-config-flag` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2064 | `test_solve_with_basis_non_alien_fallback_on_reject` | 54 | `tests` | `unit` | `non-alien-first,clear-solver-state-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2123 | `test_clear_solver_state_keeps_model_loaded` | 14 | `tests` | `unit` | `clear-solver-state-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2141 | `test_clear_solver_state_panics_without_model` | 4 | `tests` | `unit` | `clear-solver-state-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2151 | `test_clear_solver_state_increments_count` | 16 | `tests` | `unit` | `clear-solver-state-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2176 | `test_clear_solver_state_keeps_model_loaded_cross_solve_consistency` | 21 | `tests` | `unit` | `clear-solver-state-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2266 | `test_research_probe_limit_status_on_ss11_lp` | 33 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2366 | `test_research_time_limit_zero_triggers_time_limit_status` | 32 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2408 | `test_research_iteration_limit_zero_triggers_iteration_limit_status` | 35 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2450 | `test_research_partial_solution_availability` | 40 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2494 | `test_research_restore_defaults_allows_subsequent_optimal_solve` | 90 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2590 | `test_research_iteration_limit_one_triggers_iteration_limit_status` | 51 | `research_tests_ticket_023` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 268 | `test_trait_compiles_as_generic_bound` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 273 | `test_solver_interface_send_bound` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 278 | `test_noop_solver_name` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 285 | `test_noop_solver_statistics_initial` | 9 | `tests` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 296 | `test_noop_solver_get_basis_noop` | 11 | `tests` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 309 | `test_noop_solver_solve_with_basis_returns_internal_error` | 8 | `tests` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 319 | `test_noop_solver_clear_solver_state_returns_unsupported` | 11 | `tests` | `unit` | `clear-solver-state-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 332 | `test_unsupported_display_format` | 7 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 341 | `test_noop_solver_all_methods` | 44 | `tests` | `unit` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 575 | `test_basis_new_dimensions_and_zero_fill` | 7 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 584 | `test_basis_new_empty` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 591 | `test_basis_debug_and_clone` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 603 | `test_solver_error_display_infeasible` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 609 | `test_solver_error_display_all_variants` | 24 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 635 | `test_solver_error_is_std_error` | 7 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 644 | `test_solver_statistics_default_all_zero` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 665 | `default_stats_has_zero_non_alien_rejections` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 671 | `default_stats_has_zero_clear_solver_counters` | 5 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 701 | `test_stage_template_construction` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 728 | `test_solver_error_display_all_branches` | 50 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 780 | `test_solver_error_is_std_error_all_variants` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 807 | `test_solution_view_to_owned` | 20 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 829 | `test_solution_view_is_copy` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 846 | `test_row_batch_construction` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 61 | `test_solver_highs_load_model_and_solve` | 30 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 94 | `test_solver_highs_load_model_replaces_previous` | 27 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 125 | `test_fixture_stage_template_data` | 21 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 148 | `test_fixture_row_batch_data` | 10 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 162 | `test_solver_highs_add_rows_tightens` | 28 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 193 | `test_solver_highs_add_rows_single_cut` | 32 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 229 | `test_solver_highs_set_row_bounds_state_change` | 35 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 268 | `test_solver_highs_set_col_bounds_basic` | 18 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 289 | `test_solver_highs_set_col_bounds_tightens` | 24 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 316 | `test_solver_highs_set_col_bounds_repatch` | 34 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 354 | `test_solver_highs_solve_dual_values` | 26 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 383 | `test_solver_highs_solve_dual_values_with_cuts` | 27 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 413 | `test_solver_highs_solve_reduced_costs` | 20 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 436 | `test_solver_highs_solve_iterations_reported` | 19 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 460 | `test_solver_highs_dual_normalization_cut_relevant_row` | 14 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 477 | `test_solver_highs_dual_normalization_sensitivity_check` | 29 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 509 | `test_solver_highs_dual_normalization_with_binding_cut` | 18 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 532 | `test_solver_highs_reset_preserves_statistics` | 44 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 581 | `test_solver_highs_statistics_initial` | 33 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 617 | `test_solver_highs_statistics_increment` | 41 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 663 | `test_solver_highs_name_returns_identifier` | 7 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 684 | `test_solver_highs_lifecycle_repeated_patch_solve` | 35 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 733 | `test_solver_highs_solve_infeasible` | 48 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 796 | `test_solver_highs_solve_unbounded` | 48 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 917 | `test_solver_highs_solve_time_limit` | 24 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 950 | `test_solver_highs_solve_iteration_limit` | 29 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 988 | `test_solver_highs_restore_defaults_after_limit` | 31 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1065 | `test_solver_highs_infeasible_with_rows` | 35 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1108 | `test_solver_highs_infeasible_with_presolve` | 41 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1159 | `test_solver_highs_unbounded_with_primal_ray` | 35 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1212 | `test_solver_highs_unbounded_or_infeasible` | 48 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1268 | `solve_equals_solve_owned` | 30 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1305 | `solve_borrows_internal_buffers` | 22 | `` | `integration` | `add-rows-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1334 | `solve_after_add_rows` | 24 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 651 | `test_bake_load_model_row_count` | 26 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 683 | `test_bake_empty_base_row_scale_with_cut_rows_appends_ones` | 20 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/baking.rs` | 722 | `test_bake_panics_on_nnz_overflow` | 42 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/ffi.rs` | 299 | `test_ffi_smoke_create_solve_destroy` | 61 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1363 | `test_highs_solver_create_and_name` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1370 | `test_highs_solver_send_bound` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1376 | `test_highs_solver_statistics_initial` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1388 | `test_highs_load_model_updates_dimensions` | 29 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1419 | `test_highs_add_rows_updates_dimensions` | 23 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1444 | `test_highs_set_row_bounds_no_panic` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1454 | `test_highs_set_col_bounds_no_panic` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1464 | `test_highs_set_bounds_empty_no_panic` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1477 | `test_highs_solve_basic_lp` | 31 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1513 | `test_highs_solve_with_cuts` | 32 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1549 | `test_highs_solve_after_rhs_patch` | 20 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1572 | `test_highs_solve_statistics_increment` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1592 | `test_highs_solve_preserves_stats` | 20 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1615 | `test_highs_solve_iterations_positive` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1630 | `test_highs_solve_time_positive` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1646 | `test_highs_solve_statistics_single` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1666 | `test_get_basis_valid_status_codes` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1694 | `test_get_basis_resizes_output` | 33 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1731 | `test_solve_warm_start_reproduces_cold_objective` | 37 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1773 | `test_solve_warm_start_extends_missing_rows_as_basic` | 32 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1814 | `test_solve_warm_start_non_alien_success` | 26 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1856 | `test_solve_warm_start_rejects_inconsistent_basis` | 57 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1922 | `test_solve_increments_clear_solver_count_per_call` | 35 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2026 | `test_research_probe_limit_status_on_ss11_lp` | 33 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2126 | `test_research_time_limit_zero_triggers_time_limit_status` | 32 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2168 | `test_research_iteration_limit_zero_triggers_iteration_limit_status` | 35 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2210 | `test_research_partial_solution_availability` | 40 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2254 | `test_research_restore_defaults_allows_subsequent_optimal_solve` | 90 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2350 | `test_research_iteration_limit_one_triggers_iteration_limit_status` | 51 | `research_tests_ticket_023` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 209 | `test_trait_compiles_as_generic_bound` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 214 | `test_solver_interface_send_bound` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 219 | `test_noop_solver_name` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 226 | `test_noop_solver_statistics_initial` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 237 | `test_noop_solver_get_basis_noop` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 250 | `test_noop_solver_solve_with_optional_basis_returns_internal_error` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 260 | `test_unsupported_display_format` | 7 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 269 | `test_noop_solver_all_methods` | 42 | `tests` | `unit` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 573 | `test_basis_new_dimensions_and_zero_fill` | 7 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 582 | `test_basis_new_empty` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 589 | `test_basis_debug_and_clone` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 601 | `test_solver_error_display_infeasible` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 607 | `test_solver_error_display_all_variants` | 30 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 639 | `test_solver_error_is_std_error` | 7 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 648 | `test_solver_statistics_default_all_zero` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 669 | `default_stats_has_zero_clear_solver_counters` | 5 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 699 | `test_stage_template_construction` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 726 | `test_solver_error_display_all_branches` | 60 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 788 | `test_solver_error_is_std_error_all_variants` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 821 | `test_solution_view_to_owned` | 20 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 843 | `test_solution_view_is_copy` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/src/types.rs` | 860 | `test_row_batch_construction` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 61 | `test_solver_highs_load_model_and_solve` | 32 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 96 | `test_solver_highs_load_model_replaces_previous` | 27 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 127 | `test_fixture_stage_template_data` | 21 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 150 | `test_fixture_row_batch_data` | 10 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 164 | `test_solver_highs_add_rows_tightens` | 28 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 195 | `test_solver_highs_add_rows_single_cut` | 32 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 231 | `test_solver_highs_set_row_bounds_state_change` | 35 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 270 | `test_solver_highs_set_col_bounds_basic` | 18 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 291 | `test_solver_highs_set_col_bounds_tightens` | 24 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 318 | `test_solver_highs_set_col_bounds_repatch` | 34 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 356 | `test_solver_highs_solve_dual_values` | 28 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 387 | `test_solver_highs_solve_dual_values_with_cuts` | 27 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 417 | `test_solver_highs_solve_reduced_costs` | 22 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 442 | `test_solver_highs_solve_iterations_reported` | 21 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 468 | `test_solver_highs_dual_normalization_cut_relevant_row` | 16 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 487 | `test_solver_highs_dual_normalization_sensitivity_check` | 29 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 519 | `test_solver_highs_dual_normalization_with_binding_cut` | 18 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 545 | `test_solver_highs_statistics_are_cumulative` | 27 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 577 | `test_solver_highs_statistics_initial` | 33 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 613 | `test_solver_highs_statistics_increment` | 41 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 659 | `test_solver_highs_name_returns_identifier` | 7 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 680 | `test_solver_highs_lifecycle_repeated_patch_solve` | 35 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 729 | `test_solver_highs_solve_infeasible` | 48 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 792 | `test_solver_highs_solve_unbounded` | 48 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 913 | `test_solver_highs_solve_time_limit` | 24 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 946 | `test_solver_highs_solve_iteration_limit` | 29 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 984 | `test_solver_highs_restore_defaults_after_limit` | 30 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1060 | `test_solver_highs_infeasible_with_rows` | 35 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1103 | `test_solver_highs_infeasible_with_presolve` | 41 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1154 | `test_solver_highs_unbounded_with_primal_ray` | 35 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1207 | `test_solver_highs_unbounded_or_infeasible` | 48 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1263 | `solve_equals_solve_owned` | 33 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1303 | `solve_borrows_internal_buffers` | 22 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1332 | `solve_after_add_rows` | 26 | `` | `integration` | `add-rows-trait` |  |
 | `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1361 | `solve_statistics_updated` | 16 | `` | `integration` | `generic` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1383 | `basis_dimensions_after_solve` | 25 | `` | `integration` | `add-rows-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1412 | `basis_cut_extension` | 24 | `` | `integration` | `add-rows-trait,solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1440 | `basis_warm_start_iterations` | 29 | `` | `integration` | `solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1474 | `test_basis_roundtrip` | 29 | `` | `integration` | `solve-with-basis-trait` |  |
-| `cobre-solver` | `crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs` | 86 | `non_alien_basis_loop_low_rejection_rate` | 51 | `` | `integration` | `solve-with-basis-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1383 | `basis_dimensions_after_solve` | 25 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1412 | `basis_cut_extension` | 22 | `` | `integration` | `add-rows-trait` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1438 | `basis_warm_start_iterations` | 29 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1472 | `test_basis_roundtrip` | 29 | `` | `integration` | `generic` |  |
+| `cobre-solver` | `crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs` | 70 | `non_alien_basis_loop_low_rejection_rate` | 44 | `` | `integration` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/broadcast.rs` | 188 | `test_round_trip_minimal_system` | 12 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/broadcast.rs` | 202 | `test_round_trip_populated_system` | 30 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/broadcast.rs` | 234 | `test_deserialize_corrupted_bytes` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/broadcast.rs` | 243 | `test_deserialize_empty_bytes` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/broadcast.rs` | 252 | `test_serialized_size_reasonable` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1046 | `test_parse_minimal_config` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1077 | `test_missing_forward_passes` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1095 | `test_missing_stopping_rules` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1111 | `test_nonexistent_file` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1124 | `test_parse_full_config` | 97 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1224 | `test_invalid_json_syntax` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1238 | `test_stopping_rule_variants` | 45 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1286 | `test_unknown_stopping_rule_type` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1300 | `test_config_has_no_version_field` | 9 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1313 | `test_schema_field_accepted` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1335 | `test_invalid_policy_mode_rejected` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1350 | `test_legacy_version_field_silently_ignored` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1369 | `test_truncation_method_accepted` | 24 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1396 | `test_estimation_config_defaults` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1411 | `test_estimation_config_order_selection_fixed_deprecated` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1429 | `test_estimation_config_order_selection_pacf` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1448 | `test_estimation_config_unknown_order_selection` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1472 | `test_exports_stochastic_explicit_true` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1491 | `test_exports_stochastic_defaults_to_false` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1527 | `test_training_scenario_source_default` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1541 | `test_training_scenario_source_explicit` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1560 | `test_simulation_scenario_source_fallback` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1575 | `test_simulation_scenario_source_independent` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1592 | `test_scenario_source_historical_inflow_valid` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1603 | `test_scenario_source_historical_load_rejected` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1623 | `test_scenario_source_historical_ncs_rejected` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1642 | `test_scenario_source_seed_required_for_oos` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1660 | `test_scenario_source_historical_years_range` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1677 | `test_scenario_source_historical_years_without_historical_scheme` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1699 | `test_dead_sampling_scheme_field_removed` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1716 | `max_active_per_stage_serde_roundtrip` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1736 | `max_active_per_stage_absent_defaults_none` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1756 | `test_boundary_policy_present` | 21 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1780 | `test_boundary_policy_absent` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1799 | `test_boundary_policy_explicit_null` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1818 | `test_policy_config_default_boundary_is_none` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/config.rs` | 1828 | `test_boundary_policy_round_trip` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1089 | `test_parse_minimal_config` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1120 | `test_missing_forward_passes` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1138 | `test_missing_stopping_rules` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1154 | `test_nonexistent_file` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1167 | `test_parse_full_config` | 97 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1267 | `test_invalid_json_syntax` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1281 | `test_stopping_rule_variants` | 45 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1329 | `test_unknown_stopping_rule_type` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1343 | `test_config_has_no_version_field` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1356 | `test_schema_field_accepted` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1378 | `test_invalid_policy_mode_rejected` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1393 | `test_legacy_version_field_silently_ignored` | 14 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1412 | `test_truncation_method_accepted` | 24 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1439 | `test_estimation_config_defaults` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1454 | `test_estimation_config_order_selection_fixed_deprecated` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1472 | `test_estimation_config_order_selection_pacf` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1491 | `test_estimation_config_unknown_order_selection` | 18 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1515 | `test_exports_stochastic_explicit_true` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1534 | `test_exports_stochastic_defaults_to_false` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1570 | `test_training_scenario_source_default` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1584 | `test_training_scenario_source_explicit` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1603 | `test_simulation_scenario_source_fallback` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1618 | `test_simulation_scenario_source_independent` | 14 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1635 | `test_scenario_source_historical_inflow_valid` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1646 | `test_scenario_source_historical_load_rejected` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1666 | `test_scenario_source_historical_ncs_rejected` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1685 | `test_scenario_source_seed_required_for_oos` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1703 | `test_scenario_source_historical_years_range` | 14 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1720 | `test_scenario_source_historical_years_without_historical_scheme` | 18 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1742 | `test_dead_sampling_scheme_field_removed` | 14 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1759 | `max_active_per_stage_serde_roundtrip` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1779 | `max_active_per_stage_absent_defaults_none` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1799 | `test_boundary_policy_present` | 21 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1823 | `test_boundary_policy_absent` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1842 | `test_boundary_policy_explicit_null` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1861 | `test_policy_config_default_boundary_is_none` | 6 | `tests` | `unit` | `warm-start-config-flag` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1871 | `test_boundary_policy_round_trip` | 17 | `tests` | `unit` | `warm-start-config-flag` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1921 | `warm_start_basis_mode_returns_migration_error` | 11 | `tests` | `unit` | `warm-start-config-flag,canonical-config-flag` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1934 | `warm_start_basis_mode_non_alien_also_rejected` | 8 | `tests` | `unit` | `warm-start-config-flag,canonical-config-flag` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1944 | `config_without_warm_start_basis_mode_parses_cleanly` | 5 | `tests` | `unit` | `warm-start-config-flag,canonical-config-flag` |  |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1954 | `canonical_state_key_is_obsolete_but_parses_cleanly` | 22 | `tests` | `unit` | `canonical-config-flag` |  |
 | `cobre-io` | `crates/cobre-io/src/constraints/bounds.rs` | 989 | `test_thermal_valid_3_rows_sorted` | 23 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/constraints/bounds.rs` | 1015 | `test_thermal_missing_stage_id` | 26 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/constraints/bounds.rs` | 1044 | `test_thermal_nan_max_generation` | 19 | `tests` | `unit` | `generic` |  |
@@ -1723,16 +1747,16 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-io` | `crates/cobre-io/src/output/convergence_reader.rs` | 386 | `read_convergence_summary_empty_file` | 31 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/convergence_reader.rs` | 419 | `read_convergence_summary_missing_file` | 11 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/convergence_reader.rs` | 432 | `read_convergence_summary_single_row` | 14 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1326 | `codes_json_roundtrip` | 37 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1367 | `entities_csv_correct_rows` | 38 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1407 | `entities_csv_entity_type_order` | 23 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1432 | `entities_csv_system_id_is_zero` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1449 | `variables_csv_total_columns` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1464 | `variables_csv_has_required_columns_in_header` | 39 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1505 | `variables_csv_nullable_reflects_schema` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1531 | `bounds_parquet_roundtrip` | 86 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1621 | `state_dictionary_hydro_storage_entries` | 38 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1661 | `state_dictionary_version_field` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1325 | `codes_json_roundtrip` | 37 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1366 | `entities_csv_correct_rows` | 38 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1406 | `entities_csv_entity_type_order` | 23 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1431 | `entities_csv_system_id_is_zero` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1448 | `variables_csv_total_columns` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1463 | `variables_csv_has_required_columns_in_header` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1504 | `variables_csv_nullable_reflects_schema` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1530 | `bounds_parquet_roundtrip` | 86 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1620 | `state_dictionary_hydro_storage_entries` | 38 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/dictionary.rs` | 1660 | `state_dictionary_version_field` | 15 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/error.rs` | 113 | `display_io_error_contains_path_and_source` | 13 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/error.rs` | 128 | `display_serialization_error_contains_entity_and_message` | 12 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/error.rs` | 142 | `display_schema_error_contains_file_and_column` | 20 | `tests` | `unit` | `generic` |  |
@@ -1832,29 +1856,29 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-io` | `crates/cobre-io/src/output/results_writer.rs` | 781 | `training_metadata_has_max_iterations` | 23 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/scaling_report.rs` | 54 | `write_and_read_back_json` | 15 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/scaling_report.rs` | 71 | `tmp_file_is_cleaned_up` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 380 | `parquet_writer_config_default_values` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 390 | `costs_schema_field_count_and_names` | 40 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 432 | `costs_schema_types_and_nullability` | 46 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 480 | `hydros_schema_field_count_and_names` | 47 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 529 | `hydros_schema_nullable_fields` | 48 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 579 | `thermals_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 589 | `thermals_schema_gnl_fields_nullable` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 599 | `exchanges_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 609 | `buses_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 619 | `pumping_stations_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 629 | `contracts_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 639 | `non_controllables_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 649 | `inflow_lags_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 659 | `inflow_lags_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 671 | `generic_violations_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 681 | `convergence_schema_field_count_and_types` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 700 | `convergence_schema_nullable_fields` | 25 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 727 | `iteration_timing_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 737 | `iteration_timing_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 749 | `rank_timing_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 759 | `rank_timing_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 771 | `cut_selection_schema_field_count_and_types` | 29 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 802 | `all_schema_functions_return_valid_schemas` | 57 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 379 | `parquet_writer_config_default_values` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 389 | `costs_schema_field_count_and_names` | 40 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 431 | `costs_schema_types_and_nullability` | 46 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 479 | `hydros_schema_field_count_and_names` | 47 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 528 | `hydros_schema_nullable_fields` | 48 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 578 | `thermals_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 588 | `thermals_schema_gnl_fields_nullable` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 598 | `exchanges_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 608 | `buses_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 618 | `pumping_stations_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 628 | `contracts_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 638 | `non_controllables_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 648 | `inflow_lags_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 658 | `inflow_lags_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 670 | `generic_violations_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 680 | `convergence_schema_field_count_and_types` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 699 | `convergence_schema_nullable_fields` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 726 | `iteration_timing_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 736 | `iteration_timing_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 748 | `rank_timing_schema_field_count` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 758 | `rank_timing_schema_all_non_nullable` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 770 | `cut_selection_schema_field_count_and_types` | 29 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/schemas.rs` | 801 | `all_schema_functions_return_valid_schemas` | 57 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 1727 | `build_costs_batch_from_two_stages` | 16 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 1745 | `build_hydros_batch_derived_columns` | 68 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 1815 | `build_exchanges_batch_net_flow_and_losses` | 46 | `tests` | `unit` | `generic` |  |
@@ -1867,9 +1891,9 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 2019 | `write_scenario_parquet_roundtrip_costs_row_count` | 34 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 2055 | `write_scenario_parquet_roundtrip_hydros_derived_mwh` | 68 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/simulation_writer.rs` | 2125 | `write_scenario_atomic_no_tmp_file_remaining` | 23 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 363 | `write_and_read_back` | 55 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 420 | `write_empty_rows` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 438 | `retry_histogram_sparse_encoding` | 82 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 356 | `write_and_read_back` | 55 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 413 | `write_empty_rows` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-io` | `crates/cobre-io/src/output/solver_stats_writer.rs` | 431 | `retry_histogram_sparse_encoding` | 80 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/stochastic.rs` | 785 | `write_then_read_round_trips` | 30 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/stochastic.rs` | 821 | `write_creates_parent_directory` | 17 | `tests` | `unit` | `generic` |  |
 | `cobre-io` | `crates/cobre-io/src/output/stochastic.rs` | 844 | `write_correct_schema` | 31 | `tests` | `unit` | `generic` |  |
@@ -2433,14 +2457,15 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-cli` | `crates/cobre-cli/src/banner.rs` | 83 | `test_render_banner_contains_version` | 8 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/banner.rs` | 93 | `test_render_banner_contains_unicode_busbars` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/banner.rs` | 100 | `test_print_banner_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 367 | `broadcast_value_local_round_trips_simple` | 9 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 381 | `broadcast_value_local_round_trips_vec` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 393 | `broadcast_value_local_round_trips_config_like` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 415 | `broadcast_value_returns_err_when_root_passes_none` | 10 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 434 | `broadcast_value_round_trips_u64` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 450 | `broadcast_opening_tree_round_trips_via_postcard` | 15 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 474 | `broadcast_config_propagates_training_enabled` | 21 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 502 | `broadcast_optional_opening_tree_local_round_trips` | 39 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 325 | `broadcast_value_local_round_trips_simple` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 339 | `broadcast_value_local_round_trips_vec` | 6 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 351 | `broadcast_value_local_round_trips_config_like` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 373 | `broadcast_value_returns_err_when_root_passes_none` | 10 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 392 | `broadcast_value_round_trips_u64` | 6 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 408 | `broadcast_opening_tree_round_trips_via_postcard` | 15 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 432 | `broadcast_config_propagates_training_enabled` | 21 | `tests` | `unit` | `warm-start-config-flag` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 456 | `broadcast_config_roundtrips_via_postcard_after_warm_start_basis_mode_deletion` | 43 | `tests` | `unit` | `warm-start-config-flag` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 506 | `broadcast_optional_opening_tree_local_round_trips` | 39 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/init.rs` | 193 | `test_init_list_prints_template_names` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/init.rs` | 200 | `test_init_list_execute_returns_ok` | 9 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/init.rs` | 211 | `test_init_unknown_template_returns_validation_error` | 14 | `tests` | `unit` | `generic` |  |
@@ -2457,14 +2482,14 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-cli` | `crates/cobre-cli/src/commands/report.rs` | 303 | `read_optional_returns_value_for_existing_file` | 11 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/report.rs` | 316 | `read_optional_returns_internal_error_for_malformed_json` | 9 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/report.rs` | 329 | `read_training_metadata_returns_io_error_for_missing_file` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/run.rs` | 1804 | `test_resolve_thread_count_cli_value` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/run.rs` | 1809 | `test_resolve_thread_count_default` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 267 | `summary_args_parses_output_dir` | 6 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 275 | `construct_training_summary_from_metadata` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 296 | `convergence_fallback_uses_metadata_gap_percent` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 306 | `convergence_fallback_gap_none_when_metadata_has_no_gap` | 8 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 316 | `build_training_summary_gap_defaults_to_zero_when_none` | 11 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 329 | `build_training_summary_converged_at_none_when_metadata_has_none` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/run.rs` | 1767 | `test_resolve_thread_count_cli_value` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/run.rs` | 1772 | `test_resolve_thread_count_default` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 265 | `summary_args_parses_output_dir` | 6 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 273 | `construct_training_summary_from_metadata` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 294 | `convergence_fallback_uses_metadata_gap_percent` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 304 | `convergence_fallback_gap_none_when_metadata_has_no_gap` | 8 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 314 | `build_training_summary_gap_defaults_to_zero_when_none` | 11 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/commands/summary.rs` | 327 | `build_training_summary_converged_at_none_when_metadata_has_none` | 11 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/validate.rs` | 170 | `format_report_contains_error_label` | 8 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/validate.rs` | 180 | `format_report_contains_warning_label` | 8 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/commands/validate.rs` | 190 | `format_report_contains_file_path` | 8 | `tests` | `unit` | `generic` |  |
@@ -2510,48 +2535,48 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-cli` | `crates/cobre-cli/src/progress.rs` | 595 | `test_simulation_progress_five_events_no_panic` | 37 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/progress.rs` | 634 | `test_simulation_progress_accumulator_costs_collected_correctly` | 69 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/progress.rs` | 705 | `test_simulation_progress_accumulator_three_events_no_panic` | 53 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 869 | `test_format_duration_seconds` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 874 | `test_format_duration_minutes` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 879 | `test_format_duration_hours` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 884 | `test_format_duration_exactly_zero` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 889 | `test_format_duration_exactly_60s` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 894 | `test_format_duration_exactly_1h` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 899 | `test_format_summary_training_only` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 914 | `test_format_summary_with_simulation` | 32 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 948 | `test_format_summary_contains_bounds` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 966 | `test_format_summary_converged_detail` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 986 | `test_format_summary_non_converged_shows_reason` | 18 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1006 | `test_format_summary_time_3m42s` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1024 | `test_format_summary_scientific_notation` | 16 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1042 | `test_format_summary_output_dir` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1057 | `test_format_summary_cut_stats` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1076 | `test_print_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1082 | `test_print_summary_with_simulation_does_not_panic` | 23 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1169 | `format_hydro_model_summary_with_fpha_contains_key_terms` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1189 | `format_hydro_model_summary_without_fpha_contains_constant_not_fpha` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1205 | `format_hydro_model_summary_contains_header` | 9 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1217 | `format_hydro_model_summary_mixed_production_line` | 13 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1233 | `format_hydro_model_summary_all_fpha_shows_filename` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1253 | `format_hydro_model_summary_singular_evaporation` | 19 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1274 | `format_hydro_model_summary_plural_evaporation` | 9 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1286 | `print_hydro_model_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1292 | `print_hydro_model_summary_all_constant_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1298 | `print_hydro_model_summary_all_fpha_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1307 | `test_evaporation_line_all_midpoint` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1332 | `test_evaporation_line_all_user_supplied` | 30 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1365 | `test_evaporation_line_mixed` | 26 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1394 | `test_evaporation_line_no_evaporation` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1443 | `print_provenance_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1449 | `print_provenance_summary_deterministic_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1455 | `format_provenance_summary_contains_all_section_keys` | 28 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1485 | `format_provenance_summary_full_estimation_includes_ar_detail` | 12 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1499 | `format_provenance_summary_deterministic_no_ar_detail` | 17 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1518 | `format_provenance_summary_user_file_source` | 22 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1546 | `test_format_rank_list_empty` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1551 | `test_format_rank_list_single` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1556 | `test_format_rank_list_contiguous` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1561 | `test_format_rank_list_non_contiguous` | 3 | `tests` | `unit` | `generic` |  |
-| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1566 | `test_format_rank_list_mixed` | 6 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 872 | `test_format_duration_seconds` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 877 | `test_format_duration_minutes` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 882 | `test_format_duration_hours` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 887 | `test_format_duration_exactly_zero` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 892 | `test_format_duration_exactly_60s` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 897 | `test_format_duration_exactly_1h` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 902 | `test_format_summary_training_only` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 917 | `test_format_summary_with_simulation` | 31 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 950 | `test_format_summary_contains_bounds` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 968 | `test_format_summary_converged_detail` | 18 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 988 | `test_format_summary_non_converged_shows_reason` | 18 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1008 | `test_format_summary_time_3m42s` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1026 | `test_format_summary_scientific_notation` | 16 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1044 | `test_format_summary_output_dir` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1059 | `test_format_summary_cut_stats` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1078 | `test_print_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1084 | `test_print_summary_with_simulation_does_not_panic` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1170 | `format_hydro_model_summary_with_fpha_contains_key_terms` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1190 | `format_hydro_model_summary_without_fpha_contains_constant_not_fpha` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1206 | `format_hydro_model_summary_contains_header` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1218 | `format_hydro_model_summary_mixed_production_line` | 13 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1234 | `format_hydro_model_summary_all_fpha_shows_filename` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1254 | `format_hydro_model_summary_singular_evaporation` | 19 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1275 | `format_hydro_model_summary_plural_evaporation` | 9 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1287 | `print_hydro_model_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1293 | `print_hydro_model_summary_all_constant_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1299 | `print_hydro_model_summary_all_fpha_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1308 | `test_evaporation_line_all_midpoint` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1333 | `test_evaporation_line_all_user_supplied` | 30 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1366 | `test_evaporation_line_mixed` | 26 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1395 | `test_evaporation_line_no_evaporation` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1444 | `print_provenance_summary_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1450 | `print_provenance_summary_deterministic_does_not_panic` | 4 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1456 | `format_provenance_summary_contains_all_section_keys` | 28 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1486 | `format_provenance_summary_full_estimation_includes_ar_detail` | 12 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1500 | `format_provenance_summary_deterministic_no_ar_detail` | 17 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1519 | `format_provenance_summary_user_file_source` | 22 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1547 | `test_format_rank_list_empty` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1552 | `test_format_rank_list_single` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1557 | `test_format_rank_list_contiguous` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1562 | `test_format_rank_list_non_contiguous` | 3 | `tests` | `unit` | `generic` |  |
+| `cobre-cli` | `crates/cobre-cli/src/summary.rs` | 1567 | `test_format_rank_list_mixed` | 6 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/templates.rs` | 150 | `test_available_templates_contains_1dtoy` | 4 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/templates.rs` | 156 | `test_find_template_1dtoy_returns_some` | 5 | `tests` | `unit` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/src/templates.rs` | 163 | `test_find_template_unknown_returns_none` | 3 | `tests` | `unit` | `generic` |  |
@@ -2614,7 +2639,7 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-cli` | `crates/cobre-cli/tests/init.rs` | 55 | `test_init_no_args_fails` | 3 | `` | `integration` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/tests/init.rs` | 60 | `test_init_existing_non_empty_dir_fails` | 11 | `` | `integration` | `generic` |  |
 | `cobre-cli` | `crates/cobre-cli/tests/init.rs` | 73 | `test_init_force_overwrites` | 15 | `` | `integration` | `generic` |  |
-| `cobre-python` | `crates/cobre-python/src/run.rs` | 986 | `prepare_stochastic_succeeds_for_d01_case_via_python_path` | 25 | `tests` | `unit` | `generic` |  |
+| `cobre-python` | `crates/cobre-python/src/run.rs` | 958 | `prepare_stochastic_succeeds_for_d01_case_via_python_path` | 25 | `tests` | `unit` | `generic` |  |
 | `cobre-comm` | `crates/cobre-comm/src/factory.rs` | 450 | `test_available_backends_contains_local` | 7 | `tests` | `unit` | `generic` |  |
 | `cobre-comm` | `crates/cobre-comm/src/factory.rs` | 460 | `test_available_backends_no_feature_exact` | 3 | `tests` | `unit` | `generic` |  |
 | `cobre-comm` | `crates/cobre-comm/src/factory.rs` | 473 | `test_mpi_launch_detected_false_by_default` | 18 | `tests` | `unit` | `generic` |  |
@@ -3482,77 +3507,37 @@ All 3413 tests sorted by (crate, file, line).
 
 ### Epic 03 — `AlienOnly` warm-start removal (`alien-only`, `warm-start-config-flag`, `broadcast-warm-start-field`)
 
-**Count:** 3
+**Count:** 7
 
 | Crate | File | Line | Function | Category | Guards |
 | ----- | ---- | ---: | -------- | -------- | ------ |
-| `cobre-sddp` | `crates/cobre-sddp/tests/basis_reconstruct_churn.rs` | 847 | `simulate_invariant_zero_non_alien_rejections_under_churn` | `integration` | `alien-only,non-alien-first` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1935 | `test_cobre_highs_set_basis_non_alien_ffi_contract` | `unit` | `alien-only,warm-start-config-flag` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2000 | `test_solve_with_basis_respects_alien_only_mode` | `unit` | `alien-only,non-alien-first,solve-with-basis-trait,warm-start-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1861 | `test_policy_config_default_boundary_is_none` | `unit` | `warm-start-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1871 | `test_boundary_policy_round_trip` | `unit` | `warm-start-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1921 | `warm_start_basis_mode_returns_migration_error` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1934 | `warm_start_basis_mode_non_alien_also_rejected` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1944 | `config_without_warm_start_basis_mode_parses_cleanly` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 432 | `broadcast_config_propagates_training_enabled` | `unit` | `warm-start-config-flag` |
+| `cobre-cli` | `crates/cobre-cli/src/commands/broadcast.rs` | 456 | `broadcast_config_roundtrips_via_postcard_after_warm_start_basis_mode_deletion` | `unit` | `warm-start-config-flag` |
 
 ### Epic 04 — Canonical-state strategy removal (`canonical-disabled`, `canonical-config-flag`, `broadcast-canonical-field`, `clear-solver-state-trait`, `solve-with-basis-trait`)
 
-**Count:** 48
+**Count:** 4
 
 | Crate | File | Line | Function | Category | Guards |
 | ----- | ---- | ---: | -------- | -------- | ------ |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1734 | `single_stage_system_produces_no_cuts` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1826 | `two_stage_system_two_trial_points_generates_two_cuts_at_stage_0` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 1928 | `cut_inserted_with_correct_stage_iteration_and_forward_pass_index` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2027 | `no_cuts_generated_at_last_stage` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2124 | `elapsed_ms_is_non_negative` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2214 | `infeasible_solver_returns_sddp_infeasible_error` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2341 | `cut_coefficients_and_intercept_match_dual_extraction_formula` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2456 | `cut_gradient_sign_physically_correct` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2574 | `cut_is_tight_at_trial_point` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2692 | `single_rank_backward_pass_with_local_backend_produces_correct_fcf` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2790 | `forward_pass_index_matches_global_scenario_index` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 2918 | `warm_start_uses_prepopulated_forward_basis` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3025 | `multi_opening_subsequent_openings_use_internal_hotstart` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3135 | `backward_solver_error_propagates` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3243 | `test_backward_pass_parallel_cut_determinism` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3676 | `backward_pass_load_patches_applied` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 3851 | `backward_pass_no_load_buses_unchanged` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4014 | `backward_pass_cut_coefficients_unaffected` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4193 | `per_stage_cut_sync_invariant_after_bug1_fix` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4316 | `metadata_sync_updates_active_count_and_last_active_iter` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4600 | `work_stealing_produces_identical_results_across_worker_counts` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4789 | `work_stealing_produces_identical_results_across_worker_counts_clear_solver` | `unit` | `canonical-clearsolver,canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/backward.rs` | 4848 | `backward_pass_panics_when_clear_solver_unsupported` | `unit` | `canonical-clearsolver,canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 296 | `canonical_state_disabled_parses_to_disabled` | `unit` | `canonical-disabled,canonical-clearsolver,canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 306 | `canonical_state_clear_solver_parses_to_clear_solver` | `unit` | `canonical-disabled,canonical-clearsolver,canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 316 | `canonical_state_missing_key_defaults_to_disabled` | `unit` | `canonical-disabled,canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/src/setup/params.rs` | 328 | `canonical_state_invalid_value_returns_validation_error` | `unit` | `canonical-config-flag` |
-| `cobre-sddp` | `crates/cobre-sddp/tests/canonical_state_strategy.rs` | 545 | `backward_pass_under_disabled_has_zero_clear_solver_count` | `integration` | `canonical-disabled,canonical-clearsolver` |
-| `cobre-sddp` | `crates/cobre-sddp/tests/integration.rs` | 2079 | `backward_pass_uses_delta_batch_on_iter_2` | `integration` | `canonical-disabled,canonical-config-flag` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1780 | `test_get_basis_resizes_output` | `unit` | `solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1815 | `test_solve_with_basis_warm_start` | `unit` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1853 | `test_solve_with_basis_dimension_mismatch` | `unit` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1894 | `test_solve_with_basis_non_alien_success` | `unit` | `solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2000 | `test_solve_with_basis_respects_alien_only_mode` | `unit` | `alien-only,non-alien-first,solve-with-basis-trait,warm-start-config-flag` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2064 | `test_solve_with_basis_non_alien_fallback_on_reject` | `unit` | `non-alien-first,clear-solver-state-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2123 | `test_clear_solver_state_keeps_model_loaded` | `unit` | `clear-solver-state-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2141 | `test_clear_solver_state_panics_without_model` | `unit` | `clear-solver-state-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2151 | `test_clear_solver_state_increments_count` | `unit` | `clear-solver-state-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 2176 | `test_clear_solver_state_keeps_model_loaded_cross_solve_consistency` | `unit` | `clear-solver-state-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 285 | `test_noop_solver_statistics_initial` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 296 | `test_noop_solver_get_basis_noop` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 309 | `test_noop_solver_solve_with_basis_returns_internal_error` | `unit` | `clear-solver-state-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 319 | `test_noop_solver_clear_solver_state_returns_unsupported` | `unit` | `clear-solver-state-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1383 | `basis_dimensions_after_solve` | `integration` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1412 | `basis_cut_extension` | `integration` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1440 | `basis_warm_start_iterations` | `integration` | `solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1474 | `test_basis_roundtrip` | `integration` | `solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/ffi_set_basis_non_alien_smoke.rs` | 86 | `non_alien_basis_loop_low_rejection_rate` | `integration` | `solve-with-basis-trait` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1921 | `warm_start_basis_mode_returns_migration_error` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1934 | `warm_start_basis_mode_non_alien_also_rejected` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1944 | `config_without_warm_start_basis_mode_parses_cleanly` | `unit` | `warm-start-config-flag,canonical-config-flag` |
+| `cobre-io` | `crates/cobre-io/src/config.rs` | 1954 | `canonical_state_key_is_obsolete_but_parses_cleanly` | `unit` | `canonical-config-flag` |
 
 ### Epic 05 — Non-baked template removal (`non-baked`, `stored-cut-row-offset`, `add-rows-trait`)
 
-**Count:** 35
+**Count:** 36
 
 | Crate | File | Line | Function | Category | Guards |
 | ----- | ---- | ---: | -------- | -------- | ------ |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 782 | `test_slot_lookup_growth_safe_in_release` | `unit` | `stored-cut-row-offset` |
-| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 831 | `test_stored_cut_row_offset_skips_baked_rows` | `unit` | `stored-cut-row-offset` |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 783 | `test_slot_lookup_growth_safe_in_release` | `unit` | `stored-cut-row-offset` |
+| `cobre-sddp` | `crates/cobre-sddp/src/basis_reconstruct.rs` | 832 | `test_stored_cut_row_offset_skips_baked_rows` | `unit` | `stored-cut-row-offset` |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 2309 | `test_penalty_slack_absorbs_negative_inflow` | `unit` | `add-rows-trait` |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 3482 | `fpha_solve_one_hydro_optimal` | `unit` | `add-rows-trait,fpha-slow` |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 3537 | `fpha_solve_hyperplane_constraints_hold` | `unit` | `add-rows-trait,fpha-slow` |
@@ -3562,30 +3547,31 @@ All 3413 tests sorted by (crate, file, line).
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 5082 | `evap_violation_slacks_near_zero_feasible_constraint` | `unit` | `add-rows-trait` |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 5143 | `evap_storage_fixing_dual_differs_from_no_evaporation` | `unit` | `add-rows-trait` |
 | `cobre-sddp` | `crates/cobre-sddp/src/lp_builder/template.rs` | 5217 | `evap_bound_prevents_dump_valve` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1468 | `test_highs_load_model_updates_dimensions` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1499 | `test_highs_add_rows_updates_dimensions` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1557 | `test_highs_solve_basic_lp` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1593 | `test_highs_solve_with_cuts` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1629 | `test_highs_solve_after_rhs_patch` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1815 | `test_solve_with_basis_warm_start` | `unit` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1853 | `test_solve_with_basis_dimension_mismatch` | `unit` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 341 | `test_noop_solver_all_methods` | `unit` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 125 | `test_fixture_stage_template_data` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 148 | `test_fixture_row_batch_data` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 162 | `test_solver_highs_add_rows_tightens` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 193 | `test_solver_highs_add_rows_single_cut` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 229 | `test_solver_highs_set_row_bounds_state_change` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 268 | `test_solver_highs_set_col_bounds_basic` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 354 | `test_solver_highs_solve_dual_values` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 383 | `test_solver_highs_solve_dual_values_with_cuts` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 477 | `test_solver_highs_dual_normalization_sensitivity_check` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 509 | `test_solver_highs_dual_normalization_with_binding_cut` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 663 | `test_solver_highs_name_returns_identifier` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 684 | `test_solver_highs_lifecycle_repeated_patch_solve` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1305 | `solve_borrows_internal_buffers` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1334 | `solve_after_add_rows` | `integration` | `add-rows-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1383 | `basis_dimensions_after_solve` | `integration` | `add-rows-trait,solve-with-basis-trait` |
-| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1412 | `basis_cut_extension` | `integration` | `add-rows-trait,solve-with-basis-trait` |
+| `cobre-sddp` | `crates/cobre-sddp/src/stage_solve.rs` | 469 | `run_stage_solve_warm_start_excess_basic_demotes` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1388 | `test_highs_load_model_updates_dimensions` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1419 | `test_highs_add_rows_updates_dimensions` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1477 | `test_highs_solve_basic_lp` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1513 | `test_highs_solve_with_cuts` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1549 | `test_highs_solve_after_rhs_patch` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1731 | `test_solve_warm_start_reproduces_cold_objective` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/highs.rs` | 1773 | `test_solve_warm_start_extends_missing_rows_as_basic` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/src/trait_def.rs` | 269 | `test_noop_solver_all_methods` | `unit` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 127 | `test_fixture_stage_template_data` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 150 | `test_fixture_row_batch_data` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 164 | `test_solver_highs_add_rows_tightens` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 195 | `test_solver_highs_add_rows_single_cut` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 231 | `test_solver_highs_set_row_bounds_state_change` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 270 | `test_solver_highs_set_col_bounds_basic` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 356 | `test_solver_highs_solve_dual_values` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 387 | `test_solver_highs_solve_dual_values_with_cuts` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 487 | `test_solver_highs_dual_normalization_sensitivity_check` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 519 | `test_solver_highs_dual_normalization_with_binding_cut` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 659 | `test_solver_highs_name_returns_identifier` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 680 | `test_solver_highs_lifecycle_repeated_patch_solve` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1303 | `solve_borrows_internal_buffers` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1332 | `solve_after_add_rows` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1383 | `basis_dimensions_after_solve` | `integration` | `add-rows-trait` |
+| `cobre-solver` | `crates/cobre-solver/tests/conformance.rs` | 1412 | `basis_cut_extension` | `integration` | `add-rows-trait` |
 
 ## 4. Parameterization Candidates
 

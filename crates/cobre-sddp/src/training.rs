@@ -586,7 +586,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             crate::config::CutManagementConfig {
                 cut_selection,
                 budget,
-                canonical_state_strategy,
                 ..
             },
         events:
@@ -834,7 +833,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             metadata_sync_buf: &mut bwd_metadata_sync_buf,
             global_increments_buf: &mut bwd_global_increments_buf,
             real_states_buf: &mut bwd_real_states_buf,
-            canonical_state_strategy,
         };
 
         let backward_result = match run_backward_pass(
@@ -1362,7 +1360,10 @@ mod tests {
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
         fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            _basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_first && call == 0 {
@@ -1387,18 +1388,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {
-            self.call_count = 0;
-        }
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -1690,7 +1680,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1786,7 +1775,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -1900,7 +1888,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -2059,7 +2046,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2153,7 +2139,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2244,7 +2229,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2343,7 +2327,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -2452,7 +2435,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -2571,7 +2553,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -2701,7 +2682,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2801,7 +2781,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),
@@ -2918,7 +2897,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -3012,7 +2990,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -3698,7 +3675,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation; n_stages],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: Some(tx),

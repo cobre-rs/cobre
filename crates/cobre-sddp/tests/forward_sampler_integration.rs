@@ -48,8 +48,7 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    CanonicalStateStrategy, InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet,
-    StudySetup,
+    InflowNonNegativityMethod, StoppingMode, StoppingRule, StoppingRuleSet, StudySetup,
     hydro_models::PrepareHydroModelsResult,
     setup::{ConstructionConfig, prepare_stochastic},
 };
@@ -518,7 +517,6 @@ fn run_programmatic(
         cut_activity_tolerance: 0.0,
         budget: None,
         export_states: false,
-        canonical_state_strategy: CanonicalStateStrategy::default(),
     };
     let mut setup =
         StudySetup::from_broadcast_params(system, stochastic, config, hydro_models, source, source)
@@ -842,7 +840,6 @@ fn run_with_setup(
         cut_activity_tolerance: 0.0,
         budget: None,
         export_states: false,
-        canonical_state_strategy: CanonicalStateStrategy::default(),
     };
     let mut setup =
         StudySetup::from_broadcast_params(system, stochastic, config, hydro_models, source, source)

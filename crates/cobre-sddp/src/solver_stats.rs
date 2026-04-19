@@ -28,18 +28,19 @@ pub struct SolverStatsDelta {
     /// Total retry attempts across all retried solves.
     pub retry_attempts: u64,
 
-    /// Number of `solve_with_basis` calls.
+    /// Number of warm-start `solve(Some(&basis))` calls.
     pub basis_offered: u64,
 
     /// Times the offered basis was rejected because `isBasisConsistent` returned false.
     pub basis_consistency_failures: u64,
 
-    /// Total `clear_solver_state` calls across all solvers in this phase.
+    /// Total FFI `Highs_clearSolver` calls across all solvers in this phase.
     ///
-    /// Non-zero under `CanonicalStateStrategy::ClearSolver`; zero under `Disabled`.
+    /// Incremented once per `HighsSolver::solve` call to deliver the
+    /// solve-to-solve independence contract.
     pub clear_solver_count: u64,
 
-    /// `clear_solver_state` calls that returned an FFI error in this phase.
+    /// `Highs_clearSolver` calls that returned an FFI error in this phase.
     ///
     /// Should be zero in a healthy `HiGHS` build.
     pub clear_solver_failures: u64,

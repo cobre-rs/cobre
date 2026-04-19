@@ -317,7 +317,7 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
 /// and returns `(immediate_cost, SimulationStageResult)`. When a warm-start
 /// basis is provided, the LP is solved via slot-tracked `reconstruct_basis` then
-/// `solve_with_basis`; otherwise it falls back to a cold-start `solve`. The
+/// `solve(Some(&basis))`; otherwise it falls back to a cold-start `solve(None)`. The
 /// warm-start basis is a read-only, per-stage artifact from training, so
 /// determinism is preserved.
 ///
@@ -916,7 +916,7 @@ fn dispatch_scenario_result(
 /// owns its solver, patch buffer, and current-state buffer exclusively — there
 /// is no shared mutable state between workers. When `stage_bases` provides a
 /// per-stage basis from the training checkpoint, each stage LP is warm-started
-/// via `solve_with_basis`; otherwise it falls back to a cold-start `solve`.
+/// via `solve(Some(&basis))`; otherwise it falls back to a cold-start `solve(None)`.
 /// The warm-start basis is read-only and shared across all threads, preserving
 /// determinism regardless of thread count.
 ///
@@ -1230,12 +1230,12 @@ mod tests {
     /// `load_count` and `add_rows_count` track how many times `load_model` and
     /// `add_rows` were called, used by the baked-path acceptance tests.
     ///
-    /// `solve_count` counts calls to the cold-start `solve` path only.
-    /// `solve_with_basis_count` counts calls to the warm-start `solve_with_basis`
+    /// `solve_count` counts calls to the cold-start `solve(None)` path only.
+    /// `solve_with_basis_count` counts calls to the warm-start `solve(Some(&basis))`
     /// path only.  `call_count` tracks the combined total across both paths and
     /// is used by the infeasibility injection logic.
     ///
-    /// `recorded_basis` captures the last `Basis` passed to `solve_with_basis`,
+    /// `recorded_basis` captures the last `Basis` passed to `solve(Some(&basis))`,
     /// used by the warm-start reconstruction acceptance tests.
     ///
     /// `preserved_counter` accumulates the `preserved` argument passed to
@@ -1251,11 +1251,11 @@ mod tests {
         load_count: usize,
         /// Number of `add_rows` calls since construction.
         add_rows_count: usize,
-        /// Number of cold-start `solve()` calls (excludes `solve_with_basis`).
+        /// Number of cold-start `solve(None)` calls.
         solve_count: usize,
-        /// Number of warm-start `solve_with_basis()` calls (excludes `solve`).
+        /// Number of warm-start `solve(Some(&basis))` calls.
         solve_with_basis_count: usize,
-        /// Last `Basis` passed to `solve_with_basis`, if any.
+        /// Last `Basis` passed to `solve(Some(&basis))`, if any.
         recorded_basis: Option<Basis>,
         /// Cumulative `preserved` argument from `record_reconstruction_stats`.
         preserved_counter: u32,
@@ -1335,20 +1335,19 @@ mod tests {
         }
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve_count += 1;
-            self.do_solve()
-        }
-        fn reset(&mut self) {}
-        fn get_basis(&mut self, _out: &mut Basis) {}
-        fn solve_with_basis(
+        fn solve(
             &mut self,
-            basis: &Basis,
+            basis: Option<&Basis>,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve_with_basis_count += 1;
-            self.recorded_basis = Some(basis.clone());
+            if let Some(b) = basis {
+                self.solve_with_basis_count += 1;
+                self.recorded_basis = Some(b.clone());
+            } else {
+                self.solve_count += 1;
+            }
             self.do_solve()
         }
+        fn get_basis(&mut self, _out: &mut Basis) {}
         fn record_reconstruction_stats(
             &mut self,
             preserved: u32,
@@ -4634,7 +4633,7 @@ mod tests {
     // ── Ticket-010 warm-start CapturedBasis acceptance tests ─────────────────
 
     /// Acceptance criterion (ticket-010 AC #2): when `stage_bases` contains a
-    /// `CapturedBasis` with known slots, the basis passed to `solve_with_basis`
+    /// `CapturedBasis` with known slots, the basis passed to `solve(Some(&basis))`
     /// has `row_status.len() == base_row_count + active_cuts_count` and the tail
     /// entries match the stored cut statuses verbatim (preservation path).
     ///
@@ -4643,7 +4642,7 @@ mod tests {
     ///   `state_at_capture=[1.0]`, `row_status` length 5 with distinct sentinel values.
     /// - FCF pool at stage 0 has exactly those 3 slots active (slots 10, 11, 12).
     /// - `MockSolver::recorded_basis` captures the last basis received by
-    ///   `solve_with_basis`.
+    ///   `solve(Some(&basis))`.
     ///
     /// The reconstruction maps all 3 stored cut rows (slots 10, 11, 12) into
     /// the output basis — the preservation path.  The tail of the output
@@ -4780,18 +4779,18 @@ mod tests {
             "simulate must succeed with CapturedBasis warm-start: {result:?}"
         );
 
-        // Verify that solve_with_basis was called (warm-start path taken).
+        // Verify that solve(Some(&basis)) was called (warm-start path taken).
         let solver = &workspaces[0].solver;
         assert_eq!(
             solver.solve_with_basis_count, 1,
-            "solve_with_basis must be called exactly once (1 scenario × 1 stage)"
+            "warm-start solve must be called exactly once (1 scenario × 1 stage)"
         );
         assert_eq!(
             solver.solve_count, 0,
             "cold-start solve must not be called when a CapturedBasis is provided"
         );
 
-        // Verify the basis passed to solve_with_basis has the correct structure.
+        // Verify the basis passed to solve(Some(&basis)) has the correct structure.
         let recorded = solver
             .recorded_basis
             .as_ref()
@@ -4819,8 +4818,8 @@ mod tests {
     }
 
     /// Acceptance criterion (ticket-010 AC #3): when `stage_bases` is `&[]`
-    /// (cold-start), every LP solve must go through `solver.solve()` and
-    /// `solve_with_basis` must never be called.
+    /// (cold-start), every LP solve must go through `solver.solve(None)` and
+    /// `solve(Some(&basis))` must never be called.
     ///
     /// Uses `solve_count` and `solve_with_basis_count` split on `MockSolver`.
     #[test]
@@ -4916,7 +4915,7 @@ mod tests {
 
         assert_eq!(
             solver.solve_with_basis_count, 0,
-            "solve_with_basis must not be called when stage_bases is empty; \
+            "warm-start solve must not be called when stage_bases is empty; \
              got solve_with_basis_count={}",
             solver.solve_with_basis_count
         );

@@ -222,7 +222,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
             demotions,
         );
 
-        let view = ws.solver.solve_with_basis(&ws.scratch_basis).map_err(|e| {
+        let view = ws.solver.solve(Some(&ws.scratch_basis)).map_err(|e| {
             map_solver_error(
                 e,
                 inputs.stage_index,
@@ -233,7 +233,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         (view, recon_stats)
     } else {
         // Cold path: no stored basis; solver starts from scratch.
-        let view = ws.solver.solve().map_err(|e| {
+        let view = ws.solver.solve(None).map_err(|e| {
             map_solver_error(
                 e,
                 inputs.stage_index,

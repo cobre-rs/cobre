@@ -819,7 +819,6 @@ fn build_study_setup(
         cut_selection,
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
         budget: bcast_config.budget,
-        canonical_state_strategy: bcast_config.canonical_state_strategy,
         export_states: bcast_config.export_states,
     };
     StudySetup::from_broadcast_params(

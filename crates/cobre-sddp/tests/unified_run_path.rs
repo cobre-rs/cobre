@@ -44,12 +44,12 @@ use cobre_sddp::cut::pool::CutPool;
 use cobre_sddp::stage_solve::{Phase, StageInputs, StageOutcome, run_stage_solve};
 use cobre_sddp::workspace::CapturedBasis;
 use cobre_sddp::{
-    BackwardPassSpec, BakedTemplates, BasisStore, CanonicalStateStrategy, CutManagementConfig,
-    CutSyncBuffers, EntityCounts, EventConfig, ExchangeBuffers, ForwardPassBatch,
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, LoopConfig, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    TrajectoryRecord, WorkspaceSizing, run_backward_pass, run_forward_pass, simulate, train,
+    BackwardPassSpec, BakedTemplates, BasisStore, CutManagementConfig, CutSyncBuffers,
+    EntityCounts, EventConfig, ExchangeBuffers, ForwardPassBatch, FutureCostFunction, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
+    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
+    StoppingRuleSet, TrainingConfig, TrainingContext, TrajectoryRecord, WorkspaceSizing,
+    run_backward_pass, run_forward_pass, simulate, train,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ impl Communicator for StubComm {
 
 /// Minimal LP template for N=1 hydro, L=0 PAR, compatible with `HighsSolver`.
 ///
-/// Same template used in `canonical_state_strategy.rs` — 3 rows, 4 cols,
+/// Same template used in the solve-independence tests — 3 rows, 4 cols,
 /// with a water-balance structure that `HighsSolver` accepts as feasible with
 /// all-zero RHS and zero noise scale.
 ///
@@ -143,7 +143,7 @@ fn minimal_template() -> StageTemplate {
 
 /// Build a minimal `StochasticContext` for `n_stages` stages with 1 hydro,
 /// zero-mean inflow, and SAA sampling. Mirrors `make_stochastic_context` in
-/// `canonical_state_strategy.rs`.
+/// the solve-independence tests.
 #[allow(clippy::too_many_lines)]
 fn make_stochastic_context(n_stages: usize) -> StochasticContext {
     use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
@@ -361,7 +361,7 @@ fn forward_uses_stage_solve() {
         noise_scale: &noise_scale,
         // n_hydros=1 enables the noise-transform path that patches the LP RHS.
         // Combined with noise_scale=0, the patch is a no-op but the path is
-        // exercised (same convention as canonical_state_strategy.rs).
+        // exercised (same convention as the solve-independence tests).
         n_hydros: 1,
         n_load_buses: 0,
         load_balance_row_starts: &[],
@@ -661,7 +661,6 @@ fn backward_uses_stage_solve() {
             metadata_sync_buf: &mut Vec::new(),
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
-            canonical_state_strategy: CanonicalStateStrategy::default(),
         },
         &comm,
     )
@@ -818,7 +817,6 @@ fn simulation_zero_rejections_on_cut_churn() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: vec![RiskMeasure::Expectation; n_stages],
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,

@@ -1592,7 +1592,7 @@ mod tests {
     /// stage-inner traversal order). `infeasible_at` counts global solve
     /// calls starting from 0.
     ///
-    /// `warm_start_calls` is incremented each time `solve_with_basis`
+    /// `warm_start_calls` is incremented each time `solve(Some(&basis))`
     /// is called, enabling warm-start invocation tests.
     struct MockSolver {
         solution: LpSolution,
@@ -1600,7 +1600,7 @@ mod tests {
         /// and warm-start calls) returns infeasible.
         infeasible_at: Option<usize>,
         call_count: usize,
-        /// Number of times `solve_with_basis` has been called.
+        /// Number of times `solve(Some(&basis))` has been called.
         warm_start_calls: usize,
         /// Internal buffers that `SolutionView` borrows from.
         buf_primal: Vec<f64>,
@@ -1679,21 +1679,17 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            if basis.is_some() {
+                self.warm_start_calls += 1;
+            }
             self.do_solve()
         }
-
-        fn reset(&mut self) {}
 
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.warm_start_calls += 1;
-            self.do_solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics {
@@ -2300,7 +2296,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2423,7 +2418,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2552,7 +2546,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -2993,7 +2986,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -3067,8 +3059,8 @@ mod tests {
         .map(|_| ())
     }
 
-    /// Warm-start invocation: the first iteration calls `solve` (cold start);
-    /// the second iteration calls `solve_with_basis` (warm start).
+    /// Warm-start invocation: the first iteration calls `solve(None)` (cold start);
+    /// the second iteration calls `solve(Some(&basis))` (warm start).
     ///
     /// AC: `run_forward_pass` called twice, sharing the same `BasisStore`
     /// (1 scenario × 3 stages). After iteration 1: `warm_start_calls` == 0
@@ -3811,7 +3803,6 @@ mod tests {
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,
@@ -4550,26 +4541,17 @@ mod tests {
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            Err(SolverError::InternalError {
-                message: "not implemented for test".to_string(),
-                error_code: None,
-            })
-        }
-
-        fn reset(&mut self) {}
-
-        fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
+        fn solve(
             &mut self,
-            _basis: &Basis,
+            _basis: Option<&Basis>,
         ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             Err(SolverError::InternalError {
                 message: "not implemented for test".to_string(),
                 error_code: None,
             })
         }
+
+        fn get_basis(&mut self, _out: &mut Basis) {}
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()

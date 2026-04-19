@@ -2360,7 +2360,7 @@ mod tests {
 
         // The solve must succeed — the slack absorbs the negative inflow.
         let view = solver
-            .solve()
+            .solve(None)
             .expect("LP must be feasible with inflow slack active");
 
         let primal = view.primal;
@@ -3514,7 +3514,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("FPHA LP must be feasible and optimal");
 
         // col 9 is g (generation variable, shifted by +1 for diversion).
@@ -3575,7 +3575,7 @@ mod tests {
         let v_in = 100.0_f64;
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
-        let view = solver.solve().expect("FPHA LP must solve to optimal");
+        let view = solver.solve(None).expect("FPHA LP must solve to optimal");
         let primal = view.primal;
 
         let col_v = 0_usize;
@@ -3709,7 +3709,7 @@ mod tests {
             // Fix v_in = 100 hm³ via the storage-fixing equality row (row 0).
             let v_in = 100.0_f64;
             solver.set_row_bounds(&[0], &[v_in], &[v_in]);
-            let view = solver.solve().expect("LP must solve to optimal");
+            let view = solver.solve(None).expect("LP must solve to optimal");
             // Row 0 is the storage-fixing equality; its dual is the marginal cost
             // of one additional hm³ of initial storage.
             view.dual[0]
@@ -3792,7 +3792,7 @@ mod tests {
         );
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("mixed FPHA LP must be feasible and optimal");
 
         // The solve must return a finite objective.
@@ -5059,7 +5059,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evaporation LP must be feasible and optimal");
 
         // Q_ev is the first evaporation column (before withdrawal + 4*N operational slacks).
@@ -5114,7 +5114,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evaporation LP must be feasible and optimal");
 
         // Evaporation violation slack columns are before withdrawal + 4*N operational slacks.
@@ -5184,7 +5184,7 @@ mod tests {
             solver.add_rows(&empty_cuts);
             let v_in = 1_000.0_f64;
             solver.set_row_bounds(&[0], &[v_in], &[v_in]);
-            let view = solver.solve().expect("LP must solve to optimal");
+            let view = solver.solve(None).expect("LP must solve to optimal");
             // Row 0 is the storage-fixing equality; its dual is the marginal value
             // of one additional hm3 of initial storage.
             view.dual[0]
@@ -5262,7 +5262,7 @@ mod tests {
         solver.set_row_bounds(&[water_balance_row], &[high_inflow_rhs], &[high_inflow_rhs]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evap dump valve LP must be feasible and optimal");
 
         // Column layout: N=1, L=0, K=1.

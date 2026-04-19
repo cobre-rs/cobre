@@ -3,7 +3,7 @@
 use cobre_io::config::StoppingRuleConfig;
 
 use crate::{
-    CanonicalStateStrategy, InflowNonNegativityMethod, SddpError,
+    InflowNonNegativityMethod, SddpError,
     cut_selection::{CutSelectionStrategy, parse_cut_selection_config},
     stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet},
 };
@@ -51,11 +51,6 @@ pub struct StudyParams {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub budget: Option<u32>,
-    /// Canonical-state strategy for the backward pass.
-    ///
-    /// Parsed from `config.training.solver.canonical_state`. Defaults to
-    /// `Disabled` when the key is absent from the config file.
-    pub canonical_state_strategy: CanonicalStateStrategy,
 }
 
 impl StudyParams {
@@ -157,16 +152,6 @@ impl StudyParams {
             }
         }
 
-        let canonical_state_strategy = match config.training.solver.canonical_state.as_str() {
-            "disabled" => CanonicalStateStrategy::Disabled,
-            "clear_solver" => CanonicalStateStrategy::ClearSolver,
-            other => {
-                return Err(SddpError::Validation(format!(
-                    "invalid canonical_state: '{other}'. Expected 'disabled' or 'clear_solver'."
-                )));
-            }
-        };
-
         Ok(Self {
             seed,
             forward_passes,
@@ -178,7 +163,6 @@ impl StudyParams {
             cut_selection,
             cut_activity_tolerance,
             budget,
-            canonical_state_strategy,
         })
     }
 
@@ -199,7 +183,6 @@ impl StudyParams {
             cut_selection: self.cut_selection,
             cut_activity_tolerance: self.cut_activity_tolerance,
             budget: self.budget,
-            canonical_state_strategy: self.canonical_state_strategy,
             export_states: false,
         }
     }
@@ -239,104 +222,10 @@ pub struct ConstructionConfig {
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
     pub budget: Option<u32>,
-    /// Canonical-state strategy for the backward pass.
-    ///
-    /// Propagated from [`StudyParams::canonical_state_strategy`]. Defaults to
-    /// `Disabled` when the config key is absent.
-    pub canonical_state_strategy: CanonicalStateStrategy,
     /// Whether the caller wants the visited-states archive for export.
     ///
     /// When `true`, the archive is allocated during training regardless of the
     /// cut selection strategy. Defaults to `false`; set based on
     /// `exports.states`.
     pub export_states: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use cobre_io::config::{
-        Config, CutSelectionConfig, EstimationConfig, ExportsConfig, ModelingConfig, PolicyConfig,
-        SimulationConfig, StoppingRuleConfig, TrainingConfig, TrainingSolverConfig,
-        UpperBoundEvaluationConfig,
-    };
-
-    use super::StudyParams;
-    use crate::CanonicalStateStrategy;
-
-    fn minimal_config(canonical_state: &str) -> Config {
-        Config {
-            schema: None,
-            modeling: ModelingConfig::default(),
-            training: TrainingConfig {
-                enabled: true,
-                tree_seed: None,
-                forward_passes: Some(1),
-                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
-                stopping_mode: "any".to_string(),
-                cut_formulation: None,
-                forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
-                solver: TrainingSolverConfig {
-                    canonical_state: canonical_state.to_string(),
-                    ..TrainingSolverConfig::default()
-                },
-                scenario_source: None,
-            },
-            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
-            policy: PolicyConfig::default(),
-            simulation: SimulationConfig {
-                enabled: false,
-                ..SimulationConfig::default()
-            },
-            exports: ExportsConfig::default(),
-            estimation: EstimationConfig::default(),
-        }
-    }
-
-    #[test]
-    fn canonical_state_disabled_parses_to_disabled() {
-        let config = minimal_config("disabled");
-        let params = StudyParams::from_config(&config).unwrap();
-        assert_eq!(
-            params.canonical_state_strategy,
-            CanonicalStateStrategy::Disabled
-        );
-    }
-
-    #[test]
-    fn canonical_state_clear_solver_parses_to_clear_solver() {
-        let config = minimal_config("clear_solver");
-        let params = StudyParams::from_config(&config).unwrap();
-        assert_eq!(
-            params.canonical_state_strategy,
-            CanonicalStateStrategy::ClearSolver
-        );
-    }
-
-    #[test]
-    fn canonical_state_missing_key_defaults_to_disabled() {
-        // TrainingSolverConfig::default() sets canonical_state = "disabled",
-        // which mirrors the serde #[serde(default)] behaviour for absent JSON keys.
-        let config = minimal_config("disabled");
-        let params = StudyParams::from_config(&config).unwrap();
-        assert_eq!(
-            params.canonical_state_strategy,
-            CanonicalStateStrategy::Disabled
-        );
-    }
-
-    #[test]
-    fn canonical_state_invalid_value_returns_validation_error() {
-        let config = minimal_config("foo");
-        let err = StudyParams::from_config(&config).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("canonical_state"),
-            "error message must mention 'canonical_state': {msg}"
-        );
-        assert!(
-            msg.contains("disabled") || msg.contains("clear_solver"),
-            "error message must list valid alternatives: {msg}"
-        );
-    }
 }

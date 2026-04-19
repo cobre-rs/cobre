@@ -118,7 +118,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         let obj = self.objectives[call % self.objectives.len()];
@@ -132,18 +135,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -569,7 +561,6 @@ fn train_simulate_write_cycle() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: Some(tx),
@@ -948,7 +939,10 @@ impl SolverInterface for SizedMockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         Ok(cobre_solver::SolutionView {
             objective: 1000.0,
             primal: &self.primal,
@@ -959,16 +953,7 @@ impl SolverInterface for SizedMockSolver {
         })
     }
 
-    fn reset(&mut self) {}
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -1337,7 +1322,6 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
             risk_measures: vec![RiskMeasure::Expectation; n_stages],
-            ..CutManagementConfig::default()
         },
         events: EventConfig {
             event_sender: None,

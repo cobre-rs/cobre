@@ -541,7 +541,6 @@ fn train_fixture(
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
                 risk_measures: fx.risk_measures.clone(),
-                ..CutManagementConfig::default()
             },
             events: EventConfig {
                 event_sender: None,

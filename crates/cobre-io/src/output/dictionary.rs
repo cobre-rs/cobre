@@ -663,17 +663,17 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "lp_retries") => "Solves requiring retry escalation",
         ("solver_iterations", "lp_failures") => "Solves that exhausted all retry levels",
         ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
-        ("solver_iterations", "basis_offered") => "Number of solve_with_basis calls",
+        ("solver_iterations", "basis_offered") => "Number of warm-start solve(Some(&basis)) calls",
         ("solver_iterations", "basis_consistency_failures") => {
-            "Number of solve_with_basis calls in which the basis was rejected because \
+            "Number of warm-start solve calls in which the basis was rejected because \
              total_basic != num_row"
         }
         ("solver_iterations", "clear_solver_count") => {
-            "Total clear_solver_state calls in this phase. Non-zero under ClearSolver strategy; \
-             zero under Disabled."
+            "Total Highs_clearSolver FFI calls in this phase — incremented once per solve \
+             to deliver the solve-to-solve independence contract."
         }
         ("solver_iterations", "clear_solver_failures") => {
-            "clear_solver_state calls that returned an FFI error. Should be zero in a healthy \
+            "Highs_clearSolver calls that returned an FFI error. Should be zero in a healthy \
              HiGHS build."
         }
         ("solver_iterations", "simplex_iterations") => "Total simplex iterations",

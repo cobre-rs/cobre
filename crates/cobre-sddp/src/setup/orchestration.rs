@@ -51,7 +51,6 @@ impl StudySetup {
                 cut_activity_tolerance: self.cut_activity_tolerance,
                 warm_start_cuts: 0,
                 risk_measures: self.risk_measures.clone(),
-                canonical_state_strategy: self.canonical_state_strategy,
             },
             events: EventConfig {
                 event_sender,

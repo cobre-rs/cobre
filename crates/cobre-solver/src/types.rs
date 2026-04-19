@@ -137,7 +137,7 @@ impl SolutionView<'_> {
 /// See [Solver Interface Trait SS4.3](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
 #[derive(Debug, Clone, Default)]
 pub struct SolverStatistics {
-    /// Total number of `solve` and `solve_with_basis` calls.
+    /// Total number of `solve` calls (cold-start and warm-start).
     pub solve_count: u64,
 
     /// Number of solves that returned `Ok` (optimal solution found).
@@ -155,20 +155,20 @@ pub struct SolverStatistics {
     /// Cumulative wall-clock time spent in solver calls, in seconds.
     pub total_solve_time_seconds: f64,
 
-    /// Number of `solve_with_basis` calls in which `cobre_highs_set_basis_non_alien`
-    /// rejected the offered basis because `isBasisConsistent` returned false.
+    /// Number of warm-start `solve(Some(&basis))` calls in which
+    /// `cobre_highs_set_basis_non_alien` rejected the offered basis because
+    /// `isBasisConsistent` returned false.
     /// Incremented once per rejected offer. Replaces two counters removed in v0.5.0
     /// (see CHANGELOG).
     pub basis_consistency_failures: u64,
 
-    /// Total number of `clear_solver_state` calls on this solver instance.
+    /// Total FFI `Highs_clearSolver` calls on this solver instance.
     ///
-    /// Non-zero under `CanonicalStateStrategy::ClearSolver`; exactly zero
-    /// under `Disabled`. Used as a runtime confirmation that the
-    /// `ClearSolver` path is active.
+    /// Incremented once per `HighsSolver::solve` call to deliver the
+    /// solve-to-solve independence contract (AD-4, ticket-002).
     pub clear_solver_count: u64,
 
-    /// Number of `clear_solver_state` calls that returned an FFI error.
+    /// Number of `Highs_clearSolver` FFI calls that returned an error status.
     ///
     /// Should be zero in a healthy `HiGHS` build. Non-zero values indicate
     /// an FFI regression or a HiGHS-internal inconsistency.
@@ -180,7 +180,7 @@ pub struct SolverStatistics {
     /// The complement `success_count - first_try_successes` gives the number of retried solves.
     pub first_try_successes: u64,
 
-    /// Total number of `solve_with_basis` calls (basis offers).
+    /// Total number of warm-start `solve(Some(&basis))` calls (basis offers).
     ///
     /// Combined with `basis_consistency_failures`, enables acceptance-rate computation:
     /// `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.
@@ -203,8 +203,8 @@ pub struct SolverStatistics {
 
     /// Cumulative wall-clock time spent in `set_basis` FFI calls, in seconds.
     ///
-    /// Accumulated by `solve_with_basis` around the basis installation step.
-    /// `solve()` (without basis) does not increment this counter.
+    /// Accumulated by `solve(Some(&basis))` around the basis installation step.
+    /// Cold-start `solve(None)` does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
     /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation

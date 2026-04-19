@@ -75,9 +75,7 @@ pub mod visited_states;
 pub mod workspace;
 
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
-pub use config::{
-    CanonicalStateStrategy, CutManagementConfig, EventConfig, LoopConfig, TrainingConfig,
-};
+pub use config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
 pub use context::{BakedTemplates, StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};

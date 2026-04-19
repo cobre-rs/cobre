@@ -130,11 +130,6 @@ pub(crate) struct BroadcastConfig {
     pub(crate) training_source: ScenarioSource,
     /// Scenario source for the post-training simulation forward pass.
     pub(crate) simulation_source: ScenarioSource,
-    /// Canonical-state strategy for the backward pass.
-    ///
-    /// Broadcast so all ranks apply the same per-(worker, stage) `load_model`
-    /// cadence. Defaults to `Disabled`.
-    pub(crate) canonical_state_strategy: cobre_sddp::CanonicalStateStrategy,
 }
 
 impl BroadcastConfig {
@@ -207,7 +202,6 @@ impl BroadcastConfig {
             budget: params.budget,
             training_source,
             simulation_source,
-            canonical_state_strategy: params.canonical_state_strategy,
         })
     }
 }

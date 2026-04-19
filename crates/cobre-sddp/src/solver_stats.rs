@@ -31,12 +31,8 @@ pub struct SolverStatsDelta {
     /// Number of `solve_with_basis` calls.
     pub basis_offered: u64,
 
-    /// Times the basis was rejected (cold-start fallback).
-    pub basis_rejections: u64,
-
-    /// Times `solve_with_basis` fell back from the non-alien path to the alien
-    /// path because `HiGHS` rejected the non-alien basis (`isBasisConsistent` failed).
-    pub basis_non_alien_rejections: u64,
+    /// Times the offered basis was rejected because `isBasisConsistent` returned false.
+    pub basis_consistency_failures: u64,
 
     /// Total `clear_solver_state` calls across all solvers in this phase.
     ///
@@ -123,9 +119,8 @@ impl SolverStatsDelta {
             lp_failures: after.failure_count - before.failure_count,
             retry_attempts: after.retry_count - before.retry_count,
             basis_offered: after.basis_offered - before.basis_offered,
-            basis_rejections: after.basis_rejections - before.basis_rejections,
-            basis_non_alien_rejections: after.basis_non_alien_rejections
-                - before.basis_non_alien_rejections,
+            basis_consistency_failures: after.basis_consistency_failures
+                - before.basis_consistency_failures,
             clear_solver_count: after.clear_solver_count - before.clear_solver_count,
             clear_solver_failures: after.clear_solver_failures - before.clear_solver_failures,
             simplex_iterations: after.total_iterations - before.total_iterations,
@@ -171,8 +166,7 @@ impl SolverStatsDelta {
             result.lp_failures += d.lp_failures;
             result.retry_attempts += d.retry_attempts;
             result.basis_offered += d.basis_offered;
-            result.basis_rejections += d.basis_rejections;
-            result.basis_non_alien_rejections += d.basis_non_alien_rejections;
+            result.basis_consistency_failures += d.basis_consistency_failures;
             result.clear_solver_count += d.clear_solver_count;
             result.clear_solver_failures += d.clear_solver_failures;
             result.simplex_iterations += d.simplex_iterations;
@@ -217,8 +211,7 @@ pub fn aggregate_solver_statistics(
         result.total_iterations += s.total_iterations;
         result.retry_count += s.retry_count;
         result.total_solve_time_seconds += s.total_solve_time_seconds;
-        result.basis_rejections += s.basis_rejections;
-        result.basis_non_alien_rejections += s.basis_non_alien_rejections;
+        result.basis_consistency_failures += s.basis_consistency_failures;
         result.clear_solver_count += s.clear_solver_count;
         result.clear_solver_failures += s.clear_solver_failures;
         result.first_try_successes += s.first_try_successes;
@@ -257,20 +250,20 @@ pub type SolverStatsEntry = (u64, &'static str, i32, SolverStatsDelta);
 /// Number of scalar fields in [`SolverStatsDelta`] (excludes the histogram `Vec`).
 ///
 /// This constant defines the size of the fixed-size buffer used for MPI allreduce
-/// and allgatherv operations. The 18 fields are packed in declaration order:
-/// 13 `u64` fields (cast to `f64`) followed by 5 native `f64` fields.
-pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 18;
+/// and allgatherv operations. The 17 fields are packed in declaration order:
+/// 12 `u64` fields (cast to `f64`) followed by 5 native `f64` fields.
+pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 17;
 
 /// Number of `f64` values packed per scenario in [`pack_scenario_stats`].
 ///
-/// Each scenario occupies `scenario_id_as_f64` + the 18 scalar fields = 19 values.
+/// Each scenario occupies `scenario_id_as_f64` + the 17 scalar fields = 18 values.
 pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
-/// Pack the 18 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
+/// Pack the 17 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
 ///
 /// The packing order matches the declaration order of [`SolverStatsDelta`]:
-/// - Indices 0–12: the thirteen `u64` fields cast to `f64` (exact for values ≤ 2^53).
-/// - Indices 13–17: the five native `f64` fields.
+/// - Indices 0–11: the twelve `u64` fields cast to `f64` (exact for values ≤ 2^53).
+/// - Indices 12–16: the five native `f64` fields.
 ///
 /// The `retry_level_histogram` (`Vec<u64>`) is excluded: it is not part of the
 /// summary allreduce and is not included in the per-scenario Parquet schema.
@@ -284,24 +277,23 @@ pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 #[allow(clippy::cast_precision_loss)]
 pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] {
     [
-        delta.lp_solves as f64,
-        delta.lp_successes as f64,
-        delta.first_try_successes as f64,
-        delta.lp_failures as f64,
-        delta.retry_attempts as f64,
-        delta.basis_offered as f64,
-        delta.basis_rejections as f64,
-        delta.basis_non_alien_rejections as f64,
-        delta.clear_solver_count as f64,
-        delta.clear_solver_failures as f64,
-        delta.simplex_iterations as f64,
-        delta.load_model_count as f64,
-        delta.add_rows_count as f64,
-        delta.solve_time_ms,
-        delta.load_model_time_ms,
-        delta.add_rows_time_ms,
-        delta.set_bounds_time_ms,
-        delta.basis_set_time_ms,
+        delta.lp_solves as f64,                  // index 0
+        delta.lp_successes as f64,               // index 1
+        delta.first_try_successes as f64,        // index 2
+        delta.lp_failures as f64,                // index 3
+        delta.retry_attempts as f64,             // index 4
+        delta.basis_offered as f64,              // index 5
+        delta.basis_consistency_failures as f64, // index 6
+        delta.clear_solver_count as f64,         // index 7
+        delta.clear_solver_failures as f64,      // index 8
+        delta.simplex_iterations as f64,         // index 9
+        delta.load_model_count as f64,           // index 10
+        delta.add_rows_count as f64,             // index 11
+        delta.solve_time_ms,                     // index 12
+        delta.load_model_time_ms,                // index 13
+        delta.add_rows_time_ms,                  // index 14
+        delta.set_bounds_time_ms,                // index 15
+        delta.basis_set_time_ms,                 // index 16
     ]
 }
 
@@ -320,18 +312,17 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         lp_failures: buf[3] as u64,
         retry_attempts: buf[4] as u64,
         basis_offered: buf[5] as u64,
-        basis_rejections: buf[6] as u64,
-        basis_non_alien_rejections: buf[7] as u64,
-        clear_solver_count: buf[8] as u64,
-        clear_solver_failures: buf[9] as u64,
-        simplex_iterations: buf[10] as u64,
-        load_model_count: buf[11] as u64,
-        add_rows_count: buf[12] as u64,
-        solve_time_ms: buf[13],
-        load_model_time_ms: buf[14],
-        add_rows_time_ms: buf[15],
-        set_bounds_time_ms: buf[16],
-        basis_set_time_ms: buf[17],
+        basis_consistency_failures: buf[6] as u64,
+        clear_solver_count: buf[7] as u64,
+        clear_solver_failures: buf[8] as u64,
+        simplex_iterations: buf[9] as u64,
+        load_model_count: buf[10] as u64,
+        add_rows_count: buf[11] as u64,
+        solve_time_ms: buf[12],
+        load_model_time_ms: buf[13],
+        add_rows_time_ms: buf[14],
+        set_bounds_time_ms: buf[15],
+        basis_set_time_ms: buf[16],
         // Basis reconstruction counters are application-level and excluded from MPI packing.
         basis_new_tight: 0,
         basis_new_slack: 0,
@@ -378,12 +369,12 @@ pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
         .map(|chunk| {
             let scenario_id = chunk[0] as u32;
             // `chunks_exact(SCENARIO_STATS_STRIDE)` guarantees chunk.len() ==
-            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 19.
-            // Index 1..=18 therefore covers exactly the 18 scalar field slots.
+            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 18.
+            // Index 1..=17 therefore covers exactly the 17 scalar field slots.
             let arr = [
                 chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7], chunk[8],
                 chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14], chunk[15],
-                chunk[16], chunk[17], chunk[18],
+                chunk[16], chunk[17],
             ];
             (scenario_id, unpack_delta_scalars(&arr))
         })
@@ -409,8 +400,7 @@ mod tests {
             total_iterations: 500,
             retry_count: 3,
             total_solve_time_seconds: 2.0,
-            basis_rejections: 1,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 1,
             clear_solver_count: 5,
             clear_solver_failures: 0,
             first_try_successes: 7,
@@ -434,8 +424,7 @@ mod tests {
             total_iterations: 1100,
             retry_count: 5,
             total_solve_time_seconds: 4.5,
-            basis_rejections: 3,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 3,
             clear_solver_count: 20,
             clear_solver_failures: 1,
             first_try_successes: 15,
@@ -460,7 +449,7 @@ mod tests {
         assert_eq!(delta.lp_failures, 1);
         assert_eq!(delta.retry_attempts, 2);
         assert_eq!(delta.basis_offered, 9);
-        assert_eq!(delta.basis_rejections, 2);
+        assert_eq!(delta.basis_consistency_failures, 2);
         assert_eq!(delta.clear_solver_count, 15);
         assert_eq!(delta.clear_solver_failures, 1);
         assert_eq!(delta.simplex_iterations, 600);
@@ -482,8 +471,7 @@ mod tests {
             total_iterations: 200,
             retry_count: 0,
             total_solve_time_seconds: 1.0,
-            basis_rejections: 0,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 0,
             clear_solver_count: 3,
             clear_solver_failures: 0,
             first_try_successes: 5,
@@ -507,7 +495,7 @@ mod tests {
         assert_eq!(delta.lp_failures, 0);
         assert_eq!(delta.retry_attempts, 0);
         assert_eq!(delta.basis_offered, 0);
-        assert_eq!(delta.basis_rejections, 0);
+        assert_eq!(delta.basis_consistency_failures, 0);
         assert_eq!(delta.clear_solver_count, 0);
         assert_eq!(delta.clear_solver_failures, 0);
         assert_eq!(delta.simplex_iterations, 0);
@@ -534,8 +522,7 @@ mod tests {
             lp_failures: 1,
             retry_attempts: 2,
             basis_offered: 7,
-            basis_rejections: 1,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 1,
             clear_solver_count: 10,
             clear_solver_failures: 0,
             simplex_iterations: 500,
@@ -559,8 +546,7 @@ mod tests {
             lp_failures: 1,
             retry_attempts: 3,
             basis_offered: 15,
-            basis_rejections: 2,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 2,
             clear_solver_count: 20,
             clear_solver_failures: 1,
             simplex_iterations: 800,
@@ -585,7 +571,7 @@ mod tests {
         assert_eq!(agg.lp_failures, 2);
         assert_eq!(agg.retry_attempts, 5);
         assert_eq!(agg.basis_offered, 22);
-        assert_eq!(agg.basis_rejections, 3);
+        assert_eq!(agg.basis_consistency_failures, 3);
         assert_eq!(agg.clear_solver_count, 30);
         assert_eq!(agg.clear_solver_failures, 1);
         assert_eq!(agg.simplex_iterations, 1300);
@@ -609,8 +595,7 @@ mod tests {
             total_iterations: 500,
             retry_count: 3,
             total_solve_time_seconds: 2.0,
-            basis_rejections: 1,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 1,
             clear_solver_count: 10,
             clear_solver_failures: 0,
             first_try_successes: 7,
@@ -634,8 +619,7 @@ mod tests {
             total_iterations: 1100,
             retry_count: 5,
             total_solve_time_seconds: 4.5,
-            basis_rejections: 3,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 3,
             clear_solver_count: 20,
             clear_solver_failures: 1,
             first_try_successes: 15,
@@ -660,7 +644,7 @@ mod tests {
         assert_eq!(agg.total_iterations, 1600);
         assert_eq!(agg.retry_count, 8);
         assert!((agg.total_solve_time_seconds - 6.5).abs() < 1e-10);
-        assert_eq!(agg.basis_rejections, 4);
+        assert_eq!(agg.basis_consistency_failures, 4);
         assert_eq!(agg.clear_solver_count, 30);
         assert_eq!(agg.clear_solver_failures, 1);
         assert_eq!(agg.first_try_successes, 22);
@@ -686,8 +670,7 @@ mod tests {
             lp_failures: 0,
             retry_attempts: 1,
             basis_offered: lp_solves,
-            basis_rejections: 2,
-            basis_non_alien_rejections: 0,
+            basis_consistency_failures: 2,
             clear_solver_count: lp_solves,
             clear_solver_failures: 0,
             simplex_iterations: lp_solves * 10,
@@ -719,10 +702,9 @@ mod tests {
         assert_eq!(unpacked.lp_failures, delta.lp_failures);
         assert_eq!(unpacked.retry_attempts, delta.retry_attempts);
         assert_eq!(unpacked.basis_offered, delta.basis_offered);
-        assert_eq!(unpacked.basis_rejections, delta.basis_rejections);
         assert_eq!(
-            unpacked.basis_non_alien_rejections,
-            delta.basis_non_alien_rejections
+            unpacked.basis_consistency_failures,
+            delta.basis_consistency_failures
         );
         assert_eq!(unpacked.clear_solver_count, delta.clear_solver_count);
         assert_eq!(unpacked.clear_solver_failures, delta.clear_solver_failures);

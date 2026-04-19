@@ -1,28 +1,14 @@
 //! Smoke test for the warm-start basis path in `HighsSolver`.
 //!
-//! ## Current runtime coverage
+//! `cobre_highs_set_basis_non_alien` is the sole basis setter used at runtime.
+//! It rejects bases where `col_basic + row_basic != num_row` by returning
+//! `HIGHS_STATUS_ERROR`; `solve_with_basis` maps that rejection to
+//! `SolverError::BasisInconsistent`. No alien fallback exists.
 //!
-//! The runtime `solve_with_basis` path uses only the alien FFI
-//! (`cobre_highs_set_basis`). The non-alien setter
-//! (`cobre_highs_set_basis_non_alien`) is wired but not exercised at runtime
-//! — it will be re-enabled behind a feature gate once the backward-path basis
-//! reconstruction padding issue (basic count invariant + baked-cut row
-//! statuses) is fixed. This test exercises the warm-start loop to confirm
-//! counters update correctly on a well-formed fixture.
-//!
-//! ## Deviation from ticket-005 spec
-//!
-//! The original ticket specified calling `cobre_sddp::train` end-to-end.
-//! `cobre-sddp` depends on `cobre-solver`, so adding it as a dev-dependency
-//! would create a circular dependency. This test exercises the same observable
-//! (warm-start loop + rejection counters) directly through `HighsSolver`.
-//!
-//! ## Assertions
-//!
-//! - `basis_offered > 0` — warm-start calls were made.
-//! - `basis_non_alien_rejections == 0` — non-alien path not exercised in the
-//!   current runtime.
-//! - `basis_rejections == 0` — the alien path accepts the self-extracted basis.
+//! This test exercises the warm-start loop on a well-formed fixture and asserts
+//! the self-extracted basis is accepted (near-zero `basis_consistency_failures`
+//! relative to `basis_offered`). Driving it through `HighsSolver` directly
+//! avoids a circular dev-dep on `cobre-sddp`.
 #![cfg_attr(
     test,
     allow(
@@ -68,9 +54,8 @@ fn make_fixture_stage_template() -> StageTemplate {
     }
 }
 
-/// Simulated warm-start loop: verifies that `basis_non_alien_rejections` stays
-/// near zero and `basis_rejections` stays at zero across many `solve_with_basis`
-/// calls with a self-consistent basis.
+/// Simulated warm-start loop: verifies that `basis_consistency_failures` stays
+/// near zero across many `solve_with_basis` calls with a self-consistent basis.
 ///
 /// Structure mirrors the baked-template backward pass:
 ///   1. Cold-solve once to obtain an optimal basis.
@@ -79,10 +64,9 @@ fn make_fixture_stage_template() -> StageTemplate {
 /// The final `get_basis` in each iteration captures any updated basis for the
 /// next iteration, matching how the SDDP pipeline propagates bases forward.
 ///
-/// Assertions (equivalent to the SDDP integration test in the original spec):
+/// Assertions:
 ///   - `basis_offered > 0`
-///   - `basis_non_alien_rejections / basis_offered < 0.01`
-///   - `basis_rejections == 0`
+///   - `basis_consistency_failures / basis_offered < 0.01`
 #[test]
 fn non_alien_basis_loop_low_rejection_rate() {
     const ITERATIONS: usize = 60;
@@ -114,24 +98,17 @@ fn non_alien_basis_loop_low_rejection_rate() {
     // Assert
     let stats_after = solver.statistics();
     let offered = stats_after.basis_offered - stats_before.basis_offered;
-    let non_alien_rejections =
-        stats_after.basis_non_alien_rejections - stats_before.basis_non_alien_rejections;
-    let alien_rejections = stats_after.basis_rejections - stats_before.basis_rejections;
+    let failures = stats_after.basis_consistency_failures - stats_before.basis_consistency_failures;
 
     assert!(
         offered > 0,
         "basis_offered must be > 0; got {offered} — the warm-start loop must have executed"
     );
-    // Equivalent to rejection_rate < 0.01 but avoids u64 → f64 precision-loss cast.
-    // non_alien_rejections / offered < 1/100  ⟺  non_alien_rejections * 100 < offered
+    // Equivalent to failures/offered < 0.01 but avoids u64 → f64 precision-loss cast.
+    // failures / offered < 1/100  ⟺  failures * 100 < offered
     assert!(
-        non_alien_rejections.saturating_mul(100) < offered,
-        "basis_non_alien_rejections / basis_offered must be < 0.01; \
-         got {non_alien_rejections}/{offered}"
-    );
-    assert_eq!(
-        alien_rejections, 0,
-        "basis_rejections must be 0 on a well-formed warm-start loop; \
-         got {alien_rejections}"
+        failures.saturating_mul(100) < offered,
+        "basis_consistency_failures / basis_offered must be < 0.01; \
+         got {failures}/{offered}"
     );
 }

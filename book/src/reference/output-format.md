@@ -354,27 +354,27 @@ stage)` triple. 19 columns. All columns are non-nullable.
 The `phase` column is a string: `"forward"`, `"backward"`, or
 `"lower_bound"`.
 
-| Column               | Type    | Nullable | Description                                                                          |
-| -------------------- | ------- | -------- | ------------------------------------------------------------------------------------ |
-| `iteration`          | UInt32  | No       | Training iteration number (1-based).                                                 |
-| `phase`              | Utf8    | No       | Algorithm phase: `"forward"`, `"backward"`, or `"lower_bound"`.                      |
-| `stage`              | Int32   | No       | Stage index (0-based).                                                               |
-| `lp_solves`          | UInt32  | No       | Number of LP solves in this `(iteration, phase, stage)` triple.                      |
-| `lp_successes`       | UInt32  | No       | Number of solves that returned optimal.                                              |
-| `lp_retries`         | UInt32  | No       | Number of solves that required at least one retry.                                   |
-| `lp_failures`        | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                      |
-| `retry_attempts`     | UInt32  | No       | Total retry attempts across all LP solves.                                           |
-| `basis_offered`      | UInt32  | No       | Number of `solve_with_basis` calls (warm-start attempts).                            |
-| `basis_rejections`   | UInt32  | No       | Number of times a basis was rejected and the solver fell back to cold-start.         |
-| `simplex_iterations` | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                      |
-| `solve_time_ms`      | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                 |
-| `load_model_time_ms` | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                        |
-| `add_rows_time_ms`   | Float64 | No       | Cumulative time spent in `add_rows` calls, in milliseconds.                          |
-| `set_bounds_time_ms` | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds. |
-| `basis_set_time_ms`  | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.              |
-| `basis_preserved`    | UInt64  | No       | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim).                   |
-| `basis_new_tight`    | UInt64  | No       | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). |
-| `basis_new_slack`    | UInt64  | No       | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`).                                     |
+| Column                       | Type    | Nullable | Description                                                                                                        |
+| ---------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `iteration`                  | UInt32  | No       | Training iteration number (1-based).                                                                               |
+| `phase`                      | Utf8    | No       | Algorithm phase: `"forward"`, `"backward"`, or `"lower_bound"`.                                                    |
+| `stage`                      | Int32   | No       | Stage index (0-based).                                                                                             |
+| `lp_solves`                  | UInt32  | No       | Number of LP solves in this `(iteration, phase, stage)` triple.                                                    |
+| `lp_successes`               | UInt32  | No       | Number of solves that returned optimal.                                                                            |
+| `lp_retries`                 | UInt32  | No       | Number of solves that required at least one retry.                                                                 |
+| `lp_failures`                | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                                                    |
+| `retry_attempts`             | UInt32  | No       | Total retry attempts across all LP solves.                                                                         |
+| `basis_offered`              | UInt32  | No       | Number of `solve_with_basis` calls (warm-start attempts).                                                          |
+| `basis_consistency_failures` | UInt32  | No       | Number of `solve_with_basis` calls in which the basis was rejected because `isBasisConsistent` returned false.     |
+| `simplex_iterations`         | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                                                    |
+| `solve_time_ms`              | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                                               |
+| `load_model_time_ms`         | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                                                      |
+| `add_rows_time_ms`           | Float64 | No       | Cumulative time spent in `add_rows` calls, in milliseconds.                                                        |
+| `set_bounds_time_ms`         | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds.                               |
+| `basis_set_time_ms`          | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.                                            |
+| `basis_preserved`            | UInt64  | No       | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim).                |
+| `basis_new_tight`            | UInt64  | No       | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). |
+| `basis_new_slack`            | UInt64  | No       | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`).                                     |
 
 ### `simulation/solver/iterations.parquet`
 

@@ -211,3 +211,74 @@ To add convertido hashes to a future revision of this document:
 The acceptance gate for epic-03/04/05 regression tickets does not require
 convertido hashes; the 26 d-case hashes are sufficient for the epics as
 currently scoped.
+
+## Post-epic-03 verification
+
+### Summary
+
+All 90 stable parquet entries from the v0.4.5 reference map are **byte-identical**
+between the pre-epic-03 baseline and the post-epic-03 build. Zero unexpected drifts.
+Epic-03 R1 risk (latent bug surfacing) is cleared.
+
+### Capture details
+
+| Field                   | Value                                      |
+| ----------------------- | ------------------------------------------ |
+| Post-epic-03 commit SHA | `def90bad5f40855c5571e74d9399f298a7989115` |
+| Capture date            | 2026-04-18                                 |
+| Machine                 | `Linux 6.19.12-200.fc43.x86_64`            |
+| Stable entries compared | 90                                         |
+| Byte-identical          | 90                                         |
+| Allowlisted drifts      | 0 (see below)                              |
+| Unexpected drifts       | 0                                          |
+| Convertido              | Absent (see Notes on convertido)           |
+
+**Note on commit SHA**: The value above is `git rev-parse HEAD` at the time the
+capture script ran. After this document is committed, the HEAD SHA advances by
+one more commit (this edit itself). This intentional mismatch mirrors the
+same pattern noted in the "Captured at" section above.
+
+### Comparison command
+
+```sh
+bash scripts/capture_v045_reference.sh
+cp target/v045-reference/sha256.txt target/v045-reference-post-epic03/sha256.txt
+python3 scripts/compare_v045_reference.py \
+    --reference-sha256 docs/assessments/v0_4_5_reference.md \
+    --actual-sha256 target/v045-reference-post-epic03/sha256.txt
+```
+
+Output:
+
+```
+all mismatches are in the expected-drifts allowlist (90/90 files byte-identical, 0 allowlisted drift(s))
+```
+
+Exit code: 0.
+
+### Allowed-drifts list
+
+The `scripts/compare_v045_reference.py` script contains the following
+`EXPECTED_DRIFTS` allowlist. In this run, none of these paths appeared in the
+stable hash map (the timing-bearing files were already excluded by the capture
+script, and the `iterations.parquet` schema-rename files are also
+timing-bearing and therefore also excluded). The allowlist is recorded here
+for completeness:
+
+| Path pattern                              | Justification                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| `**/training/solver/iterations.parquet`   | ticket-007: `basis_consistency_failures` schema rename causes hash drift |
+| `**/simulation/solver/iterations.parquet` | ticket-007: `basis_consistency_failures` schema rename causes hash drift |
+| `**/training/convergence.parquet`         | ticket-001: timing columns (`time_*_ms`) are wall-clock unstable         |
+| `**/training/timing/iterations.parquet`   | ticket-001: pure wall-clock timing file, excluded from stable map        |
+| `**/metadata.json`                        | embeds `completed_at` timestamp and hostname, changes on every run       |
+
+### Convertido wall-clock delta
+
+The convertido benchmark case (`~/git/cobre-bridge/example/convertido`) was
+**not present** on this machine at re-capture time. The ±5% wall-clock
+acceptance criterion (ticket-009 R2 risk gate) cannot be evaluated here.
+No performance regression is flagged; the measurement is deferred to the
+reference machine where convertido is available. See the "Notes on
+convertido" section above for instructions on adding convertido hashes when
+the reference machine is available.

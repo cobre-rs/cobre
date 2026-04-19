@@ -664,10 +664,9 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "lp_failures") => "Solves that exhausted all retry levels",
         ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
         ("solver_iterations", "basis_offered") => "Number of solve_with_basis calls",
-        ("solver_iterations", "basis_rejections") => "Times the warm-start basis was rejected",
-        ("solver_iterations", "basis_non_alien_rejections") => {
-            "Times solve_with_basis fell back from the non-alien path to the alien path \
-             because HiGHS rejected the non-alien basis (isBasisConsistent failed)"
+        ("solver_iterations", "basis_consistency_failures") => {
+            "Number of solve_with_basis calls in which the basis was rejected because \
+             total_basic != num_row"
         }
         ("solver_iterations", "clear_solver_count") => {
             "Total clear_solver_state calls in this phase. Non-zero under ClearSolver strategy; \
@@ -1456,8 +1455,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 198,
-            "variables.csv must have exactly 198 data rows (one per column across all schemas, including clear_solver_count and clear_solver_failures)"
+            row_count, 197,
+            "variables.csv must have exactly 197 data rows (one per column across all schemas, including clear_solver_count and clear_solver_failures)"
         );
     }
 

@@ -708,9 +708,8 @@ fn backward_uses_stage_solve() {
 ///   1. Trains for 3 iterations with `HighsSolver`, producing a populated
 ///      `basis_cache` in `TrainingResult`.
 ///   2. Runs simulation against the trained FCF with those stored bases.
-///   3. Asserts `SolverStatsDelta::basis_non_alien_rejections == 0` across
-///      all simulation scenarios — the preemptive fix for the observability
-///      finding.
+///   3. Asserts `SolverStatsDelta::basis_consistency_failures == 0` across
+///      all simulation scenarios.
 ///
 /// guards: unified-path
 #[test]
@@ -913,18 +912,18 @@ fn simulation_zero_rejections_on_cut_churn() {
     )
     .expect("simulation must complete without error");
 
-    // Primary assertion: the unified run_stage_solve path with uniform
-    // enforce_basic_count_invariant must produce zero non-alien rejections.
+    // Primary assertion: the unified run_stage_solve path must produce zero
+    // basis consistency failures (isBasisConsistent never returns false).
     let total_rejections: u64 = sim_result
         .solver_stats
         .iter()
-        .map(|(_, delta)| delta.basis_non_alien_rejections)
+        .map(|(_, delta)| delta.basis_consistency_failures)
         .sum();
 
     assert_eq!(
         total_rejections, 0,
-        "simulation must produce 0 non-alien basis rejections after ticket-005 rewire, \
-         got {total_rejections} (preemptive fix for warm-start-observability-findings.md)"
+        "simulation must produce 0 basis consistency failures after ticket-005 rewire, \
+         got {total_rejections}"
     );
 }
 

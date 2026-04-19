@@ -90,7 +90,7 @@ impl Communicator for StubComm {
 /// `TrainingResult` and the `HighsSolver`. Uses `StubComm`, seed 42, and 1 thread.
 ///
 /// Unlike `run_deterministic`, this helper keeps the solver alive so callers can
-/// inspect `solver.statistics()` (e.g. `basis_rejections`) after training completes.
+/// inspect `solver.statistics()` (e.g. `basis_consistency_failures`) after training completes.
 fn run_deterministic_with_solver(case_dir: &Path) -> (cobre_sddp::TrainingResult, HighsSolver) {
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config must parse");
@@ -869,7 +869,7 @@ fn d11_water_withdrawal() {
 /// Warm-start verification for the D02 system.
 ///
 /// Validates that basis transfer via `solve_with_basis` works end-to-end: after
-/// the training loop completes, `SolverStatistics.basis_rejections` must be zero.
+/// the training loop completes, `SolverStatistics.basis_consistency_failures` must be zero.
 /// A non-zero count would indicate silent cold-start fallbacks, which would
 /// degrade performance without surfacing an error.
 ///
@@ -888,9 +888,9 @@ fn d11_warm_start_verification() {
 
     let stats = solver.statistics();
     assert_eq!(
-        stats.basis_rejections, 0,
+        stats.basis_consistency_failures, 0,
         "D11: expected 0 basis rejections, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures
     );
 }
 

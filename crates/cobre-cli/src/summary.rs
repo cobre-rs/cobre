@@ -462,11 +462,10 @@ pub struct TrainingSummary {
     /// Total number of `solve_with_basis` calls.
     pub total_basis_offered: Option<u64>,
 
-    /// Total number of basis rejections.
-    pub total_basis_rejections: Option<u64>,
-
-    /// Total number of non-alien basis rejections (fallbacks from non-alien path to alien path).
-    pub total_basis_non_alien_rejections: Option<u64>,
+    /// Number of `solve_with_basis` calls in which the basis was rejected because
+    /// `isBasisConsistent` returned false. Replaces two counters removed in v0.5.0
+    /// (see CHANGELOG).
+    pub total_basis_consistency_failures: Option<u64>,
 
     /// Total `clear_solver_state` calls across all solvers in the training phase.
     pub total_clear_solver_count: Option<u64>,
@@ -516,11 +515,10 @@ pub struct SimulationSummary {
     /// Number of `solve_with_basis` calls.
     pub total_basis_offered: Option<u64>,
 
-    /// Times the basis was rejected (cold-start fallback).
-    pub total_basis_rejections: Option<u64>,
-
-    /// Times `solve_with_basis` fell back from the non-alien path to the alien path.
-    pub total_basis_non_alien_rejections: Option<u64>,
+    /// Number of `solve_with_basis` calls in which the basis was rejected because
+    /// `isBasisConsistent` returned false. Replaces two counters removed in v0.5.0
+    /// (see CHANGELOG).
+    pub total_basis_consistency_failures: Option<u64>,
 
     /// Total `clear_solver_state` calls across all solvers in the simulation phase.
     pub total_clear_solver_count: Option<u64>,
@@ -692,17 +690,18 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
             "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
         ));
     }
-    if let (Some(offered), Some(rejections)) = (t.total_basis_offered, t.total_basis_rejections) {
+    if let (Some(offered), Some(failures)) =
+        (t.total_basis_offered, t.total_basis_consistency_failures)
+    {
         if offered > 0 {
             #[allow(clippy::cast_precision_loss)]
-            let hit_pct = (1.0 - rejections as f64 / offered as f64) * 100.0;
+            let hit_pct = (1.0 - failures as f64 / offered as f64) * 100.0;
             let _ = stderr.write_line(&format!(
-                "  Basis reuse:  {hit_pct:.1}% hit ({rejections} rejections / {offered} offered)"
+                "  Basis reuse:  {hit_pct:.1}% hit ({failures} rejected / {offered} offered)"
             ));
+        } else if failures > 0 {
+            let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
         }
-    }
-    if let Some(non_alien_rejections) = t.total_basis_non_alien_rejections {
-        let _ = stderr.write_line(&format!("  Non-alien rejections: {non_alien_rejections}"));
     }
     if let Some(count) = t.total_clear_solver_count {
         let failures = t.total_clear_solver_failures.unwrap_or(0);
@@ -764,18 +763,19 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
             "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
         ));
     }
-    if let (Some(offered), Some(rejections)) = (sim.total_basis_offered, sim.total_basis_rejections)
-    {
+    if let (Some(offered), Some(failures)) = (
+        sim.total_basis_offered,
+        sim.total_basis_consistency_failures,
+    ) {
         if offered > 0 {
             #[allow(clippy::cast_precision_loss)]
-            let hit_pct = (1.0 - rejections as f64 / offered as f64) * 100.0;
+            let hit_pct = (1.0 - failures as f64 / offered as f64) * 100.0;
             let _ = stderr.write_line(&format!(
-                "  Basis reuse:  {hit_pct:.1}% hit ({rejections} rejections / {offered} offered)"
+                "  Basis reuse:  {hit_pct:.1}% hit ({failures} rejected / {offered} offered)"
             ));
+        } else if failures > 0 {
+            let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
         }
-    }
-    if let Some(non_alien_rejections) = sim.total_basis_non_alien_rejections {
-        let _ = stderr.write_line(&format!("  Non-alien rejections: {non_alien_rejections}"));
     }
     if let Some(count) = sim.total_clear_solver_count {
         let failures = sim.total_clear_solver_failures.unwrap_or(0);
@@ -850,8 +850,7 @@ mod tests {
             total_failed: Some(0),
             total_solve_time_seconds: Some(28.8),
             total_basis_offered: Some(34_000),
-            total_basis_rejections: Some(200),
-            total_basis_non_alien_rejections: Some(50),
+            total_basis_consistency_failures: Some(200),
             total_clear_solver_count: Some(0),
             total_clear_solver_failures: Some(0),
             total_simplex_iterations: Some(1_800_000),
@@ -926,8 +925,7 @@ mod tests {
             total_failed_solves: None,
             total_solve_time_seconds: None,
             total_basis_offered: None,
-            total_basis_rejections: None,
-            total_basis_non_alien_rejections: None,
+            total_basis_consistency_failures: None,
             total_clear_solver_count: None,
             total_clear_solver_failures: None,
             total_simplex_iterations: None,
@@ -1094,8 +1092,7 @@ mod tests {
             total_failed_solves: None,
             total_solve_time_seconds: None,
             total_basis_offered: None,
-            total_basis_rejections: None,
-            total_basis_non_alien_rejections: None,
+            total_basis_consistency_failures: None,
             total_clear_solver_count: None,
             total_clear_solver_failures: None,
             total_simplex_iterations: None,

@@ -37,11 +37,8 @@ pub struct SolverStatsRow {
     pub retry_attempts: u32,
     /// Number of `solve_with_basis` calls.
     pub basis_offered: u32,
-    /// Times the basis was rejected.
-    pub basis_rejections: u32,
-    /// Times `solve_with_basis` fell back from the non-alien path to the alien path
-    /// because `HiGHS` rejected the non-alien basis (`isBasisConsistent` failed).
-    pub basis_non_alien_rejections: u32,
+    /// Times the offered basis was rejected because `isBasisConsistent` returned false.
+    pub basis_consistency_failures: u32,
     /// Total `clear_solver_state` calls across all solvers in this phase.
     ///
     /// Non-zero under `CanonicalStateStrategy::ClearSolver`; zero under `Disabled`.
@@ -126,11 +123,9 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         UInt32Array::from(rows.iter().map(|r| r.retry_attempts).collect::<Vec<_>>());
     let basis_offered_arr =
         UInt32Array::from(rows.iter().map(|r| r.basis_offered).collect::<Vec<_>>());
-    let basis_rejections_arr =
-        UInt32Array::from(rows.iter().map(|r| r.basis_rejections).collect::<Vec<_>>());
-    let basis_non_alien_rejections_arr = UInt32Array::from(
+    let basis_consistency_failures_arr = UInt32Array::from(
         rows.iter()
-            .map(|r| r.basis_non_alien_rejections)
+            .map(|r| r.basis_consistency_failures)
             .collect::<Vec<_>>(),
     );
     let clear_solver_count_arr = UInt64Array::from(
@@ -183,8 +178,7 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(lp_failures_arr),
         Arc::new(retry_attempts_arr),
         Arc::new(basis_offered_arr),
-        Arc::new(basis_rejections_arr),
-        Arc::new(basis_non_alien_rejections_arr),
+        Arc::new(basis_consistency_failures_arr),
         Arc::new(clear_solver_count_arr),
         Arc::new(clear_solver_failures_arr),
         Arc::new(simplex_iter_arr),
@@ -308,8 +302,7 @@ mod tests {
                 lp_failures: 0,
                 retry_attempts: 4,
                 basis_offered: 90,
-                basis_rejections: 3,
-                basis_non_alien_rejections: 0,
+                basis_consistency_failures: 3,
                 clear_solver_count: 0,
                 clear_solver_failures: 0,
                 simplex_iterations: 5000,
@@ -334,8 +327,7 @@ mod tests {
                 lp_failures: 0,
                 retry_attempts: 0,
                 basis_offered: 180,
-                basis_rejections: 1,
-                basis_non_alien_rejections: 0,
+                basis_consistency_failures: 1,
                 clear_solver_count: 0,
                 clear_solver_failures: 0,
                 simplex_iterations: 10000,
@@ -367,13 +359,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        // iterations.parquet — 23 scalar columns
+        // iterations.parquet — 22 scalar columns
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         assert!(iter_path.exists());
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 23);
+        assert_eq!(batch.num_columns(), 22);
 
         let iteration_col = batch
             .column(0)
@@ -384,11 +376,11 @@ mod tests {
         assert_eq!(iteration_col.value(1), 1);
 
         // Column indices:
-        // 9 = basis_rejections, 10 = basis_non_alien_rejections,
-        // 11 = clear_solver_count, 12 = clear_solver_failures,
-        // 13 = simplex_iterations, 14 = solve_time_ms
+        // 9 = basis_consistency_failures,
+        // 10 = clear_solver_count, 11 = clear_solver_failures,
+        // 12 = simplex_iterations, 13 = solve_time_ms
         let solve_time_col = batch
-            .column(14)
+            .column(13)
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
@@ -396,7 +388,7 @@ mod tests {
         assert!((solve_time_col.value(1) - 85.0).abs() < 1e-10);
 
         let simplex_col = batch
-            .column(13)
+            .column(12)
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
@@ -426,7 +418,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 23);
+        assert_eq!(builder.schema().fields().len(), 22);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -449,8 +441,7 @@ mod tests {
                 lp_failures: 0,
                 retry_attempts: 3,
                 basis_offered: 40,
-                basis_rejections: 0,
-                basis_non_alien_rejections: 0,
+                basis_consistency_failures: 0,
                 clear_solver_count: 0,
                 clear_solver_failures: 0,
                 simplex_iterations: 2000,
@@ -476,8 +467,7 @@ mod tests {
                 lp_failures: 0,
                 retry_attempts: 0,
                 basis_offered: 80,
-                basis_rejections: 0,
-                basis_non_alien_rejections: 0,
+                basis_consistency_failures: 0,
                 clear_solver_count: 0,
                 clear_solver_failures: 0,
                 simplex_iterations: 5000,

@@ -11,12 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+#### Solver Observability Counters
+
+- Renamed solver observability counters. `basis_rejections` and
+  `basis_non_alien_rejections` (both in `SolverStatistics`, `SolverStatsDelta`,
+  parquet schemas, and CLI summaries) are replaced by a single
+  `basis_consistency_failures` counter. The `SOLVER_STATS_DELTA_SCALAR_FIELDS`
+  constant drops from 18 to 17. The `training/solver/iterations.parquet` schema
+  drops from 23 to 22 columns.
+
 #### Warm-Start Basis Mode
 
 - Deleted `WarmStartBasisMode` enum; warm-start uses the non-alien setter
   unconditionally. See ticket-003's `BasisInconsistent` hard-error.
   Callers that previously called `.with_warm_start_mode(...)` must remove
   that call; the builder method no longer exists.
+- Removed `training.solver.warm_start_basis_mode` from the config schema.
+  Configs containing this key are rejected at parse time with a migration
+  error (`LoadError::SchemaError`); delete the key from `config.json` before
+  upgrading. The non-alien setter is now used unconditionally.
 
 #### Basis Reconstruction
 
@@ -194,6 +207,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   purge" that could destroy LB monotonicity on runs exceeding ~50
   iterations; they are no longer needed now that the LB LP is
   append-only.
+
+### Verified
+
+- D01-D30 + convertido SHA256 map matches v0.4.5 reference except for the
+  documented schema renames from ticket-007. All 90 stable parquet entries are
+  byte-identical between the pre-epic-03 baseline and the post-epic-03 build.
+  Convertido median wall-clock measurement deferred — convertido case absent on
+  this machine (see `docs/assessments/v0_4_5_reference.md` § Post-epic-03
+  verification for details).
 
 ## [0.4.4] - 2026-04-14
 

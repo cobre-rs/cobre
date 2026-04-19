@@ -190,19 +190,6 @@ impl BroadcastConfig {
 
         let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
 
-        // Deprecation warning: warm_start_basis_mode config key is ignored; the
-        // non-alien setter is used unconditionally (ticket-004). The key will be
-        // removed from config in ticket-005.
-        if matches!(
-            config.training.solver.warm_start_basis_mode,
-            cobre_io::config::WarmStartBasisMode::AlienOnly
-        ) {
-            tracing::warn!(
-                "config.training.solver.warm_start_basis_mode = alien_only is ignored \
-                 in v0.5.0; the key will be removed in a later release"
-            );
-        }
-
         Ok(Self {
             seed: params.seed,
             forward_passes: params.forward_passes,
@@ -468,6 +455,52 @@ mod tests {
         assert!(
             !bcast.training_enabled,
             "training_enabled should be false when config.training.enabled is false"
+        );
+    }
+
+    /// Postcard serialization round-trip after deletion of `warm_start_basis_mode`.
+    #[test]
+    fn broadcast_config_roundtrips_via_postcard_after_warm_start_basis_mode_deletion() {
+        use cobre_core::scenario::{SamplingScheme, ScenarioSource};
+
+        use super::BroadcastConfig;
+
+        let json = r#"{
+            "training": {
+                "forward_passes": 4,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 10 }
+                ]
+            }
+        }"#;
+        let config: cobre_io::Config = serde_json::from_str(json).unwrap();
+        let original = BroadcastConfig::from_config(&config).unwrap();
+
+        let bytes = postcard::to_allocvec(&original)
+            .expect("postcard serialization of BroadcastConfig must succeed");
+        let decoded: BroadcastConfig = postcard::from_bytes(&bytes)
+            .expect("postcard deserialization of BroadcastConfig must succeed");
+
+        assert_eq!(decoded.seed, original.seed);
+        assert_eq!(decoded.seed, 42u64);
+        assert_eq!(decoded.forward_passes, original.forward_passes);
+        assert_eq!(decoded.forward_passes, 4u32);
+        assert_eq!(decoded.n_scenarios, original.n_scenarios);
+        assert_eq!(decoded.n_scenarios, 0u32);
+        assert_eq!(decoded.training_source, original.training_source);
+        let default_source = ScenarioSource::default();
+        assert_eq!(
+            decoded.training_source.inflow_scheme,
+            default_source.inflow_scheme
+        );
+        assert_eq!(
+            decoded.training_source.inflow_scheme,
+            SamplingScheme::InSample
+        );
+        assert_eq!(decoded.simulation_source, original.simulation_source);
+        assert_eq!(
+            decoded.simulation_source.inflow_scheme,
+            SamplingScheme::InSample
         );
     }
 

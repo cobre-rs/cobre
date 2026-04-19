@@ -236,28 +236,6 @@ pub struct CutSelectionConfig {
     pub max_active_per_stage: Option<u32>,
 }
 
-/// Controls which `HiGHS` basis-setter is called on each warm-start.
-///
-/// `NonAlienFirst` (the default) calls `cobre_highs_set_basis_non_alien`
-/// first and falls back to the alien setter on rejection.  `AlienOnly`
-/// reproduces the pre-ticket-010 behaviour: always call
-/// `cobre_highs_set_basis` without the consistency check.
-///
-/// Set in `config.json → training.solver.warm_start_basis_mode`.
-/// Existing files that omit this field receive `NonAlienFirst` via
-/// `#[serde(default)]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum WarmStartBasisMode {
-    /// Call `cobre_highs_set_basis` (alien) directly — pre-ticket-010 behaviour.
-    AlienOnly,
-    /// Call `cobre_highs_set_basis_non_alien` first; fall back to alien on
-    /// `HIGHS_STATUS_ERROR`.  Default after ticket-010.
-    #[default]
-    NonAlienFirst,
-}
-
 /// LP solver retry settings (`config.json → training.solver`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -268,14 +246,6 @@ pub struct TrainingSolverConfig {
 
     /// Total time budget in seconds across all retry attempts for one solve.
     pub retry_time_budget_seconds: f64,
-
-    /// Which `HiGHS` basis-setter to use on each warm-start.
-    ///
-    /// `"non_alien_first"` (default) tries the consistency-checking setter first
-    /// and falls back to the alien setter on rejection.
-    /// `"alien_only"` skips the consistency check (pre-ticket-010 behaviour).
-    #[serde(default)]
-    pub warm_start_basis_mode: WarmStartBasisMode,
 
     /// Canonical-state strategy: `"disabled"` (default) or `"clear_solver"`.
     ///
@@ -291,7 +261,6 @@ impl Default for TrainingSolverConfig {
         Self {
             retry_max_attempts: 5,
             retry_time_budget_seconds: 30.0,
-            warm_start_basis_mode: WarmStartBasisMode::default(),
             canonical_state: Self::default_canonical_state(),
         }
     }
@@ -755,6 +724,12 @@ impl Default for ExportsConfig {
 pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
     let raw = std::fs::read_to_string(path).map_err(|e| LoadError::io(path, e))?;
 
+    // Migration-error pre-parse: reject v0.4.x configs that still carry removed
+    // keys. Applied before the strongly-typed parse so the error message names
+    // the key precisely. Unknown keys are silently ignored by serde without this
+    // guard, producing a silent regression instead of a clear upgrade prompt.
+    check_removed_keys(&raw, path)?;
+
     let config: Config = serde_json::from_str(&raw).map_err(|e| {
         // serde_json errors carry a message that describes the field or syntax problem.
         // Unknown enum variants in a tagged enum produce a deserialization error whose
@@ -775,6 +750,50 @@ pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
     validate_config(&config, path)?;
 
     Ok(config)
+}
+
+/// Reject raw JSON configs that carry keys removed in v0.5.0.
+///
+/// This check runs on the raw JSON string before the strongly-typed
+/// `serde_json::from_str::<Config>` parse. Without it, removed keys would be
+/// silently discarded by serde (no `deny_unknown_fields`), giving operators no
+/// indication that their config is stale.
+///
+/// Each entry in `REMOVED_KEYS` is a `(json_pointer, dot_path, message)` triple:
+/// - `json_pointer` — RFC 6901 pointer used with [`serde_json::Value::pointer`].
+/// - `dot_path` — human-readable dot-separated field path returned in the error.
+/// - `message` — migration guidance surfaced to the operator.
+///
+/// To add a new removed key (e.g. for epic-04), append a tuple to `REMOVED_KEYS`.
+fn check_removed_keys(raw: &str, path: &Path) -> Result<(), LoadError> {
+    /// Keys removed from the config schema in v0.5.0.
+    ///
+    /// Format: `(json_pointer, dot_path, migration_message)`.
+    const REMOVED_KEYS: &[(&str, &str, &str)] = &[(
+        "/training/solver/warm_start_basis_mode",
+        "training.solver.warm_start_basis_mode",
+        "this key was removed in v0.5.0; delete it from config.json. \
+             warm-start now uses the non-alien setter unconditionally and \
+             hard-errors on basis inconsistency",
+    )];
+
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| LoadError::parse(path, e.to_string()))?;
+
+    for (pointer, dot_path, message) in REMOVED_KEYS {
+        if !value
+            .pointer(pointer)
+            .is_none_or(serde_json::Value::is_null)
+        {
+            return Err(LoadError::SchemaError {
+                path: path.to_path_buf(),
+                field: (*dot_path).to_string(),
+                message: (*message).to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// Extract a field name hint from a `serde_json` error message.
@@ -1842,5 +1861,68 @@ mod tests {
         let boundary = restored.boundary.unwrap();
         assert_eq!(boundary.path, "../monthly/policy");
         assert_eq!(boundary.source_stage, 5);
+    }
+
+    fn write_config_with_warm_start_basis_mode(value: &str) -> NamedTempFile {
+        write_config(&format!(
+            r#"{{
+              "training": {{
+                "forward_passes": 10,
+                "stopping_rules": [{{"type": "iteration_limit", "limit": 50}}],
+                "solver": {{
+                  "warm_start_basis_mode": "{value}",
+                  "retry_max_attempts": 5,
+                  "retry_time_budget_seconds": 30,
+                  "canonical_state": "disabled"
+                }}
+              }}
+            }}"#
+        ))
+    }
+
+    fn write_minimal_config() -> NamedTempFile {
+        write_config(
+            r#"{
+              "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 50}],
+                "solver": {
+                  "retry_max_attempts": 5,
+                  "retry_time_budget_seconds": 30,
+                  "canonical_state": "disabled"
+                }
+              }
+            }"#,
+        )
+    }
+
+    #[test]
+    fn warm_start_basis_mode_returns_migration_error() {
+        let f = write_config_with_warm_start_basis_mode("alien_only");
+        let err = parse_config(f.path()).unwrap_err();
+        match err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert_eq!(field, "training.solver.warm_start_basis_mode");
+                assert!(message.contains("v0.5.0"), "got: {message}");
+            }
+            other => panic!("expected SchemaError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warm_start_basis_mode_non_alien_also_rejected() {
+        let f = write_config_with_warm_start_basis_mode("non_alien_first");
+        let err = parse_config(f.path()).unwrap_err();
+        assert!(
+            matches!(err, LoadError::SchemaError { .. }),
+            "expected SchemaError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn config_without_warm_start_basis_mode_parses_cleanly() {
+        let f = write_minimal_config();
+        let cfg = parse_config(f.path()).unwrap();
+        assert_eq!(cfg.training.solver.retry_max_attempts, 5);
     }
 }

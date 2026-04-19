@@ -971,8 +971,7 @@ fn run_training_phase(
         local_failed,
         local_solve_time_s,
         local_basis_offered,
-        local_basis_rejections,
-        local_basis_non_alien_rejections,
+        local_basis_consistency_failures,
         local_simplex_iter,
         local_clear_solver_count,
         local_clear_solver_failures,
@@ -985,13 +984,12 @@ fn run_training_phase(
         local_failed as f64,
         local_solve_time_s,
         local_basis_offered as f64,
-        local_basis_rejections as f64,
-        local_basis_non_alien_rejections as f64,
+        local_basis_consistency_failures as f64,
         local_simplex_iter as f64,
         local_clear_solver_count as f64,
         local_clear_solver_failures as f64,
     ];
-    let mut recv_stats = [0.0_f64; 10];
+    let mut recv_stats = [0.0_f64; 9];
     ctx.comm
         .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
@@ -1004,8 +1002,7 @@ fn run_training_phase(
         total_failed,
         total_solve_time_s,
         total_basis_offered,
-        total_basis_rejections,
-        total_basis_non_alien_rejections,
+        total_basis_consistency_failures,
         total_simplex_iter,
         total_clear_solver_count,
         total_clear_solver_failures,
@@ -1019,7 +1016,6 @@ fn run_training_phase(
         recv_stats[6] as u64,
         recv_stats[7] as u64,
         recv_stats[8] as u64,
-        recv_stats[9] as u64,
     );
 
     // Print training summary on rank 0.
@@ -1045,8 +1041,7 @@ fn run_training_phase(
         total_failed: Some(total_failed),
         total_solve_time_seconds: Some(total_solve_time_s),
         total_basis_offered: Some(total_basis_offered),
-        total_basis_rejections: Some(total_basis_rejections),
-        total_basis_non_alien_rejections: Some(total_basis_non_alien_rejections),
+        total_basis_consistency_failures: Some(total_basis_consistency_failures),
         total_clear_solver_count: Some(total_clear_solver_count),
         total_clear_solver_failures: Some(total_clear_solver_failures),
         total_simplex_iterations: Some(total_simplex_iter),
@@ -1065,14 +1060,13 @@ fn run_training_phase(
 /// Aggregate solver statistics from the training stats log.
 fn aggregate_solver_stats(
     stats_log: &[(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)],
-) -> (u64, u64, u64, f64, u64, u64, u64, u64, u64, u64) {
+) -> (u64, u64, u64, f64, u64, u64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
     let mut failed = 0u64;
     let mut solve_time = 0.0_f64;
     let mut basis_offered = 0u64;
-    let mut basis_rejections = 0u64;
-    let mut basis_non_alien_rejections = 0u64;
+    let mut basis_consistency_failures = 0u64;
     let mut simplex = 0u64;
     let mut clear_solver_count = 0u64;
     let mut clear_solver_failures = 0u64;
@@ -1082,8 +1076,7 @@ fn aggregate_solver_stats(
         failed += delta.lp_failures;
         solve_time += delta.solve_time_ms;
         basis_offered += delta.basis_offered;
-        basis_rejections += delta.basis_rejections;
-        basis_non_alien_rejections += delta.basis_non_alien_rejections;
+        basis_consistency_failures += delta.basis_consistency_failures;
         simplex += delta.simplex_iterations;
         clear_solver_count += delta.clear_solver_count;
         clear_solver_failures += delta.clear_solver_failures;
@@ -1094,8 +1087,7 @@ fn aggregate_solver_stats(
         failed,
         solve_time / 1000.0,
         basis_offered,
-        basis_rejections,
-        basis_non_alien_rejections,
+        basis_consistency_failures,
         simplex,
         clear_solver_count,
         clear_solver_failures,
@@ -1309,8 +1301,7 @@ fn print_sim_summary(
             total_failed_solves: Some(agg.lp_failures),
             total_solve_time_seconds: Some(agg.solve_time_ms / 1000.0),
             total_basis_offered: Some(agg.basis_offered),
-            total_basis_rejections: Some(agg.basis_rejections),
-            total_basis_non_alien_rejections: Some(agg.basis_non_alien_rejections),
+            total_basis_consistency_failures: Some(agg.basis_consistency_failures),
             total_clear_solver_count: Some(agg.clear_solver_count),
             total_clear_solver_failures: Some(agg.clear_solver_failures),
             total_simplex_iterations: Some(agg.simplex_iterations),
@@ -1518,8 +1509,7 @@ fn delta_to_stats_row(
         lp_failures: delta.lp_failures as u32,
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
-        basis_rejections: delta.basis_rejections as u32,
-        basis_non_alien_rejections: delta.basis_non_alien_rejections as u32,
+        basis_consistency_failures: delta.basis_consistency_failures as u32,
         clear_solver_count: delta.clear_solver_count,
         clear_solver_failures: delta.clear_solver_failures,
         simplex_iterations: delta.simplex_iterations,

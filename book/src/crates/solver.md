@@ -90,19 +90,19 @@ complete contracts.
 
 ### Method summary
 
-| Method             | `&self` / `&mut self` | Returns                                 | Description                                                                 |
-| ------------------ | --------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
-| `load_model`       | `&mut self`           | `()`                                    | Bulk-loads a structural LP from a `StageTemplate`; replaces any prior model |
-| `add_rows`         | `&mut self`           | `()`                                    | Appends a `RowBatch` of constraint rows to the dynamic region               |
-| `set_row_bounds`   | `&mut self`           | `()`                                    | Updates row lower/upper bounds at indexed positions                         |
-| `set_col_bounds`   | `&mut self`           | `()`                                    | Updates column lower/upper bounds at indexed positions                      |
-| `solve`            | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Solves the current LP; encapsulates internal retry logic                    |
-| `solve_with_basis` | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
-| `reset`            | `&mut self`           | `()`                                    | Clears solver state for error recovery or model switch                      |
-| `get_basis`        | `&mut self`           | `()`                                    | Writes basis status codes into a caller-owned `&mut Basis`                  |
-| `statistics`           | `&self`               | `SolverStatistics`                      | Returns accumulated monotonic solve counters                                |
-| `name`                 | `&self`               | `&'static str`                          | Returns a static string identifying the backend                             |
-| `solver_name_version`  | `&self`               | `String`                                | Returns `"name vX.Y.Z"` (e.g. `"HiGHS v1.8.1"`) for metadata output       |
+| Method                | `&self` / `&mut self` | Returns                                 | Description                                                                 |
+| --------------------- | --------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| `load_model`          | `&mut self`           | `()`                                    | Bulk-loads a structural LP from a `StageTemplate`; replaces any prior model |
+| `add_rows`            | `&mut self`           | `()`                                    | Appends a `RowBatch` of constraint rows to the dynamic region               |
+| `set_row_bounds`      | `&mut self`           | `()`                                    | Updates row lower/upper bounds at indexed positions                         |
+| `set_col_bounds`      | `&mut self`           | `()`                                    | Updates column lower/upper bounds at indexed positions                      |
+| `solve`               | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Solves the current LP; encapsulates internal retry logic                    |
+| `solve_with_basis`    | `&mut self`           | `Result<SolutionView<'_>, SolverError>` | Sets a cached basis, then solves (warm-start path)                          |
+| `reset`               | `&mut self`           | `()`                                    | Clears solver state for error recovery or model switch                      |
+| `get_basis`           | `&mut self`           | `()`                                    | Writes basis status codes into a caller-owned `&mut Basis`                  |
+| `statistics`          | `&self`               | `SolverStatistics`                      | Returns accumulated monotonic solve counters                                |
+| `name`                | `&self`               | `&'static str`                          | Returns a static string identifying the backend                             |
+| `solver_name_version` | `&self`               | `String`                                | Returns `"name vX.Y.Z"` (e.g. `"HiGHS v1.8.1"`) for metadata output         |
 
 ### Mutability convention
 
@@ -213,27 +213,27 @@ first because it is the most diagnostic field. The Rust struct orders them as
 `basis_new_tight`, `basis_new_slack`, `basis_preserved`, which matches the
 writer order in the parquet output.
 
-| Field                          | Type       | Description                                                                                         |
-| ------------------------------ | ---------- | --------------------------------------------------------------------------------------------------- |
-| `solve_count`                  | `u64`      | Total `solve` and `solve_with_basis` calls.                                                         |
-| `success_count`                | `u64`      | Solves that returned optimal.                                                                       |
-| `failure_count`                | `u64`      | Solves that returned terminal error after retries.                                                   |
-| `total_iterations`             | `u64`      | Total simplex iterations across all solves.                                                          |
-| `retry_count`                  | `u64`      | Total retry attempts across all solves.                                                              |
-| `total_solve_time_seconds`     | `f64`      | Cumulative wall-clock solve time.                                                                    |
-| `basis_rejections`             | `u64`      | Times `solve_with_basis` fell back to cold-start.                                                    |
-| `first_try_successes`          | `u64`      | Solves optimal on first attempt. Enables: `first_try_rate = first_try_successes / solve_count`.      |
-| `basis_offered`                | `u64`      | Total `solve_with_basis` calls. Enables: `basis_hit_rate = 1 - basis_rejections / basis_offered`.    |
-| `load_model_count`             | `u64`      | Total `load_model` calls.                                                                            |
-| `add_rows_count`               | `u64`      | Total `add_rows` calls.                                                                              |
-| `total_load_model_time_seconds`| `f64`      | Cumulative time in `load_model`.                                                                     |
-| `total_add_rows_time_seconds`  | `f64`      | Cumulative time in `add_rows`.                                                                       |
-| `total_set_bounds_time_seconds`| `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                              |
-| `total_basis_set_time_seconds` | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                          |
-| `basis_preserved`              | `u64`      | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim). Set by the calling algorithm via `reconstruct_basis`. |
-| `basis_new_tight`              | `u64`      | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). Set by the calling algorithm. |
-| `basis_new_slack`              | `u64`      | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`). Set by the calling algorithm. |
-| `retry_level_histogram`        | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.  |
+| Field                           | Type       | Description                                                                                                                                               |
+| ------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `solve_count`                   | `u64`      | Total `solve` and `solve_with_basis` calls.                                                                                                               |
+| `success_count`                 | `u64`      | Solves that returned optimal.                                                                                                                             |
+| `failure_count`                 | `u64`      | Solves that returned terminal error after retries.                                                                                                        |
+| `total_iterations`              | `u64`      | Total simplex iterations across all solves.                                                                                                               |
+| `retry_count`                   | `u64`      | Total retry attempts across all solves.                                                                                                                   |
+| `total_solve_time_seconds`      | `f64`      | Cumulative wall-clock solve time.                                                                                                                         |
+| `basis_consistency_failures`    | `u64`      | `solve_with_basis` calls where `isBasisConsistent` returned false; solver fell back to cold-start.                                                        |
+| `first_try_successes`           | `u64`      | Solves optimal on first attempt. Enables: `first_try_rate = first_try_successes / solve_count`.                                                           |
+| `basis_offered`                 | `u64`      | Total `solve_with_basis` calls. Enables: `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.                                        |
+| `load_model_count`              | `u64`      | Total `load_model` calls.                                                                                                                                 |
+| `add_rows_count`                | `u64`      | Total `add_rows` calls.                                                                                                                                   |
+| `total_load_model_time_seconds` | `f64`      | Cumulative time in `load_model`.                                                                                                                          |
+| `total_add_rows_time_seconds`   | `f64`      | Cumulative time in `add_rows`.                                                                                                                            |
+| `total_set_bounds_time_seconds` | `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                                                                                   |
+| `total_basis_set_time_seconds`  | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                                                                               |
+| `basis_preserved`               | `u64`      | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim). Set by the calling algorithm via `reconstruct_basis`. |
+| `basis_new_tight`               | `u64`      | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). Set by the calling algorithm.          |
+| `basis_new_slack`               | `u64`      | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`). Set by the calling algorithm.                                              |
+| `retry_level_histogram`         | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.                                                        |
 
 See the [`SolverStatistics`
 rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.SolverStatistics.html).
@@ -320,9 +320,9 @@ placed in `LpSolution.reduced_costs`.
 (because new dynamic constraint rows were added since the basis was extracted),
 the extra rows are filled with the HiGHS "Basic" status code (1). When the
 saved basis has more rows than the current LP, the extra entries are truncated.
-If HiGHS rejects the basis (returns `HIGHS_STATUS_ERROR` from `Highs_setBasis`),
+If HiGHS rejects the basis (`isBasisConsistent` returns false),
 the method falls back to a cold-start solve and increments
-`SolverStatistics.basis_rejections`. After setting the basis, `solve_with_basis`
+`SolverStatistics.basis_consistency_failures`. After setting the basis, `solve_with_basis`
 delegates to `solve()`, which handles the retry escalation sequence.
 
 The calling algorithm (cobre-sddp) wraps each stored basis in a

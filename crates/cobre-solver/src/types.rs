@@ -155,31 +155,11 @@ pub struct SolverStatistics {
     /// Cumulative wall-clock time spent in solver calls, in seconds.
     pub total_solve_time_seconds: f64,
 
-    /// Number of times `solve_with_basis` fell back to cold-start because the
-    /// alien `HiGHS` setter (`Highs_setBasis`) returned `HIGHS_STATUS_ERROR`.
-    ///
-    /// After ticket-004, the alien setter is no longer called; the non-alien
-    /// path is unconditional. This counter is therefore **structurally zero**
-    /// in all current code paths and is retained for wire-format compatibility
-    /// only. Non-alien rejections are tracked separately in
-    /// [`basis_non_alien_rejections`](Self::basis_non_alien_rejections) and
-    /// surface as `Err(SolverError::BasisInconsistent)`.
-    pub basis_rejections: u64,
-
-    /// Number of times `solve_with_basis` fell back from the non-alien path
-    /// to the alien path due to `HiGHS` rejecting the non-alien basis
-    /// (`isBasisConsistent` failed).
-    ///
-    /// A non-zero value indicates that basis padding or construction
-    /// produced a basis whose total basic count did not equal `num_rows`.
-    /// On the baked-template path this should be effectively zero; on the
-    /// non-baked path it tracks how often padding breaks consistency.
-    /// Non-alien rate can be computed as
-    /// `1 - basis_non_alien_rejections / basis_offered`.
-    ///
-    /// Distinct from `basis_rejections`, which counts alien-path
-    /// rejections (pathological misconfigurations).
-    pub basis_non_alien_rejections: u64,
+    /// Number of `solve_with_basis` calls in which `cobre_highs_set_basis_non_alien`
+    /// rejected the offered basis because `isBasisConsistent` returned false.
+    /// Incremented once per rejected offer. Replaces two counters removed in v0.5.0
+    /// (see CHANGELOG).
+    pub basis_consistency_failures: u64,
 
     /// Total number of `clear_solver_state` calls on this solver instance.
     ///
@@ -202,8 +182,8 @@ pub struct SolverStatistics {
 
     /// Total number of `solve_with_basis` calls (basis offers).
     ///
-    /// Combined with `basis_rejections`, enables basis hit rate computation:
-    /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
+    /// Combined with `basis_consistency_failures`, enables acceptance-rate computation:
+    /// `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.
     pub basis_offered: u64,
 
     /// Total number of `load_model` calls.
@@ -674,7 +654,7 @@ mod tests {
         assert_eq!(stats.total_iterations, 0);
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
-        assert_eq!(stats.basis_rejections, 0);
+        assert_eq!(stats.basis_consistency_failures, 0);
         assert_eq!(stats.first_try_successes, 0);
         assert_eq!(stats.basis_offered, 0);
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
@@ -684,12 +664,6 @@ mod tests {
         assert_eq!(stats.basis_new_slack, 0);
         assert_eq!(stats.basis_preserved, 0);
         assert!(stats.retry_level_histogram.is_empty());
-    }
-
-    #[test]
-    fn default_stats_has_zero_non_alien_rejections() {
-        let s = SolverStatistics::default();
-        assert_eq!(s.basis_non_alien_rejections, 0);
     }
 
     #[test]

@@ -1247,7 +1247,7 @@ impl SolverInterface for HighsSolver {
             // `isBasisConsistent` (total_basic != num_row).
             // Count the rejection and surface it as a hard error —
             // no alien-setter fallback (ticket-003 BasisInconsistent path).
-            self.stats.basis_non_alien_rejections += 1;
+            self.stats.basis_consistency_failures += 1;
             // Count basic entries from the already-populated buffers.
             // `basis_col_i32[..num_cols]` and `basis_row_i32[..num_rows]`
             // were filled by the copy block above before this setter call.
@@ -1777,9 +1777,9 @@ mod tests {
 
         let stats = solver.statistics();
         assert_eq!(
-            stats.basis_rejections, 0,
-            "basis_rejections must be 0 when raw basis is accepted, got {}",
-            stats.basis_rejections
+            stats.basis_consistency_failures, 0,
+            "basis_consistency_failures must be 0 when raw basis is accepted, got {}",
+            stats.basis_consistency_failures
         );
     }
 
@@ -1825,8 +1825,8 @@ mod tests {
     /// Solves SS1.1 cold, extracts the optimal basis, reloads the model, and
     /// warm-starts via `solve_with_basis`.  The non-alien FFI call
     /// (`cobre_highs_set_basis_non_alien`) should accept a basis that was just
-    /// produced by `HiGHS` itself, so `basis_non_alien_rejections` must not
-    /// increase and `basis_rejections` must remain zero.
+    /// produced by `HiGHS` itself, so `basis_consistency_failures` must not
+    /// increase.
     #[test]
     fn test_solve_with_basis_non_alien_success() {
         // Arrange
@@ -1849,14 +1849,9 @@ mod tests {
         // Assert
         let after = solver.statistics();
         assert_eq!(
-            after.basis_non_alien_rejections - before.basis_non_alien_rejections,
+            after.basis_consistency_failures - before.basis_consistency_failures,
             0,
-            "non-alien path should accept a self-extracted basis; rejections delta must be 0"
-        );
-        assert_eq!(
-            after.basis_rejections - before.basis_rejections,
-            0,
-            "alien fallback must not be triggered when non-alien path succeeds"
+            "non-alien path should accept a self-extracted basis; consistency failures delta must be 0"
         );
     }
 
@@ -1867,12 +1862,11 @@ mod tests {
     /// `HIGHS_BASIS_STATUS_BASIC`, all row statuses `HIGHS_BASIS_STATUS_BASIC`).
     /// For the 3-column, 2-row SS1.1 LP this yields 5 basic variables against a
     /// rank of 2, which `cobre_highs_set_basis_non_alien` rejects with
-    /// `HIGHS_STATUS_ERROR`.  The error is now surfaced as a hard `Err` instead
-    /// of silently calling the alien setter.
+    /// `HIGHS_STATUS_ERROR`.  The error is surfaced as a hard `Err` and
+    /// `basis_consistency_failures` increments by 1.
     ///
     /// After the call:
-    /// - `basis_non_alien_rejections` increments by 1 (non-alien rejected).
-    /// - `basis_rejections` stays at 0 (alien setter is never called).
+    /// - `basis_consistency_failures` increments by 1.
     /// - The result is `Err(SolverError::BasisInconsistent { num_row: 2,
     ///   total_basic: 5, col_basic: 3, row_basic: 2 })`.
     #[test]
@@ -1909,14 +1903,9 @@ mod tests {
         // Assert counters — the mutable borrow from solve_with_basis is gone.
         let after = solver.statistics();
         assert_eq!(
-            after.basis_non_alien_rejections - before.basis_non_alien_rejections,
+            after.basis_consistency_failures - before.basis_consistency_failures,
             1,
-            "basis_non_alien_rejections must increment by 1 for an overcounted basis"
-        );
-        assert_eq!(
-            after.basis_rejections - before.basis_rejections,
-            0,
-            "alien setter must not be called — basis_rejections must stay at zero"
+            "basis_consistency_failures must increment by 1 for an overcounted basis"
         );
 
         // Assert the returned error.

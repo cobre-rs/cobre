@@ -62,7 +62,6 @@ use cobre_io::config::StoppingRuleConfig;
 use cobre_sddp::{
     SolverStatsDelta, StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
 };
-// ticket-007 deletion target: WarmStartBasisMode removed from cobre-solver in ticket-004
 use cobre_solver::highs::HighsSolver;
 
 // ---------------------------------------------------------------------------
@@ -172,7 +171,7 @@ fn sum_forward_deltas(log: &[(u64, &'static str, i32, SolverStatsDelta)]) -> Sol
 ///   ± 5 % tolerance band.  Run observed value; regenerate the pin only if
 ///   `HiGHS` major version changes.
 /// - `final_lb` to float-exact equality (lower bound must be stable).
-/// - `basis_rejections == 0` (reconstruction must never produce an invalid
+/// - `basis_consistency_failures == 0` (reconstruction must never produce an invalid
 ///   warm-start basis).
 ///
 /// ## Sensitivity
@@ -286,10 +285,10 @@ fn basis_reconstruct_churn() {
     // AC-4: zero basis rejections — length-matching invariant must hold.
     // If reconstruction produces a basis with wrong row count, HiGHS rejects it.
     assert_eq!(
-        fwd.basis_rejections, 0,
+        fwd.basis_consistency_failures, 0,
         "basis_reconstruct_churn: expected 0 basis rejections, got {} \
          (reconstructed bases must always be accepted by HiGHS)",
-        fwd.basis_rejections
+        fwd.basis_consistency_failures
     );
 
     // AC-5: simplex-iteration pin (±5 % tolerance).
@@ -329,7 +328,7 @@ fn basis_reconstruct_churn() {
 ///   correctly classified at the padding state.
 /// - `basis_preserved > 0` by iteration 3: cuts from an earlier backward
 ///   pass are found in the stored basis and assigned the preserved status.
-/// - `basis_rejections == 0`: no length-mismatch on the `HiGHS` side.
+/// - `basis_consistency_failures == 0`: no length-mismatch on the `HiGHS` side.
 /// - Lower bound is positive and finite.
 ///
 /// ## Failure mode
@@ -411,9 +410,9 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
 
     // AC-C: zero rejections.
     assert_eq!(
-        fwd.basis_rejections, 0,
+        fwd.basis_consistency_failures, 0,
         "no_churn: expected 0 basis rejections, got {}",
-        fwd.basis_rejections
+        fwd.basis_consistency_failures
     );
 
     // AC-D: lower bound is positive and finite.
@@ -448,13 +447,13 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
 ///   with no active cuts, there are no new rows to classify.
 /// - `preserved + new_tight + new_slack == 0 == active_cuts_at_forward_time`:
 ///   the accounting invariant holds for the degenerate (empty) case.
-/// - `basis_rejections == 0`: an empty FCF must still produce a valid warm-start.
+/// - `basis_consistency_failures == 0`: an empty FCF must still produce a valid warm-start.
 /// - The LP optimum of iteration 2 is finite (cold-start with no cuts).
 ///
 /// ## Failure mode
 ///
 /// If the reconstruction path panics or produces an invalid basis when the
-/// FCF is empty, `basis_rejections` will be non-zero and the assertion will
+/// FCF is empty, `basis_consistency_failures` will be non-zero and the assertion will
 /// fire.
 #[test]
 fn test_basis_reconstruct_full_churn_no_rows_preserved() {
@@ -653,10 +652,10 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 
         // AC-F4: zero basis rejections — empty FCF must still produce a valid warm-start.
         assert_eq!(
-            iter2_fwd_agg.basis_rejections, 0,
+            iter2_fwd_agg.basis_consistency_failures, 0,
             "full_churn: iteration 2 forward must have 0 basis rejections, got {} \
              (empty FCF must not cause HiGHS to reject the warm-start basis)",
-            iter2_fwd_agg.basis_rejections
+            iter2_fwd_agg.basis_consistency_failures
         );
 
         // AC-F5: LP optimum is finite (cold-start with no cuts runs successfully).
@@ -694,7 +693,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 /// ## Assertion
 ///
 /// `sum(basis_preserved across all simulation scenarios) > 0`.
-/// `basis_rejections == 0` (reconstructed bases must always be accepted).
+/// `basis_consistency_failures == 0` (reconstructed bases must always be accepted).
 #[test]
 fn simulate_warm_start_basis_preserved_gt_zero() {
     let case_dir = d03_case_dir();
@@ -788,7 +787,7 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     drop(result_tx);
     drain_handle.join().expect("drain thread must not panic");
 
-    // Aggregate basis_preserved and basis_rejections across all simulation scenarios.
+    // Aggregate basis_preserved and basis_consistency_failures across all simulation scenarios.
     let total_preserved: u64 = sim_result
         .solver_stats
         .iter()
@@ -797,7 +796,7 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     let total_rejections: u64 = sim_result
         .solver_stats
         .iter()
-        .map(|(_, delta)| delta.basis_rejections)
+        .map(|(_, delta)| delta.basis_consistency_failures)
         .sum();
 
     assert!(
@@ -807,21 +806,7 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     );
     assert_eq!(
         total_rejections, 0,
-        "simulate_warm_start: expected 0 basis_rejections in simulation, got {total_rejections} \
+        "simulate_warm_start: expected 0 basis_consistency_failures in simulation, got {total_rejections} \
          (reconstructed bases must always be accepted by HiGHS)"
     );
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: Simulation invariant fix — cut-set churn + enforce_basic_count_invariant
-// ---------------------------------------------------------------------------
-
-/// Stubbed: `WarmStartBasisMode` enum deleted in ticket-004; full test body
-/// references `AlienOnly`/`NonAlienFirst` variants removed with the enum.
-/// Deletion of this test dispatched to ticket-007.
-#[test]
-#[ignore = "deletion dispatched to ticket-007"]
-fn simulate_invariant_zero_non_alien_rejections_under_churn() {
-    // Stubbed: body deleted with WarmStartBasisMode in ticket-004.
-    // Full deletion (including this function) dispatched to ticket-007.
 }

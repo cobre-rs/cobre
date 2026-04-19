@@ -608,8 +608,8 @@ fn test_solver_highs_statistics_initial() {
         "expected total_solve_time_seconds = 0.0 on fresh solver"
     );
     assert_eq!(
-        stats.basis_rejections, 0,
-        "expected basis_rejections = 0 on fresh solver"
+        stats.basis_consistency_failures, 0,
+        "expected basis_consistency_failures = 0 on fresh solver"
     );
 }
 
@@ -651,9 +651,9 @@ fn test_solver_highs_statistics_increment() {
         stats.total_solve_time_seconds
     );
     assert_eq!(
-        stats.basis_rejections, 0,
-        "expected basis_rejections = 0 after cold solves, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures, 0,
+        "expected basis_consistency_failures = 0 after cold solves, got {}",
+        stats.basis_consistency_failures
     );
 }
 
@@ -1436,7 +1436,7 @@ fn basis_cut_extension() {
 }
 
 /// A warm-start via `solve_with_basis` must not require more simplex
-/// iterations than a cold-start, and `basis_rejections` must remain zero.
+/// iterations than a cold-start, and `basis_consistency_failures` must remain zero.
 #[test]
 fn basis_warm_start_iterations() {
     let mut solver = HighsSolver::new().expect("solver");
@@ -1462,9 +1462,9 @@ fn basis_warm_start_iterations() {
 
     let stats = solver.statistics();
     assert_eq!(
-        stats.basis_rejections, 0,
-        "basis_rejections must be 0 after accepted basis, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures, 0,
+        "basis_consistency_failures must be 0 after accepted basis, got {}",
+        stats.basis_consistency_failures
     );
 }
 

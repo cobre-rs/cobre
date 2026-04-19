@@ -1351,17 +1351,17 @@ fn d17_level1_cut_selection_convergence() {
     );
 
     // Diagnostic: basis rejection rate after cut selection.
-    // With the mock solver, basis_rejections is always 0 since the mock
+    // With the mock solver, basis_consistency_failures is always 0 since the mock
     // does not track basis operations. This check is informational — it
     // would detect degradation if the mock were upgraded to track basis
     // rejections, or when running with a real solver.
     // See BasisStore doc comment for the design decision (option 1 vs 3).
     let stats = solver.statistics();
-    if stats.basis_offered > 0 && stats.basis_rejections > stats.basis_offered / 2 {
+    if stats.basis_offered > 0 && stats.basis_consistency_failures > stats.basis_offered / 2 {
         eprintln!(
             "WARNING: basis rejection rate after cut selection is {}/{}. \
              Consider implementing option 3 (discard cut row statuses).",
-            stats.basis_rejections, stats.basis_offered
+            stats.basis_consistency_failures, stats.basis_offered
         );
     }
 }
@@ -1462,9 +1462,9 @@ fn d17_level1_cut_selection_reconstruction() {
     // Zero basis rejections — reconstruction produces valid warm-start bases.
     let stats = solver.statistics();
     assert_eq!(
-        stats.basis_rejections, 0,
+        stats.basis_consistency_failures, 0,
         "D17+reconstruction: expected 0 basis rejections, got {}",
-        stats.basis_rejections,
+        stats.basis_consistency_failures,
     );
 }
 
@@ -1711,9 +1711,9 @@ fn test_forward_basis_reconstruct_bit_identical_d01() {
     // Sanity: zero basis rejections — reconstructed bases must be accepted.
     let stats = solver.statistics();
     assert_eq!(
-        stats.basis_rejections, 0,
+        stats.basis_consistency_failures, 0,
         "reconstruct path: expected 0 basis rejections, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures
     );
 }
 

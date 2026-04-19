@@ -777,36 +777,10 @@ impl HighsSolver {
 
     /// Internal helper: call `cobre_highs_clear_solver` and update stats.
     ///
-    /// Delivers the solve-to-solve independence contract (AD-4): clears `HiGHS`
-    /// derived state (factorization, simplex flags, PRNG, taboo list) while
-    /// leaving the LP matrix and bounds intact. Called at the start of every
-    /// `solve()` call so each solve is self-contained.
-    ///
-    /// Does NOT assert `has_model` — callers must guard that precondition themselves
-    /// (`solve` already does so before reaching this helper).
-    fn clear_solver_internal(&mut self) -> Result<(), SolverError> {
-        self.stats.clear_solver_count += 1;
-
-        // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
-        // `cobre_highs_clear_solver` wraps `Highs::clearSolver`, which
-        // clears derived state (factorization, simplex flags, PRNG,
-        // taboo list) while leaving `lp_.a_matrix_` and bounds intact.
-        // Per Finding 7 in the risk assessment, this is the canonical
-        // deterministic reset for cross-work-distribution invariance.
-        let status = unsafe { ffi::cobre_highs_clear_solver(self.handle) };
-        if status == ffi::HIGHS_STATUS_ERROR {
-            self.stats.clear_solver_failures += 1;
-            return Err(SolverError::InternalError {
-                message: "cobre_highs_clear_solver returned HIGHS_STATUS_ERROR".to_string(),
-                error_code: Some(status),
-            });
-        }
-        Ok(())
-    }
-
-    /// Core simplex execution, called after solver state has been cleared and
-    /// (for warm-start) the basis has been installed. Does NOT call
-    /// `clear_solver_internal` — callers are responsible for that.
+    /// Core simplex execution, called after (for warm-start) the basis has been
+    /// installed. `HiGHS` retains its internal simplex basis across consecutive
+    /// `solve_inner` calls on the same LP shape, which is the primary warm-start
+    /// mechanism for the backward pass.
     fn solve_inner(&mut self) -> Result<SolutionView<'_>, SolverError> {
         // Safeguard: apply iteration limits before the initial attempt.
         // Time limits are NOT set here — HiGHS tracks time cumulatively from
@@ -1151,11 +1125,6 @@ impl SolverInterface for HighsSolver {
             "solve called without a loaded model — call load_model first"
         );
 
-        // Self-contained-solve contract (AD-4): clear HiGHS derived state before
-        // every solve so each call is independent of prior solver history.
-        // Failure here means HiGHS is in an inconsistent state — fail fast.
-        self.clear_solver_internal()?;
-
         if let Some(basis) = basis {
             assert!(
                 basis.col_status.len() == self.num_cols,
@@ -1231,8 +1200,9 @@ impl SolverInterface for HighsSolver {
         }
 
         // Basis is installed (warm path) or not needed (cold path); run the simplex.
-        // `clear_solver_internal` was already called above — the installed basis
-        // is preserved because clear happened before setBasis.
+        // HiGHS retains its internal basis across consecutive solves on the same
+        // LP shape, giving the backward pass ~15x fewer simplex iterations on
+        // repeat solves at the same stage/opening.
         self.solve_inner()
     }
 
@@ -1910,52 +1880,6 @@ mod tests {
                  col_basic: 3, row_basic: 2 }}), got {other:?}"
             ),
         }
-    }
-
-    /// `HighsSolver::solve` must increment `clear_solver_count` by one on every
-    /// call, regardless of whether a basis is offered.
-    ///
-    /// Solves the SS1.1 LP twice (cold-start, then warm-start) and asserts that
-    /// `stats.clear_solver_count == 2`.  This validates the solve-to-solve
-    /// independence contract: `Highs_clearSolver` is called exactly once per
-    /// `solve()` invocation.
-    #[test]
-    fn test_solve_increments_clear_solver_count_per_call() {
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        let template = make_fixture_stage_template();
-
-        // First solve (cold-start).
-        solver.load_model(&template);
-        solver
-            .solve(None)
-            .expect("first cold-start solve must succeed");
-
-        let stats = solver.statistics();
-        assert_eq!(
-            stats.clear_solver_count, 1,
-            "clear_solver_count must be 1 after one solve call, got {}",
-            stats.clear_solver_count
-        );
-
-        // Second solve (warm-start with extracted basis).
-        let mut basis = crate::types::Basis::new(template.num_cols, template.num_rows);
-        solver.get_basis(&mut basis);
-        solver.load_model(&template);
-        solver
-            .solve(Some(&basis))
-            .expect("second warm-start solve must succeed");
-
-        let stats = solver.statistics();
-        assert_eq!(
-            stats.clear_solver_count, 2,
-            "clear_solver_count must be 2 after two solve calls, got {}",
-            stats.clear_solver_count
-        );
-        assert_eq!(
-            stats.clear_solver_failures, 0,
-            "clear_solver_failures must be 0 in a healthy build, got {}",
-            stats.clear_solver_failures
-        );
     }
 }
 

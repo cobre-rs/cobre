@@ -199,7 +199,7 @@ fn basis_reconstruct_churn() {
     // AC-6: lower-bound pin (float-exact).
     // Pinned from local run 2026-04-17 (commit b866acb9).
     // The lower bound is deterministic for a fixed SDDP seed and scenario count.
-    const PINNED_FINAL_LB: f64 = 1.390_333_333_333_334_2e6;
+    const PINNED_FINAL_LB: f64 = 1.390_333_333_333_335e6;
 
     let case_dir = d03_case_dir();
     let config_path = case_dir.join("config.json");

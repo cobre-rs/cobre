@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+#### Warm-Start Basis Mode
+
+- Deleted `WarmStartBasisMode` enum; warm-start uses the non-alien setter
+  unconditionally. See ticket-003's `BasisInconsistent` hard-error.
+  Callers that previously called `.with_warm_start_mode(...)` must remove
+  that call; the builder method no longer exists.
+
 #### Basis Reconstruction
 
 - Renamed parquet columns in `training/solver/iterations.parquet`:

@@ -28,37 +28,6 @@ use crate::{
     types::{RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate},
 };
 
-// ─── Warm-start basis mode ────────────────────────────────────────────────────
-
-/// Controls which `HiGHS` basis-setter is called during warm-start.
-///
-/// This mirrors `cobre_io::config::WarmStartBasisMode` without creating a
-/// cross-crate dependency from the infrastructure solver crate to the I/O
-/// crate.  Conversion from the I/O type is performed at the construction site
-/// in `cobre-sddp` and `cobre-cli`, which depend on both crates.
-///
-/// # Variants
-///
-/// - [`WarmStartBasisMode::NonAlienFirst`] (default) — calls
-///   `cobre_highs_set_basis_non_alien` first; falls back to the alien setter
-///   (`cobre_highs_set_basis`) when the non-alien call returns
-///   `HIGHS_STATUS_ERROR`.  Tracks fallbacks in
-///   [`SolverStatistics::basis_non_alien_rejections`].
-///
-/// - [`WarmStartBasisMode::AlienOnly`] — always calls
-///   `cobre_highs_set_basis` without the consistency check.  This was the
-///   only path before ticket-010 and is retained for rollback via
-///   `config.json`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WarmStartBasisMode {
-    /// Call `cobre_highs_set_basis` (alien) directly — pre-ticket-010 path.
-    AlienOnly,
-    /// Call `cobre_highs_set_basis_non_alien` first; fall back to alien on
-    /// rejection.  Default after ticket-010.
-    #[default]
-    NonAlienFirst,
-}
-
 // ─── Default HiGHS configuration ─────────────────────────────────────────────
 //
 // The eight performance-tuned options applied at construction and restored after
@@ -208,9 +177,6 @@ pub struct HighsSolver {
     /// Accumulated solver statistics. Counters grow monotonically from zero;
     /// not reset by `reset()`.
     stats: SolverStatistics,
-    /// Which basis-setter to call in `solve_with_basis`.
-    /// Defaults to [`WarmStartBasisMode::NonAlienFirst`].
-    warm_start_basis_mode: WarmStartBasisMode,
 }
 
 // SAFETY: `HighsSolver` holds a raw pointer to a `HiGHS` C++ object. The `HiGHS`
@@ -300,34 +266,7 @@ impl HighsSolver {
                 retry_level_histogram: vec![0u64; 12],
                 ..SolverStatistics::default()
             },
-            warm_start_basis_mode: WarmStartBasisMode::default(),
         })
-    }
-
-    /// Sets the warm-start basis mode for this solver instance.
-    ///
-    /// Use this builder method after construction to select which `HiGHS`
-    /// basis-setter is called in [`solve_with_basis`](Self::solve_with_basis):
-    ///
-    /// - [`WarmStartBasisMode::NonAlienFirst`] (the default after ticket-010) —
-    ///   calls `cobre_highs_set_basis_non_alien` first and falls back to the
-    ///   alien setter on rejection.
-    /// - [`WarmStartBasisMode::AlienOnly`] — always calls `cobre_highs_set_basis`
-    ///   without the consistency check (pre-ticket-010 behaviour).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use cobre_solver::{HighsSolver, highs::WarmStartBasisMode};
-    ///
-    /// let solver = HighsSolver::new()
-    ///     .expect("HiGHS initialisation failed")
-    ///     .with_warm_start_mode(WarmStartBasisMode::AlienOnly);
-    /// ```
-    #[must_use]
-    pub fn with_warm_start_mode(mut self, mode: WarmStartBasisMode) -> Self {
-        self.warm_start_basis_mode = mode;
-        self
     }
 
     /// Applies the eight performance-tuned `HiGHS` configuration options.
@@ -1287,7 +1226,7 @@ impl SolverInterface for HighsSolver {
             self.basis_row_i32[basis_rows..lp_rows].fill(ffi::HIGHS_BASIS_STATUS_BASIC);
         }
 
-        // SAFETY for both basis-setter calls below:
+        // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer obtained from
         //   `cobre_highs_create()` and kept alive by `HighsSolver`.
         // - `basis_col_i32` was sized to `num_cols` in `load_model` and grown in
@@ -1296,50 +1235,47 @@ impl SolverInterface for HighsSolver {
         //   `add_rows`; the slice written above covers exactly `num_rows` entries
         //   (with missing rows extended to BASIC).
         let basis_set_start = Instant::now();
-        let set_status = match self.warm_start_basis_mode {
-            WarmStartBasisMode::AlienOnly => {
-                // SAFETY: see block comment above.
-                unsafe {
-                    ffi::cobre_highs_set_basis(
-                        self.handle,
-                        self.basis_col_i32.as_ptr(),
-                        self.basis_row_i32.as_ptr(),
-                    )
-                }
-            }
-            WarmStartBasisMode::NonAlienFirst => {
-                // Try the consistency-checking setter first.
-                // SAFETY: see block comment above.
-                let non_alien_status = unsafe {
-                    ffi::cobre_highs_set_basis_non_alien(
-                        self.handle,
-                        self.basis_col_i32.as_ptr(),
-                        self.basis_row_i32.as_ptr(),
-                    )
-                };
-                if non_alien_status == ffi::HIGHS_STATUS_ERROR {
-                    // Non-alien rejected; count and fall back to the alien setter.
-                    self.stats.basis_non_alien_rejections += 1;
-                    // SAFETY: see block comment above.
-                    unsafe {
-                        ffi::cobre_highs_set_basis(
-                            self.handle,
-                            self.basis_col_i32.as_ptr(),
-                            self.basis_row_i32.as_ptr(),
-                        )
-                    }
-                } else {
-                    non_alien_status
-                }
-            }
+        let set_status = unsafe {
+            ffi::cobre_highs_set_basis_non_alien(
+                self.handle,
+                self.basis_col_i32.as_ptr(),
+                self.basis_row_i32.as_ptr(),
+            )
         };
-        self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
-
-        // Hard-failure tracking: alien setter also rejected — cold-start fallback.
         if set_status == ffi::HIGHS_STATUS_ERROR {
-            self.stats.basis_rejections += 1;
-            debug_assert!(false, "raw basis rejected; falling back to cold-start");
+            // Non-alien rejected: the offered basis failed
+            // `isBasisConsistent` (total_basic != num_row).
+            // Count the rejection and surface it as a hard error —
+            // no alien-setter fallback (ticket-003 BasisInconsistent path).
+            self.stats.basis_non_alien_rejections += 1;
+            // Count basic entries from the already-populated buffers.
+            // `basis_col_i32[..num_cols]` and `basis_row_i32[..num_rows]`
+            // were filled by the copy block above before this setter call.
+            //
+            // `usize` -> `i64` is lossless for any basis that fits in memory:
+            // realistic LP sizes are bounded well below 2^63.
+            #[allow(clippy::cast_possible_wrap)]
+            let col_basic = self.basis_col_i32[..self.num_cols]
+                .iter()
+                .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
+                .count() as i64;
+            #[allow(clippy::cast_possible_wrap)]
+            let row_basic = self.basis_row_i32[..self.num_rows]
+                .iter()
+                .filter(|&&s| s == ffi::HIGHS_BASIS_STATUS_BASIC)
+                .count() as i64;
+            // Accumulate the elapsed time even on early return — otherwise
+            // rejected solves lose their wall-clock accounting.
+            self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
+            #[allow(clippy::cast_possible_wrap)]
+            return Err(SolverError::BasisInconsistent {
+                num_row: self.num_rows as i64,
+                total_basic: col_basic + row_basic,
+                col_basic,
+                row_basic,
+            });
         }
+        self.stats.total_basis_set_time_seconds += basis_set_start.elapsed().as_secs_f64();
 
         // Delegate to solve() which handles retry escalation and statistics updates.
         self.solve()
@@ -1924,153 +1860,29 @@ mod tests {
         );
     }
 
-    /// Non-alien FFI smoke test: `cobre_highs_set_basis_non_alien` rejects an
-    /// inconsistent basis and returns `HIGHS_STATUS_ERROR`.
-    ///
-    /// This test exercises the new C wrapper directly (the runtime path uses
-    /// only the alien setter). Validates that the FFI symbol links, accepts a
-    /// consistent basis with `kHighsStatusOk`, and rejects an all-nonbasic
-    /// basis with `kHighsStatusError`. Both properties are required before
-    /// the non-alien path can be re-enabled behind a feature gate.
-    #[test]
-    fn test_cobre_highs_set_basis_non_alien_ffi_contract() {
-        use crate::ffi;
-
-        let template = make_fixture_stage_template();
-        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
-        solver.load_model(&template);
-
-        // Solve once to obtain a consistent basis.
-        let _ = solver.solve().expect("cold-start solve must succeed");
-        let mut basis = Basis::new(template.num_cols, template.num_rows);
-        solver.get_basis(&mut basis);
-
-        // Case 1: consistent basis -> kHighsStatusOk (0) or kHighsStatusWarning (1).
-        // SAFETY: solver.handle is valid; basis buffers are the right size.
-        let ok_status = unsafe {
-            ffi::cobre_highs_set_basis_non_alien(
-                solver.handle,
-                basis.col_status.as_ptr(),
-                basis.row_status.as_ptr(),
-            )
-        };
-        assert_ne!(
-            ok_status,
-            ffi::HIGHS_STATUS_ERROR,
-            "non-alien FFI must accept a self-extracted basis"
-        );
-
-        // Case 2: all-nonbasic basis (total basic = 0 != num_rows = 2)
-        //         -> kHighsStatusError.
-        basis
-            .col_status
-            .iter_mut()
-            .for_each(|v| *v = ffi::HIGHS_BASIS_STATUS_NONBASIC);
-        basis
-            .row_status
-            .iter_mut()
-            .for_each(|v| *v = ffi::HIGHS_BASIS_STATUS_NONBASIC);
-        // SAFETY: same as above.
-        let err_status = unsafe {
-            ffi::cobre_highs_set_basis_non_alien(
-                solver.handle,
-                basis.col_status.as_ptr(),
-                basis.row_status.as_ptr(),
-            )
-        };
-        assert_eq!(
-            err_status,
-            ffi::HIGHS_STATUS_ERROR,
-            "non-alien FFI must reject a zero-basic-count basis"
-        );
-    }
-
-    /// `AlienOnly` mode must not call the non-alien setter.
-    ///
-    /// Constructs a solver with [`WarmStartBasisMode::AlienOnly`], performs one
-    /// cold-start solve to obtain a valid basis, then warms-starts.  The
-    /// `basis_non_alien_rejections` counter must stay at zero because the
-    /// non-alien setter is never invoked in this mode.
-    ///
-    /// Note: `basis_non_alien_rejections == 0` is also consistent with
-    /// `NonAlienFirst` when the non-alien setter *accepts* the basis.  To make
-    /// the test mode-specific we assert `solver.warm_start_basis_mode` directly
-    /// and confirm that `basis_offered` incremented (proving `solve_with_basis`
-    /// ran rather than the cold-start path).
-    #[test]
-    fn test_solve_with_basis_respects_alien_only_mode() {
-        use super::WarmStartBasisMode;
-
-        // Arrange
-        let template = make_fixture_stage_template();
-        let mut solver = HighsSolver::new()
-            .expect("HighsSolver::new() must succeed")
-            .with_warm_start_mode(WarmStartBasisMode::AlienOnly);
-
-        // Verify the mode was set.
-        assert_eq!(
-            solver.warm_start_basis_mode,
-            WarmStartBasisMode::AlienOnly,
-            "warm_start_basis_mode must be AlienOnly after with_warm_start_mode"
-        );
-
-        // Cold-solve to obtain a valid basis.
-        solver.load_model(&template);
-        let _ = solver.solve().expect("cold-start solve must succeed");
-        let mut basis = Basis::new(template.num_cols, template.num_rows);
-        solver.get_basis(&mut basis);
-
-        // Reload model, then warm-start.
-        solver.load_model(&template);
-        let before = solver.statistics();
-
-        // Act
-        let _ = solver
-            .solve_with_basis(&basis)
-            .expect("warm-start solve must succeed in AlienOnly mode");
-
-        // Assert
-        let after = solver.statistics();
-        assert_eq!(
-            after.basis_non_alien_rejections, before.basis_non_alien_rejections,
-            "basis_non_alien_rejections must not change in AlienOnly mode"
-        );
-        assert_eq!(
-            after.basis_rejections, before.basis_rejections,
-            "alien setter must accept a self-extracted basis (basis_rejections unchanged)"
-        );
-        // Confirm solve_with_basis ran (not a cold-start bypass).
-        assert_eq!(
-            after.basis_offered - before.basis_offered,
-            1,
-            "basis_offered must increment by 1 to confirm solve_with_basis executed"
-        );
-    }
-
-    /// `NonAlienFirst` falls back to the alien setter when given an inconsistent
-    /// basis.
+    /// `solve_with_basis` returns `Err(SolverError::BasisInconsistent)` when given
+    /// an inconsistent basis instead of silently falling back to the alien setter.
     ///
     /// Builds a deliberately inconsistent basis (all column statuses set to
     /// `HIGHS_BASIS_STATUS_BASIC`, all row statuses `HIGHS_BASIS_STATUS_BASIC`).
     /// For the 3-column, 2-row SS1.1 LP this yields 5 basic variables against a
     /// rank of 2, which `cobre_highs_set_basis_non_alien` rejects with
-    /// `HIGHS_STATUS_ERROR`.  The alien setter accepts the overcounted basis via
-    /// `accommodateAlienBasis`, and `HiGHS` recovers a feasible solution.
+    /// `HIGHS_STATUS_ERROR`.  The error is now surfaced as a hard `Err` instead
+    /// of silently calling the alien setter.
     ///
     /// After the call:
     /// - `basis_non_alien_rejections` increments by 1 (non-alien rejected).
-    /// - `basis_rejections` stays at 0 (alien accepted + `HiGHS` repaired).
-    /// - The solve succeeds (non-null objective).
+    /// - `basis_rejections` stays at 0 (alien setter is never called).
+    /// - The result is `Err(SolverError::BasisInconsistent { num_row: 2,
+    ///   total_basic: 5, col_basic: 3, row_basic: 2 })`.
     #[test]
-    fn test_solve_with_basis_non_alien_fallback_on_reject() {
-        use super::WarmStartBasisMode;
+    fn test_solve_with_basis_non_alien_rejects_return_basis_inconsistent() {
         use crate::ffi;
+        use crate::types::SolverError;
 
-        // Arrange: solver with the default NonAlienFirst mode.
+        // Arrange: non-alien setter is now the only warm-start path.
         let template = make_fixture_stage_template();
-        let mut solver = HighsSolver::new()
-            .expect("HighsSolver::new() must succeed")
-            .with_warm_start_mode(WarmStartBasisMode::NonAlienFirst);
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
 
         solver.load_model(&template);
 
@@ -2087,18 +1899,14 @@ mod tests {
 
         let before = solver.statistics();
 
-        // Act — capture objective before releasing the borrow on solver.
-        // `SolutionView` borrows solver's internal buffers; calling
-        // `solver.statistics()` afterwards would overlap immutable and mutable
-        // borrows. Extracting the scalar value first ends the borrow.
-        let objective = {
-            let result = solver.solve_with_basis(&bad_basis).expect(
-                "solve_with_basis must succeed via alien fallback even with inconsistent basis",
-            );
-            result.objective
-        };
+        // Act — convert result to a form that does not borrow `solver`.
+        // `SolutionView<'_>` borrows `solver`'s internal buffers; calling
+        // `statistics()` afterwards would overlap borrows.  On the error path
+        // `SolverError` contains no solver references, so mapping Ok → () breaks
+        // the mutable borrow before the statistics call.
+        let err_variant: Result<(), SolverError> = solver.solve_with_basis(&bad_basis).map(|_| ());
 
-        // Assert: non-alien rejected and fell back to alien.
+        // Assert counters — the mutable borrow from solve_with_basis is gone.
         let after = solver.statistics();
         assert_eq!(
             after.basis_non_alien_rejections - before.basis_non_alien_rejections,
@@ -2108,13 +1916,27 @@ mod tests {
         assert_eq!(
             after.basis_rejections - before.basis_rejections,
             0,
-            "alien setter must accept the overcounted basis via accommodateAlienBasis"
+            "alien setter must not be called — basis_rejections must stay at zero"
         );
-        // HiGHS must still find the optimal solution after basis repair.
-        assert!(
-            objective.is_finite(),
-            "objective must be finite after alien-fallback repair"
-        );
+
+        // Assert the returned error.
+        match err_variant {
+            Err(SolverError::BasisInconsistent {
+                num_row,
+                total_basic,
+                col_basic,
+                row_basic,
+            }) => {
+                assert_eq!(num_row, 2, "num_row must match LP row count");
+                assert_eq!(total_basic, 5, "total_basic must be col_basic + row_basic");
+                assert_eq!(col_basic, 3, "col_basic must count BASIC columns");
+                assert_eq!(row_basic, 2, "row_basic must count BASIC rows");
+            }
+            other => panic!(
+                "expected Err(SolverError::BasisInconsistent {{ num_row: 2, total_basic: 5, \
+                 col_basic: 3, row_basic: 2 }}), got {other:?}"
+            ),
+        }
     }
 
     /// After a successful solve, `clear_solver_state` must return `Ok(())` and

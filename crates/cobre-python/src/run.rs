@@ -30,10 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
-    ArOrderSummary, DEFAULT_SEED, EstimationReport, FutureCostFunction, HydroModelSummary,
-    ModelProvenanceReport, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
+    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
+    StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -75,7 +75,7 @@ fn write_policy_checkpoint(
     export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        PolicyCheckpointMetadata, write_policy_checkpoint as io_write_policy_checkpoint,
+        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -272,27 +272,16 @@ struct TrainingPhaseResult {
 fn run_training_phase_py(
     setup: &mut StudySetup,
     n_threads: usize,
-    warm_start_basis_mode: cobre_io::config::WarmStartBasisMode,
 ) -> Result<TrainingPhaseResult, String> {
-    use cobre_solver::highs::WarmStartBasisMode as SolverMode;
-
-    // Convert from the I/O config type to the solver-crate mirrored type.
-    let solver_mode = match warm_start_basis_mode {
-        cobre_io::config::WarmStartBasisMode::AlienOnly => SolverMode::AlienOnly,
-        cobre_io::config::WarmStartBasisMode::NonAlienFirst => SolverMode::NonAlienFirst,
-    };
-
     let started_at = cobre_io::now_iso8601();
-    let mut solver = HighsSolver::new()
-        .map_err(|e| format!("HiGHS initialisation failed: {e}"))?
-        .with_warm_start_mode(solver_mode);
+    let mut solver = HighsSolver::new().map_err(|e| format!("HiGHS initialisation failed: {e}"))?;
     let (event_tx, event_rx) = mpsc::channel();
     let training_outcome = setup
         .train(
             &mut solver,
             &LocalBackend,
             n_threads,
-            move || HighsSolver::new().map(|s| s.with_warm_start_mode(solver_mode)),
+            || HighsSolver::new(),
             Some(event_tx),
             None,
         )
@@ -386,21 +375,11 @@ fn run_simulation_phase_py(
     system: &cobre_core::System,
     training_result: &cobre_sddp::TrainingResult,
     n_threads: usize,
-    warm_start_basis_mode: cobre_io::config::WarmStartBasisMode,
 ) -> Result<SimSummary, String> {
-    use cobre_solver::highs::WarmStartBasisMode as SolverMode;
-
-    let solver_mode = match warm_start_basis_mode {
-        cobre_io::config::WarmStartBasisMode::AlienOnly => SolverMode::AlienOnly,
-        cobre_io::config::WarmStartBasisMode::NonAlienFirst => SolverMode::NonAlienFirst,
-    };
-
     let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
-        .create_workspace_pool(n_threads, move || {
-            HighsSolver::new().map(|s| s.with_warm_start_mode(solver_mode))
-        })
+        .create_workspace_pool(n_threads, || HighsSolver::new())
         .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
@@ -637,11 +616,7 @@ fn run_inner(
             cobre_sddp::inject_boundary_cuts(&mut setup, &boundary_records);
         }
 
-        let training = run_training_phase_py(
-            &mut setup,
-            n_threads,
-            config.training.solver.warm_start_basis_mode,
-        )?;
+        let training = run_training_phase_py(&mut setup, n_threads)?;
 
         write_training_artifacts(
             &output_dir,
@@ -667,7 +642,6 @@ fn run_inner(
                 &system,
                 &training.result,
                 n_threads,
-                config.training.solver.warm_start_basis_mode,
             )?)
         } else {
             None
@@ -754,7 +728,6 @@ fn run_inner(
                 &system,
                 &training_result,
                 n_threads,
-                config.training.solver.warm_start_basis_mode,
             )?);
 
             return Ok(RunSummary {

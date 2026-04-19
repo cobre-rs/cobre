@@ -39,9 +39,7 @@ use cobre_stochastic::{
     ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
-use cobre_sddp::basis_reconstruct::{
-    HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, ReconstructionStats,
-};
+use cobre_sddp::basis_reconstruct::{HIGHS_BASIS_STATUS_BASIC as B, ReconstructionStats};
 use cobre_sddp::cut::pool::CutPool;
 use cobre_sddp::stage_solve::{Phase, StageInputs, StageOutcome, run_stage_solve};
 use cobre_sddp::workspace::CapturedBasis;
@@ -977,15 +975,60 @@ fn eq_template() -> StageTemplate {
 }
 
 /// Build a fresh `SolverWorkspace<HighsSolver>` with the fixture LP loaded.
-fn eq_workspace(template: &StageTemplate) -> SolverWorkspace<HighsSolver> {
+///
+/// `pool_capacity` sets `WorkspaceSizing::initial_pool_capacity`, which
+/// pre-sizes `ScratchBuffers::recon_slot_lookup`.  Pass a value large enough
+/// to cover the maximum cut-slot index that `reconstruct_basis` will look up;
+/// `0` is correct when no stored basis is provided (`stored_basis: None`).
+fn eq_workspace(template: &StageTemplate, pool_capacity: usize) -> SolverWorkspace<HighsSolver> {
     let mut solver = HighsSolver::new().expect("HighsSolver::new");
     solver.load_model(template);
     SolverWorkspace::new(
         solver,
         PatchBuffer::new(0, 0, 0, 0),
         0,
-        WorkspaceSizing::default(),
+        WorkspaceSizing {
+            initial_pool_capacity: pool_capacity,
+            ..WorkspaceSizing::default()
+        },
     )
+}
+
+/// Build a `CutPool` with `n` active cuts at iteration 0, forward-pass indices
+/// 0..n-1.  The pool has capacity 16 and `forward_passes = n` so that the slot
+/// formula `0 + 0 * n + fp` maps fp ∈ [0, n) to slots [0, n).
+///
+/// The cut coefficients are `[1.0]` (state dimension = 1) and intercepts are
+/// `0.0`.  These values are never actually evaluated by the tests; only the
+/// slot identities and active count matter.
+fn eq_pool_with_cuts(n: usize) -> CutPool {
+    let mut pool = CutPool::new(16, 1, n as u32, 0);
+    for fp in 0..n {
+        pool.add_cut(0, fp as u32, 0.0, &[1.0_f64]);
+    }
+    pool
+}
+
+/// Add `n` placeholder cut rows to a solver workspace so the LP dimension
+/// matches the basis that `eq_excess_basis` produces.
+///
+/// Each row is `(-∞, +∞)` with no non-zero coefficients — always satisfied and
+/// irrelevant to the LP optimum, but they make the solver's internal row count
+/// equal to `template.num_rows + n`, which is what `cobre_highs_set_basis_non_alien`
+/// checks when validating the basis.
+///
+/// This mirrors what the forward/backward passes do when they call `add_rows`
+/// before delegating to `run_stage_solve`.
+fn eq_add_cut_rows(ws: &mut SolverWorkspace<HighsSolver>, n: usize) {
+    let batch = RowBatch {
+        num_rows: n,
+        row_starts: vec![0_i32; n + 1],
+        col_indices: vec![],
+        values: vec![],
+        row_lower: vec![-f64::INFINITY; n],
+        row_upper: vec![f64::INFINITY; n],
+    };
+    ws.solver.add_rows(&batch);
 }
 
 /// Build a minimal `StageContext` wrapping a single template slice.
@@ -1011,19 +1054,34 @@ fn eq_context(templates: &[StageTemplate]) -> StageContext<'_> {
 /// Build a `CapturedBasis` with `total_basic == num_row + excess`.
 ///
 /// `num_cols = 3` (matches `eq_template`).
-/// Column statuses: first `num_row` columns BASIC, rest LOWER.
-/// Row statuses: all `num_row + excess` entries BASIC (the excess entries
-/// will be demoted by `enforce_basic_count_invariant`).
-fn eq_excess_basis(base_rows: usize, excess: usize) -> CapturedBasis {
-    let num_row = base_rows; // no cuts
+///
+/// `cut_slots` holds the slot indices of the cut rows that were active at
+/// capture time.  `excess` must equal `cut_slots.len()`: each slot contributes
+/// one BASIC cut row, so `total_basic = num_cols + base_rows + excess` while
+/// `num_row = base_rows + excess`.  That leaves `col_basic = num_cols = 3`
+/// excess basic entries that `enforce_basic_count_invariant` demotes from the
+/// cut-row section (indices `base_rows .. base_rows + excess`).
+///
+/// Column statuses: all `num_cols` BASIC (so the `col_basic` contribution is
+/// `num_cols = 3` regardless of `base_rows`, giving `excess = 3` demotions).
+/// Row statuses: all `base_rows + excess` entries BASIC.
+fn eq_excess_basis(base_rows: usize, excess: usize, cut_slots: &[u32]) -> CapturedBasis {
+    assert_eq!(
+        cut_slots.len(),
+        excess,
+        "eq_excess_basis: cut_slots.len() must equal excess"
+    );
     let num_cols = 3_usize;
-    let mut cb = CapturedBasis::new(num_cols, num_row + excess, base_rows, 0, 1);
+    let total_rows = base_rows + excess;
+    let mut cb = CapturedBasis::new(num_cols, total_rows, base_rows, excess, 1);
+    // All columns BASIC so col_basic == num_cols == 3.
     cb.basis.col_status.clear();
-    for j in 0..num_cols {
-        cb.basis.col_status.push(if j < num_row { B } else { L });
-    }
+    cb.basis.col_status.resize(num_cols, B);
+    // All rows BASIC; cut rows will be demoted by enforce_basic_count_invariant.
     cb.basis.row_status.clear();
-    cb.basis.row_status.resize(num_row + excess, B);
+    cb.basis.row_status.resize(total_rows, B);
+    // Record the captured cut-row slot indices.
+    cb.cut_row_slots.extend_from_slice(cut_slots);
     cb.state_at_capture.push(0.0_f64);
     cb
 }
@@ -1081,16 +1139,24 @@ fn unpack_outcome(outcome: &StageOutcome<'_>) -> (Vec<f64>, Vec<f64>, Reconstruc
 fn cross_phase_identical_inputs_identical_reconstruction() {
     let template = eq_template();
     let templates = std::slice::from_ref(&template);
-    let pool = CutPool::new(16, 1, 1, 0);
+    // 3 active cuts at slots [0,1,2] so the LP has 2+3=5 rows and
+    // enforce_basic_count_invariant can demote 3 BASIC cut rows.
+    let pool = eq_pool_with_cuts(3);
     let indexer = StageIndexer::new(1, 0);
-    // excess=3 forces enforce_basic_count_invariant to demote 3 rows.
-    let captured = eq_excess_basis(2, 3);
+    // excess=3 cut rows (slots [0,1,2]), all BASIC at capture; all 3 cols BASIC
+    // gives col_basic=3 so total_basic=3+5=8, num_row=5, excess=3 demotions.
+    let captured = eq_excess_basis(2, 3, &[0, 1, 2]);
 
     let mut results: Vec<(Vec<f64>, Vec<f64>, ReconstructionStats)> = Vec::new();
 
     for phase in [Phase::Forward, Phase::Backward, Phase::Simulation] {
         let ctx = eq_context(templates);
-        let mut ws = eq_workspace(&template);
+        // pool_capacity=16 pre-sizes recon_slot_lookup to cover slots [0,1,2].
+        let mut ws = eq_workspace(&template, 16);
+        // Add 3 cut rows so the LP dimension matches the 5-row basis produced
+        // by eq_excess_basis. This mirrors what forward/backward callers do
+        // (via add_rows) before delegating to run_stage_solve.
+        eq_add_cut_rows(&mut ws, 3);
         let inputs = eq_inputs(&ctx, &indexer, &pool, Some(&captured));
         let outcome =
             run_stage_solve(&mut ws, phase, &inputs).expect("solve must succeed for all phases");
@@ -1161,16 +1227,24 @@ fn cross_phase_identical_inputs_identical_reconstruction() {
 fn phase_only_affects_outcome_variant_not_solve_path() {
     let template = eq_template();
     let templates = std::slice::from_ref(&template);
-    let pool = CutPool::new(16, 1, 1, 0);
+    // 3 active cuts at slots [0,1,2] so the LP has 2+3=5 rows and
+    // enforce_basic_count_invariant can demote 3 BASIC cut rows.
+    let pool = eq_pool_with_cuts(3);
     let indexer = StageIndexer::new(1, 0);
-    let captured = eq_excess_basis(2, 3);
+    // excess=3 cut rows (slots [0,1,2]), all BASIC at capture.
+    let captured = eq_excess_basis(2, 3, &[0, 1, 2]);
 
     // Collect (solve_count_delta, basis_offered_delta, load_model_count_delta).
     let mut deltas: Vec<(u64, u64, u64)> = Vec::new();
 
     for phase in [Phase::Forward, Phase::Backward, Phase::Simulation] {
         let ctx = eq_context(templates);
-        let mut ws = eq_workspace(&template);
+        // pool_capacity=16 pre-sizes recon_slot_lookup to cover slots [0,1,2].
+        let mut ws = eq_workspace(&template, 16);
+        // Add 3 cut rows so the LP dimension matches the 5-row basis produced
+        // by eq_excess_basis. This mirrors what forward/backward callers do
+        // (via add_rows) before delegating to run_stage_solve.
+        eq_add_cut_rows(&mut ws, 3);
         // Snapshot statistics before the call.
         let before: SolverStatistics = ws.solver.statistics();
 
@@ -1265,7 +1339,7 @@ fn cold_start_zero_recon_stats() {
 
     for phase in [Phase::Forward, Phase::Backward, Phase::Simulation] {
         let ctx = eq_context(templates);
-        let mut ws = eq_workspace(&template);
+        let mut ws = eq_workspace(&template, 0);
 
         let inputs = eq_inputs(&ctx, &indexer, &pool, None);
         let outcome = run_stage_solve(&mut ws, phase, &inputs)

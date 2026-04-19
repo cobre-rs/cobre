@@ -156,23 +156,14 @@ pub struct SolverStatistics {
     pub total_solve_time_seconds: f64,
 
     /// Number of times `solve_with_basis` fell back to cold-start because the
-    /// chosen `HiGHS` setter returned `HIGHS_STATUS_ERROR`.
+    /// alien `HiGHS` setter (`Highs_setBasis`) returned `HIGHS_STATUS_ERROR`.
     ///
-    /// This counter measures whichever setter was actually invoked, which
-    /// depends on the warm-start mode:
-    ///
-    /// - **`WarmStartBasisMode::AlienOnly`**: fires only on dimension
-    ///   mismatch (`isBasisRightSize` failure). `HiGHS` silently repairs any
-    ///   dimensionally-correct but structurally-inconsistent basis via
-    ///   `accommodateAlienBasis` and returns `kOk`, so this counter is
-    ///   **structurally zero in production**. `basis_rejections == 0` under
-    ///   `AlienOnly` does *not* imply good warm-start quality — `HiGHS` may
-    ///   have rewritten many bases via LU refactorisation.
-    /// - **`WarmStartBasisMode::NonAlienFirst`**: fires only after both the
-    ///   non-alien and alien setters reject. The non-alien path enforces
-    ///   `isBasisConsistent` (a real structural check), and its rejections
-    ///   are counted separately in
-    ///   [`basis_non_alien_rejections`](Self::basis_non_alien_rejections).
+    /// After ticket-004, the alien setter is no longer called; the non-alien
+    /// path is unconditional. This counter is therefore **structurally zero**
+    /// in all current code paths and is retained for wire-format compatibility
+    /// only. Non-alien rejections are tracked separately in
+    /// [`basis_non_alien_rejections`](Self::basis_non_alien_rejections) and
+    /// surface as `Err(SolverError::BasisInconsistent)`.
     pub basis_rejections: u64,
 
     /// Number of times `solve_with_basis` fell back from the non-alien path
@@ -538,6 +529,24 @@ pub enum SolverError {
     /// The caller should fall back to an alternate code path (e.g.,
     /// `reset` + `load_model`).
     Unsupported(&'static str),
+
+    /// The offered basis was rejected by the solver because the total
+    /// number of basic variables did not match the row count.
+    ///
+    /// Indicates that the reconstructed basis violates the fundamental LP
+    /// basis consistency invariant (`col_basic + row_basic == num_row`).
+    /// The calling algorithm should perform a hard stop; this is not a
+    /// recoverable solver-internal condition.
+    BasisInconsistent {
+        /// The LP row count at the point of rejection.
+        num_row: i64,
+        /// The total basic-variable count in the offered basis (`col_basic + row_basic`).
+        total_basic: i64,
+        /// Number of basic columns in the offered basis.
+        col_basic: i64,
+        /// Number of basic rows in the offered basis.
+        row_basic: i64,
+    },
 }
 
 impl fmt::Display for SolverError {
@@ -562,6 +571,15 @@ impl fmt::Display for SolverError {
                 None => write!(f, "internal solver error: {message}"),
             },
             Self::Unsupported(msg) => write!(f, "unsupported operation: {msg}"),
+            Self::BasisInconsistent {
+                num_row,
+                total_basic,
+                col_basic,
+                row_basic,
+            } => write!(
+                f,
+                "basis inconsistent: num_row={num_row}, total_basic={total_basic} (col_basic={col_basic}, row_basic={row_basic})"
+            ),
         }
     }
 }
@@ -621,6 +639,12 @@ mod tests {
             SolverError::InternalError {
                 message: "segfault in HiGHS".to_string(),
                 error_code: Some(-1),
+            },
+            SolverError::BasisInconsistent {
+                num_row: 2,
+                total_basic: 5,
+                col_basic: 3,
+                row_basic: 2,
             },
         ];
 
@@ -765,6 +789,16 @@ mod tests {
                 },
                 "code -1",
             ),
+            (
+                "BasisInconsistent",
+                SolverError::BasisInconsistent {
+                    num_row: 2,
+                    total_basic: 5,
+                    col_basic: 3,
+                    row_basic: 2,
+                },
+                "num_row=2",
+            ),
         ];
 
         for (name, err, expected_text) in cases {
@@ -796,6 +830,12 @@ mod tests {
             SolverError::InternalError {
                 message: "test".to_string(),
                 error_code: Some(-1),
+            },
+            SolverError::BasisInconsistent {
+                num_row: 2,
+                total_basic: 5,
+                col_basic: 3,
+                row_basic: 2,
             },
         ];
 

@@ -138,15 +138,6 @@ int32_t cobre_highs_get_simplex_iteration_count(const void* highs);
  * Basis Management
  * ========================================================================= */
 
-/** Set the basis using column and row status arrays.
- *  Wraps Highs_setBasis().
- *  Returns a kHighsStatus constant. */
-int32_t cobre_highs_set_basis(
-    void*           highs,
-    const int32_t*  col_status,
-    const int32_t*  row_status
-);
-
 /** Set the basis with alien = false, skipping HiGHS's throwaway
  *  rank-detection LU factorization. Caller guarantees basis
  *  consistency (total basic count equals num_rows).

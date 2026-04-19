@@ -165,18 +165,6 @@ int32_t cobre_highs_get_simplex_iteration_count(const void* highs) {
  * Basis Management
  * ========================================================================= */
 
-int32_t cobre_highs_set_basis(
-    void*           highs,
-    const int32_t*  col_status,
-    const int32_t*  row_status
-) {
-    return (int32_t)Highs_setBasis(
-        highs,
-        (const HighsInt*)col_status,
-        (const HighsInt*)row_status
-    );
-}
-
 int32_t cobre_highs_get_basis(
     const void* highs,
     int32_t*    col_status,

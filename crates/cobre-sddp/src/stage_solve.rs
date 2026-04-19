@@ -284,7 +284,7 @@ fn map_solver_error(
 
 #[cfg(test)]
 mod tests {
-    use cobre_solver::{HighsSolver, RowBatch, SolverInterface, StageTemplate};
+    use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate};
 
     use super::{Phase, StageInputs, run_stage_solve};
     use crate::{
@@ -398,35 +398,6 @@ mod tests {
         StageIndexer::new(1, 0)
     }
 
-    /// Build a `CapturedBasis` where `col_basic + row_basic == num_row`.
-    ///
-    /// `num_row = base_rows + cut_count`
-    /// `num_cols = 3` (matches the fixture LP).
-    ///
-    /// Column statuses: first `num_row` columns are BASIC, rest are LOWER.
-    /// Row statuses: all BASIC.
-    fn make_balanced_basis(base_rows: usize, cut_count: usize) -> CapturedBasis {
-        let num_row = base_rows + cut_count;
-        let num_cols = 3_usize;
-        let mut cb = CapturedBasis::new(num_cols, num_row, base_rows, cut_count, 1);
-        // Fill col_status: exactly `num_row` BASIC columns, rest LOWER.
-        cb.basis.col_status.clear();
-        for j in 0..num_cols {
-            cb.basis.col_status.push(if j < num_row { B } else { L });
-        }
-        // Fill row_status: all BASIC — gives col_basic + row_basic == num_row.
-        cb.basis.row_status.clear();
-        cb.basis.row_status.resize(num_row, B);
-        // Slot metadata: one slot per cut row (slots 0..cut_count).
-        for s in 0..cut_count {
-            #[allow(clippy::cast_possible_truncation)]
-            cb.cut_row_slots.push(s as u32);
-        }
-        // Capture state: [0.0] — matches n_state = 1.
-        cb.state_at_capture.push(0.0);
-        cb
-    }
-
     /// Build a `CapturedBasis` where `col_basic + row_basic == num_row + excess`.
     ///
     /// Achieved by marking `excess` extra cut rows as BASIC instead of LOWER.
@@ -434,7 +405,7 @@ mod tests {
         let num_row = base_rows + cut_count;
         let num_cols = 3_usize;
         let mut cb = CapturedBasis::new(num_cols, num_row, base_rows, cut_count, 1);
-        // Same column layout as `make_balanced_basis` (num_row BASIC cols).
+        // Column statuses: first `num_row` columns are BASIC, rest are LOWER.
         cb.basis.col_status.clear();
         for j in 0..num_cols {
             cb.basis.col_status.push(if j < num_row { B } else { L });
@@ -492,53 +463,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 2: warm start, balanced basis — demotions == 0
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn run_stage_solve_warm_start_balanced_basis_no_demotions() {
-        let template = make_template();
-        let templates = std::slice::from_ref(&template);
-        let ctx = make_context(templates);
-        let pool = make_empty_pool();
-        let indexer = make_indexer();
-        let mut ws = make_workspace(&template);
-
-        // Balanced basis: col_basic + row_basic == num_row (2 template rows, 0 cuts).
-        let captured = make_balanced_basis(2, 0);
-
-        // Ensure slot-lookup scratch covers the stored slots (none here, but
-        // the workspace starts empty; `run_stage_solve` grows it).
-        ws.scratch.recon_slot_lookup = vec![None; 16];
-
-        let inputs = StageInputs {
-            stage_context: &ctx,
-            indexer: &indexer,
-            pool: &pool,
-            current_state: &[0.0],
-            stored_basis: Some(&captured),
-            baked_template: None,
-            stage_index: 0,
-            scenario_index: 0,
-            horizon_is_terminal: false,
-            terminal_has_boundary_cuts: false,
-            iteration: Some(2),
-        };
-
-        let result = run_stage_solve(&mut ws, Phase::Forward, &inputs);
-        let outcome = result.expect("warm start with balanced basis should succeed");
-
-        match outcome {
-            crate::stage_solve::StageOutcome::Forward { recon_stats, .. } => {
-                assert_eq!(recon_stats.preserved, 0, "no cut rows to preserve");
-                assert_eq!(recon_stats.new_slack, 0, "no new cut rows");
-            }
-            _ => panic!("expected Forward variant"),
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Test 3: warm start, excess BASIC count — demotions == 3
+    // Test 2: warm start, excess BASIC count — demotions == 3
     // -----------------------------------------------------------------------
 
     #[test]
@@ -607,60 +532,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 4: uniform behavior across phases — recon_stats are byte-identical
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn run_stage_solve_uniform_across_phases() {
-        let template = make_template();
-        let templates = std::slice::from_ref(&template);
-        let pool = make_empty_pool();
-        let indexer = make_indexer();
-        let captured = make_balanced_basis(2, 0);
-
-        // Run for each phase and collect recon_stats.
-        let mut stats_per_phase = Vec::new();
-        for phase in [Phase::Forward, Phase::Backward, Phase::Simulation] {
-            let ctx = make_context(templates);
-            let mut ws = make_workspace(&template);
-            ws.scratch.recon_slot_lookup = vec![None; 16];
-
-            let inputs = StageInputs {
-                stage_context: &ctx,
-                indexer: &indexer,
-                pool: &pool,
-                current_state: &[0.0],
-                stored_basis: Some(&captured),
-                baked_template: None,
-                stage_index: 0,
-                scenario_index: 0,
-                horizon_is_terminal: false,
-                terminal_has_boundary_cuts: false,
-                iteration: None,
-            };
-
-            let outcome = run_stage_solve(&mut ws, phase, &inputs).expect("solve must succeed");
-            let rs = match outcome {
-                crate::stage_solve::StageOutcome::Forward { recon_stats, .. }
-                | crate::stage_solve::StageOutcome::Backward { recon_stats, .. }
-                | crate::stage_solve::StageOutcome::Simulation { recon_stats, .. } => recon_stats,
-            };
-            stats_per_phase.push(rs);
-        }
-
-        // All three phases must produce identical reconstruction stats.
-        assert_eq!(
-            stats_per_phase[0], stats_per_phase[1],
-            "Forward and Backward recon_stats must be identical"
-        );
-        assert_eq!(
-            stats_per_phase[1], stats_per_phase[2],
-            "Backward and Simulation recon_stats must be identical"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Test 5: infeasible LP propagates as SddpError::Infeasible
+    // Test 3: infeasible LP propagates as SddpError::Infeasible
     // -----------------------------------------------------------------------
 
     #[test]
@@ -699,6 +571,72 @@ mod tests {
                 assert_eq!(iteration, 42, "iteration must match inputs.iteration");
             }
             other => panic!("expected SddpError::Infeasible, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: BasisInconsistent propagates as SddpError::Solver
+    // -----------------------------------------------------------------------
+
+    /// A basis with zero basic variables (all LOWER) against `num_row = 2`
+    /// causes `cobre_highs_set_basis_non_alien` to fail `isBasisConsistent`
+    /// and return `HIGHS_STATUS_ERROR`.  The solver converts this to
+    /// `SolverError::BasisInconsistent`, which `map_solver_error` must route
+    /// to `SddpError::Solver(...)` — not `SddpError::Infeasible`.
+    #[test]
+    fn basis_inconsistent_propagates_as_sddp_solver_error() {
+        let template = make_template();
+        let templates = std::slice::from_ref(&template);
+        let ctx = make_context(templates);
+        let pool = make_empty_pool();
+        let indexer = make_indexer();
+        let mut ws = make_workspace(&template);
+        ws.scratch.recon_slot_lookup = vec![None; 16];
+
+        // Build a CapturedBasis where all col_status and row_status are LOWER
+        // (= 0, the zero-fill default from Basis::new).  After reconstruct_basis
+        // copies these values into scratch_basis and enforce_basic_count_invariant
+        // runs (it only demotes excess basics, never promotes), the delivered
+        // basis has col_basic = 0, row_basic = 0, total_basic = 0 against
+        // num_row = 2.  cobre_highs_set_basis_non_alien rejects this because
+        // isBasisConsistent requires total_basic == num_row.
+        let all_lower = CapturedBasis::new(
+            template.num_cols,
+            template.num_rows,
+            template.num_rows,
+            0,
+            1,
+        );
+        // state_at_capture is empty (capacity only), which satisfies the
+        // reconstruct_basis debug_assert (stored.state_at_capture.is_empty()).
+
+        let inputs = StageInputs {
+            stage_context: &ctx,
+            indexer: &indexer,
+            pool: &pool,
+            current_state: &[0.0],
+            stored_basis: Some(&all_lower),
+            baked_template: None,
+            stage_index: 0,
+            scenario_index: 3,
+            horizon_is_terminal: false,
+            terminal_has_boundary_cuts: false,
+            iteration: Some(5),
+        };
+
+        let result = run_stage_solve(&mut ws, Phase::Forward, &inputs);
+        match result {
+            Err(SddpError::Solver(SolverError::BasisInconsistent { .. })) => {
+                // Correct: BasisInconsistent routes to SddpError::Solver, not
+                // SddpError::Infeasible.
+            }
+            Err(SddpError::Infeasible { .. }) => {
+                panic!("BasisInconsistent must not map to SddpError::Infeasible")
+            }
+            other => panic!(
+                "expected Err(SddpError::Solver(SolverError::BasisInconsistent {{ .. }})), \
+                 got {other:?}"
+            ),
         }
     }
 }

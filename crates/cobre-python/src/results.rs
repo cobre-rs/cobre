@@ -22,16 +22,16 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use arrow::array::{Array, BooleanArray, Float64Array, Int32Array, Int64Array, Int8Array};
+use arrow::array::{Array, BooleanArray, Float64Array, Int8Array, Int32Array, Int64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use pyo3::BoundObject;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
-use pyo3::BoundObject;
 
 /// Canonicalize a path and return an appropriate Python error on failure.
 fn canonicalize_dir(path: &Path) -> PyResult<PathBuf> {

@@ -26,36 +26,6 @@ pub(crate) enum BroadcastStoppingMode {
     All,
 }
 
-/// Postcard-serializable warm-start basis mode.
-///
-/// Mirrors [`cobre_io::config::WarmStartBasisMode`] for postcard broadcast.
-/// The I/O type uses `#[serde(rename_all = "snake_case")]` which is not
-/// compatible with postcard's non-self-describing format; this plain enum
-/// round-trips cleanly.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-pub(crate) enum BroadcastWarmStartBasisMode {
-    AlienOnly,
-    NonAlienFirst,
-}
-
-impl From<cobre_io::config::WarmStartBasisMode> for BroadcastWarmStartBasisMode {
-    fn from(mode: cobre_io::config::WarmStartBasisMode) -> Self {
-        match mode {
-            cobre_io::config::WarmStartBasisMode::AlienOnly => Self::AlienOnly,
-            cobre_io::config::WarmStartBasisMode::NonAlienFirst => Self::NonAlienFirst,
-        }
-    }
-}
-
-impl From<BroadcastWarmStartBasisMode> for cobre_solver::highs::WarmStartBasisMode {
-    fn from(mode: BroadcastWarmStartBasisMode) -> Self {
-        match mode {
-            BroadcastWarmStartBasisMode::AlienOnly => Self::AlienOnly,
-            BroadcastWarmStartBasisMode::NonAlienFirst => Self::NonAlienFirst,
-        }
-    }
-}
-
 /// Postcard-serializable cut selection strategy.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum BroadcastCutSelection {
@@ -160,11 +130,6 @@ pub(crate) struct BroadcastConfig {
     pub(crate) training_source: ScenarioSource,
     /// Scenario source for the post-training simulation forward pass.
     pub(crate) simulation_source: ScenarioSource,
-    /// Which `HiGHS` basis-setter to call on each warm-start.
-    ///
-    /// Broadcast so all ranks construct their solver workspace with the same
-    /// mode. Defaults to `NonAlienFirst` (post-ticket-010).
-    pub(crate) warm_start_basis_mode: BroadcastWarmStartBasisMode,
     /// Canonical-state strategy for the backward pass.
     ///
     /// Broadcast so all ranks apply the same per-(worker, stage) `load_model`
@@ -225,6 +190,19 @@ impl BroadcastConfig {
 
         let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
 
+        // Deprecation warning: warm_start_basis_mode config key is ignored; the
+        // non-alien setter is used unconditionally (ticket-004). The key will be
+        // removed from config in ticket-005.
+        if matches!(
+            config.training.solver.warm_start_basis_mode,
+            cobre_io::config::WarmStartBasisMode::AlienOnly
+        ) {
+            tracing::warn!(
+                "config.training.solver.warm_start_basis_mode = alien_only is ignored \
+                 in v0.5.0; the key will be removed in a later release"
+            );
+        }
+
         Ok(Self {
             seed: params.seed,
             forward_passes: params.forward_passes,
@@ -242,7 +220,6 @@ impl BroadcastConfig {
             budget: params.budget,
             training_source,
             simulation_source,
-            warm_start_basis_mode: config.training.solver.warm_start_basis_mode.into(),
             canonical_state_strategy: params.canonical_state_strategy,
         })
     }

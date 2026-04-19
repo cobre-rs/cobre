@@ -282,3 +282,80 @@ No performance regression is flagged; the measurement is deferred to the
 reference machine where convertido is available. See the "Notes on
 convertido" section above for instructions on adding convertido hashes when
 the reference machine is available.
+
+## Post-epic-04 verification
+
+### Summary
+
+All 90/90 stable parquet entries from the v0.4.5 reference map are
+**byte-identical** between the pre-epic-03 baseline and the post-epic-04
+build. 0 allowlisted drifts. Zero unexpected drifts. Epic-04 R1 risk
+(latent bug surfacing from the removal of `CanonicalStateStrategy`,
+`clear_solver_state`, `solve_with_basis`, and `reset` trait methods) is
+cleared.
+
+### Capture details
+
+| Field                   | Value                                      |
+| ----------------------- | ------------------------------------------ |
+| Post-epic-04 commit SHA | `25f13510081454165b6f3b681abde0eeca01fa7e` |
+| Capture date            | 2026-04-19                                 |
+| Machine                 | `Linux 6.19.12-200.fc43.x86_64`            |
+| Stable entries compared | 90                                         |
+| Byte-identical          | 90                                         |
+| Allowlisted drifts      | 0 (see below)                              |
+| Unexpected drifts       | 0                                          |
+| Convertido              | Absent (see Notes on convertido)           |
+
+**Note on commit SHA**: The value above is `git rev-parse HEAD` at the
+time the capture script ran. After this document is committed, the HEAD
+SHA advances by one more commit (this edit itself). This intentional
+mismatch mirrors the same pattern noted in the "Captured at" section
+above and in the Post-epic-03 verification section.
+
+### Comparison command
+
+```sh
+bash scripts/capture_v045_reference.sh
+python3 scripts/compare_v045_reference.py \
+    --reference-sha256 docs/assessments/v0_4_5_reference.md \
+    --actual-sha256 target/v045-reference/sha256.txt
+```
+
+Output:
+
+```
+all mismatches are in the expected-drifts allowlist (90/90 files byte-identical, 0 allowlisted drift(s))
+```
+
+Exit code: 0.
+
+### Allowed-drifts list
+
+No allowlisted drifts were active in this run. Epic-04 tickets 001-008
+(removal of `CanonicalStateStrategy`, `WarmStartBasisMode`, trait method
+deletions, `clear_solver_count` counter, and associated test deletions)
+produced zero hash changes in any stable parquet output. The
+`EXPECTED_DRIFTS` allowlist in `scripts/compare_v045_reference.py` was
+not extended by any epic-04 ticket. Entries already present from
+epic-03 ticket-007 (solver iterations schema rename) and ticket-001
+(timing files) continue to be listed defensively but did not activate
+because those files remain excluded from the stable capture.
+
+| Path pattern                              | Justification                                                                 |
+| ----------------------------------------- | ----------------------------------------------------------------------------- |
+| `**/training/solver/iterations.parquet`   | ticket-007 (epic-03): `basis_consistency_failures` schema rename — not active |
+| `**/simulation/solver/iterations.parquet` | ticket-007 (epic-03): `basis_consistency_failures` schema rename — not active |
+| `**/training/convergence.parquet`         | ticket-001 (epic-03): timing columns wall-clock unstable — not active         |
+| `**/training/timing/iterations.parquet`   | ticket-001 (epic-03): pure wall-clock timing file — not active                |
+| `**/metadata.json`                        | embeds `completed_at` timestamp and hostname — not active                     |
+
+### Convertido wall-clock delta
+
+The convertido benchmark case (`~/git/cobre-bridge/example/convertido`)
+was **not present** on this machine at re-capture time. The ±5%
+wall-clock acceptance criterion (ticket-009 R2 risk gate) cannot be
+evaluated here. No performance regression is flagged; the measurement is
+deferred to the reference machine where convertido is available. See the
+"Notes on convertido" section above for instructions on adding convertido
+hashes when the reference machine is available.

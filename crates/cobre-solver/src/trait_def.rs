@@ -34,6 +34,12 @@ use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics,
 /// - Methods that write to internal scratch buffers (`get_basis`) take `&mut self`.
 /// - Read-only query methods (`statistics`, `name`) take `&self`.
 ///
+/// # Solve Contract
+///
+/// Each `solve` call is self-contained and does not depend on state accumulated
+/// from prior calls. See [`SolverInterface::solve`] for the full
+/// solve-to-solve independence contract.
+///
 /// # Usage as a Generic Bound
 ///
 /// ```rust
@@ -82,25 +88,70 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.3a.
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]);
 
-    /// Solves the LP, returning a zero-copy view or terminal error after retry exhaustion.
+    /// Solve the LP under the solve-to-solve independence contract.
     ///
     /// Hot-path method encapsulating internal retry logic and optional warm-start.
     /// Requires [`Self::load_model`] called first and scenario patches applied.
-    /// When `basis` is `Some`, the basis is injected before solving (warm-start path);
-    /// when `basis` is `None`, the solver starts from scratch (cold-start path).
     /// The returned [`SolutionView`] borrows solver-internal buffers and is valid
     /// until the next `&mut self` call. Call [`SolutionView::to_owned`] when the
     /// solution must outlive the borrow.
     ///
+    /// # Contract — solve-to-solve independence
+    ///
+    /// Each `solve` call is self-contained. The result depends only on (a) the
+    /// loaded model, (b) the current column/row bounds, (c) the
+    /// `basis: Option<&Basis>` argument. It does NOT depend on state left over
+    /// from prior `solve` calls — not on the previous trial point's optimum, not
+    /// on the order trial points were submitted, not on any hidden cached data the
+    /// solver accumulated.
+    ///
+    /// `basis = Some(&b)` installs `b` before running the simplex.
+    /// `basis = None` warm-starts from whatever basis this instance currently
+    /// holds (itself a deterministic function of the prior inputs on this
+    /// instance).
+    ///
+    /// Implementations fulfill the contract however they like: internal state
+    /// clearing, relying on the backend's natural independence, or per-solve
+    /// model reload. [`crate::HighsSolver`] delivers the guarantee by calling
+    /// `Highs_clearSolver` at the start of each `solve` body.
+    ///
     /// # Errors
     ///
-    /// Returns `Err(SolverError)` when all internal retry attempts exhausted.
-    /// Possible variants: [`SolverError::Infeasible`], [`SolverError::Unbounded`],
-    /// [`SolverError::NumericalDifficulty`], [`SolverError::TimeLimitExceeded`],
-    /// [`SolverError::IterationLimit`], [`SolverError::BasisInconsistent`], or
-    /// [`SolverError::InternalError`].
+    /// Returns `Err(SolverError)` after internal retry exhaustion.
+    /// Variants:
+    /// - [`SolverError::Infeasible`] — LP has no feasible solution.
+    /// - [`SolverError::Unbounded`] — objective is unbounded below.
+    /// - [`SolverError::NumericalDifficulty`] — retry sequence exhausted without
+    ///   convergence.
+    /// - [`SolverError::TimeLimitExceeded`] — wall-clock budget exceeded.
+    /// - [`SolverError::IterationLimit`] — simplex iteration budget exceeded
+    ///   across all retry levels.
+    /// - [`SolverError::InternalError`] — FFI layer returned an error.
+    /// - [`SolverError::BasisInconsistent`] — ONLY when `basis = Some(&b)` and
+    ///   `b` fails the solver's consistency check.
     ///
-    /// See Solver Interface Trait SS2.4.
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use cobre_solver::{Basis, HighsSolver, SolverInterface};
+    ///
+    /// let mut solver = HighsSolver::new().expect("HiGHS init");
+    /// # let template = unimplemented!();
+    /// solver.load_model(&template);
+    ///
+    /// // Cold-start solve: no stored basis.
+    /// let cold = solver.solve(None).expect("cold solve");
+    /// let cold_obj = cold.objective;
+    ///
+    /// // Warm-start solve: reinstall a previously captured basis.
+    /// let basis: Basis = unimplemented!("previously captured");
+    /// let warm = solver.solve(Some(&basis)).expect("warm solve");
+    /// assert!((warm.objective - cold_obj).abs() < 1e-9);
+    /// ```
+    ///
+    /// See [Solver Interface Trait SS2.4] for the post-conditions on
+    /// [`SolutionView`] lifetime and the thread-safety constraints inherited
+    /// from the trait's `Send` bound.
     fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError>;
 
     /// Writes solver-native `i32` status codes into a caller-owned [`Basis`] buffer.

@@ -622,7 +622,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
 /// `load_model` is hoisted per-(worker, stage) before the trial-point loop.
 /// Per-trial-point deterministic reset is delivered internally by
 /// `HighsSolver::solve` (AD-4 contract, ticket-002).
-#[allow(clippy::panic)]
 fn process_stage_backward<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,

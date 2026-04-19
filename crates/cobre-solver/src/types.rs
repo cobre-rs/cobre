@@ -131,8 +131,8 @@ impl SolutionView<'_> {
 /// Statistics are aggregated across threads via reduction after training
 /// completes.
 ///
-/// `reset()` does **not** zero statistics counters. They persist across
-/// model reloads for the lifetime of the solver instance.
+/// Statistics counters persist across model reloads for the lifetime of the
+/// solver instance.
 ///
 /// See [Solver Interface Trait SS4.3](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
 #[derive(Debug, Clone, Default)]
@@ -162,10 +162,10 @@ pub struct SolverStatistics {
     /// (see CHANGELOG).
     pub basis_consistency_failures: u64,
 
-    /// Total FFI `Highs_clearSolver` calls on this solver instance.
+    /// Number of `Highs_clearSolver` FFI calls — one per `solve` call.
     ///
-    /// Incremented once per `HighsSolver::solve` call to deliver the
-    /// solve-to-solve independence contract (AD-4, ticket-002).
+    /// Incremented once per [`crate::SolverInterface::solve`] call to deliver the
+    /// solve-to-solve independence contract (AD-4).
     pub clear_solver_count: u64,
 
     /// Number of `Highs_clearSolver` FFI calls that returned an error status.

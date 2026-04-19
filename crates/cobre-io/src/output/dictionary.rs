@@ -663,10 +663,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "lp_retries") => "Solves requiring retry escalation",
         ("solver_iterations", "lp_failures") => "Solves that exhausted all retry levels",
         ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
-        ("solver_iterations", "basis_offered") => "Number of warm-start solve(Some(&basis)) calls",
+        ("solver_iterations", "basis_offered") => {
+            "Number of warm-start solve calls (basis-offered)"
+        }
         ("solver_iterations", "basis_consistency_failures") => {
-            "Number of warm-start solve calls in which the basis was rejected because \
-             total_basic != num_row"
+            "Number of warm-start solve calls rejected because isBasisConsistent returned false"
         }
         ("solver_iterations", "clear_solver_count") => {
             "Total Highs_clearSolver FFI calls in this phase — incremented once per solve \

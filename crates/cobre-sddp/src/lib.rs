@@ -64,6 +64,7 @@ pub mod scaling_report;
 pub mod setup;
 pub mod simulation;
 pub mod solver_stats;
+pub mod stage_solve;
 pub mod state_exchange;
 pub mod stochastic_summary;
 pub mod stopping_rule;

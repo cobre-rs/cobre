@@ -71,7 +71,7 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::WelfordAccumulator;
-use cobre_solver::{RowBatch, SolverError, SolverInterface};
+use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
     ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
@@ -83,9 +83,6 @@ use rayon::iter::{
 
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
-    basis_reconstruct::{
-        PaddingContext, ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
-    },
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
@@ -754,10 +751,19 @@ struct StageKey<'a> {
     /// (scenario, stage) pair in the pass.
     terminal_has_boundary_cuts: bool,
     /// Reference to the cut pool for stage `t`. Used by
-    /// [`reconstruct_basis`](crate::basis_reconstruct::reconstruct_basis)
-    /// to walk active cut rows and by `write_capture_metadata` to record slot
-    /// identities for the next iteration's warm-start.
+    /// `write_capture_metadata` to record slot identities for the next
+    /// iteration's warm-start, and forwarded into `StageInputs`.
     pool: &'a CutPool,
+    /// Baked stage template for stage `t`.
+    ///
+    /// Always `None` in ticket-003 so that the forward pass continues to use
+    /// the legacy (`pool.active_cuts()`) reconstruction arm and produces
+    /// bit-for-bit identical results vs. the pre-epic baseline.
+    ///
+    /// Tickets 010/011 will switch this to
+    /// `baked.ready.then(|| &baked.templates[t])` when the baked forward
+    /// path is intentionally activated.
+    baked_template: Option<&'a StageTemplate>,
 }
 
 /// Populate `CapturedBasis` metadata after a forward solve.
@@ -825,6 +831,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         basis_row_capacity,
         terminal_has_boundary_cuts,
         pool,
+        baked_template,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -925,88 +932,63 @@ fn run_forward_stage<S: SolverInterface + Send>(
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
 
-    // Grow the slot-lookup scratch if the pool has allocated new slots since
-    // the last call.  `pool.populated_count` is monotonically non-decreasing,
-    // so after the first few iterations this check is a no-op.
-    if ws.scratch.recon_slot_lookup.len() < pool.populated_count {
-        ws.scratch
-            .recon_slot_lookup
-            .resize(pool.populated_count, None);
-    }
+    // Copy current_state into a local buffer before constructing StageInputs
+    // so the immutable borrow of ws.current_state does not overlap with the
+    // mutable borrow taken by run_stage_solve.
+    let current_state_buf: Vec<f64> = ws.current_state[..indexer.n_state].to_vec();
 
-    let view = match basis_slice.get_mut(m, t) {
-        &mut Some(ref captured) => {
-            // Slot-tracked reconstruction: copy preserved cut-row statuses by
-            // slot identity, and evaluate new cuts at the current state.
-            // Runs unconditionally when a stored basis exists.
-            let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
-            let recon_stats = reconstruct_basis(
-                captured,
-                ReconstructionTarget {
-                    base_row_count: ctx.templates[t].num_rows,
-                    num_cols: ctx.templates[t].num_cols,
-                },
-                pool.active_cuts(),
-                PaddingContext {
-                    state: &ws.current_state[..indexer.n_state],
-                    theta: theta_value,
-                    tolerance: 1e-7,
-                },
-                0,
-                &mut ws.scratch_basis,
-                &mut ws.scratch.recon_slot_lookup,
-            );
-            // Forward-path invariant fix (ticket-009): after cut-set churn,
-            // col_basic + row_basic may exceed num_row when dropped cuts had
-            // BASIC status.  Demote trailing cut-row BASIC statuses to LOWER
-            // to restore the HiGHS isBasisConsistent invariant.
-            // Do NOT apply on the backward path — ticket-008 proved delta == 0
-            // there by construction.
-            let num_row = ctx.templates[t].num_rows + pool.active_cuts().count();
-            let demotions = enforce_basic_count_invariant(
-                &mut ws.scratch_basis,
-                num_row,
-                ctx.templates[t].num_rows,
-            );
-            ws.solver.record_reconstruction_stats(
-                recon_stats.preserved,
-                recon_stats.new_tight,
-                recon_stats.new_slack,
-                demotions,
-            );
-            ws.solver.solve_with_basis(&ws.scratch_basis)
-        }
-        _ => ws.solver.solve(),
-    }
-    .map_err(|e| {
-        *basis_slice.get_mut(m, t) = None;
-        match e {
-            SolverError::Infeasible => SddpError::Infeasible {
-                stage: t,
-                iteration,
-                scenario: m,
-            },
-            other => SddpError::Solver(other),
-        }
-    })?;
+    let inputs = crate::stage_solve::StageInputs {
+        stage_context: ctx,
+        indexer,
+        pool,
+        current_state: &current_state_buf,
+        stored_basis: basis_slice.get_mut(m, t).as_ref(),
+        baked_template,
+        stage_index: t,
+        scenario_index: m,
+        iteration: Some(iteration),
+        horizon_is_terminal: horizon.is_terminal(t + 1),
+        terminal_has_boundary_cuts,
+    };
 
-    // Unscale primal values from the solver's scaled coordinate system back
-    // to the original physical units. When col_scale is empty (no scaling
-    // applied), this loop is skipped.
+    let outcome =
+        crate::stage_solve::run_stage_solve(ws, crate::stage_solve::Phase::Forward, &inputs)
+            .map_err(|e| {
+                // Preserve today's behavior: invalidate the stored basis on
+                // Infeasible so the next warm-start attempt cold-solves.
+                if matches!(e, SddpError::Infeasible { .. }) {
+                    *basis_slice.get_mut(m, t) = None;
+                }
+                e
+            })?;
+
+    let crate::stage_solve::StageOutcome::Forward {
+        view,
+        recon_stats: _,
+    } = outcome
+    else {
+        unreachable!("run_stage_solve(Phase::Forward, ...) returns Forward variant")
+    };
+
+    // Unscale primal values and capture the objective before the ws borrow
+    // held by `view` ends its overlap with subsequent ws.scratch accesses.
+    // `SolutionView` is `Copy`, so view data is extracted here via .to_vec() /
+    // .collect() into a local, then `view` goes out of use before the next
+    // mutable borrow of ws fields.
     let col_scale = &ctx.templates[t].col_scale;
-    let unscaled_primal = &mut ws.scratch.unscaled_primal;
-    if col_scale.is_empty() {
-        unscaled_primal.clear();
-        unscaled_primal.extend_from_slice(view.primal);
+    let view_objective = view.objective;
+    let unscaled_primal: Vec<f64> = if col_scale.is_empty() {
+        view.primal.to_vec()
     } else {
-        unscaled_primal.resize(view.primal.len(), 0.0);
-        for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
-            unscaled_primal[j] = d * xp;
-        }
-    }
+        view.primal
+            .iter()
+            .zip(col_scale)
+            .map(|(&xp, &d)| d * xp)
+            .collect()
+    };
 
     let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
-    let stage_cost = (view.objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
+    let stage_cost = (view_objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
     let rec = &mut worker_records[local_m * num_stages + t];
     // Skip primal storage: only rec.state is consumed downstream; primals
     // are read directly from the solver when needed (simulation).
@@ -1052,7 +1034,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
     crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
-        unscaled_primal,
+        &unscaled_primal,
         indexer,
         &stage_lag,
         &mut crate::noise::LagAccumState {
@@ -1426,6 +1408,12 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                         },
                         terminal_has_boundary_cuts,
                         pool: &fcf.pools[t],
+                        // Always None until ticket-010 activates the baked
+                        // forward path. Passing None forces the legacy
+                        // (pool.active_cuts()) reconstruction arm so that
+                        // forward-pass behavior is bit-for-bit identical to
+                        // the pre-epic baseline.
+                        baked_template: None,
                     };
                     trajectory_costs[local_m] += cum_d
                         * run_forward_stage(

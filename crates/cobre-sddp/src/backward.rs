@@ -90,7 +90,6 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
-    basis_reconstruct::{PaddingContext, ReconstructionTarget, reconstruct_basis},
     config::CanonicalStateStrategy,
     context::{BakedTemplates, StageContext, TrainingContext},
     cut::pool::CutPool,
@@ -310,8 +309,6 @@ struct SuccessorSpec<'a> {
     template_num_rows: usize,
     /// Baked LP template for the successor stage, when `ready == true`.
     baked_template: Option<&'a cobre_solver::StageTemplate>,
-    /// Row count of the baked template (base + baked cut rows).
-    baked_template_num_rows: usize,
     /// Ordered slot indices of the active cuts at the successor stage.
     successor_active_slots: &'a [usize],
     /// Basis store for warm-starting each worker's first opening solve.
@@ -481,105 +478,83 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // Openings 1+: HiGHS retains internal factorization from the previous
         // solve — only bounds/RHS changed via `patch_opening_bounds`, so
         // `solve()` hot-starts without redundant refactorization (P3b).
-        let view = if omega == 0 {
-            if let Some(captured) = succ.basis_store.get(m, s) {
-                // Grow slot-lookup scratch if the pool has expanded.
-                if ws.scratch.recon_slot_lookup.len() < succ.successor_pool.populated_count {
-                    ws.scratch
-                        .recon_slot_lookup
-                        .resize(succ.successor_pool.populated_count, None);
-                }
-
-                // Use `state_at_capture` as the padding state; fall back to
-                // `x_hat` only when no capture state was recorded (legacy
-                // bases written before the field existed).
-                let padding_state = if captured.state_at_capture.is_empty() {
-                    x_hat
-                } else {
-                    &captured.state_at_capture
-                };
-                let theta_value = succ.successor_pool.evaluate_at_state(padding_state);
-
-                // Reconstruct basis by path:
-                // - Baked: base_row_count = baked template rows (not the non-baked
-                //   base), offset = 0. The stored basis was captured from a baked-
-                //   template LP, so all baked rows are "base" rows — no offset needed.
-                //   Only delta cuts (iter-N) are reconciled; tight ones will be
-                //   discovered via simplex pivots.
-                // - Legacy (non-baked): base_row_count = non-baked template rows,
-                //   full active-cut set, offset = 0.
-                let padding = PaddingContext {
-                    state: padding_state,
-                    theta: theta_value,
-                    tolerance: 1e-7,
-                };
-                let recon_stats = if succ.baked_template.is_some() {
-                    let target = ReconstructionTarget {
-                        base_row_count: succ.baked_template_num_rows,
-                        num_cols: ctx.templates[s].num_cols,
-                    };
-                    reconstruct_basis(
-                        captured,
-                        target,
-                        succ.successor_pool.active_delta_cuts(spec.iteration),
-                        padding,
-                        0,
-                        &mut ws.scratch_basis,
-                        &mut ws.scratch.recon_slot_lookup,
-                    )
-                } else {
-                    let target = ReconstructionTarget {
-                        base_row_count: succ.template_num_rows,
-                        num_cols: ctx.templates[s].num_cols,
-                    };
-                    reconstruct_basis(
-                        captured,
-                        target,
-                        succ.successor_pool.active_cuts(),
-                        padding,
-                        0,
-                        &mut ws.scratch_basis,
-                        &mut ws.scratch.recon_slot_lookup,
-                    )
-                };
-                ws.solver.record_reconstruction_stats(
-                    recon_stats.preserved,
-                    recon_stats.new_tight,
-                    recon_stats.new_slack,
-                    0, // backward path: delta==0 by construction (ticket-008); no demotion pass
-                );
-
-                ws.solver.solve_with_basis(&ws.scratch_basis)
+        let inputs = crate::stage_solve::StageInputs {
+            stage_context: ctx,
+            indexer,
+            pool: succ.successor_pool,
+            current_state: x_hat,
+            // Opening 0: use forward-pass basis from BasisStore for slot-tracked
+            // reconstruction. Openings 1+: pass None so run_stage_solve takes the
+            // cold path (ws.solver.solve()), which hot-starts from HiGHS's retained
+            // internal factorization (P3b).
+            stored_basis: if omega == 0 {
+                succ.basis_store.get(m, s)
             } else {
-                ws.solver.solve()
-            }
-        } else {
-            ws.solver.solve()
-        }
-        .map_err(|e| match e {
-            SolverError::Infeasible => SddpError::Infeasible {
-                stage: succ.t,
-                iteration: spec.iteration,
-                scenario,
+                None
             },
-            other => SddpError::Solver(other),
-        })?;
+            // baked_template: None for behavior-preservation; wired in tickets 010–011.
+            baked_template: None,
+            stage_index: s,
+            scenario_index: scenario,
+            iteration: Some(spec.iteration),
+            horizon_is_terminal: false,
+            terminal_has_boundary_cuts: false,
+        };
 
+        let outcome =
+            crate::stage_solve::run_stage_solve(ws, crate::stage_solve::Phase::Backward, &inputs)?;
+
+        let crate::stage_solve::StageOutcome::Backward {
+            view,
+            recon_stats: _,
+        } = outcome
+        else {
+            unreachable!("run_stage_solve(Phase::Backward) returns Backward variant")
+        };
+
+        // Extract all needed values from `view` before any mutable borrow of
+        // `ws.backward_accum`. `view` borrows from `ws` through the
+        // `run_stage_solve` lifetime; extracting into owned locals ends that
+        // borrow before the subsequent `&mut ws` accesses below.
         let objective = view.objective;
         // Unscale duals from scaled units back to original units.
         // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
         // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
         // Cut rows have implicit row_scale = 1.0 and require no adjustment.
         let row_scale = &ctx.templates[s].row_scale;
-        let out = &mut ws.backward_accum.outcomes[omega];
-        if row_scale.is_empty() {
-            out.coefficients
-                .copy_from_slice(&view.dual[..indexer.n_state]);
+        let state_duals: Vec<f64> = if row_scale.is_empty() {
+            view.dual[..indexer.n_state].to_vec()
         } else {
-            for (i, &d) in view.dual[..indexer.n_state].iter().enumerate() {
-                out.coefficients[i] = d * row_scale[i];
-            }
-        }
+            view.dual[..indexer.n_state]
+                .iter()
+                .zip(row_scale)
+                .map(|(&d, &rs)| d * rs)
+                .collect()
+        };
+        let cut_duals_owned: Vec<f64> = if succ.num_cuts_at_successor > 0 {
+            // Dual extraction for cut binding-activity tracking.
+            //
+            // Layout invariant (both baked and legacy paths):
+            //   [0, template_num_rows)               — base structural rows
+            //   [template_num_rows, template_num_rows + num_cuts_at_successor) — cut rows
+            //
+            // On the baked path, `num_cuts_at_successor` = baked_cut_count + delta_cut_count:
+            //   [template_num_rows, baked_template_num_rows) — baked cut rows (from prior iters)
+            //   [baked_template_num_rows, baked_template_num_rows + num_delta_cuts) — delta rows
+            //
+            // Both sections are contiguous and slot-monotone (baked then delta in active-slot
+            // order), so the unified index `cut_idx` maps correctly to `successor_active_slots`.
+            view.dual[succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor]
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        // `view` is Copy; assign to `_` to make the end-of-borrow intent explicit.
+        // Subsequent code may mutably borrow `ws` fields.
+        let _ = view;
+
+        let out = &mut ws.backward_accum.outcomes[omega];
+        out.coefficients.copy_from_slice(&state_duals);
         out.objective_value = objective;
         // Intercept: alpha = Q_scaled - pi' * x_hat.
         //
@@ -598,26 +573,12 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 .map(|(pi, x)| pi * x)
                 .sum::<f64>();
 
-        // Dual extraction for cut binding-activity tracking.
-        //
-        // Layout invariant (both baked and legacy paths):
-        //   [0, template_num_rows)               — base structural rows
-        //   [template_num_rows, template_num_rows + num_cuts_at_successor) — cut rows
-        //
-        // On the baked path, `num_cuts_at_successor` = baked_cut_count + delta_cut_count:
-        //   [template_num_rows, baked_template_num_rows) — baked cut rows (from prior iters)
-        //   [baked_template_num_rows, baked_template_num_rows + num_delta_cuts) — delta rows
-        //
-        // Both sections are contiguous and slot-monotone (baked then delta in active-slot
-        // order), so the unified index `cut_idx` maps correctly to `successor_active_slots`.
-        // The existing extraction loop below is correct unchanged.
-        if succ.num_cuts_at_successor > 0 {
-            let cut_duals = &view.dual
-                [succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor];
-            for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
-                if cut_duals[cut_idx] > succ.cut_activity_tolerance {
-                    ws.backward_accum.slot_increments[slot] += 1;
-                }
+        for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
+            if cut_duals_owned
+                .get(cut_idx)
+                .is_some_and(|&d| d > succ.cut_activity_tolerance)
+            {
+                ws.backward_accum.slot_increments[slot] += 1;
             }
         }
     }
@@ -903,7 +864,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // Build the cut batch: delta-only when baked templates are ready,
         // full active set on the legacy path (iteration 1 or baking disabled).
         let template_num_rows = ctx.templates[successor].num_rows;
-        let (baked_template, baked_template_num_rows, num_cuts_at_successor) = if baked.ready {
+        let (baked_template, num_cuts_at_successor) = if baked.ready {
             build_delta_cut_row_batch_into(
                 &mut cut_batches[successor],
                 fcf,
@@ -917,7 +878,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             let num_delta = cut_batches[successor].num_rows;
             // Total cuts = baked cut rows (beyond base template) + delta rows.
             let total_cuts = (baked_num_rows - template_num_rows) + num_delta;
-            (Some(baked_tmpl), baked_num_rows, total_cuts)
+            (Some(baked_tmpl), total_cuts)
         } else {
             build_cut_row_batch_into(
                 &mut cut_batches[successor],
@@ -927,7 +888,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 &ctx.templates[successor].col_scale,
             );
             let num_cuts = cut_batches[successor].num_rows;
-            (None, template_num_rows, num_cuts)
+            (None, num_cuts)
         };
         #[allow(clippy::cast_possible_truncation)]
         {
@@ -946,7 +907,6 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             num_cuts_at_successor,
             template_num_rows,
             baked_template,
-            baked_template_num_rows,
             successor_active_slots: spec.successor_active_slots_buf,
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,

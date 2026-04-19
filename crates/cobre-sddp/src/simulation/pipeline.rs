@@ -46,7 +46,7 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
-use cobre_solver::{RowBatch, SolverError, SolverInterface, StageTemplate};
+use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
     ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
@@ -56,9 +56,6 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelI
 
 use crate::{
     FutureCostFunction,
-    basis_reconstruct::{
-        PaddingContext, ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
-    },
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
@@ -405,155 +402,105 @@ fn solve_simulation_stage<S: SolverInterface>(
         );
     }
 
-    // Slot-tracked warm-start reconstruction, mirroring forward.rs:926-965.
-    // Grow the slot-lookup scratch if the pool has allocated new slots since
-    // the last call (monotonic grow-only, same pattern as forward.rs:929-933).
-    let pool = &fcf.pools[t];
-    if ws.scratch.recon_slot_lookup.len() < pool.populated_count {
-        ws.scratch
-            .recon_slot_lookup
-            .resize(pool.populated_count, None);
-    }
-    let view = if let Some(captured) = load_spec.warm_basis {
-        let theta_value = pool.evaluate_at_state(&ws.current_state[..indexer.n_state]);
-        let padding = PaddingContext {
-            state: &ws.current_state[..indexer.n_state],
-            theta: theta_value,
-            tolerance: 1e-7,
-        };
-        // The baked and fallback arms are written out separately to keep iterator
-        // types monomorphic. Box<dyn Iterator> is banned by project rules.
-        if let Some(baked) = load_spec.baked_template {
-            // Baked path: all cut rows are structural in the baked template.
-            // Pass an empty iterator — no delta cut rows to reconcile.
-            let recon_stats = reconstruct_basis(
-                captured,
-                ReconstructionTarget {
-                    base_row_count: baked.num_rows,
-                    num_cols: ctx.templates[t].num_cols,
-                },
-                std::iter::empty(),
-                padding,
-                0,
-                &mut ws.scratch_basis,
-                &mut ws.scratch.recon_slot_lookup,
-            );
-            // Mirrors the forward-path fix (ticket-009): stored bases capture
-            // the iteration-K forward LP, but the simulation cut set reflects
-            // post-backward / post-selection churn.  Dropped non-BASIC cuts
-            // inflate total_basic beyond num_row and trip HiGHS's
-            // isBasisConsistent check, producing non-alien rejections.  In the
-            // baked path the cut rows are structural, so num_row == base row
-            // count and eligible demotion indices would be empty; pass the
-            // structural row count in both slots so the helper is a no-op
-            // when the basis already balances.
-            let num_row = baked.num_rows;
-            let demotions =
-                enforce_basic_count_invariant(&mut ws.scratch_basis, num_row, baked.num_rows);
-            ws.solver.record_reconstruction_stats(
-                recon_stats.preserved,
-                recon_stats.new_tight,
-                recon_stats.new_slack,
-                demotions,
-            );
-            ws.solver.solve_with_basis(&ws.scratch_basis)
-        } else {
-            // Fallback path: delta cut rows come from the active cut pool.
-            let recon_stats = reconstruct_basis(
-                captured,
-                ReconstructionTarget {
-                    base_row_count: ctx.templates[t].num_rows,
-                    num_cols: ctx.templates[t].num_cols,
-                },
-                pool.active_cuts(),
-                padding,
-                0,
-                &mut ws.scratch_basis,
-                &mut ws.scratch.recon_slot_lookup,
-            );
-            // Mirrors the forward-path fix (ticket-009): see note in the baked
-            // arm above.  Here the cut rows are appended after the template,
-            // so demotions may be non-zero when the stored basis is stale
-            // relative to the current cut pool.
-            let num_row = ctx.templates[t].num_rows + pool.active_cuts().count();
-            let demotions = enforce_basic_count_invariant(
-                &mut ws.scratch_basis,
-                num_row,
-                ctx.templates[t].num_rows,
-            );
-            ws.solver.record_reconstruction_stats(
-                recon_stats.preserved,
-                recon_stats.new_tight,
-                recon_stats.new_slack,
-                demotions,
-            );
-            ws.solver.solve_with_basis(&ws.scratch_basis)
-        }
-    } else {
-        ws.solver.solve()
-    }
-    .map_err(|e| match e {
-        SolverError::Infeasible => SimulationError::LpInfeasible {
-            scenario_id: ids.scenario_id,
-            stage_id: ids.stage_id_u32,
-            solver_message: "LP infeasible".to_string(),
-        },
-        other => SimulationError::SolverError {
-            scenario_id: ids.scenario_id,
-            stage_id: ids.stage_id_u32,
-            solver_message: other.to_string(),
-        },
-    })?;
+    // Copy current_state to avoid borrow overlap with run_stage_solve.
+    let current_state_buf: Vec<f64> = ws.current_state[..indexer.n_state].to_vec();
 
-    // Unscale primal values when column scaling is active.
+    let inputs = crate::stage_solve::StageInputs {
+        stage_context: ctx,
+        indexer,
+        pool: &fcf.pools[t],
+        current_state: &current_state_buf,
+        stored_basis: load_spec.warm_basis,
+        baked_template: load_spec.baked_template,
+        stage_index: t,
+        scenario_index: ids.scenario_id as usize,
+        iteration: None,            // simulation has no iteration counter
+        horizon_is_terminal: false, // simulation stage-sweep semantics
+        terminal_has_boundary_cuts: false,
+    };
+
+    let outcome =
+        crate::stage_solve::run_stage_solve(ws, crate::stage_solve::Phase::Simulation, &inputs)
+            .map_err(|e| match e {
+                crate::error::SddpError::Infeasible {
+                    stage, scenario, ..
+                } => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let scenario_id = scenario as u32;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let stage_id = stage as u32;
+                    SimulationError::LpInfeasible {
+                        scenario_id,
+                        stage_id,
+                        solver_message: "LP infeasible".to_string(),
+                    }
+                }
+                crate::error::SddpError::Solver(other) => SimulationError::SolverError {
+                    scenario_id: ids.scenario_id,
+                    stage_id: ids.stage_id_u32,
+                    solver_message: other.to_string(),
+                },
+                other => SimulationError::SolverError {
+                    scenario_id: ids.scenario_id,
+                    stage_id: ids.stage_id_u32,
+                    solver_message: format!("{other}"),
+                },
+            })?;
+
+    let crate::stage_solve::StageOutcome::Simulation {
+        view,
+        recon_stats: _,
+    } = outcome
+    else {
+        unreachable!("run_stage_solve(Phase::Simulation) returns Simulation variant")
+    };
+
+    // Extract view fields into owned locals before mutable borrowing ws.scratch.
     let col_scale = &ctx.templates[ids.t].col_scale;
-    {
-        let buf = &mut ws.scratch.unscaled_primal;
-        if col_scale.is_empty() {
-            buf.clear();
-            buf.extend_from_slice(view.primal);
-        } else {
-            buf.resize(view.primal.len(), 0.0);
-            for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
-                buf[j] = d * xp;
-            }
-        }
-    }
+    let row_scale = &ctx.templates[ids.t].row_scale;
+    let view_objective = view.objective;
+    let view_iterations = view.iterations;
+    let view_solve_time = view.solve_time_seconds;
+    // Unscale primal values when column scaling is active.
+    let unscaled_primal: Vec<f64> = if col_scale.is_empty() {
+        view.primal.to_vec()
+    } else {
+        view.primal
+            .iter()
+            .zip(col_scale)
+            .map(|(&xp, &d)| d * xp)
+            .collect()
+    };
     // Unscale dual values when row scaling is active.
     // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
     // Structural rows use row_scale[i]; rows beyond the template length
     // (cut rows) have implicit row_scale = 1.0.
-    let row_scale = &ctx.templates[ids.t].row_scale;
-    {
-        let buf = &mut ws.scratch.unscaled_dual;
-        if row_scale.is_empty() {
-            buf.clear();
-            buf.extend_from_slice(view.dual);
-        } else {
-            buf.resize(view.dual.len(), 0.0);
-            for (i, &d) in view.dual.iter().enumerate() {
+    let unscaled_dual: Vec<f64> = if row_scale.is_empty() {
+        view.dual.to_vec()
+    } else {
+        view.dual
+            .iter()
+            .enumerate()
+            .map(|(i, &d)| {
                 let scale = if i < row_scale.len() {
                     row_scale[i]
                 } else {
                     1.0
                 };
-                buf[i] = d * scale;
-            }
-        }
-    }
-    // Temporarily take the unscaled buffers out of scratch so we can
-    // simultaneously read them (via the SolutionView) and mutate other
-    // scratch fields inside extract_sim_stage_result.  std::mem::take
-    // replaces each field with an empty Vec (no allocation).
-    let unscaled_primal = std::mem::take(&mut ws.scratch.unscaled_primal);
-    let unscaled_dual = std::mem::take(&mut ws.scratch.unscaled_dual);
+                d * scale
+            })
+            .collect()
+    };
+    // `reduced_costs` is not used by extract_sim_stage_result; pass an empty
+    // slice. The `view` borrow of `ws` ended after the last use of view.primal
+    // and view.dual above; the subsequent &mut ws accesses are safe.
     let unscaled_view = cobre_solver::SolutionView {
-        objective: view.objective,
+        objective: view_objective,
         primal: &unscaled_primal,
         dual: &unscaled_dual,
-        reduced_costs: view.reduced_costs,
-        iterations: view.iterations,
-        solve_time_seconds: view.solve_time_seconds,
+        reduced_costs: &[],
+        iterations: view_iterations,
+        solve_time_seconds: view_solve_time,
     };
     let (immediate_cost, result) = extract_sim_stage_result(
         &mut ws.scratch,

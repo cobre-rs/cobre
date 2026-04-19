@@ -43,20 +43,20 @@ EXPECTED_DRIFTS: list[tuple[str, str]] = [
     (
         "**/training/solver/iterations.parquet",
         "ticket 04a-006: deleted clear_solver_count and clear_solver_failures columns (Option A) "
-        "per Bucket D decision; counters permanently 0 after commit 25f1351.",
+        "per Bucket D decision; counters permanently 0 after commit 25f1351. "
+        "ticket 04a-007: added opening column (Int32, nullable); exploded backward row shape from "
+        "(iter, phase, stage) to (iter, phase, stage, opening). "
+        "Forward and lower_bound rows gain NULL opening. "
+        "ticket 04a-011a: exploded forward row shape from one row per iteration (stage=-1) to "
+        "one row per (iter, stage); forward row count grows from `num_iters` to "
+        "`num_iters * num_stages`.",
     ),
     (
         "**/simulation/solver/iterations.parquet",
         "ticket 04a-006: deleted clear_solver_count and clear_solver_failures columns (Option A) "
-        "per Bucket D decision; counters permanently 0 after commit 25f1351.",
-    ),
-    (
-        "**/training/solver/iterations.parquet",
-        "ticket-007: basis_consistency_failures schema rename causes hash drift",
-    ),
-    (
-        "**/simulation/solver/iterations.parquet",
-        "ticket-007: basis_consistency_failures schema rename causes hash drift",
+        "per Bucket D decision; counters permanently 0 after commit 25f1351. "
+        "ticket 04a-007: added opening column (Int32, nullable). "
+        "Simulation has no opening dimension; column is always NULL.",
     ),
     # Defensive: timing-bearing files are already excluded from the reference
     # map by the capture script, but added here so a partial capture does not

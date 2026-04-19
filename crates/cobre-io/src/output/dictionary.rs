@@ -167,7 +167,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
     ])
     .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
 
-    // Hydros (code 0)
     for h in system.hydros() {
         wtr.write_record(&[
             ENTITY_TYPE_HYDRO.to_string(),
@@ -179,7 +178,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Thermals (code 1)
     for t in system.thermals() {
         wtr.write_record(&[
             ENTITY_TYPE_THERMAL.to_string(),
@@ -215,7 +213,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Pumping stations (code 4)
     for p in system.pumping_stations() {
         wtr.write_record(&[
             ENTITY_TYPE_PUMPING_STATION.to_string(),
@@ -227,7 +224,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Contracts (code 5)
     for c in system.contracts() {
         wtr.write_record(&[
             ENTITY_TYPE_CONTRACT.to_string(),
@@ -239,7 +235,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Non-controllable sources (code 7)
     for n in system.non_controllable_sources() {
         wtr.write_record(&[
             ENTITY_TYPE_NON_CONTROLLABLE.to_string(),
@@ -691,6 +686,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
             "BASIC row statuses demoted to LOWER by enforce_basic_count_invariant on the \
              forward path to restore col_basic + row_basic == num_row after cut-set churn \
              (ticket-009). Zero on backward and simulation paths."
+        }
+        ("solver_iterations", "opening") => {
+            "Opening (noise realization) index within the stage, for backward-pass \
+             rows. NULL for forward, lower_bound, and simulation rows — these phases \
+             do not have an opening dimension. Backward rows range 0..n_openings."
         }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
@@ -1448,8 +1448,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 195,
-            "variables.csv must have exactly 195 data rows (one per column across all schemas)"
+            row_count, 196,
+            "variables.csv must have exactly 196 data rows (one per column across all schemas)"
         );
     }
 

@@ -194,7 +194,7 @@ impl PyThermal {
         self.inner.max_generation_mw
     }
 
-    /// Marginal cost of generation [$/MWh].
+    /// Marginal cost of generation [$/`MWh`].
     #[getter]
     fn cost_per_mwh(&self) -> f64 {
         self.inner.cost_per_mwh

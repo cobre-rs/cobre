@@ -359,3 +359,138 @@ evaluated here. No performance regression is flagged; the measurement is
 deferred to the reference machine where convertido is available. See the
 "Notes on convertido" section above for instructions on adding convertido
 hashes when the reference machine is available.
+
+## Post-epic-04a verification
+
+### Summary
+
+All 90/90 stable parquet entries from the v0.4.5 reference map are
+**byte-identical** between the pre-epic-03 baseline and the post-epic-04a
+build. 0 allowlisted drifts. Zero unexpected drifts. Epic-04a R1 risk
+(latent bug surfacing from per-opening observability additions, Bucket D
+column deletions, and per-stage forward stats) is cleared.
+
+The `training/solver/iterations.parquet` and
+`simulation/solver/iterations.parquet` files received intentional schema
+changes in epic-04a (ticket-006 column deletions, ticket-007 opening
+column addition, ticket-011a forward per-stage row explosion). These files
+are **timing-bearing** and are excluded from the stable reference map by
+the capture script; they therefore do not appear in the SHA256 comparison
+and do not register as drifts. The allowlist entries for these paths exist
+in `scripts/compare_v045_reference.py` as a defensive measure in case a
+partial capture includes them.
+
+Cross-MPI parity (ticket-010 gate) confirmed: per-opening counter columns
+are invariant across 1, 2, and 4 MPI ranks for D01 (40 rows, 13 counter
+columns).
+
+Python parity (ticket-009 gate) confirmed: all 6 pytest tests in
+`crates/cobre-python/tests/test_solver_stats_parity.py` pass. Schema,
+row count, and all non-timing columns are identical between CLI and Python
+runs of D01. Byte-for-byte SHA256 identity is NOT expected (timing columns
+cause byte-level differences between independent runs) and is not tested.
+
+### Capture details
+
+| Field                    | Value                                           |
+| ------------------------ | ----------------------------------------------- |
+| Post-epic-04a commit SHA | `1cf494cd7a80bd4a6d1941c4ec2d3aab920396f4`      |
+| Capture date             | 2026-04-19                                      |
+| Machine                  | `Linux fedora 6.19.12-200.fc43.x86_64`          |
+| Stable entries compared  | 90                                              |
+| Byte-identical           | 90                                              |
+| Allowlisted drifts       | 0 (see below)                                   |
+| Unexpected drifts        | 0                                               |
+| Cross-MPI parity         | PASS (1/2/4 ranks, 40 rows, 13 counter columns) |
+| Python parity            | PASS (6/6 tests, schema + non-timing columns)   |
+| Convertido               | Absent (see Notes on convertido)                |
+
+**Note on commit SHA**: The value above is `git rev-parse HEAD` at the
+time the capture script ran. After this document is committed, the HEAD
+SHA advances by one more commit (this edit itself). This intentional
+mismatch mirrors the same pattern noted in the "Captured at" section
+above and in the Post-epic-03 and Post-epic-04 verification sections.
+
+### Comparison command
+
+```sh
+bash scripts/capture_v045_reference.sh
+python3 scripts/compare_v045_reference.py \
+    --reference-sha256 docs/assessments/v0_4_5_reference.md \
+    --actual-sha256 target/v045-reference/sha256.txt
+```
+
+Output:
+
+```
+all mismatches are in the expected-drifts allowlist (90/90 files byte-identical, 0 allowlisted drift(s))
+```
+
+Exit code: 0.
+
+### Allowed-drifts list
+
+No allowlisted drifts were active in this run. The `training/solver/iterations.parquet`
+and `simulation/solver/iterations.parquet` files received intentional schema
+changes in epic-04a but are excluded from the stable reference capture by the
+capture script (they are timing-bearing). The `EXPECTED_DRIFTS` allowlist
+entries for these paths exist defensively.
+
+| Path pattern                              | Justification                                                                                                                                                                                                                                                        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `**/training/solver/iterations.parquet`   | ticket 04a-006: deleted `clear_solver_count`/`clear_solver_failures` columns (Bucket D Option A). ticket 04a-007: added `opening` column (Int32, nullable). ticket 04a-011a: exploded forward rows to per-stage — not active (timing-bearing, excluded from capture) |
+| `**/simulation/solver/iterations.parquet` | ticket 04a-006: deleted `clear_solver_count`/`clear_solver_failures` columns (Bucket D Option A). ticket 04a-007: added `opening` column (Int32, nullable) — not active (timing-bearing, excluded from capture)                                                      |
+| `**/training/convergence.parquet`         | ticket-001 (epic-03): timing columns wall-clock unstable — not active                                                                                                                                                                                                |
+| `**/training/timing/iterations.parquet`   | ticket-001 (epic-03): pure wall-clock timing file — not active                                                                                                                                                                                                       |
+| `**/metadata.json`                        | embeds `completed_at` timestamp and hostname — not active                                                                                                                                                                                                            |
+
+### Cross-MPI parity
+
+Command:
+
+```sh
+bash scripts/test_per_opening_mpi_parity.sh examples/deterministic/d01-thermal-dispatch
+```
+
+Output (abbreviated):
+
+```
+Row counts: rank-1=40, rank-2=40, rank-4=40
+PASS: all 3 runs agree on 13 counter columns (40 rows each, sorted by ['iteration', 'phase', 'stage', 'opening'])
+PASS: per-opening counter columns are MPI-rank-invariant.
+```
+
+Exit code: 0.
+
+### Python parity
+
+Command:
+
+```sh
+.venv/bin/pytest crates/cobre-python/tests/test_solver_stats_parity.py -v
+```
+
+Output:
+
+```
+6 passed in 0.35s
+```
+
+Exit code: 0. All 6 tests passed:
+
+- `test_python_writes_opening_column` — PASS
+- `test_python_opening_column_values` — PASS
+- `test_python_matches_cli_schema` — PASS
+- `test_python_matches_cli_row_count` — PASS
+- `test_python_matches_cli_nontiming_columns` — PASS
+- `test_python_schema_matches_expected_columns` — PASS
+
+### Convertido wall-clock delta
+
+The convertido benchmark case (`~/git/cobre-bridge/example/convertido`) was
+**not present** on this machine at re-capture time. The ±5% wall-clock
+acceptance criterion (ticket-009 R2 risk gate) cannot be evaluated here.
+No performance regression is flagged; the measurement is deferred to the
+reference machine where convertido is available. See the "Notes on
+convertido" section above for instructions on adding convertido hashes when
+the reference machine is available.

@@ -94,7 +94,7 @@ fn results_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 /// Register a submodule in `sys.modules` so that `import cobre.foo` works.
 ///
-/// PyO3's `add_submodule` attaches a module as an attribute but does not
+/// `PyO3`'s `add_submodule` attaches a module as an attribute but does not
 /// register it in `sys.modules`. Without this, `import cobre.foo` fails.
 fn register_submodule<'py>(
     parent: &Bound<'py, PyModule>,

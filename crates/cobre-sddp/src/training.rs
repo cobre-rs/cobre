@@ -775,15 +775,30 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             Err(e) => on_error!(e),
         };
 
-        // Snapshot pool stats after forward pass and compute delta.
-        let fwd_delta = {
+        // Snapshot pool stats after forward pass and compute aggregate delta for timing.
+        // The per-stage breakdown is carried by `forward_result.stage_stats`; the pool
+        // snapshot here is kept solely to derive `fwd_solve_time_ms` for the timing
+        // summary at line 1176 (unchanged from pre-ticket behaviour).
+        let fwd_solve_time_ms = {
             let fwd_stats_after = aggregate_solver_statistics(
                 fwd_pool.workspaces.iter().map(|w| w.solver.statistics()),
             );
-            SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
+            SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after).solve_time_ms
         };
-        let fwd_solve_time_ms = fwd_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "forward", -1, -1, fwd_delta));
+
+        // Push one SolverStatsEntry per (iteration, "forward", stage) — no opening
+        // dimension on the forward pass. The opening sentinel -1 maps to NULL at
+        // the parquet writer boundary (unchanged from ticket-007 behaviour).
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+        for (stage_idx, delta) in forward_result.stage_stats.iter().enumerate() {
+            solver_stats_log.push((
+                iteration,
+                "forward",
+                i32::try_from(stage_idx).unwrap_or(i32::MAX),
+                -1,
+                delta.clone(),
+            ));
+        }
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 

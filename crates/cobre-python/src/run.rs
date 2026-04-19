@@ -30,10 +30,10 @@ use cobre_comm::LocalBackend;
 use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParquetWriter};
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
+    ArOrderSummary, DEFAULT_SEED, EstimationReport, FutureCostFunction, HydroModelSummary,
+    ModelProvenanceReport, SolverStatsDelta, StochasticSource, StochasticSummary, StudySetup,
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
-    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
-    StochasticSummary, StudySetup, DEFAULT_SEED,
+    prepare_hydro_models, prepare_stochastic,
 };
 use cobre_solver::HighsSolver;
 
@@ -75,7 +75,7 @@ fn write_policy_checkpoint(
     export_states: bool,
 ) -> Result<(), String> {
     use cobre_io::output::policy::{
-        write_policy_checkpoint as io_write_policy_checkpoint, PolicyCheckpointMetadata,
+        PolicyCheckpointMetadata, write_policy_checkpoint as io_write_policy_checkpoint,
     };
     use cobre_sddp::policy_export::{
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
@@ -221,50 +221,24 @@ fn export_stochastic_artifacts_py(
     }
 }
 
-/// Collapse a 5-tuple solver stats log (with per-opening dimension) into a 4-tuple
-/// log suitable for the existing Parquet writer by summing across the opening dimension.
-///
-/// Entries with the same `(iteration, phase, stage)` key are accumulated; insertion
-/// order is preserved for deterministic output.
-fn collapse_openings_for_writer(
-    log: &[(u64, &'static str, i32, i32, SolverStatsDelta)],
-) -> Vec<(u64, &'static str, i32, SolverStatsDelta)> {
-    use std::collections::HashMap;
-    let mut order: Vec<(u64, &'static str, i32)> = Vec::new();
-    let mut map: HashMap<(u64, &'static str, i32), SolverStatsDelta> = HashMap::new();
-    for (iter, phase, stage, _opening, delta) in log {
-        let key = (*iter, *phase, *stage);
-        if let Some(existing) = map.get_mut(&key) {
-            SolverStatsDelta::accumulate_into(existing, delta);
-        } else {
-            order.push(key);
-            map.insert(key, delta.clone());
-        }
-    }
-    order
-        .into_iter()
-        .map(|key| {
-            let delta = map.remove(&key).unwrap_or_default();
-            (key.0, key.1, key.2, delta)
-        })
-        .collect()
-}
-
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
-/// scenario ID for the simulation phase.
+/// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
+/// and `None` for forward, `lower_bound`, and simulation rows.
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
+    opening: Option<i32>,
     delta: &SolverStatsDelta,
 ) -> SolverStatsRow {
     SolverStatsRow {
         iteration: id,
         phase: phase.to_string(),
         stage,
+        opening,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
@@ -307,7 +281,7 @@ fn run_training_phase_py(
             &mut solver,
             &LocalBackend,
             n_threads,
-            || HighsSolver::new(),
+            HighsSolver::new,
             Some(event_tx),
             None,
         )
@@ -348,12 +322,15 @@ fn write_training_artifacts(
     .map_err(|e| format!("policy checkpoint error: {e}"))?;
 
     if !training.result.solver_stats_log.is_empty() {
-        let collapsed = collapse_openings_for_writer(&training.result.solver_stats_log);
-        let rows: Vec<SolverStatsRow> = collapsed
+        let rows: Vec<SolverStatsRow> = training
+            .result
+            .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, delta)| {
-                #[allow(clippy::cast_possible_truncation)]
-                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            .map(|(iter, phase, stage, opening, delta)| {
+                let opening_opt = if *opening == -1 { None } else { Some(*opening) };
+                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
+                let id = *iter as u32;
+                delta_to_stats_row(id, phase, *stage, opening_opt, delta)
             })
             .collect();
         cobre_io::write_solver_stats(output_dir, &rows)
@@ -404,7 +381,7 @@ fn run_simulation_phase_py(
     let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
-        .create_workspace_pool(n_threads, || HighsSolver::new())
+        .create_workspace_pool(n_threads, HighsSolver::new)
         .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
@@ -444,12 +421,13 @@ fn run_simulation_phase_py(
     let mut sim_out = sim_writer.finalize(0);
     sim_out.failed = write_failures;
 
+    // Simulation has no opening dimension; opening is always None.
     if !sim_run_result.solver_stats.is_empty() {
         let rows: Vec<SolverStatsRow> = sim_run_result
             .solver_stats
             .iter()
             .map(|(scenario_id, _opening, delta)| {
-                delta_to_stats_row(*scenario_id, "simulation", -1, delta)
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, delta)
             })
             .collect();
         cobre_io::write_simulation_solver_stats(output_dir, &rows)
@@ -485,6 +463,10 @@ fn run_simulation_phase_py(
 }
 
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
+// This function is an orchestrator that sequences stochastic prep, training, and
+// simulation in a single call.  Extracting sub-phases further would fragment the
+// control flow without meaningful cohesion improvement.
+#[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
     output_dir: PathBuf,
@@ -575,6 +557,7 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                #[allow(clippy::cast_possible_truncation)]
                 let state_dim = setup.fcf().state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
@@ -608,6 +591,7 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                #[allow(clippy::cast_possible_truncation)]
                 let state_dim = setup.fcf().state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
@@ -707,6 +691,7 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
+                #[allow(clippy::cast_possible_truncation)]
                 let state_dim = setup.fcf().state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,

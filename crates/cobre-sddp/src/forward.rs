@@ -135,6 +135,13 @@ pub struct ForwardResult {
     /// Represents rayon barrier, thread wake-up, and work-stealing dispatch costs
     /// after accounting for all measured per-worker work.
     pub scheduling_overhead_ms: u64,
+
+    /// Per-stage solver-counter deltas, summed across all workers and
+    /// scenarios this rank processed. Length equals the number of
+    /// stages in the study. Element `t` is the rank-local sum over
+    /// `(scenario × this_rank)` of the per-stage `SolverStatsDelta`
+    /// produced by `run_stage_solve(Phase::Forward, ...)` for stage `t`.
+    pub stage_stats: Vec<SolverStatsDelta>,
 }
 
 /// Global upper bound statistics from forward synchronisation step.
@@ -1288,135 +1295,152 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     let terminal_has_boundary_cuts =
         num_stages > 0 && fcf.pools[num_stages - 1].warm_start_count > 0;
 
+    // Pre-allocate per-worker stage-stats accumulators (one Vec per worker, each with
+    // n_stages entries). Allocated here — outside the parallel region — to satisfy the
+    // no-hot-path-allocation rule. Each entry is zeroed via Default::default().
+    // After the parallel region the vecs are summed element-wise into `stage_stats`.
+    let worker_stage_stats: Vec<Vec<SolverStatsDelta>> = (0..n_workers)
+        .map(|_| {
+            (0..num_stages)
+                .map(|_| SolverStatsDelta::default())
+                .collect()
+        })
+        .collect();
+
     // Collect per-worker snapshots before the parallel region (needed for overhead decomposition).
     let worker_stats_before: Vec<_> = workspaces.iter().map(|ws| ws.solver.statistics()).collect();
 
     // Each worker collects per-scenario costs in local scenario index order.
     let parallel_start = Instant::now();
-    let worker_results: Vec<Result<(Vec<f64>, u64), SddpError>> = workspaces
+    #[allow(clippy::type_complexity)]
+    let worker_results: Vec<Result<(Vec<f64>, u64, Vec<SolverStatsDelta>), SddpError>> = workspaces
         .par_iter_mut()
         .zip(record_slices.par_iter_mut())
         .zip(basis_slices.into_par_iter())
+        .zip(worker_stage_stats.into_par_iter())
         .enumerate()
-        .map(|(w, ((ws, worker_records), mut basis_slice))| {
-            let (start_m, end_m) = partition(forward_passes, n_workers, w);
-            let n_local = end_m - start_m;
-            let mut trajectory_costs = vec![0.0_f64; n_local];
-            let local_solve_count_before = ws.solver.statistics().solve_count;
-            // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
-            // when run_forward_stage borrows ws while raw_noise is still live.
-            let mut raw_noise_buf = vec![0.0_f64; noise_dim];
-            #[allow(clippy::cast_possible_truncation)]
-            let mut perm_scratch = vec![0_usize; (*total_forward_passes).max(1)];
-            #[allow(clippy::cast_possible_truncation)]
-            let total_scenarios_u32 = *total_forward_passes as u32;
+        .map(
+            |(w, (((ws, worker_records), mut basis_slice), mut per_stage_stats))| {
+                let (start_m, end_m) = partition(forward_passes, n_workers, w);
+                let n_local = end_m - start_m;
+                let mut trajectory_costs = vec![0.0_f64; n_local];
+                let local_solve_count_before = ws.solver.statistics().solve_count;
+                // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
+                // when run_forward_stage borrows ws while raw_noise is still live.
+                let mut raw_noise_buf = vec![0.0_f64; noise_dim];
+                #[allow(clippy::cast_possible_truncation)]
+                let mut perm_scratch = vec![0_usize; (*total_forward_passes).max(1)];
+                #[allow(clippy::cast_possible_truncation)]
+                let total_scenarios_u32 = *total_forward_passes as u32;
 
-            for t in 0..num_stages {
-                let cum_d = ctx
-                    .cumulative_discount_factors
-                    .get(t)
-                    .copied()
-                    .unwrap_or(1.0);
+                for t in 0..num_stages {
+                    let cum_d = ctx
+                        .cumulative_discount_factors
+                        .get(t)
+                        .copied()
+                        .unwrap_or(1.0);
 
-                for (local_m, m) in (start_m..end_m).enumerate() {
-                    // Reload model per scenario to ensure deterministic LP state across thread assignments.
-                    // When baked templates are ready, the active cut rows are already structural rows
-                    // in the baked template — no add_rows call is needed.
-                    if baked.ready {
-                        ws.solver.load_model(&baked.templates[t]);
-                    } else {
-                        ws.solver.load_model(&ctx.templates[t]);
-                        if cut_batches[t].num_rows > 0 {
-                            ws.solver.add_rows(&cut_batches[t]);
-                        }
-                    }
-                    ws.current_state.clear();
-                    let src: &[f64] = if t == 0 {
-                        initial_state
-                    } else {
-                        &worker_records[local_m * num_stages + (t - 1)].state
-                    };
-                    ws.current_state.extend_from_slice(src);
-
-                    // Seed (or zero) the lag accumulator at trajectory start so it
-                    // does not carry state across scenarios or training iterations.
-                    // When recent_accum_seed is non-empty, copy it instead of
-                    // zeroing — this pre-fills the partial period with observed data.
-                    if t == 0 {
-                        if recent_accum_seed.is_empty() {
-                            ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
-                            ws.scratch.lag_weight_accum = 0.0;
+                    for (local_m, m) in (start_m..end_m).enumerate() {
+                        // Reload model per scenario to ensure deterministic LP state across thread assignments.
+                        // When baked templates are ready, the active cut rows are already structural rows
+                        // in the baked template — no add_rows call is needed.
+                        if baked.ready {
+                            ws.solver.load_model(&baked.templates[t]);
                         } else {
-                            ws.scratch.lag_accumulator[..recent_accum_seed.len()]
-                                .copy_from_slice(recent_accum_seed);
-                            ws.scratch.lag_weight_accum = recent_weight_seed;
+                            ws.solver.load_model(&ctx.templates[t]);
+                            if cut_batches[t].num_rows > 0 {
+                                ws.solver.add_rows(&cut_batches[t]);
+                            }
                         }
-                        // Reset downstream accumulator at trajectory start.
-                        ws.scratch
-                            .downstream_accumulator
-                            .iter_mut()
-                            .for_each(|v| *v = 0.0);
-                        ws.scratch.downstream_weight_accum = 0.0;
-                        ws.scratch
-                            .downstream_completed_lags
-                            .iter_mut()
-                            .for_each(|v| *v = 0.0);
-                        ws.scratch.downstream_n_completed = 0;
-                    }
+                        ws.current_state.clear();
+                        let src: &[f64] = if t == 0 {
+                            initial_state
+                        } else {
+                            &worker_records[local_m * num_stages + (t - 1)].state
+                        };
+                        ws.current_state.extend_from_slice(src);
 
-                    let global_scenario = fwd_offset + m;
-                    #[allow(clippy::cast_possible_truncation)]
-                    let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
+                        // Seed (or zero) the lag accumulator at trajectory start so it
+                        // does not carry state across scenarios or training iterations.
+                        // When recent_accum_seed is non-empty, copy it instead of
+                        // zeroing — this pre-fills the partial period with observed data.
+                        if t == 0 {
+                            if recent_accum_seed.is_empty() {
+                                ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+                                ws.scratch.lag_weight_accum = 0.0;
+                            } else {
+                                ws.scratch.lag_accumulator[..recent_accum_seed.len()]
+                                    .copy_from_slice(recent_accum_seed);
+                                ws.scratch.lag_weight_accum = recent_weight_seed;
+                            }
+                            // Reset downstream accumulator at trajectory start.
+                            ws.scratch
+                                .downstream_accumulator
+                                .iter_mut()
+                                .for_each(|v| *v = 0.0);
+                            ws.scratch.downstream_weight_accum = 0.0;
+                            ws.scratch
+                                .downstream_completed_lags
+                                .iter_mut()
+                                .for_each(|v| *v = 0.0);
+                            ws.scratch.downstream_n_completed = 0;
+                        }
 
-                    if t == 0 {
-                        let class_req = ClassSampleRequest {
+                        let global_scenario = fwd_offset + m;
+                        #[allow(clippy::cast_possible_truncation)]
+                        let (i32, s32, t32) = (*iteration as u32, global_scenario as u32, t as u32);
+
+                        if t == 0 {
+                            let class_req = ClassSampleRequest {
+                                iteration: i32,
+                                scenario: s32,
+                                stage: 0,
+                                stage_idx: 0,
+                                total_scenarios: total_scenarios_u32,
+                                noise_group_id: 0,
+                            };
+                            sampler.apply_initial_state(
+                                &class_req,
+                                &mut ws.current_state,
+                                indexer.inflow_lags.start,
+                            );
+                        }
+                        let noise = sampler.sample(SampleRequest {
                             iteration: i32,
                             scenario: s32,
-                            stage: 0,
-                            stage_idx: 0,
+                            stage: t32,
+                            stage_idx: t,
+                            noise_buf: &mut raw_noise_buf,
+                            perm_scratch: &mut perm_scratch,
                             total_scenarios: total_scenarios_u32,
-                            noise_group_id: 0,
+                            noise_group_id: ctx.noise_group_id_at(t),
+                        })?;
+                        let raw_noise = noise.as_slice();
+                        let key = StageKey {
+                            t,
+                            m,
+                            local_m,
+                            num_stages,
+                            iteration: *iteration,
+                            raw_noise,
+                            basis_row_capacity: if baked.ready {
+                                baked.templates[t].num_rows
+                            } else {
+                                ctx.templates[t].num_rows + cut_batches[t].num_rows
+                            },
+                            terminal_has_boundary_cuts,
+                            pool: &fcf.pools[t],
+                            // Always None until ticket-010 activates the baked
+                            // forward path. Passing None forces the legacy
+                            // (pool.active_cuts()) reconstruction arm so that
+                            // forward-pass behavior is bit-for-bit identical to
+                            // the pre-epic baseline.
+                            baked_template: None,
                         };
-                        sampler.apply_initial_state(
-                            &class_req,
-                            &mut ws.current_state,
-                            indexer.inflow_lags.start,
-                        );
-                    }
-                    let noise = sampler.sample(SampleRequest {
-                        iteration: i32,
-                        scenario: s32,
-                        stage: t32,
-                        stage_idx: t,
-                        noise_buf: &mut raw_noise_buf,
-                        perm_scratch: &mut perm_scratch,
-                        total_scenarios: total_scenarios_u32,
-                        noise_group_id: ctx.noise_group_id_at(t),
-                    })?;
-                    let raw_noise = noise.as_slice();
-                    let key = StageKey {
-                        t,
-                        m,
-                        local_m,
-                        num_stages,
-                        iteration: *iteration,
-                        raw_noise,
-                        basis_row_capacity: if baked.ready {
-                            baked.templates[t].num_rows
-                        } else {
-                            ctx.templates[t].num_rows + cut_batches[t].num_rows
-                        },
-                        terminal_has_boundary_cuts,
-                        pool: &fcf.pools[t],
-                        // Always None until ticket-010 activates the baked
-                        // forward path. Passing None forces the legacy
-                        // (pool.active_cuts()) reconstruction arm so that
-                        // forward-pass behavior is bit-for-bit identical to
-                        // the pre-epic baseline.
-                        baked_template: None,
-                    };
-                    trajectory_costs[local_m] += cum_d
-                        * run_forward_stage(
+                        // Snapshot solver statistics before the stage solve so the
+                        // per-stage delta can be accumulated without hot-path allocation.
+                        let stats_before_stage = ws.solver.statistics();
+                        let stage_cost = run_forward_stage(
                             ws,
                             &mut basis_slice,
                             ctx,
@@ -1424,12 +1448,22 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                             &key,
                             worker_records,
                         )?;
+                        // Accumulate per-stage delta element-wise into the pre-allocated
+                        // worker-local buffer. `per_stage_stats` has length `num_stages`;
+                        // `t` is always in `0..num_stages` (loop invariant).
+                        let stage_delta = SolverStatsDelta::from_snapshots(
+                            &stats_before_stage,
+                            &ws.solver.statistics(),
+                        );
+                        SolverStatsDelta::accumulate_into(&mut per_stage_stats[t], &stage_delta);
+                        trajectory_costs[local_m] += cum_d * stage_cost;
+                    }
                 }
-            }
 
-            let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-            Ok((trajectory_costs, local_solves))
-        })
+                let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
+                Ok((trajectory_costs, local_solves, per_stage_stats))
+            },
+        )
         .collect();
 
     // Capture parallel region wall-clock before sequential post-processing.
@@ -1485,12 +1519,20 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     let fwd_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
 
     // Merge per-worker cost vectors in global scenario index order (canonical).
+    // Simultaneously merge per-stage stats by summing element-wise across workers.
     let mut scenario_costs = Vec::with_capacity(forward_passes);
     let mut lp_solves = 0u64;
+    let mut stage_stats: Vec<SolverStatsDelta> = (0..num_stages)
+        .map(|_| SolverStatsDelta::default())
+        .collect();
     for result in worker_results {
-        let (worker_costs, w_solves) = result?;
+        let (worker_costs, w_solves, worker_stage_stats) = result?;
         scenario_costs.extend(worker_costs);
         lp_solves += w_solves;
+        // Sum each worker's per-stage delta into the aggregate.
+        for (dst, src) in stage_stats.iter_mut().zip(&worker_stage_stats) {
+            SolverStatsDelta::accumulate_into(dst, src);
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1507,6 +1549,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         setup_time_ms: fwd_setup_ms as u64,
         load_imbalance_ms: fwd_imbalance_ms as u64,
         scheduling_overhead_ms: fwd_scheduling_ms as u64,
+        stage_stats,
     })
 }
 
@@ -1928,6 +1971,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         assert_eq!(r.scenario_costs.len(), 4);
         assert_eq!(r.scenario_costs[0], 60.0);
@@ -1943,6 +1987,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let c = r.clone();
         assert_eq!(c.scenario_costs.len(), r.scenario_costs.len());
@@ -2682,6 +2727,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2723,6 +2769,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 4).unwrap();
@@ -2752,6 +2799,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result_single = sync_forward(&single_rank, &comm, 4).unwrap();
@@ -2793,6 +2841,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 1).unwrap();
@@ -2829,6 +2878,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2858,6 +2908,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2879,6 +2930,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = LocalBackend;
         let result = sync_forward(&local, &comm, 2).unwrap();
@@ -2947,6 +2999,7 @@ mod tests {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         let comm = FailingComm;
         let err = sync_forward(&local, &comm, 1).unwrap_err();

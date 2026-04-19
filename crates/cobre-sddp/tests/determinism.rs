@@ -916,6 +916,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &StubComm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -930,6 +931,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -944,6 +946,7 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };

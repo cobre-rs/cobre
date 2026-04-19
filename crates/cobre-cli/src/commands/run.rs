@@ -1079,39 +1079,6 @@ fn aggregate_solver_stats(
     )
 }
 
-/// Collapse per-opening `SolverStatsEntry` rows back to per-`(iteration, phase,
-/// stage)` totals for the existing parquet writer.
-///
-/// The parquet schema does not yet have an `opening` column (ticket-007 adds it).
-/// This helper sums all entries sharing the same `(iteration, phase, stage)` key
-/// across their opening dimension, producing the old 4-tuple shape that the
-/// current writer expects. This preserves D-suite byte-identity until ticket-007
-/// lands.
-fn collapse_openings_for_writer(
-    log: &[(u64, &'static str, i32, i32, cobre_sddp::SolverStatsDelta)],
-) -> Vec<(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)> {
-    use std::collections::HashMap;
-    // Preserve insertion order for deterministic output by tracking a sequence number.
-    let mut order: Vec<(u64, &'static str, i32)> = Vec::new();
-    let mut map: HashMap<(u64, &'static str, i32), cobre_sddp::SolverStatsDelta> = HashMap::new();
-    for (iter, phase, stage, _opening, delta) in log {
-        let key = (*iter, *phase, *stage);
-        if let Some(existing) = map.get_mut(&key) {
-            cobre_sddp::SolverStatsDelta::accumulate_into(existing, delta);
-        } else {
-            order.push(key);
-            map.insert(key, delta.clone());
-        }
-    }
-    order
-        .into_iter()
-        .map(|key| {
-            let delta = map.remove(&key).unwrap_or_default();
-            (key.0, key.1, key.2, delta)
-        })
-        .collect()
-}
-
 /// Run the simulation phase: workspace pool, Parquet writing, and output.
 fn run_simulation_phase(
     ctx: &RunContext<impl Communicator>,
@@ -1508,23 +1475,24 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
     Ok((global_agg, global_scenario_stats))
 }
 
-/// Write training checkpoint and results to the output directory.
-///
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
-/// scenario ID for the simulation phase.
+/// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
+/// and `None` for forward, `lower_bound`, and simulation rows.
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
+    opening: Option<i32>,
     delta: &cobre_sddp::SolverStatsDelta,
 ) -> cobre_io::SolverStatsRow {
     cobre_io::SolverStatsRow {
         iteration: id,
         phase: phase.to_string(),
         stage,
+        opening,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
@@ -1593,16 +1561,18 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
     .map_err(CliError::from)?;
 
     // Write training solver stats to training/solver/iterations.parquet.
-    // Collapse per-opening entries to per-(iteration, phase, stage) totals so
-    // the existing parquet schema is preserved. The opening column is added in
-    // ticket-007; until then this collapse ensures D-suite byte-identity.
+    // Each entry in solver_stats_log is a 5-tuple (iteration, phase, stage, opening, delta).
+    // Backward rows carry a non-negative opening index; forward/LB rows carry -1 (mapped to None).
     if !args.training_result.solver_stats_log.is_empty() {
-        let collapsed = collapse_openings_for_writer(&args.training_result.solver_stats_log);
-        let rows: Vec<cobre_io::SolverStatsRow> = collapsed
+        let rows: Vec<cobre_io::SolverStatsRow> = args
+            .training_result
+            .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, delta)| {
+            .map(|(iter, phase, stage, opening, delta)| {
+                let opening_opt = if *opening == -1 { None } else { Some(*opening) };
                 #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
-                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+                let id = *iter as u32;
+                delta_to_stats_row(id, phase, *stage, opening_opt, delta)
             })
             .collect();
         cobre_io::write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
@@ -1651,11 +1621,14 @@ fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliErr
         .map_err(CliError::from)?;
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
+    // Simulation has no opening dimension; opening is always None.
     if !args.sim_solver_stats.is_empty() {
         let rows: Vec<cobre_io::SolverStatsRow> = args
             .sim_solver_stats
             .iter()
-            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .map(|(scenario_id, delta)| {
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, delta)
+            })
             .collect();
         cobre_io::write_simulation_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
     }
@@ -1791,7 +1764,7 @@ fn export_stochastic_artifacts(
     clippy::panic
 )]
 mod tests {
-    use super::{collapse_openings_for_writer, resolve_thread_count};
+    use super::{delta_to_stats_row, resolve_thread_count};
     use cobre_sddp::SolverStatsDelta;
 
     fn make_delta(lp_solves: u64) -> SolverStatsDelta {
@@ -1812,65 +1785,33 @@ mod tests {
     }
 
     #[test]
-    fn test_collapse_openings_for_writer_sums_openings_per_stage() {
-        // AC-003: collapse_openings_for_writer folds multiple openings for the same
-        // (iter, phase, stage) key into a single entry with accumulated lp_solves.
-        let log: Vec<(u64, &'static str, i32, i32, SolverStatsDelta)> = vec![
-            (1, "forward", -1, -1, make_delta(4)),
-            (1, "backward", 2, 0, make_delta(2)),
-            (1, "backward", 2, 1, make_delta(3)),
-            (1, "backward", 3, 0, make_delta(5)),
-            (1, "backward", 3, 1, make_delta(7)),
-            (1, "lower_bound", -1, -1, make_delta(1)),
-        ];
-
-        let collapsed = collapse_openings_for_writer(&log);
-
-        // Expect 4 rows: forward, backward-stage-2, backward-stage-3, lower_bound.
-        assert_eq!(collapsed.len(), 4);
-
-        // Row 0: forward
-        let (iter, phase, stage, delta) = &collapsed[0];
-        assert_eq!(*iter, 1);
-        assert_eq!(*phase, "forward");
-        assert_eq!(*stage, -1);
-        assert_eq!(delta.lp_solves, 4);
-
-        // Row 1: backward stage 2 — openings 0 + 1 summed
-        let (_, ph1, st1, d1) = &collapsed[1];
-        assert_eq!(*ph1, "backward");
-        assert_eq!(*st1, 2);
-        assert_eq!(d1.lp_solves, 5); // 2 + 3
-
-        // Row 2: backward stage 3 — openings 0 + 1 summed
-        let (_, ph2, st2, d2) = &collapsed[2];
-        assert_eq!(*ph2, "backward");
-        assert_eq!(*st2, 3);
-        assert_eq!(d2.lp_solves, 12); // 5 + 7
-
-        // Row 3: lower_bound
-        let (_, ph3, st3, d3) = &collapsed[3];
-        assert_eq!(*ph3, "lower_bound");
-        assert_eq!(*st3, -1);
-        assert_eq!(d3.lp_solves, 1);
+    fn test_delta_to_stats_row_backward_carries_opening() {
+        // Backward rows must carry Some(opening) in the output row.
+        let delta = make_delta(10);
+        let row = delta_to_stats_row(1, "backward", 2, Some(0), &delta);
+        assert_eq!(row.opening, Some(0));
+        assert_eq!(row.stage, 2);
+        assert_eq!(row.phase, "backward");
+        assert_eq!(row.lp_solves, 10);
     }
 
     #[test]
-    fn test_collapse_openings_for_writer_empty_returns_empty() {
-        let collapsed = collapse_openings_for_writer(&[]);
-        assert!(collapsed.is_empty());
+    fn test_delta_to_stats_row_forward_opening_is_none() {
+        // Forward rows must carry None for opening and a real stage index >= 0.
+        // ticket-011a: forward rows use stage = real stage index, not -1.
+        let delta = make_delta(4);
+        let row = delta_to_stats_row(1, "forward", 0, None, &delta);
+        assert_eq!(row.opening, None);
+        assert_eq!(row.stage, 0);
+        assert_eq!(row.lp_solves, 4);
     }
 
     #[test]
-    fn test_collapse_openings_for_writer_single_entry_passthrough() {
-        let log: Vec<(u64, &'static str, i32, i32, SolverStatsDelta)> =
-            vec![(5, "forward", -1, -1, make_delta(10))];
-        let collapsed = collapse_openings_for_writer(&log);
-        assert_eq!(collapsed.len(), 1);
-        let (iter, phase, stage, delta) = &collapsed[0];
-        assert_eq!(*iter, 5);
-        assert_eq!(*phase, "forward");
-        assert_eq!(*stage, -1);
-        assert_eq!(delta.lp_solves, 10);
+    fn test_delta_to_stats_row_simulation_opening_is_none() {
+        // Simulation rows must carry None for opening.
+        let delta = make_delta(7);
+        let row = delta_to_stats_row(42, "simulation", -1, None, &delta);
+        assert_eq!(row.opening, None);
+        assert_eq!(row.iteration, 42);
     }
 }

@@ -719,7 +719,7 @@ fn process_stage_backward<S: SolverInterface + Send>(
             ws.backward_accum
                 .per_opening_stats
                 .resize_with(n_openings, SolverStatsDelta::default);
-            for slot in &mut ws.backward_accum.per_opening_stats {
+            for slot in &mut ws.backward_accum.per_opening_stats[..n_openings] {
                 *slot = SolverStatsDelta::default();
             }
 

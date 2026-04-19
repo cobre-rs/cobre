@@ -783,7 +783,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
         };
         let fwd_solve_time_ms = fwd_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "forward", -1, fwd_delta));
+        solver_stats_log.push((iteration, "forward", -1, -1, fwd_delta));
 
         let forward_elapsed_ms = forward_result.elapsed_ms;
 
@@ -853,14 +853,28 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // Buffers are borrowed by bwd_spec and automatically available for
         // the next iteration after bwd_spec is dropped here.
 
-        // Store per-stage backward deltas and compute aggregate solve time.
+        // Store per-stage, per-opening backward deltas and compute aggregate solve time.
+        // stage_stats is Vec<(usize, Vec<SolverStatsDelta>)> — one inner Vec per stage,
+        // with length n_openings. Push one SolverStatsEntry per (stage, opening) pair.
         let bwd_solve_time_ms = {
-            let agg =
-                SolverStatsDelta::aggregate(backward_result.stage_stats.iter().map(|(_, d)| d));
+            let agg = SolverStatsDelta::aggregate(
+                backward_result
+                    .stage_stats
+                    .iter()
+                    .flat_map(|(_, per_opening)| per_opening.iter()),
+            );
             let total_ms = agg.solve_time_ms;
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            for (stage_idx, delta) in &backward_result.stage_stats {
-                solver_stats_log.push((iteration, "backward", *stage_idx as i32, delta.clone()));
+            for (stage_idx, per_opening) in &backward_result.stage_stats {
+                for (omega_usize, delta) in per_opening.iter().enumerate() {
+                    solver_stats_log.push((
+                        iteration,
+                        "backward",
+                        *stage_idx as i32,
+                        omega_usize as i32,
+                        delta.clone(),
+                    ));
+                }
             }
             total_ms
         };
@@ -1119,7 +1133,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
         let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
         let lb_solve_time_ms = lb_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "lower_bound", -1, lb_delta));
+        solver_stats_log.push((iteration, "lower_bound", -1, -1, lb_delta));
         #[allow(clippy::cast_possible_truncation)]
         let lb_wall_ms = lb_wall_start.elapsed().as_millis() as u64;
 

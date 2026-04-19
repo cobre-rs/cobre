@@ -140,8 +140,6 @@ fn build_training_summary(
         total_solve_time_seconds: None,
         total_basis_offered: None,
         total_basis_consistency_failures: None,
-        total_clear_solver_count: None,
-        total_clear_solver_failures: None,
         total_simplex_iterations: None,
     }
 }
@@ -162,8 +160,6 @@ fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary 
         total_solve_time_seconds: None,
         total_basis_offered: None,
         total_basis_consistency_failures: None,
-        total_clear_solver_count: None,
-        total_clear_solver_failures: None,
         total_simplex_iterations: None,
     }
 }

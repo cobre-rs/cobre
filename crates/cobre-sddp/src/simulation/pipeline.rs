@@ -85,8 +85,12 @@ const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 /// Per-worker scenario cost accumulation: `(scenario_id, total_cost, category_costs)`.
 type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 
-/// Per-worker solver statistics: `(scenario_id, delta)`.
-type WorkerStats = Vec<(u32, SolverStatsDelta)>;
+/// Per-worker solver statistics: `(scenario_id, opening, delta)`.
+///
+/// The `opening` field is always `-1` for simulation rows — simulation has one
+/// solve per `(scenario, stage)` with no opening loop. The sentinel value `-1`
+/// maps to a NULL `Int32` in the parquet schema (ticket-007).
+type WorkerStats = Vec<(u32, i32, SolverStatsDelta)>;
 
 /// Result of a simulation run, containing per-scenario costs and solver statistics.
 #[derive(Debug)]
@@ -94,7 +98,10 @@ pub struct SimulationRunResult {
     /// Per-scenario `(scenario_id, total_cost, category_costs)`, sorted by `scenario_id`.
     pub costs: Vec<(u32, f64, ScenarioCategoryCosts)>,
     /// Per-scenario solver statistics delta, sorted by `scenario_id`.
-    pub solver_stats: Vec<(u32, SolverStatsDelta)>,
+    ///
+    /// Each entry is `(scenario_id, opening, delta)` where `opening` is always
+    /// `-1` for simulation (no opening dimension).
+    pub solver_stats: Vec<(u32, i32, SolverStatsDelta)>,
 }
 
 /// Output-related inputs bundled from the caller for [`simulate`].
@@ -1102,7 +1109,9 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
                 let scenario_solve_time_ms = scenario_delta.solve_time_ms;
                 let scenario_lp_solves = scenario_delta.lp_solves;
-                worker_stats.push((scenario_id, scenario_delta));
+                // opening = -1: simulation has no opening loop (one solve per
+                // scenario×stage). The sentinel maps to NULL in parquet (ticket-007).
+                worker_stats.push((scenario_id, -1_i32, scenario_delta));
 
                 worker_costs.push(dispatch_scenario_result(
                     &output,
@@ -1134,7 +1143,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         all_stats.extend(stats);
     }
     all_costs.sort_by_key(|&(id, _, _)| id);
-    all_stats.sort_by_key(|&(id, _)| id);
+    all_stats.sort_by_key(|&(id, _, _)| id);
 
     if let Some(sender) = output.event_sender {
         #[allow(clippy::cast_possible_truncation)]

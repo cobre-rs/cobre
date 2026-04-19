@@ -775,12 +775,13 @@ impl HighsSolver {
         }
     }
 
-    /// Internal helper: call `cobre_highs_clear_solver` and update stats.
+    /// Internal helper: run the simplex and update stats.
     ///
     /// Core simplex execution, called after (for warm-start) the basis has been
     /// installed. `HiGHS` retains its internal simplex basis across consecutive
     /// `solve_inner` calls on the same LP shape, which is the primary warm-start
-    /// mechanism for the backward pass.
+    /// mechanism for the backward pass. No `Highs_clearSolver` call is issued —
+    /// that behavior was removed in commit `25f1351` to recover a 4.7× perf regression.
     fn solve_inner(&mut self) -> Result<SolutionView<'_>, SolverError> {
         // Safeguard: apply iteration limits before the initial attempt.
         // Time limits are NOT set here — HiGHS tracks time cumulatively from

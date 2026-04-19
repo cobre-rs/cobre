@@ -140,11 +140,11 @@ fn d01_case_dir() -> std::path::PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Aggregate `SolverStatsDelta` across all `"forward"` log entries.
-fn sum_forward_deltas(log: &[(u64, &'static str, i32, SolverStatsDelta)]) -> SolverStatsDelta {
+fn sum_forward_deltas(log: &[(u64, &'static str, i32, i32, SolverStatsDelta)]) -> SolverStatsDelta {
     SolverStatsDelta::aggregate(
         log.iter()
-            .filter(|(_, phase, _, _)| *phase == "forward")
-            .map(|(_, _, _, d)| d),
+            .filter(|(_, phase, _, _, _)| *phase == "forward")
+            .map(|(_, _, _, _, d)| d),
     )
 }
 
@@ -611,8 +611,8 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
         let iter2_fwd: Vec<&SolverStatsDelta> = result2
             .solver_stats_log
             .iter()
-            .filter(|(iter, phase, _, _)| *iter == 2 && *phase == "forward")
-            .map(|(_, _, _, d)| d)
+            .filter(|(iter, phase, _, _, _)| *iter == 2 && *phase == "forward")
+            .map(|(_, _, _, _, d)| d)
             .collect();
 
         assert!(
@@ -791,12 +791,12 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     let total_preserved: u64 = sim_result
         .solver_stats
         .iter()
-        .map(|(_, delta)| delta.basis_preserved)
+        .map(|(_, _, delta)| delta.basis_preserved)
         .sum();
     let total_rejections: u64 = sim_result
         .solver_stats
         .iter()
-        .map(|(_, delta)| delta.basis_consistency_failures)
+        .map(|(_, _, delta)| delta.basis_consistency_failures)
         .sum();
 
     assert!(

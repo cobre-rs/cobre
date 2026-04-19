@@ -716,8 +716,8 @@ pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
     check_removed_keys(&raw, path)?;
 
     // Option B: warn (not error) for keys that are now obsolete but harmless.
-    // `canonical_state` was removed in v0.5.0; the solve-to-solve independence
-    // contract is now unconditional inside `HighsSolver::solve`.
+    // `canonical_state` was removed in v0.5.0; solvers may now retain internal
+    // state between consecutive `solve` calls as a warm-start optimisation.
     warn_obsolete_keys(&raw, path);
 
     let config: Config = serde_json::from_str(&raw).map_err(|e| {
@@ -801,8 +801,9 @@ fn warn_obsolete_keys(raw: &str, _path: &Path) {
         "/training/solver/canonical_state",
         "training.solver.canonical_state",
         "is obsolete and has no effect; please remove it from your config \
-             (see CHANGELOG for details). Solve-to-solve independence is now \
-             an unconditional contract inside `HighsSolver::solve`.",
+             (see CHANGELOG for details). Solvers may retain internal state \
+             between solves for performance; explicit resets are available via \
+             `load_model` (resets topology) per `SolverInterface::solve` contract.",
     )];
 
     // Silently skip if JSON is malformed — `check_removed_keys` already validated it.

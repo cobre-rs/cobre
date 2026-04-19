@@ -915,7 +915,7 @@ fn simulation_zero_rejections_on_cut_churn() {
     let total_rejections: u64 = sim_result
         .solver_stats
         .iter()
-        .map(|(_, delta)| delta.basis_consistency_failures)
+        .map(|(_, _opening, delta)| delta.basis_consistency_failures)
         .sum();
 
     assert_eq!(

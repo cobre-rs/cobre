@@ -34,11 +34,14 @@ use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics,
 /// - Methods that write to internal scratch buffers (`get_basis`) take `&mut self`.
 /// - Read-only query methods (`statistics`, `name`) take `&self`.
 ///
-/// # Solve Contract
+/// # Solve-to-solve Contract
 ///
-/// Each `solve` call is self-contained and does not depend on state accumulated
-/// from prior calls. See [`SolverInterface::solve`] for the full
-/// solve-to-solve independence contract.
+/// Implementations MAY retain internal state (factorization, simplex basis)
+/// between consecutive `solve` calls on the same instance as a performance
+/// optimization. Callers that need a reproducible reset between runs must
+/// either call `load_model` (which resets topology) or pass an explicit
+/// `Basis` via `solve(Some(&b))`. See [`SolverInterface::solve`] for the
+/// full solve-to-solve contract.
 ///
 /// # Usage as a Generic Bound
 ///
@@ -88,7 +91,7 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.3a.
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]);
 
-    /// Solve the LP under the solve-to-solve independence contract.
+    /// Solve the LP currently loaded on the backend.
     ///
     /// Hot-path method encapsulating internal retry logic and optional warm-start.
     /// Requires [`Self::load_model`] called first and scenario patches applied.
@@ -96,24 +99,36 @@ pub trait SolverInterface: Send {
     /// until the next `&mut self` call. Call [`SolutionView::to_owned`] when the
     /// solution must outlive the borrow.
     ///
-    /// # Contract — solve-to-solve independence
+    /// # Contract — solve-to-solve behavior (revised 2026-04-19)
     ///
-    /// Each `solve` call is self-contained. The result depends only on (a) the
-    /// loaded model, (b) the current column/row bounds, (c) the
-    /// `basis: Option<&Basis>` argument. It does NOT depend on state left over
-    /// from prior `solve` calls — not on the previous trial point's optimum, not
-    /// on the order trial points were submitted, not on any hidden cached data the
-    /// solver accumulated.
+    /// `solve` returns the optimum of the LP currently loaded on the backend,
+    /// subject to the current column/row bounds. If `basis` is `Some(&b)`, the
+    /// solver attempts to warm-start from `b`; a basis that fails
+    /// `isBasisConsistent` returns [`SolverError::BasisInconsistent`].
     ///
     /// `basis = Some(&b)` installs `b` before running the simplex.
     /// `basis = None` warm-starts from whatever basis this instance currently
-    /// holds (itself a deterministic function of the prior inputs on this
-    /// instance).
+    /// holds (itself determined by prior `solve` history on the same instance).
     ///
-    /// Implementations fulfill the contract however they like: internal state
-    /// clearing, relying on the backend's natural independence, or per-solve
-    /// model reload. [`crate::HighsSolver`] delivers the guarantee by calling
-    /// `Highs_clearSolver` at the start of each `solve` body.
+    /// Implementations MAY retain internal state (factorization, simplex basis)
+    /// between consecutive `solve` calls on the same instance as a performance
+    /// optimization. This means the result of a cold-start `solve(None)` can
+    /// depend on prior `solve` history on the same instance through the retained
+    /// internal basis. Callers that need a reproducible reset between runs must
+    /// either call `load_model` (which resets topology) or pass an explicit
+    /// `Basis` via `solve(Some(&b))`.
+    ///
+    /// [`crate::HighsSolver`] retains its internal simplex basis and
+    /// factorization across consecutive `solve` calls as a warm-start
+    /// optimization. This is the primary warm-start mechanism for backward-pass
+    /// workloads where the LP shape is constant across trial points at the same
+    /// (stage, opening). Callers that need solve-independence must pass an
+    /// explicit `Basis` (or call `load_model` to reset topology). The performance
+    /// fix in commit `25f1351` (April 2026) removed an unconditional
+    /// `Highs_clearSolver` call that defeated this optimization;
+    /// cross-sampled-state reproducibility concerns raised during that fix are
+    /// documented at the plan level and deferred to a follow-up design
+    /// (see known-concerns).
     ///
     /// # Errors
     ///

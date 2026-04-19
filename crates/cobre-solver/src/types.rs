@@ -162,18 +162,6 @@ pub struct SolverStatistics {
     /// (see CHANGELOG).
     pub basis_consistency_failures: u64,
 
-    /// Number of `Highs_clearSolver` FFI calls — one per `solve` call.
-    ///
-    /// Incremented once per [`crate::SolverInterface::solve`] call to deliver the
-    /// solve-to-solve independence contract (AD-4).
-    pub clear_solver_count: u64,
-
-    /// Number of `Highs_clearSolver` FFI calls that returned an error status.
-    ///
-    /// Should be zero in a healthy `HiGHS` build. Non-zero values indicate
-    /// an FFI regression or a HiGHS-internal inconsistency.
-    pub clear_solver_failures: u64,
-
     /// Number of solves that returned optimal on the first attempt (before any retry).
     ///
     /// Enables first-try rate computation: `first_try_rate = first_try_successes / solve_count`.
@@ -664,13 +652,6 @@ mod tests {
         assert_eq!(stats.basis_new_slack, 0);
         assert_eq!(stats.basis_preserved, 0);
         assert!(stats.retry_level_histogram.is_empty());
-    }
-
-    #[test]
-    fn default_stats_has_zero_clear_solver_counters() {
-        let s = SolverStatistics::default();
-        assert_eq!(s.clear_solver_count, 0);
-        assert_eq!(s.clear_solver_failures, 0);
     }
 
     fn make_fixture_stage_template() -> StageTemplate {

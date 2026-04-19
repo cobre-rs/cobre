@@ -465,12 +465,6 @@ pub struct TrainingSummary {
     /// Number of warm-start calls in which `isBasisConsistent` returned false.
     pub total_basis_consistency_failures: Option<u64>,
 
-    /// Total `Highs_clearSolver` FFI calls — one per solve — across all solvers in the training phase.
-    pub total_clear_solver_count: Option<u64>,
-
-    /// `Highs_clearSolver` FFI calls that returned an error during the training phase.
-    pub total_clear_solver_failures: Option<u64>,
-
     /// Total simplex iterations across all solves.
     pub total_simplex_iterations: Option<u64>,
 }
@@ -515,12 +509,6 @@ pub struct SimulationSummary {
 
     /// Number of warm-start calls in which `isBasisConsistent` returned false.
     pub total_basis_consistency_failures: Option<u64>,
-
-    /// Total `Highs_clearSolver` FFI calls — one per solve — across all solvers in the simulation phase.
-    pub total_clear_solver_count: Option<u64>,
-
-    /// `Highs_clearSolver` FFI calls that returned an error during the simulation phase.
-    pub total_clear_solver_failures: Option<u64>,
 
     /// Total simplex iterations across all solves.
     pub total_simplex_iterations: Option<u64>,
@@ -699,12 +687,6 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
             let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
         }
     }
-    if let Some(count) = t.total_clear_solver_count {
-        let failures = t.total_clear_solver_failures.unwrap_or(0);
-        let _ = stderr.write_line(&format!(
-            "  Clear-solver calls: {count} ({failures} failures)"
-        ));
-    }
     if let Some(simplex) = t.total_simplex_iterations {
         let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
     }
@@ -772,12 +754,6 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
         } else if failures > 0 {
             let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
         }
-    }
-    if let Some(count) = sim.total_clear_solver_count {
-        let failures = sim.total_clear_solver_failures.unwrap_or(0);
-        let _ = stderr.write_line(&format!(
-            "  Clear-solver calls: {count} ({failures} failures)"
-        ));
     }
     if let Some(simplex) = sim.total_simplex_iterations {
         let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
@@ -847,8 +823,6 @@ mod tests {
             total_solve_time_seconds: Some(28.8),
             total_basis_offered: Some(34_000),
             total_basis_consistency_failures: Some(200),
-            total_clear_solver_count: Some(0),
-            total_clear_solver_failures: Some(0),
             total_simplex_iterations: Some(1_800_000),
         }
     }
@@ -922,8 +896,6 @@ mod tests {
             total_solve_time_seconds: None,
             total_basis_offered: None,
             total_basis_consistency_failures: None,
-            total_clear_solver_count: None,
-            total_clear_solver_failures: None,
             total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));
@@ -1089,8 +1061,6 @@ mod tests {
             total_solve_time_seconds: None,
             total_basis_offered: None,
             total_basis_consistency_failures: None,
-            total_clear_solver_count: None,
-            total_clear_solver_failures: None,
             total_simplex_iterations: None,
         };
         let summary = make_run_summary(Some(sim));

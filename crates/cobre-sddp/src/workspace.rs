@@ -160,6 +160,16 @@ pub(crate) struct BackwardAccumulators {
     /// contributions across all workers into `metadata_sync_buf`, replacing
     /// the old per-`StagedCut` `binding_increments` Vec iteration.
     pub(crate) metadata_sync_contribution: Vec<u64>,
+    /// Per-opening solver-statistics accumulator for this worker.
+    ///
+    /// Length equals `n_openings` for the current stage. Re-initialised to
+    /// `vec![Default::default(); n_openings]` once per stage at the start of
+    /// the parallel region (in `process_stage_backward`). Each trial point
+    /// processed by this worker adds its per-opening delta element-wise.
+    /// After the parallel region the sequential merge phase sums
+    /// contributions across all workers to produce the per-stage
+    /// `Vec<SolverStatsDelta>` stored in `BackwardResult::stage_stats`.
+    pub(crate) per_opening_stats: Vec<crate::solver_stats::SolverStatsDelta>,
 }
 
 impl BackwardAccumulators {
@@ -181,6 +191,7 @@ impl BackwardAccumulators {
             slot_increments: vec![0u64; initial_pool_capacity],
             agg_coefficients: vec![0.0_f64; n_state],
             metadata_sync_contribution: vec![0u64; initial_pool_capacity],
+            per_opening_stats: Vec::new(),
         }
     }
 }

@@ -114,13 +114,14 @@ pub struct BackwardResult {
     /// Number of LP solves performed during this backward pass.
     pub lp_solves: u64,
 
-    /// Per-stage solver statistics deltas.
+    /// Per-stage, per-opening solver statistics deltas.
     ///
-    /// Each entry is `(successor_stage_index, delta)` where the stage index
-    /// identifies which stage's LP was solved (the successor), not the stage
-    /// where cuts are added. Entries are in reverse stage order (matching
-    /// the backward iteration direction).
-    pub stage_stats: Vec<(usize, SolverStatsDelta)>,
+    /// Each entry is `(successor_stage_index, per_opening_deltas)` where the
+    /// stage index identifies which stage's LP was solved (the successor), not
+    /// the stage where cuts are added. The inner `Vec<SolverStatsDelta>` has
+    /// length `n_openings` for that stage — one delta per opening index.
+    /// Entries are in reverse stage order (matching the backward iteration direction).
+    pub stage_stats: Vec<(usize, Vec<SolverStatsDelta>)>,
 
     /// Wall-clock time for state exchange (`allgatherv`) accumulated across
     /// all stages, in milliseconds.
@@ -431,7 +432,14 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
 /// Called once per trial point inside the parallel worker closure of
 /// `process_stage_backward`. Uses `ws.backward_accum` as pre-allocated scratch
 /// storage. The caller must have grown the accumulator buffers to the required
-/// dimensions and zeroed `slot_increments[..pop]` before calling.
+/// dimensions, zeroed `slot_increments[..pop]` before calling, and
+/// initialised `per_opening_stats` to `vec![Default::default(); n_openings]`
+/// once per stage before the first trial point.
+///
+/// Per-opening solver-statistics deltas are accumulated element-wise into
+/// `ws.backward_accum.per_opening_stats` across all trial points processed
+/// by this worker for the current stage.
+///
 /// Returns a single aggregated [`StagedCut`].
 #[allow(clippy::too_many_lines)]
 fn process_trial_point_backward<S: SolverInterface + Send>(
@@ -448,9 +456,19 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     let scenario = spec.fwd_offset + m;
     let s = succ.successor;
 
+    debug_assert_eq!(
+        ws.backward_accum.per_opening_stats.len(),
+        succ.probabilities.len(),
+        "per_opening_stats must be initialised to n_openings before each stage's trial-point loop"
+    );
+
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
+
+        // Snapshot solver statistics before this opening's solve so we can
+        // compute the per-opening delta afterwards.
+        let stats_before_omega = ws.solver.statistics();
 
         // Opening 0: use forward-pass basis from BasisStore for warm start.
         // Slot-tracked reconstruction: copy preserved cut-row statuses by slot
@@ -541,7 +559,30 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         };
         // `view` is Copy; assign to `_` to make the end-of-borrow intent explicit.
         // Subsequent code may mutably borrow `ws` fields.
+        //
+        // IMPORTANT: the after-snapshot for per-opening stats is taken AFTER
+        // `view` is dropped. `run_stage_solve` returns a `StageOutcome<'ws>`
+        // whose `view` field borrows `ws` for `'ws`. While `view` is live the
+        // borrow checker treats `ws` as mutably borrowed, preventing
+        // `ws.solver.statistics()` (shared borrow). Dropping `view` here ends
+        // the mutable borrow so the statistics call below is safe.
         let _ = view;
+
+        // Snapshot solver statistics after this opening's solve. All needed
+        // values from `view` (objective, duals) are already in owned locals.
+        // The monotonic counters in `statistics()` are unaffected by the
+        // solution data that `view` was borrowing.
+        let stats_after_omega = ws.solver.statistics();
+
+        // Accumulate per-opening delta element-wise into the worker's buffer.
+        // The buffer was initialised to `Default::default()` for this stage
+        // at the start of `process_stage_backward`, before the trial-point loop.
+        let opening_delta =
+            SolverStatsDelta::from_snapshots(&stats_before_omega, &stats_after_omega);
+        SolverStatsDelta::accumulate_into(
+            &mut ws.backward_accum.per_opening_stats[omega],
+            &opening_delta,
+        );
 
         let out = &mut ws.backward_accum.outcomes[omega];
         out.coefficients.copy_from_slice(&state_duals);
@@ -671,6 +712,17 @@ fn process_stage_backward<S: SolverInterface + Send>(
             }
             ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
 
+            // Initialise per_opening_stats to n_openings zero-valued deltas.
+            // Resized (never grows beyond the maximum n_openings seen) and
+            // zeroed once per stage — not per trial point — to bound the
+            // allocation cost to the stage boundary.
+            ws.backward_accum
+                .per_opening_stats
+                .resize_with(n_openings, SolverStatsDelta::default);
+            for slot in &mut ws.backward_accum.per_opening_stats {
+                *slot = SolverStatsDelta::default();
+            }
+
             // Pre-allocate staged buffer with a conservative capacity hint.
             // Work-stealing means each worker claims roughly local_work items,
             // but we can't know exactly; use local_work as an upper bound.
@@ -769,7 +821,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         .map(|ws| ws.solver.statistics().solve_count)
         .sum();
     let mut cuts_generated: usize = 0;
-    let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
+    let mut stage_stats: Vec<(usize, Vec<SolverStatsDelta>)> = Vec::new();
     let mut state_exchange_ms: u64 = 0;
     let mut cut_batch_build_ms: u64 = 0;
     let mut setup_ms: u64 = 0;
@@ -1027,9 +1079,35 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             scheduling_ms += stage_scheduling_ms as u64;
         }
 
-        let stage_delta = SolverStatsDelta::aggregate(worker_deltas.iter());
+        // Merge per-worker per_opening_stats into a single Vec<SolverStatsDelta>
+        // of length n_openings by summing element-wise across workers.
+        // The worker buffers were initialised to Default::default() at the start
+        // of this stage's parallel region and accumulated per-opening deltas
+        // inside `process_trial_point_backward`.
+        //
+        // We build the merged vec by starting from the first worker's buffer
+        // (cloned to avoid aliasing) and folding in the remaining workers.
+        let stage_per_opening: Vec<SolverStatsDelta> = {
+            let mut merged: Vec<SolverStatsDelta> = workspaces.first().map_or_else(
+                || vec![SolverStatsDelta::default(); n_openings],
+                |ws| ws.backward_accum.per_opening_stats.clone(),
+            );
+            // Grow merged to n_openings if the first worker had fewer (empty case).
+            merged.resize_with(n_openings, SolverStatsDelta::default);
+            for ws in workspaces.iter().skip(1) {
+                debug_assert_eq!(
+                    ws.backward_accum.per_opening_stats.len(),
+                    n_openings,
+                    "per_opening_stats length must equal n_openings on every worker"
+                );
+                for (dst, src) in merged.iter_mut().zip(&ws.backward_accum.per_opening_stats) {
+                    SolverStatsDelta::accumulate_into(dst, src);
+                }
+            }
+            merged
+        };
 
-        stage_stats.push((successor, stage_delta));
+        stage_stats.push((successor, stage_per_opening));
     }
 
     #[allow(clippy::cast_possible_truncation)]

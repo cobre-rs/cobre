@@ -669,14 +669,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "basis_consistency_failures") => {
             "Number of warm-start solve calls rejected because isBasisConsistent returned false"
         }
-        ("solver_iterations", "clear_solver_count") => {
-            "Total Highs_clearSolver FFI calls in this phase — incremented once per solve \
-             to deliver the solve-to-solve independence contract."
-        }
-        ("solver_iterations", "clear_solver_failures") => {
-            "Highs_clearSolver calls that returned an FFI error. Should be zero in a healthy \
-             HiGHS build."
-        }
         ("solver_iterations", "simplex_iterations") => "Total simplex iterations",
         ("solver_iterations", "solve_time_ms") => "Cumulative solve wall-clock time",
         ("solver_iterations", "load_model_time_ms") => "Cumulative load_model call time",
@@ -1456,8 +1448,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 197,
-            "variables.csv must have exactly 197 data rows (one per column across all schemas, including clear_solver_count and clear_solver_failures)"
+            row_count, 195,
+            "variables.csv must have exactly 195 data rows (one per column across all schemas)"
         );
     }
 

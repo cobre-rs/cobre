@@ -42,6 +42,16 @@ from pathlib import Path
 EXPECTED_DRIFTS: list[tuple[str, str]] = [
     (
         "**/training/solver/iterations.parquet",
+        "ticket 04a-006: deleted clear_solver_count and clear_solver_failures columns (Option A) "
+        "per Bucket D decision; counters permanently 0 after commit 25f1351.",
+    ),
+    (
+        "**/simulation/solver/iterations.parquet",
+        "ticket 04a-006: deleted clear_solver_count and clear_solver_failures columns (Option A) "
+        "per Bucket D decision; counters permanently 0 after commit 25f1351.",
+    ),
+    (
+        "**/training/solver/iterations.parquet",
         "ticket-007: basis_consistency_failures schema rename causes hash drift",
     ),
     (

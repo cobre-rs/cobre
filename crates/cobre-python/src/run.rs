@@ -221,6 +221,35 @@ fn export_stochastic_artifacts_py(
     }
 }
 
+/// Collapse a 5-tuple solver stats log (with per-opening dimension) into a 4-tuple
+/// log suitable for the existing Parquet writer by summing across the opening dimension.
+///
+/// Entries with the same `(iteration, phase, stage)` key are accumulated; insertion
+/// order is preserved for deterministic output.
+fn collapse_openings_for_writer(
+    log: &[(u64, &'static str, i32, i32, SolverStatsDelta)],
+) -> Vec<(u64, &'static str, i32, SolverStatsDelta)> {
+    use std::collections::HashMap;
+    let mut order: Vec<(u64, &'static str, i32)> = Vec::new();
+    let mut map: HashMap<(u64, &'static str, i32), SolverStatsDelta> = HashMap::new();
+    for (iter, phase, stage, _opening, delta) in log {
+        let key = (*iter, *phase, *stage);
+        if let Some(existing) = map.get_mut(&key) {
+            SolverStatsDelta::accumulate_into(existing, delta);
+        } else {
+            order.push(key);
+            map.insert(key, delta.clone());
+        }
+    }
+    order
+        .into_iter()
+        .map(|key| {
+            let delta = map.remove(&key).unwrap_or_default();
+            (key.0, key.1, key.2, delta)
+        })
+        .collect()
+}
+
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
@@ -243,8 +272,6 @@ fn delta_to_stats_row(
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
         basis_consistency_failures: delta.basis_consistency_failures as u32,
-        clear_solver_count: delta.clear_solver_count,
-        clear_solver_failures: delta.clear_solver_failures,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,
@@ -321,9 +348,8 @@ fn write_training_artifacts(
     .map_err(|e| format!("policy checkpoint error: {e}"))?;
 
     if !training.result.solver_stats_log.is_empty() {
-        let rows: Vec<SolverStatsRow> = training
-            .result
-            .solver_stats_log
+        let collapsed = collapse_openings_for_writer(&training.result.solver_stats_log);
+        let rows: Vec<SolverStatsRow> = collapsed
             .iter()
             .map(|(iter, phase, stage, delta)| {
                 #[allow(clippy::cast_possible_truncation)]
@@ -422,7 +448,9 @@ fn run_simulation_phase_py(
         let rows: Vec<SolverStatsRow> = sim_run_result
             .solver_stats
             .iter()
-            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .map(|(scenario_id, _opening, delta)| {
+                delta_to_stats_row(*scenario_id, "simulation", -1, delta)
+            })
             .collect();
         cobre_io::write_simulation_solver_stats(output_dir, &rows)
             .map_err(|e| format!("simulation solver stats output: {e}"))?;

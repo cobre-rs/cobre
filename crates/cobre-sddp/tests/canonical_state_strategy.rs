@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::{
+    Bus, DeficitSegment, EntityId,
     scenario::{
         CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile, SamplingScheme,
     },
@@ -34,20 +35,19 @@ use cobre_core::{
         Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
         StageStateConfig,
     },
-    Bus, DeficitSegment, EntityId,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
 };
 use cobre_stochastic::{
-    build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+    ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
 };
 
 use cobre_sddp::{
-    cut::fcf::FutureCostFunction, train, CanonicalStateStrategy, CutManagementConfig, EventConfig,
-    HorizonMode, InflowNonNegativityMethod, LoopConfig, RiskMeasure, SolverStatsEntry,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext,
+    CanonicalStateStrategy, CutManagementConfig, EventConfig, HorizonMode,
+    InflowNonNegativityMethod, LoopConfig, RiskMeasure, SolverStatsEntry, StageContext,
+    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    cut::fcf::FutureCostFunction, train,
 };
 
 use cobre_solver::highs::HighsSolver;

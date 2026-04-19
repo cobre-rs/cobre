@@ -20,13 +20,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use cobre_core::{entities::hydro::HydroGenerationModel, EntityId, System};
+use cobre_core::{EntityId, System, entities::hydro::HydroGenerationModel};
 use cobre_io::extensions::{
     FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SelectionMode,
 };
 
-use crate::fpha_fitting::{fit_fpha_planes, FphaFitResult};
 use crate::SddpError;
+use crate::fpha_fitting::{FphaFitResult, fit_fpha_planes};
 
 // ── Hyperplane types ──────────────────────────────────────────────────────────
 
@@ -1707,14 +1707,14 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EfficiencyModel, EntityId, HydraulicLossesModel, SystemBuilder,
+        TailraceModel,
         entities::hydro::{HydroGenerationModel, HydroPenalties},
         scenario::CorrelationModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EfficiencyModel, EntityId, HydraulicLossesModel, SystemBuilder,
-        TailraceModel,
     };
     use cobre_io::extensions::{
         FphaColumnLayout, FphaHyperplaneRow, HydroGeometryRow, ProductionModelConfig, SeasonConfig,
@@ -1722,12 +1722,12 @@ mod tests {
     };
 
     use super::{
-        build_fpha_model, build_hydro_model_summary, determine_source, find_fpha_config_for_stage,
-        find_model_for_stage, validate_computed_prerequisites, validate_hyperplane_row,
         EvaporationModel, EvaporationModelSet, EvaporationReferenceSource, EvaporationSource,
         FphaHydroDetail, FphaPlane, HydroModelProvenance, HydroModelSummary, LinearizedEvaporation,
         PrepareHydroModelsResult, ProductionModelSet, ProductionModelSource,
-        ResolvedProductionModel,
+        ResolvedProductionModel, build_fpha_model, build_hydro_model_summary, determine_source,
+        find_fpha_config_for_stage, find_model_for_stage, validate_computed_prerequisites,
+        validate_hyperplane_row,
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────
@@ -3197,9 +3197,11 @@ mod tests {
         );
         assert!(!models.has_evaporation(), "has_evaporation() must be false");
         assert_eq!(provenance.len(), 2);
-        assert!(provenance
-            .iter()
-            .all(|(_, src)| *src == EvaporationSource::NotModeled));
+        assert!(
+            provenance
+                .iter()
+                .all(|(_, src)| *src == EvaporationSource::NotModeled)
+        );
     }
 
     /// resolve_evaporation_models core logic: known geometry + coefficient gives correct k_evap0 and k_evap_v.

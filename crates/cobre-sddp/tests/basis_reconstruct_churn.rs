@@ -17,16 +17,13 @@
 //!    `reconstruct_basis`.
 //!
 //! 3. [`test_basis_reconstruct_full_churn_no_rows_preserved`] — edge-case:
-//!    all iteration-1 cuts deactivated via direct pool mutation before
-//!    iteration 2's forward pass.  Verifies the reconstruction path
-//!    correctly reports 0 preserved rows.
+//!    all iteration-1 cuts deactivated before iteration 2's forward pass.
+//!    Verifies the reconstruction path handles an empty FCF without panicking.
 //!
 //! ## Regression sensitivity
 //!
-//! Injecting `preserved = 0` always (by reverting `reconstruct_basis`) will
-//! cause test 2 to fail with a clear assertion message.  Injecting the
-//! `padding_state = x_hat` regression from ticket-004 will cause test 1's
-//! `simplex_iterations` to exceed the ±5 % tolerance band.
+//! Injecting the `padding_state = x_hat` regression from ticket-004 will
+//! cause test 1's `simplex_iterations` to exceed the ±5 % tolerance band.
 //!
 //! ## Relation to Epic 01
 //!
@@ -179,10 +176,11 @@ fn sum_forward_deltas(
 /// ## Always-baked reconstruction (ticket-002)
 ///
 /// On the always-baked forward path, cuts are baked as structural rows into the
-/// stage template. `reconstruct_basis` receives an empty delta-cut iterator, so
-/// `basis_preserved`, `basis_new_tight`, and `basis_new_slack` are all 0 by
-/// design. Warm-start is still effective via `load_model(baked_template)`.
-/// Only `basis_consistency_failures` and `simplex_iterations` matter here.
+/// stage template. `reconstruct_basis` is called once per warm-start solve, so
+/// `basis_reconstructions > 0` across all forward-pass log entries. The critical
+/// invariant is that reconstruction is active and produces zero consistency
+/// failures. Only `basis_consistency_failures` and `simplex_iterations` matter
+/// for correctness pinning here.
 ///
 /// ## Sensitivity
 ///
@@ -264,22 +262,14 @@ fn basis_reconstruct_churn() {
     // Aggregate forward-pass stats across all iterations.
     let fwd = sum_forward_deltas(&result.solver_stats_log);
 
-    // AC-1/AC-2/AC-3: On the always-baked forward path (ticket-002), cuts are
-    // structural rows in the baked template. reconstruct_basis is called with an
-    // empty delta-cut iterator, so preserved/new_tight/new_slack are all 0 by
-    // design. Warm-start is still effective via load_model(baked_template).
-    assert_eq!(
-        fwd.basis_preserved, 0,
-        "basis_reconstruct_churn: preserved must be 0 on always-baked path, got {}",
-        fwd.basis_preserved
-    );
-    assert_eq!(
-        fwd.basis_new_tight + fwd.basis_new_slack,
-        0,
-        "basis_reconstruct_churn: new_tight+new_slack must be 0 on always-baked path, \
-         got tight={} slack={}",
-        fwd.basis_new_tight,
-        fwd.basis_new_slack
+    // AC-1: On the always-baked forward path (ticket-002), reconstruct_basis is
+    // called once per warm-start solve. The counter must be non-zero across all
+    // forward-pass log entries, confirming basis reconstruction is active.
+    assert!(
+        fwd.basis_reconstructions > 0,
+        "basis_reconstruct_churn: forward warm-start solves must increment \
+         basis_reconstructions, got {}",
+        fwd.basis_reconstructions
     );
 
     // AC-4: zero basis rejections — length-matching invariant must hold.
@@ -309,7 +299,7 @@ fn basis_reconstruct_churn() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: No-churn — happy path, preservation grows across iterations
+// Test 2: No-churn — happy path, reconstruction active across iterations
 // ---------------------------------------------------------------------------
 
 /// No-churn test: no cut selection, no budget, cuts only accumulate.
@@ -318,35 +308,32 @@ fn basis_reconstruct_churn() {
 ///
 /// Verifies the no-churn happy path on the always-baked forward path
 /// (ticket-002). Cuts are baked as structural rows into the stage template;
-/// `reconstruct_basis` receives an empty delta-cut iterator, so
-/// `basis_preserved`, `basis_new_tight`, and `basis_new_slack` are all 0 by
-/// design. Warm-start is still effective via `load_model(baked_template)`.
+/// `reconstruct_basis` is called once per warm-start solve so
+/// `basis_reconstructions > 0` across all forward-pass log entries.
+/// Warm-start is effective via `load_model(baked_template)`.
 ///
 /// ## Assertions
 ///
-/// - `basis_preserved == 0`: on the always-baked path, no delta cut rows
-///   are injected, so the slot-tracked preserved counter is always 0.
-/// - `basis_new_tight + basis_new_slack == 0`: same reasoning — no delta
-///   rows to classify.
+/// - `basis_reconstructions > 0`: reconstruction is called on every warm-start
+///   solve; a non-zero value confirms the always-baked path is active.
 /// - `basis_consistency_failures == 0`: no length-mismatch on the `HiGHS` side.
 /// - Lower bound is positive and finite.
 ///
 /// ## Failure mode
 ///
 /// A regression that accidentally routes the forward path away from
-/// `baked_template: Some(...)` will cause non-zero `preserved`/`new_tight`
-/// or change the lower bound.
+/// `baked_template: Some(...)` will change the lower bound or alter
+/// the reconstruction call pattern.
 #[test]
 fn test_basis_reconstruct_no_churn_full_preservation() {
     let case_dir = d03_case_dir();
     let config_path = case_dir.join("config.json");
     let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
 
-    // 2 forward passes, 3 iterations: enough for preservation to manifest.
+    // 2 forward passes, 3 iterations: enough for reconstruction to accumulate.
     // Iteration 1: forward stores empty-cut basis; backward adds 2 cuts/stage.
-    // Iteration 2: forward sees 2 cuts → new_tight/slack = 2; backward adds 2 more.
-    // Iteration 3: forward sees 4 cuts, 2 from iter 1 backward are in stored basis
-    //              → preserved = 2 per LP solve (≥ 1 stage × 2 fwd-passes).
+    // Iteration 2: forward warm-starts from the stored basis (basis_reconstructions > 0).
+    // Iteration 3: forward warm-starts again; basis_reconstructions keeps growing.
     config.training.forward_passes = Some(2);
     config.training.stopping_rules = Some(vec![StoppingRuleConfig::IterationLimit { limit: 3 }]);
 
@@ -388,22 +375,14 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
     // Aggregate forward stats across all iterations.
     let fwd = sum_forward_deltas(&result.solver_stats_log);
 
-    // AC-A/AC-B: On the always-baked forward path (ticket-002), cuts are baked into
-    // the template as structural rows. reconstruct_basis receives an empty
-    // delta-cut iterator so new_tight, new_slack, and preserved are all 0 by
-    // design. Warm-start is still effective via load_model(baked_template).
-    assert_eq!(
-        fwd.basis_preserved, 0,
-        "no_churn: preserved must be 0 on always-baked path, got {}",
-        fwd.basis_preserved
-    );
-    assert_eq!(
-        fwd.basis_new_tight + fwd.basis_new_slack,
-        0,
-        "no_churn: new_tight+new_slack must be 0 on always-baked path, \
-         got tight={} slack={}",
-        fwd.basis_new_tight,
-        fwd.basis_new_slack
+    // AC-A: On the always-baked forward path (ticket-002), reconstruct_basis is
+    // called once per warm-start solve. The counter must be non-zero, confirming
+    // basis reconstruction is active across all 3 iterations.
+    assert!(
+        fwd.basis_reconstructions > 0,
+        "no_churn: forward warm-start solves must increment basis_reconstructions, \
+         got {}",
+        fwd.basis_reconstructions
     );
 
     // AC-C: zero rejections.
@@ -434,24 +413,31 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
 ///    2 cuts per stage (from 2 forward passes); slot-tracked reconstruction
 ///    is always active post-Epic-01.
 /// 2. Deactivate ALL cuts in every pool via direct pool mutation.
-/// 3. Resume training from iteration 2 using `set_start_iteration`.
-///    Iteration 2's forward pass now sees an empty FCF.
+/// 3. Rebuild `setup2` — a fresh `StudySetup` with the deactivated FCF
+///    transplanted in.  Because `setup2` is a cold-start (no prior
+///    `record_reconstruction_stats` call), `basis_reconstructions == 0` for
+///    phase 2 is correct: the solver never had a stored basis to reconstruct.
+///
+/// ## Cold-start semantics for phase 2
+///
+/// `setup2` is constructed fresh and has no stored basis in `basis_cache`.
+/// The forward pass in iteration 2 therefore runs as a cold-start: `HiGHS` is
+/// given no warm-start basis and `record_reconstruction_stats` is never called.
+/// `basis_reconstructions == 0` is the expected value.  The classification
+/// assertions (`basis_reconstructions > 0`) are dropped here on purpose; the
+/// safety goal is that an empty FCF does not cause a panic or an invalid basis.
 ///
 /// ## Assertions
 ///
-/// - `basis_preserved == 0` for iteration 2's forward: with no active cuts,
-///   there is nothing to preserve.
-/// - `basis_new_tight + basis_new_slack == 0` for iteration 2's forward:
-///   with no active cuts, there are no new rows to classify.
-/// - `preserved + new_tight + new_slack == 0 == active_cuts_at_forward_time`:
-///   the accounting invariant holds for the degenerate (empty) case.
-/// - `basis_consistency_failures == 0`: an empty FCF must still produce a valid warm-start.
-/// - The LP optimum of iteration 2 is finite (cold-start with no cuts).
+/// - `basis_consistency_failures == 0`: an empty FCF must not produce an
+///   invalid warm-start (or any other `HiGHS` rejection).
+/// - The LP optimum of iteration 2 is finite (cold-start with no cuts
+///   must still find a feasible solution).
 ///
 /// ## Failure mode
 ///
-/// If the reconstruction path panics or produces an invalid basis when the
-/// FCF is empty, `basis_consistency_failures` will be non-zero and the assertion will
+/// If the reconstruction path panics or corrupts the LP when the FCF is
+/// empty, `basis_consistency_failures` will be non-zero and the assertion will
 /// fire.
 #[test]
 fn test_basis_reconstruct_full_churn_no_rows_preserved() {
@@ -620,35 +606,11 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 
         let iter2_fwd_agg = SolverStatsDelta::aggregate(iter2_fwd.into_iter());
 
-        // AC-F1: zero preserved — no active cuts in the FCF at forward time.
-        assert_eq!(
-            iter2_fwd_agg.basis_preserved, 0,
-            "full_churn: iteration 2 forward must have basis_preserved=0, got {} \
-             (all iteration-1 cuts were deactivated before iteration 2's forward pass)",
-            iter2_fwd_agg.basis_preserved
-        );
-
-        // AC-F2: zero new classified — no active cuts → nothing to classify.
-        assert_eq!(
-            iter2_fwd_agg.basis_new_tight + iter2_fwd_agg.basis_new_slack,
-            0,
-            "full_churn: iteration 2 forward must have new_tight=0 and new_slack=0, \
-             got tight={} slack={} (no active cuts means no new rows to classify)",
-            iter2_fwd_agg.basis_new_tight,
-            iter2_fwd_agg.basis_new_slack
-        );
-
-        // AC-F3: accounting invariant — preserved + new_tight + new_slack == active_cuts == 0.
-        let total_accounted = iter2_fwd_agg.basis_preserved
-            + iter2_fwd_agg.basis_new_tight
-            + iter2_fwd_agg.basis_new_slack;
-        assert_eq!(
-            total_accounted, 0,
-            "full_churn: accounting invariant: preserved+new_tight+new_slack must equal \
-             active_cuts_at_forward_time (0), got {total_accounted}"
-        );
-
-        // AC-F4: zero basis rejections — empty FCF must still produce a valid warm-start.
+        // Safety invariant: empty FCF must not cause HiGHS to reject the warm-start
+        // basis (or panic).  Phase 2 is a cold-start (setup2 has no prior stored
+        // basis), so basis_reconstructions == 0 is expected and not asserted here.
+        // The classification assertion (`basis_reconstructions > 0`) is intentionally
+        // absent — see the test docstring for the cold-start rationale.
         assert_eq!(
             iter2_fwd_agg.basis_consistency_failures, 0,
             "full_churn: iteration 2 forward must have 0 basis rejections, got {} \
@@ -656,7 +618,8 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
             iter2_fwd_agg.basis_consistency_failures
         );
 
-        // AC-F5: LP optimum is finite (cold-start with no cuts runs successfully).
+        // Safety invariant: LP optimum must be finite even with a cold-start and
+        // an empty FCF (no cuts from phase 1 are active).
         assert!(
             result2.final_lb.is_finite(),
             "full_churn: final_lb must be finite after full-churn iteration, got {}",
@@ -679,13 +642,12 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 /// bases are accepted by `HiGHS`.  A regression that delivers an inconsistent
 /// warm-start basis will fail this assertion via a non-zero rejection count.
 ///
-/// ## On `basis_preserved` in baked simulation
+/// ## On `basis_reconstructions` in baked simulation
 ///
 /// On the baked path all cut rows are structural rows embedded in
-/// `StageTemplate`.  `reconstruct_basis` receives an empty `current_cut_rows`
-/// iterator (there are no dynamically-added rows to match against
-/// `cut_row_slots`), so `basis_preserved == 0` by design.  The simulation
-/// still warms-starts correctly — the template's structural rows carry the
+/// `StageTemplate`.  `reconstruct_basis` is called once per warm-start solve,
+/// incrementing `basis_reconstructions` throughout the simulation.  The
+/// simulation warms-starts correctly — the template's structural rows carry the
 /// basis status implicitly through `CapturedBasis.basis`.
 ///
 /// ## Setup
@@ -699,7 +661,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 /// `basis_consistency_failures == 0` (reconstructed bases must always be
 /// accepted by `HiGHS` on the baked path).
 #[test]
-fn simulate_warm_start_basis_preserved_gt_zero() {
+fn simulate_baked_path_zero_consistency_failures() {
     let case_dir = d03_case_dir();
     let config_path = case_dir.join("config.json");
     let mut config = cobre_io::parse_config(&config_path).expect("config must parse");
@@ -775,9 +737,8 @@ fn simulate_warm_start_basis_preserved_gt_zero() {
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().count());
 
     // Use the baked templates from training.  All cuts are structural rows in the
-    // template; `reconstruct_basis` receives an empty `current_cut_rows` iterator
-    // so `basis_preserved == 0` by design on this path.  The critical assertion is
-    // that zero bases are rejected by HiGHS.
+    // template; `reconstruct_basis` is called once per warm-start solve on this path.
+    // The critical assertion is that zero bases are rejected by HiGHS.
     let sim_result = setup
         .simulate(
             &mut pool.workspaces,

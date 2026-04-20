@@ -43,14 +43,15 @@ TIMING_COLS = frozenset(
     {
         "solve_time_ms",
         "load_model_time_ms",
-        "add_rows_time_ms",
         "set_bounds_time_ms",
         "basis_set_time_ms",
     }
 )
 
-# Expected schema for training/solver/iterations.parquet after epic-04b (ticket-009).
-# rank and worker_id were added in epic-04b as columns 5 and 6 (after opening).
+# Expected schema for training/solver/iterations.parquet after epic-07 (ticket-002).
+# rank and worker_id added in epic-04b; add_rows_time_ms removed in epic-07 ticket-001;
+# 4 basis_preserved/new_tight/new_slack/demotions columns consolidated to single
+# basis_reconstructions in epic-07 ticket-002.
 EXPECTED_COLUMNS = [
     "iteration",
     "phase",
@@ -68,13 +69,9 @@ EXPECTED_COLUMNS = [
     "simplex_iterations",
     "solve_time_ms",
     "load_model_time_ms",
-    "add_rows_time_ms",
     "set_bounds_time_ms",
     "basis_set_time_ms",
-    "basis_preserved",
-    "basis_new_tight",
-    "basis_new_slack",
-    "basis_demotions",
+    "basis_reconstructions",
 ]
 
 
@@ -261,7 +258,7 @@ def test_python_matches_cli_nontiming_columns(
 def test_python_schema_matches_expected_columns(
     d01_python_output: pathlib.Path,
 ) -> None:
-    """Python output has exactly the expected 23-column schema (rank + worker_id added in epic-04b)."""
+    """Python output has exactly the expected 19-column schema (basis reconstruction columns consolidated in epic-07 ticket-002)."""
     schema = pq.read_schema(
         d01_python_output / "training" / "solver" / "iterations.parquet"
     )
@@ -269,4 +266,33 @@ def test_python_schema_matches_expected_columns(
         f"Column names mismatch:\n"
         f"  expected: {EXPECTED_COLUMNS}\n"
         f"  got:      {schema.names}"
+    )
+
+
+def test_python_basis_reconstructions_column_shape(
+    d01_python_output: pathlib.Path,
+) -> None:
+    """basis_reconstructions column is UInt64 non-nullable."""
+    parquet_path = d01_python_output / "training" / "solver" / "iterations.parquet"
+    schema = pq.read_schema(parquet_path)
+    field = schema.field("basis_reconstructions")
+    assert pa.types.is_uint64(field.type), (
+        f"basis_reconstructions must be UInt64, got {field.type}"
+    )
+    assert not field.nullable, "basis_reconstructions must be non-nullable"
+
+    # Verify the counter is non-zero somewhere in the forward phase: warm-start
+    # solves after iteration 1 must invoke reconstruct_basis, so at least one row
+    # should have basis_reconstructions > 0. (`>= 0` would be vacuously true for
+    # UInt64.)
+    table = pq.read_table(parquet_path)
+    phases = table.column("phase").to_pylist()
+    values = table.column("basis_reconstructions").to_pylist()
+    forward_max = max(
+        (v for p, v in zip(phases, values) if p == "forward"),
+        default=0,
+    )
+    assert forward_max > 0, (
+        f"forward phase must invoke basis reconstruction at least once after iteration 1, "
+        f"got max basis_reconstructions={forward_max}"
     )

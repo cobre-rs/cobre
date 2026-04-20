@@ -255,13 +255,9 @@ fn delta_to_stats_row(
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,
-        add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
-        basis_preserved: delta.basis_preserved,
-        basis_new_tight: delta.basis_new_tight,
-        basis_new_slack: delta.basis_new_slack,
-        basis_demotions: delta.basis_demotions,
+        basis_reconstructions: delta.basis_reconstructions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }

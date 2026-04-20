@@ -293,13 +293,12 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 23 columns. One row per (iteration, phase, stage, opening) tuple for
+/// 19 columns. One row per (iteration, phase, stage, opening) tuple for
 /// backward rows; forward, `lower_bound`, and simulation rows carry
 /// `opening = NULL`. The `rank` and `worker_id` columns (positions 5 and 6,
 /// 0-indexed) are `Int32 nullable`; they are `NULL` for rank-aggregated rows
 /// and will carry real values once T005 (MPI allgatherv) is wired. Includes
-/// four basis reconstruction columns: `basis_preserved`, `basis_new_tight`,
-/// `basis_new_slack`, `basis_demotions`.
+/// one basis reconstruction column: `basis_reconstructions`.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
@@ -318,13 +317,9 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("simplex_iterations", DataType::UInt64, false),
         Field::new("solve_time_ms", DataType::Float64, false),
         Field::new("load_model_time_ms", DataType::Float64, false),
-        Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
-        Field::new("basis_preserved", DataType::UInt64, false),
-        Field::new("basis_new_tight", DataType::UInt64, false),
-        Field::new("basis_new_slack", DataType::UInt64, false),
-        Field::new("basis_demotions", DataType::UInt64, false),
+        Field::new("basis_reconstructions", DataType::UInt64, false),
     ])
 }
 
@@ -823,6 +818,74 @@ mod tests {
     }
 
     #[test]
+    fn solver_iterations_schema_field_count_and_types() {
+        let schema = solver_iterations_schema();
+        assert_eq!(
+            schema.fields().len(),
+            19,
+            "solver_iterations schema must have 19 fields after epic-07"
+        );
+        let expected: &[(&str, DataType, bool)] = &[
+            ("iteration", DataType::UInt32, false),
+            ("phase", DataType::Utf8, false),
+            ("stage", DataType::Int32, false),
+            ("opening", DataType::Int32, true),
+            ("rank", DataType::Int32, true),
+            ("worker_id", DataType::Int32, true),
+            ("lp_solves", DataType::UInt32, false),
+            ("lp_successes", DataType::UInt32, false),
+            ("lp_retries", DataType::UInt32, false),
+            ("lp_failures", DataType::UInt32, false),
+            ("retry_attempts", DataType::UInt32, false),
+            ("basis_offered", DataType::UInt32, false),
+            ("basis_consistency_failures", DataType::UInt32, false),
+            ("simplex_iterations", DataType::UInt64, false),
+            ("solve_time_ms", DataType::Float64, false),
+            ("load_model_time_ms", DataType::Float64, false),
+            ("set_bounds_time_ms", DataType::Float64, false),
+            ("basis_set_time_ms", DataType::Float64, false),
+            ("basis_reconstructions", DataType::UInt64, false),
+        ];
+        for (i, (name, dtype, nullable)) in expected.iter().enumerate() {
+            let field = &schema.fields()[i];
+            assert_eq!(field.name(), name, "field {i} name mismatch");
+            assert_eq!(field.data_type(), dtype, "field {i} ({name}) type mismatch");
+            assert_eq!(
+                field.is_nullable(),
+                *nullable,
+                "field {i} ({name}) nullability mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_histogram_schema_field_count_and_types() {
+        let schema = retry_histogram_schema();
+        assert_eq!(
+            schema.fields().len(),
+            5,
+            "retry_histogram schema must have 5 fields"
+        );
+        let expected: &[(&str, DataType, bool)] = &[
+            ("iteration", DataType::UInt32, false),
+            ("phase", DataType::Utf8, false),
+            ("stage", DataType::Int32, false),
+            ("retry_level", DataType::UInt32, false),
+            ("count", DataType::UInt64, false),
+        ];
+        for (i, (name, dtype, nullable)) in expected.iter().enumerate() {
+            let field = &schema.fields()[i];
+            assert_eq!(field.name(), name, "field {i} name mismatch");
+            assert_eq!(field.data_type(), dtype, "field {i} ({name}) type mismatch");
+            assert_eq!(
+                field.is_nullable(),
+                *nullable,
+                "field {i} ({name}) nullability mismatch"
+            );
+        }
+    }
+
+    #[test]
     fn all_schema_functions_return_valid_schemas() {
         // Call all schema functions and verify they return non-empty schemas
         // without panicking.
@@ -870,7 +933,7 @@ mod tests {
             ("iteration_timing", 18),
             ("rank_timing", 8),
             ("cut_selection", 9),
-            ("solver_iterations", 23),
+            ("solver_iterations", 19),
             ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {

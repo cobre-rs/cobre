@@ -207,33 +207,28 @@ monotonically from zero. `reset()` does not zero them — statistics persist for
 the lifetime of the solver instance and are aggregated across threads after
 iterative solving completes.
 
-The three basis reconstruction counters (`basis_preserved`, `basis_new_tight`,
-`basis_new_slack`) are listed below in readability order — `basis_preserved`
-first because it is the most diagnostic field. The Rust struct orders them as
-`basis_new_tight`, `basis_new_slack`, `basis_preserved`, which matches the
-writer order in the parquet output.
+The `basis_reconstructions` counter is incremented once per `reconstruct_basis`
+call. A non-zero value confirms that slot-tracked basis reconstruction is
+active; a zero value on a warm-start run indicates no stored basis was available
+or none was applied.
 
-| Field                           | Type       | Description                                                                                                                                               |
-| ------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `solve_count`                   | `u64`      | Total `solve` and `solve_with_basis` calls.                                                                                                               |
-| `success_count`                 | `u64`      | Solves that returned optimal.                                                                                                                             |
-| `failure_count`                 | `u64`      | Solves that returned terminal error after retries.                                                                                                        |
-| `total_iterations`              | `u64`      | Total simplex iterations across all solves.                                                                                                               |
-| `retry_count`                   | `u64`      | Total retry attempts across all solves.                                                                                                                   |
-| `total_solve_time_seconds`      | `f64`      | Cumulative wall-clock solve time.                                                                                                                         |
-| `basis_consistency_failures`    | `u64`      | `solve_with_basis` calls where `isBasisConsistent` returned false; solver fell back to cold-start.                                                        |
-| `first_try_successes`           | `u64`      | Solves optimal on first attempt. Enables: `first_try_rate = first_try_successes / solve_count`.                                                           |
-| `basis_offered`                 | `u64`      | Total `solve_with_basis` calls. Enables: `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.                                        |
-| `load_model_count`              | `u64`      | Total `load_model` calls.                                                                                                                                 |
-| `add_rows_count`                | `u64`      | Total `add_rows` calls.                                                                                                                                   |
-| `total_load_model_time_seconds` | `f64`      | Cumulative time in `load_model`.                                                                                                                          |
-| `total_add_rows_time_seconds`   | `f64`      | Cumulative time in `add_rows`.                                                                                                                            |
-| `total_set_bounds_time_seconds` | `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                                                                                   |
-| `total_basis_set_time_seconds`  | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                                                                               |
-| `basis_preserved`               | `u64`      | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim). Set by the calling algorithm via `reconstruct_basis`. |
-| `basis_new_tight`               | `u64`      | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). Set by the calling algorithm.          |
-| `basis_new_slack`               | `u64`      | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`). Set by the calling algorithm.                                              |
-| `retry_level_histogram`         | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.                                                        |
+| Field                           | Type       | Description                                                                                                                                                     |
+| ------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `solve_count`                   | `u64`      | Total `solve` and `solve_with_basis` calls.                                                                                                                     |
+| `success_count`                 | `u64`      | Solves that returned optimal.                                                                                                                                   |
+| `failure_count`                 | `u64`      | Solves that returned terminal error after retries.                                                                                                              |
+| `total_iterations`              | `u64`      | Total simplex iterations across all solves.                                                                                                                     |
+| `retry_count`                   | `u64`      | Total retry attempts across all solves.                                                                                                                         |
+| `total_solve_time_seconds`      | `f64`      | Cumulative wall-clock solve time.                                                                                                                               |
+| `basis_consistency_failures`    | `u64`      | `solve_with_basis` calls where `isBasisConsistent` returned false; solver fell back to cold-start.                                                              |
+| `first_try_successes`           | `u64`      | Solves optimal on first attempt. Enables: `first_try_rate = first_try_successes / solve_count`.                                                                 |
+| `basis_offered`                 | `u64`      | Total `solve_with_basis` calls. Enables: `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.                                              |
+| `load_model_count`              | `u64`      | Total `load_model` calls.                                                                                                                                       |
+| `total_load_model_time_seconds` | `f64`      | Cumulative time in `load_model`.                                                                                                                                |
+| `total_set_bounds_time_seconds` | `f64`      | Cumulative time in `set_row_bounds` / `set_col_bounds`.                                                                                                         |
+| `total_basis_set_time_seconds`  | `f64`      | Cumulative time in basis installation (`solve_with_basis`).                                                                                                     |
+| `basis_reconstructions`         | `u64`      | Number of `reconstruct_basis` invocations that applied a stored warm-start basis via slot reconciliation. Incremented by the calling algorithm, not the solver. |
+| `retry_level_histogram`         | `Vec<u64>` | Per-level retry success counts (length 12 for HiGHS). Sum = `success_count - first_try_successes`.                                                              |
 
 See the [`SolverStatistics`
 rustdoc](https://docs.rs/cobre-solver/latest/cobre_solver/struct.SolverStatistics.html).
@@ -329,9 +324,10 @@ The calling algorithm (cobre-sddp) wraps each stored basis in a
 `CapturedBasis` struct and uses `reconstruct_basis` to classify cut rows as
 preserved, new-tight, or new-slack before calling `solve_with_basis`. This
 slot-tracked reconciliation replaces the naive row-count fill that `solve_with_basis`
-performs internally. The three counters `basis_preserved`, `basis_new_tight`,
-and `basis_new_slack` in `SolverStatistics` are incremented by the algorithm
-during this reconstruction step.
+performs internally. The single `basis_reconstructions` counter in
+`SolverStatistics` is incremented by the algorithm once per `reconstruct_basis`
+invocation. The underlying classification (preserved vs new-tight vs new-slack)
+is still performed at runtime but is no longer surfaced as separate counters.
 
 ## SoA bound patching
 

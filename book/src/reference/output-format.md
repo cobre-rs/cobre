@@ -347,45 +347,48 @@ Per-iteration, per-rank timing statistics for distributed runs. One row per
 
 ### `training/solver/iterations.parquet`
 
-Per-iteration, per-phase, per-stage LP solver statistics for diagnosing
-conditioning issues and retry behavior. One row per `(iteration, phase,
-stage)` triple. 19 columns. All columns are non-nullable.
-
-The `phase` column is a string: `"forward"`, `"backward"`, or
-`"lower_bound"`.
+Per-iteration, per-phase, per-stage, per-opening, per-worker LP solver
+statistics for diagnosing conditioning issues and retry behavior. One row per
+`(iteration, phase, stage, opening, rank, worker_id)` tuple on the backward
+phase (per-opening, per-worker); one row per `(iteration, phase, stage)` tuple
+on the forward, `lower_bound`, and `simulation` phases. 19 columns. Columns
+`opening`, `rank`, and `worker_id` are nullable Int32; all other columns are
+non-nullable.
 
 | Column                       | Type    | Nullable | Description                                                                                                        |
 | ---------------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `iteration`                  | UInt32  | No       | Training iteration number (1-based).                                                                               |
-| `phase`                      | Utf8    | No       | Algorithm phase: `"forward"`, `"backward"`, or `"lower_bound"`.                                                    |
+| `iteration`                  | UInt32  | No       | Training iteration (1-based) or simulation scenario id (0-based).                                                 |
+| `phase`                      | Utf8    | No       | `"forward"`, `"backward"`, `"lower_bound"`, or `"simulation"`.                                                     |
 | `stage`                      | Int32   | No       | Stage index (0-based).                                                                                             |
-| `lp_solves`                  | UInt32  | No       | Number of LP solves in this `(iteration, phase, stage)` triple.                                                    |
+| `opening`                    | Int32   | Yes      | Opening (noise realization) index within the stage for backward rows. NULL for forward, `lower_bound`, `simulation`. |
+| `rank`                       | Int32   | Yes      | MPI rank that produced this row. NULL for rank-aggregated rows.                                                    |
+| `worker_id`                  | Int32   | Yes      | Rayon worker index within the rank's pool. NULL for rows without a per-worker dimension.                           |
+| `lp_solves`                  | UInt32  | No       | Number of LP solves in this row's bucket.                                                                          |
 | `lp_successes`               | UInt32  | No       | Number of solves that returned optimal.                                                                            |
 | `lp_retries`                 | UInt32  | No       | Number of solves that required at least one retry.                                                                 |
 | `lp_failures`                | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                                                    |
-| `retry_attempts`             | UInt32  | No       | Total retry attempts across all LP solves.                                                                         |
-| `basis_offered`              | UInt32  | No       | Number of `solve_with_basis` calls (warm-start attempts).                                                          |
-| `basis_consistency_failures` | UInt32  | No       | Number of `solve_with_basis` calls in which the basis was rejected because `isBasisConsistent` returned false.     |
+| `retry_attempts`             | UInt32  | No       | Total retry attempts across all LP solves in this bucket.                                                          |
+| `basis_offered`              | UInt32  | No       | Number of `solve(Some(&basis))` calls (warm-start attempts).                                                       |
+| `basis_consistency_failures` | UInt32  | No       | Number of warm-start calls in which the basis was rejected because `isBasisConsistent` returned false.             |
 | `simplex_iterations`         | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                                                    |
 | `solve_time_ms`              | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                                               |
 | `load_model_time_ms`         | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                                                      |
-| `add_rows_time_ms`           | Float64 | No       | Cumulative time spent in `add_rows` calls, in milliseconds.                                                        |
 | `set_bounds_time_ms`         | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds.                               |
 | `basis_set_time_ms`          | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.                                            |
-| `basis_preserved`            | UInt64  | No       | Cut rows whose slot identity survived from the stored warm-start basis (status preserved verbatim).                |
-| `basis_new_tight`            | UInt64  | No       | Cut rows newly added since capture whose slack <= tolerance at the capture-time state (assigned `NONBASIC_LOWER`). |
-| `basis_new_slack`            | UInt64  | No       | Cut rows newly added since capture whose slack > tolerance (assigned `BASIC`).                                     |
+| `basis_reconstructions`      | UInt64  | No       | Number of `reconstruct_basis` invocations with a non-empty stored basis (slot-tracked warm-start applications).    |
 
 ### `simulation/solver/iterations.parquet`
 
 Identical schema to [`training/solver/iterations.parquet`](#trainingsolveriterationsparquet).
 One row per `(scenario, phase, stage)` triple where `phase == "simulation"`.
 
-The `basis_preserved` column on simulation rows is a direct indicator that
-`broadcast_basis_cache` is delivering full `CapturedBasis` metadata to
-non-root ranks. A near-zero value on a multi-rank run suggests a pre-Epic-03
-checkpoint or a wire-format regression in
-`crates/cobre-sddp/src/training.rs` (the four-broadcast format).
+The `basis_reconstructions` column on simulation rows is a direct indicator
+that baked-template simulation is using the stored warm-start basis for every
+solve. A near-zero value on a multi-rank run suggests that `CapturedBasis`
+metadata was not delivered to non-root ranks; see
+`CapturedBasis::to_broadcast_payload` in
+`crates/cobre-sddp/src/workspace.rs` for the 4-broadcast wire format
+introduced in epic-06.
 
 ### `training/solver/retry_histogram.parquet`
 

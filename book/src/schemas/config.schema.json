@@ -73,14 +73,6 @@
     "CutSelectionConfig": {
       "description": "Cut selection settings (`config.json → training.cut_selection`).",
       "properties": {
-        "basis_padding": {
-          "default": null,
-          "description": "Enable basis padding for warm-start (Epic 05).\n\nWhen `Some(true)`, the forward pass applies informed basis status\nassignment for new cut rows before warm-starting the LP solver.\nThis can reduce the number of simplex pivots required after each\ncut addition.\n\nDisabled by default (`None` or `Some(false)`).",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "check_frequency": {
           "default": null,
           "description": "Iterations between pruning checks.",
@@ -694,7 +686,6 @@
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
           "default": {
-            "basis_padding": null,
             "check_frequency": null,
             "cut_activity_tolerance": null,
             "domination_epsilon": null,

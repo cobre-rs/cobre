@@ -27,6 +27,7 @@ use cobre_core::scenario::{HistoricalYears, SamplingScheme, ScenarioSource};
 
 use crate::LoadError;
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::path::Path;
 
 /// Top-level deserialized representation of `config.json`.
@@ -718,7 +719,7 @@ pub fn parse_config(path: &Path) -> Result<Config, LoadError> {
     // Option B: warn (not error) for keys that are now obsolete but harmless.
     // `canonical_state` was removed in v0.5.0; solvers may now retain internal
     // state between consecutive `solve` calls as a warm-start optimisation.
-    warn_obsolete_keys(&raw, path);
+    warn_obsolete_keys(&raw, path, &mut io::stderr());
 
     let config: Config = serde_json::from_str(&raw).map_err(|e| {
         // serde_json errors carry a message that describes the field or syntax problem.
@@ -789,22 +790,35 @@ fn check_removed_keys(raw: &str, path: &Path) -> Result<(), LoadError> {
 /// Emit runtime warnings for config keys that are obsolete but no longer hard errors.
 ///
 /// Unlike [`check_removed_keys`], which rejects configs with error, this function
-/// parses the raw JSON and prints a warning to stderr for each key present. The
+/// parses the raw JSON and prints a warning to `writer` for each key present. The
 /// config still deserialises and runs correctly — the key is simply ignored.
 ///
+/// The `writer` parameter exists to allow unit tests to capture the output; callers
+/// should pass `&mut std::io::stderr()` in production.
+///
 /// Format: `(json_pointer, dot_path, warning_message)`.
-fn warn_obsolete_keys(raw: &str, _path: &Path) {
+fn warn_obsolete_keys(raw: &str, _path: &Path, writer: &mut dyn io::Write) {
     /// Keys obsolete in v0.5.0: present configs still parse, but the key has no effect.
     ///
     /// Format: `(json_pointer, dot_path, warning_message)`.
-    const OBSOLETE_KEYS: &[(&str, &str, &str)] = &[(
-        "/training/solver/canonical_state",
-        "training.solver.canonical_state",
-        "is obsolete and has no effect; please remove it from your config \
+    const OBSOLETE_KEYS: &[(&str, &str, &str)] = &[
+        (
+            "/training/solver/canonical_state",
+            "training.solver.canonical_state",
+            "is obsolete and has no effect; please remove it from your config \
              (see CHANGELOG for details). Solvers may retain internal state \
              between solves for performance; explicit resets are available via \
              `load_model` (resets topology) per `SolverInterface::solve` contract.",
-    )];
+        ),
+        (
+            "/training/cut_selection/basis_padding",
+            "training.cut_selection.basis_padding",
+            "is obsolete and has no effect; please remove it from your config \
+             (see CHANGELOG for details). Basis reconstruction is now always \
+             active when a stored warm-start basis exists; slot-tracked \
+             `reconstruct_basis` replaces the config-gated padding pass.",
+        ),
+    ];
 
     // Silently skip if JSON is malformed — `check_removed_keys` already validated it.
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
@@ -816,7 +830,7 @@ fn warn_obsolete_keys(raw: &str, _path: &Path) {
             .pointer(pointer)
             .is_none_or(serde_json::Value::is_null)
         {
-            eprintln!("warning: config key `{dot_path}` {message}");
+            let _ = writeln!(writer, "warning: config key `{dot_path}` {message}");
         }
     }
 }
@@ -1973,6 +1987,62 @@ mod tests {
         assert!(
             (cfg.training.solver.retry_time_budget_seconds - 10.0).abs() < f64::EPSILON,
             "retry_time_budget_seconds should be 10.0"
+        );
+    }
+
+    // AC (ticket-003): config with obsolete `basis_padding` key in
+    // `training.cut_selection` parses successfully and emits a deprecation
+    // warning.  `warn_obsolete_keys` accepts a writer so the output can be
+    // captured without spawning a subprocess or adding extra dev-dependencies.
+    #[test]
+    fn basis_padding_parses_with_warning() {
+        let raw_true = r#"{
+          "training": {
+            "forward_passes": 4,
+            "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+            "cut_selection": {
+              "basis_padding": true
+            }
+          }
+        }"#;
+
+        let raw_false = r#"{
+          "training": {
+            "forward_passes": 4,
+            "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
+            "cut_selection": {
+              "basis_padding": false
+            }
+          }
+        }"#;
+
+        // Both values must parse without error.
+        let f_true = write_config(raw_true);
+        let cfg = parse_config(f_true.path()).unwrap();
+        assert_eq!(cfg.training.forward_passes, Some(4));
+
+        let f_false = write_config(raw_false);
+        parse_config(f_false.path()).unwrap();
+
+        // Verify that `warn_obsolete_keys` emits the expected phrase.
+        // The format is: warning: config key `<dot_path>` <message>
+        // so the output contains the dot_path followed immediately by "` is obsolete".
+        let dummy_path = std::path::Path::new("dummy.json");
+        let mut buf = Vec::<u8>::new();
+        warn_obsolete_keys(raw_true, dummy_path, &mut buf);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("training.cut_selection.basis_padding` is obsolete"),
+            "expected obsolete-key warning in output, got: {output:?}"
+        );
+
+        // `basis_padding: false` must also trigger the warning.
+        let mut buf = Vec::<u8>::new();
+        warn_obsolete_keys(raw_false, dummy_path, &mut buf);
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.contains("training.cut_selection.basis_padding` is obsolete"),
+            "expected obsolete-key warning for false value, got: {output:?}"
         );
     }
 }

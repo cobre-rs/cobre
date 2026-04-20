@@ -123,13 +123,13 @@ pub struct ForwardResult {
     /// workers, in milliseconds.
     ///
     /// Computed as the sum across all workers of
-    /// `load_model_time_ms + add_rows_time_ms + set_bounds_time_ms + basis_set_time_ms`.
+    /// `load_model_time_ms + set_bounds_time_ms + basis_set_time_ms`.
     pub setup_time_ms: u64,
 
     /// Load-imbalance component of parallel overhead, in milliseconds.
     ///
     /// Computed as `max_worker_total_ms - avg_worker_total_ms`, where
-    /// `worker_total_ms = solve + load_model + add_rows + set_bounds + basis_set`
+    /// `worker_total_ms = solve + load_model + set_bounds + basis_set`
     /// for each worker.  Measures how much the slowest worker exceeds the average.
     pub load_imbalance_ms: u64,
 
@@ -1472,23 +1472,17 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         .map(|(b, a)| SolverStatsDelta::from_snapshots(b, a))
         .collect();
 
-    // setup_time_ms: total non-solve work (load_model + add_rows + set_bounds + basis_set).
+    // setup_time_ms: total non-solve work (load_model + set_bounds + basis_set).
     let fwd_setup_ms: f64 = worker_deltas
         .iter()
-        .map(|d| {
-            d.load_model_time_ms + d.add_rows_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
-        })
+        .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
         .sum();
 
     // Per-worker elapsed: solve + setup phases.
     let worker_totals: Vec<f64> = worker_deltas
         .iter()
         .map(|d| {
-            d.solve_time_ms
-                + d.load_model_time_ms
-                + d.add_rows_time_ms
-                + d.set_bounds_time_ms
-                + d.basis_set_time_ms
+            d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
         })
         .collect();
 
@@ -1515,10 +1509,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     // then emit one WorkerTiming event per worker when an event sender is present.
     // worker_deltas is ordered by worker index (same order as workspaces).
     for (ws, delta) in workspaces.iter_mut().zip(&worker_deltas) {
-        ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_SETUP] += delta.load_model_time_ms
-            + delta.add_rows_time_ms
-            + delta.set_bounds_time_ms
-            + delta.basis_set_time_ms;
+        ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_SETUP] +=
+            delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
     }
     if let Some(sender) = event_sender {
         for ws in workspaces.iter() {
@@ -1987,14 +1979,12 @@ mod tests {
         fn make_stats(
             solve_s: f64,
             load_model_s: f64,
-            add_rows_s: f64,
             set_bounds_s: f64,
             basis_set_s: f64,
         ) -> SolverStatistics {
             SolverStatistics {
                 total_solve_time_seconds: solve_s,
                 total_load_model_time_seconds: load_model_s,
-                total_add_rows_time_seconds: add_rows_s,
                 total_set_bounds_time_seconds: set_bounds_s,
                 total_basis_set_time_seconds: basis_set_s,
                 ..SolverStatistics::default()
@@ -2003,16 +1993,16 @@ mod tests {
 
         // Solve times (s): 0.5, 0.6, 0.55, 0.58; setup times (s): 0.05, 0.06, 0.045, 0.055
         let befores = [
-            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
-            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
-            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
-            make_stats(0.0, 0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0),
+            make_stats(0.0, 0.0, 0.0, 0.0),
         ];
         let afters = [
-            make_stats(0.500, 0.050, 0.0, 0.0, 0.0),
-            make_stats(0.600, 0.060, 0.0, 0.0, 0.0),
-            make_stats(0.550, 0.045, 0.0, 0.0, 0.0),
-            make_stats(0.580, 0.055, 0.0, 0.0, 0.0),
+            make_stats(0.500, 0.050, 0.0, 0.0),
+            make_stats(0.600, 0.060, 0.0, 0.0),
+            make_stats(0.550, 0.045, 0.0, 0.0),
+            make_stats(0.580, 0.055, 0.0, 0.0),
         ];
 
         let deltas: Vec<SolverStatsDelta> = befores
@@ -2024,23 +2014,14 @@ mod tests {
         // setup_time_ms: sum of all workers' setup phases.
         let setup_ms: f64 = deltas
             .iter()
-            .map(|d| {
-                d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
-            })
+            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
             .sum();
 
         // Per-worker totals: solve + setup.
         let worker_totals: Vec<f64> = deltas
             .iter()
             .map(|d| {
-                d.solve_time_ms
-                    + d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
+                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
             })
             .collect();
 
@@ -2097,11 +2078,7 @@ mod tests {
         let worker_totals: Vec<f64> = deltas
             .iter()
             .map(|d| {
-                d.solve_time_ms
-                    + d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
+                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
             })
             .collect();
 

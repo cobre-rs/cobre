@@ -973,7 +973,6 @@ impl SolverInterface for HighsSolver {
     }
 
     fn add_rows(&mut self, cuts: &RowBatch) {
-        let t0 = Instant::now();
         assert!(
             i32::try_from(cuts.num_rows).is_ok(),
             "cuts.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
@@ -1024,8 +1023,6 @@ impl SolverInterface for HighsSolver {
 
         // Grow basis row i32 buffer to cover the new rows.
         self.basis_row_i32.resize(self.num_rows, 0);
-        self.stats.total_add_rows_time_seconds += t0.elapsed().as_secs_f64();
-        self.stats.add_rows_count += 1;
     }
 
     fn set_row_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]) {
@@ -1240,17 +1237,8 @@ impl SolverInterface for HighsSolver {
         self.stats.clone()
     }
 
-    fn record_reconstruction_stats(
-        &mut self,
-        preserved: u32,
-        new_tight: u32,
-        new_slack: u32,
-        demotions: u32,
-    ) {
-        self.stats.basis_preserved += u64::from(preserved);
-        self.stats.basis_new_tight += u64::from(new_tight);
-        self.stats.basis_new_slack += u64::from(new_slack);
-        self.stats.basis_demotions += u64::from(demotions);
+    fn record_reconstruction_stats(&mut self) {
+        self.stats.basis_reconstructions += 1;
     }
 }
 

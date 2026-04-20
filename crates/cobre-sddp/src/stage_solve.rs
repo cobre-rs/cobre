@@ -167,7 +167,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         // All solves now use the baked path: cuts are structural rows in the
         // baked template; the delta-cut iterator is always empty (AD-3).
         let baked = inputs.baked_template;
-        let stats = reconstruct_basis(
+        let recon_stats = reconstruct_basis(
             captured,
             ReconstructionTarget {
                 base_row_count: baked.num_rows,
@@ -184,22 +184,16 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         // bug class (source doc AD-2).
         let num_row_for_invariant = baked.num_rows;
         let base_row_for_invariant = baked.num_rows;
-        let recon_stats = stats;
 
         // Enforce basic-count invariant across all phases (source doc AD-2):
         // no-op on the baked path in the common case.
-        let demotions = enforce_basic_count_invariant(
+        enforce_basic_count_invariant(
             &mut ws.scratch_basis,
             num_row_for_invariant,
             base_row_for_invariant,
         );
 
-        ws.solver.record_reconstruction_stats(
-            recon_stats.preserved,
-            recon_stats.new_tight,
-            recon_stats.new_slack,
-            demotions,
-        );
+        ws.solver.record_reconstruction_stats();
 
         let view = ws.solver.solve(Some(&ws.scratch_basis)).map_err(|e| {
             map_solver_error(

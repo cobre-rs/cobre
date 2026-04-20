@@ -323,14 +323,14 @@ dependencies = [
 
 [[package]]
 name = "cobre-comm"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "cobre-core"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "serde",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "cobre-io"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "cobre-python"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "arrow",
  "cobre-comm",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "cobre-sddp"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "cobre-comm",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "cobre-solver"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "cc",
  "cmake",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "cobre-stochastic"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "cobre-core",

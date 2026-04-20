@@ -279,14 +279,12 @@ in an O(1) scratch map built from `cut_row_slots`, and classifies each
 row into one of three categories:
 
 - **Preserved**: the slot identity was found in the stored basis —
-  the original status code is copied verbatim. The `basis_preserved`
-  counter is incremented.
+  the original status code is copied verbatim.
 - **New-tight**: the slot was not found (a newly added cut) and its
   slack at `state_at_capture` is <= 1e-7 — the row is assigned
-  `NONBASIC_LOWER`. The `basis_new_tight` counter is incremented.
+  `NONBASIC_LOWER`.
 - **New-slack**: the slot was not found and its slack at
   `state_at_capture` is > 1e-7 — the row is assigned `BASIC`.
-  The `basis_new_slack` counter is incremented.
 
 Reconstruction is always active when a stored basis exists — there is no
 configuration flag. The Epic 02 A/B benchmark provided the motivation:
@@ -294,11 +292,11 @@ across a 10-iteration training run on a representative case, 148,060 cut
 rows were preserved and the mechanism delivered a -3.5% wall-time
 improvement versus the pre-Epic-01 baseline.
 
-The three counters `basis_preserved`, `basis_new_tight`, and
-`basis_new_slack` are written as `UInt64` columns in both
+The `basis_reconstructions` counter in
 `training/solver/iterations.parquet` and
-`simulation/solver/iterations.parquet`. See the
-[Output Format reference](../reference/output-format.md#trainingsolveriterationsparquet)
+`simulation/solver/iterations.parquet` tracks how often `reconstruct_basis`
+was invoked with a non-empty stored basis. See the [Output Format
+reference](../reference/output-format.md#trainingsolveriterationsparquet)
 for the full column schema.
 
 ---

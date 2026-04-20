@@ -1249,8 +1249,8 @@ mod tests {
     /// `recorded_basis` captures the last `Basis` passed to `solve(Some(&basis))`,
     /// used by the warm-start reconstruction acceptance tests.
     ///
-    /// `preserved_counter` accumulates the `preserved` argument passed to
-    /// `record_reconstruction_stats`.
+    /// `reconstruction_counter` counts `record_reconstruction_stats` invocations
+    /// (one per warm-start solve that applied a stored basis via slot reconciliation).
     struct MockSolver {
         solution: LpSolution,
         infeasible_at: Option<usize>,
@@ -1269,7 +1269,7 @@ mod tests {
         /// Last `Basis` passed to `solve(Some(&basis))`, if any.
         recorded_basis: Option<Basis>,
         /// Cumulative `preserved` argument from `record_reconstruction_stats`.
-        preserved_counter: u32,
+        reconstruction_counter: u32,
     }
 
     impl MockSolver {
@@ -1289,7 +1289,7 @@ mod tests {
                 solve_count: 0,
                 solve_with_basis_count: 0,
                 recorded_basis: None,
-                preserved_counter: 0,
+                reconstruction_counter: 0,
             }
         }
 
@@ -1309,7 +1309,7 @@ mod tests {
                 solve_count: 0,
                 solve_with_basis_count: 0,
                 recorded_basis: None,
-                preserved_counter: 0,
+                reconstruction_counter: 0,
             }
         }
 
@@ -1359,14 +1359,8 @@ mod tests {
             self.do_solve()
         }
         fn get_basis(&mut self, _out: &mut Basis) {}
-        fn record_reconstruction_stats(
-            &mut self,
-            preserved: u32,
-            _new_tight: u32,
-            _new_slack: u32,
-            _demotions: u32,
-        ) {
-            self.preserved_counter += preserved;
+        fn record_reconstruction_stats(&mut self) {
+            self.reconstruction_counter += 1;
         }
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()

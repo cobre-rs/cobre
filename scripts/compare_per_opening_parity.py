@@ -54,10 +54,7 @@ COMPARE_COLS: list[str] = [
     "basis_offered",
     "basis_consistency_failures",
     "simplex_iterations",
-    "basis_preserved",
-    "basis_new_tight",
-    "basis_new_slack",
-    "basis_demotions",
+    "basis_reconstructions",
 ]
 
 # Timing columns excluded from parity assertion.

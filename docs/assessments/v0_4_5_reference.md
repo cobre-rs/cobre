@@ -527,3 +527,24 @@ Confirms epic-06 type-surface reshapes (`TrainingResult` `#[non_exhaustive]`
 + `::new(...)`, `CapturedBasis::{to,try_from}_broadcast_payload`, clippy
 workspace deny on `too_many_arguments`, retired `scripts/check_suppressions.py`)
 are runtime-neutral for the parquet outputs covered by the v0.4.5 map.
+
+## Post-epic-07 verification (2026-04-20)
+
+Captured on branch `feat/architecture-unification` after epic-07 close at
+workspace version v0.5.0 (epic-06 had already bumped the version; epic-07
+preserves it).
+
+- 27 D-cases captured via `./target/release/cobre run <case> --output target/v045-reference-post-epic07/<case> --threads 1 --quiet`.
+- Convertido case absent on this machine; skipped per the reference convention.
+- SHA256 map matches the post-04a allowlist: `compare_v045_reference.py` reports "all mismatches are in the expected-drifts allowlist (90/90 files byte-identical, 0 allowlisted drift(s))". No new `EXPECTED_DRIFTS` entries were added.
+- Python parity test (`crates/cobre-python/tests/test_solver_stats_parity.py`): 7 PASSED, 0 SKIPPED, 0 FAILED. `cobre-python` installed via `maturin develop --release`. The previously-skipped parity tests now run cleanly per ticket-007.
+- MPI parity test (`scripts/test_per_opening_mpi_parity.sh`): 1-rank vs 2-rank vs 4-rank all agree on the 10 counter columns (40 rows each), exit 0. The `compare_per_opening_parity.py` script was updated in ticket-008 to reflect the post-epic-07 10-column counter set (previously matched 13 stale columns).
+- Full workspace test suite: 3,700 tests pass, 0 fail. Delta vs post-epic-06 baseline (3,695) is +5: +2 from epic-07 ticket-004 (solver/retry_histogram schema tests), +2 from epic-07 ticket-008 (SolverStatsDelta 13-field wire-format tests), +1 from ticket-007 (Python parity test). Offset by -N from ticket-002's consolidation of redundant assertions.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` exit 0.
+- `cargo fmt --all --check` exit 0.
+
+Confirms epic-07 counter/config cleanups are runtime-neutral:
+- `add_rows_count` / `total_add_rows_time_seconds` / `add_rows_time_ms` deletion (ticket-001)
+- 4 reconstruction counters → 1 `basis_reconstructions` (ticket-002)
+- `basis_padding` obsolete-key warning + `config.schema.json` regeneration (ticket-003)
+are observable only as parquet schema/column-count changes; no bit flips in the per-column data for any D-case.

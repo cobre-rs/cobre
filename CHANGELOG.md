@@ -11,70 +11,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-#### Solver Observability Counters
+### Added
 
-- Renamed solver observability counters. `basis_rejections` and
-  `basis_non_alien_rejections` (both in `SolverStatistics`, `SolverStatsDelta`,
-  parquet schemas, and CLI summaries) are replaced by a single
+### Changed
+
+### Removed
+
+### Verified
+
+## [0.5.0] - 2026-04-20
+
+This release consolidates the architecture-unification plan (epics 02–07).
+Every breaking change is described below, grouped by user-visible surface.
+Consumers must update config files, code calling solver traits, and any tooling
+that reads the `solver/iterations.parquet` schema before upgrading.
+
+### Breaking Changes
+
+#### Config Schema
+
+- **`training.solver.warm_start_basis_mode` removed.** Configs containing
+  this key are rejected at parse time with a migration error
+  (`LoadError::SchemaError`). Delete the key from `config.json` before
+  upgrading. The non-alien warm-start setter is now used unconditionally.
+- **`training.solver.canonical_state` silently ignored but warned.**
+  Configs that still include this key parse successfully, but a one-line
+  warning is emitted to stderr at parse time. Remove the key to suppress
+  the warning. Solve-to-solve independence is now enforced unconditionally
+  inside `HighsSolver::solve`.
+- **`angular_pruning` section rejected at parse time.** `config.json` files
+  containing the `angular_pruning` object under `cut_selection` fail to
+  deserialize. Delete the entire `angular_pruning` block before upgrading.
+- **`training.cut_selection.basis_padding` is now in the soft-deprecation
+  warning list** (`OBSOLETE_KEYS` in `crates/cobre-io/src/config.rs`).
+  Configs containing this key continue to parse without error but emit a
+  one-line stderr warning. The Rust field was removed in the prior release;
+  `book/src/schemas/config.schema.json` is regenerated in this release to
+  drop the stale field. Basis reconstruction is now always active when a
+  stored warm-start basis exists.
+
+#### Solver API and Counters (`cobre-solver`)
+
+- **`WarmStartBasisMode` enum deleted.** Callers that previously called
+  `.with_warm_start_mode(...)` on the solver builder must remove that call;
+  the builder method no longer exists. The non-alien setter is used
+  unconditionally.
+- **`CanonicalStateStrategy` enum deleted** (`Disabled` / `ClearSolver`)
+  and the `canonical_state_strategy` field removed from `CutManagementConfig`,
+  `BackwardPassSpec`, `StudySetup`, `StudyParams`, `ConstructionConfig`, and
+  `BroadcastConfig`. All call sites must remove references to these types.
+- **`SolverInterface::record_padding_stats` removed.** Use the new
+  `record_reconstruction_stats(&mut self)` (no arguments) instead.
+  Pre-v0.5.0 signature was
+  `record_reconstruction_stats(preserved, new_tight, new_slack, demotions)`.
+  Every implementor must update its method signature.
+- **`basis_preserved`, `basis_new_tight`, `basis_new_slack`, `basis_demotions`
+  removed from `SolverStatistics`, `SolverStatsDelta`, and `SolverStatsRow`.**
+  These four counters are replaced by a single `basis_reconstructions: u64`
+  counter incremented once per `reconstruct_basis` invocation with a
+  non-empty stored basis. The runtime classification (preserved / new-tight /
+  new-slack) is still performed inside `reconstruct_basis` but is no longer
+  surfaced as separate fields. Use a debug build or `trace!` instrumentation
+  for per-row detail.
+- **`add_rows_count` and `total_add_rows_time_seconds` removed from
+  `cobre_solver::SolverStatistics`.** The `SolverInterface::add_rows` trait
+  method survives for the lower-bound `append_new_cuts_to_lp` path; only the
+  per-call counter bookkeeping is removed.
+- **`add_rows_count` and `add_rows_time_ms` removed from
+  `cobre_sddp::SolverStatsDelta`.** `SOLVER_STATS_DELTA_SCALAR_FIELDS` drops
+  from 17 (pre-epic-04a) to 15 (post-epic-04a, post `clear_solver_*` removal)
+  to 13 (post-epic-07 ticket-001 and ticket-002). MPI pack/unpack functions
+  `pack_delta_scalars` / `unpack_delta_scalars` updated with the new 13-field
+  index layout.
+- **`basis_rejections` and `basis_non_alien_rejections` renamed** to a single
   `basis_consistency_failures` counter. The `SOLVER_STATS_DELTA_SCALAR_FIELDS`
-  constant drops from 18 to 17. The `training/solver/iterations.parquet` schema
-  drops from 23 to 22 columns.
-
-#### Warm-Start Basis Mode
-
-- Deleted `WarmStartBasisMode` enum; warm-start uses the non-alien setter
-  unconditionally. See ticket-003's `BasisInconsistent` hard-error.
-  Callers that previously called `.with_warm_start_mode(...)` must remove
-  that call; the builder method no longer exists.
-- Removed `training.solver.warm_start_basis_mode` from the config schema.
-  Configs containing this key are rejected at parse time with a migration
-  error (`LoadError::SchemaError`); delete the key from `config.json` before
-  upgrading. The non-alien setter is now used unconditionally.
-
-#### Basis Reconstruction
-
-- Renamed parquet columns in `training/solver/iterations.parquet`:
-  `basis_padding_tight` → `basis_new_tight` and
-  `basis_padding_slack` → `basis_new_slack`. Added new column
-  `basis_preserved` tracking warm-start basis rows preserved from the
-  previous iteration's stored basis via slot reconciliation.
-- Renamed public Rust APIs:
-  `cobre_solver::SolverStatistics::basis_padding_{tight,slack}` →
-  `basis_new_{tight,slack}`; added `basis_preserved`.
-  `SolverInterface::record_padding_stats` removed; use
-  `record_reconstruction_stats(preserved, new_tight, new_slack)` instead.
-- Renamed module `crates/cobre-sddp/src/basis_padding.rs` →
-  `basis_reconstruct.rs` (effective since ticket 002, noted here for
-  completeness).
-- Removed `basis_padding` config field (and the corresponding
-  `basis_padding_enabled` Rust struct fields on `CutManagementConfig`,
-  `TrainingContext`, and `StageKey`). Basis reconstruction is now always
-  active when a stored warm-start basis exists. Config files that still
-  contain `"basis_padding": true` or `false` deserialize without error
-  and emit a one-line deprecation warning on stderr; the value is ignored.
-- **Policy FlatBuffer schema** — `CUT_FIELD_DOMINATION_COUNT` (slot 22) removed
-  from the cut record vtable. `PolicyCutRecord::domination_count` and
-  `OwnedPolicyCutRecord::domination_count` removed from the Rust API. Old policy
-  files deserialize via the FlatBuffer graceful-absence pattern (`field_pos`
-  returns `None`, caller falls back to `0`). **Python**:
-  `cobre.results.load_policy(...)` per-cut dict no longer includes the
-  `"domination_count"` key.
-
-#### Canonical-State Strategy
-
-- **Deleted `CanonicalStateStrategy` enum** (`Disabled` / `ClearSolver`) and
-  the `canonical_state_strategy` field on `CutManagementConfig`,
-  `BackwardPassSpec`, `StudySetup`, `StudyParams`, `ConstructionConfig`,
-  and `BroadcastConfig`. Solve-to-solve independence is now an unconditional
-  contract on `SolverInterface::solve`, delivered by `HighsSolver::solve`
-  via an internal `Highs_clearSolver` call on every solve.
-- Removed `training.solver.canonical_state` from the config schema.
-  Configs that still include the key parse successfully — the key is silently
-  ignored by serde — but a one-line warning is emitted to stderr at parse
-  time. Remove the key from `config.json` to suppress the warning.
-
-#### `TrainingResult` Construction
-
+  constant was also affected by this rename (tracked in the 17→15 progression
+  above). CLI summaries now report `basis_consistency_failures`.
+- **`BakedTemplates::ready` bool deleted.** `StageInputs.baked_template` is
+  now `&StageTemplate` (always populated). The empty-batch bake is an
+  unconditional structural copy at training startup and simulation startup;
+  the `Option<&StageTemplate>` disambiguation is gone from
+  `crates/cobre-sddp/src/stage_solve.rs`.
+- **`stored_cut_row_offset` parameter removed from `reconstruct_basis`.**
+  All call sites had passed `0` after epic-04; the parameter is gone. See
+  `crates/cobre-sddp/src/basis_reconstruct.rs` module docs for the sole
+  hot-path entry-point contract.
+- **Fallback (non-baked) arm deleted from `simulation/pipeline.rs`.**
+  Simulation unconditionally uses baked templates; the `None` sentinel is
+  absorbed at the public API entry via simulation-startup re-bake.
 - **`TrainingResult` is now `#[non_exhaustive]`.** External struct-literal
   construction (`TrainingResult { final_lb, ... }`) is a compile error.
   Replace with `TrainingResult::new(final_lb, final_ub, final_ub_std,
@@ -82,16 +106,74 @@ final_gap, iterations, reason, total_time_ms, basis_cache,
 solver_stats_log, visited_archive, baked_templates)`. The constructor
   takes all 11 fields explicitly; adding a new field in a future release
   will force every caller to update via a compile error.
-
-#### `CapturedBasis` Wire Format Ownership
-
-- **New public methods** on `CapturedBasis`:
+- **`CapturedBasis` wire format ownership transferred.** New public methods
   `to_broadcast_payload(&self, i32_buf: &mut Vec<i32>, f64_buf: &mut Vec<f64>)`
   and
-  `try_from_broadcast_payload(stage, i32_buf, i32_cursor, f64_buf, f64_cursor) -> Result<Option<Self>, SddpError>`.
-  These are the sole owners of the 4-broadcast wire format (previously
+  `try_from_broadcast_payload(stage, i32_buf, i32_cursor, f64_buf, f64_cursor) -> Result<Option<Self>, SddpError>`
+  are now the sole owners of the 4-broadcast wire format (previously
   hand-maintained inside `broadcast_basis_cache` in `training.rs`). The
   byte layout is unchanged.
+- **`clear_solver_count` and `clear_solver_failures` deleted** from
+  `SolverStatistics`. `SolverInterface::clear_solver_state` was removed;
+  solver state is cleared unconditionally inside `HighsSolver::solve`.
+- **Policy FlatBuffer schema** — `CUT_FIELD_DOMINATION_COUNT` (slot 22)
+  removed from the cut record vtable. `PolicyCutRecord::domination_count`
+  and `OwnedPolicyCutRecord::domination_count` removed from the Rust API.
+  Old policy files deserialize via the FlatBuffer graceful-absence pattern
+  (`field_pos` returns `None`, caller falls back to `0`).
+
+#### Output Schema (`solver/iterations.parquet`)
+
+The `training/solver/iterations.parquet` and
+`simulation/solver/iterations.parquet` schemas changed materially across this
+release. The net result is **19 columns** (down from 23 pre-v0.5.0):
+
+- **Renamed** `basis_rejections` → `basis_consistency_failures` (column count
+  unchanged at 23 at the time of rename; column count then dropped in
+  subsequent changes below).
+- **Renamed parquet columns**: `basis_padding_tight` → `basis_new_tight` and
+  `basis_padding_slack` → `basis_new_slack`. Added `basis_preserved`. These
+  intermediate renames appeared transiently; the v0.5.0 schema does not
+  contain them.
+- **Added `opening` column**: nullable Int32. Backward-phase rows carry the
+  opening index (0..`n_openings`); forward, `lower_bound`, and simulation
+  rows carry NULL. The backward-row shape changes from
+  `(iteration, phase, stage)` to `(iteration, phase, stage, opening)`. The
+  forward-row shape changes from one row per iteration to one row per
+  `(iteration, stage)`. Column count rises from 22 to 23.
+- **Added `rank` and `worker_id` columns**: nullable Int32. Backward rows
+  (per-opening) carry the MPI rank and rayon worker ID that produced the
+  stats. Forward, `lower_bound`, and simulation rows carry NULL. Enables
+  per-(rank, worker_id) analysis for MPI cross-rank parity testing. Column
+  count rises from 23 to 25.
+- **Deleted `clear_solver_count` and `clear_solver_failures`**: no longer
+  tracked. Column count drops from 25 to 23.
+- **Deleted `add_rows_time_ms`**: column count drops from 23 to 22.
+- **Deleted `basis_preserved`, `basis_new_tight`, `basis_new_slack`,
+  `basis_demotions`**: column count drops from 22 to 18.
+- **Added `basis_reconstructions`** (UInt64, non-nullable): column count rises
+  from 18 to 19. This is the v0.5.0 final column count.
+
+The column `active_after_angular` was removed from
+`training/cut_selection/iterations.parquet` (column count drops from 10 to 9).
+
+#### Python API (`cobre-python`)
+
+- **`cobre.results.load_policy(...)` per-cut dict** no longer includes the
+  `"domination_count"` key (FlatBuffer slot 22 removed).
+- **`EXPECTED_COLUMNS`** in
+  `crates/cobre-python/tests/test_solver_stats_parity.py` loses
+  `add_rows_time_ms`, `basis_preserved`, `basis_new_tight`, `basis_new_slack`,
+  and `basis_demotions`, and gains the single `basis_reconstructions` entry.
+  Tests that hard-code the 23-column schema must be updated to the 19-column
+  schema.
+
+#### CLI
+
+No CLI flag changes in this release beyond those induced by the counter
+removals (`clear_solver_count`, `clear_solver_failures`, `add_rows_count`,
+`add_rows_time_ms`, `basis_preserved`, `basis_new_tight`, `basis_new_slack`,
+`basis_demotions` no longer appear in solver-statistics CLI summaries).
 
 ### Added
 
@@ -104,12 +186,11 @@ solver_stats_log, visited_archive, baked_templates)`. The constructor
   LP state at capture time, enabling slot-aware reconciliation on the
   next warm-start.
 - **`reconstruct_basis` helper** in
-  `crates/cobre-sddp/src/basis_reconstruct.rs` — sole hot-path entry
-  point for applying a stored basis on forward, backward, and simulation
-  paths. Reconciles cut rows by slot identity; classifies newly added
-  cuts at `state_at_capture` as tight (slack ≤ 1e-7, `NONBASIC_LOWER`)
-  or slack (`BASIC`). Pass `stored_cut_row_offset = 0` on all paths
-  except the baked-template backward path.
+  `crates/cobre-sddp/src/basis_reconstruct.rs` — sole hot-path entry point
+  for applying a stored basis on forward, backward, and simulation paths.
+  Reconciles cut rows by slot identity; classifies newly added cuts at
+  `state_at_capture` as tight (slack ≤ 1e-7, `NONBASIC_LOWER`) or slack
+  (`BASIC`).
 - **Simulation pipeline template baking** —
   `TrainingResult::baked_templates: Option<Vec<StageTemplate>>`
   populated when training ran at least one bake step;
@@ -117,21 +198,34 @@ solver_stats_log, visited_archive, baked_templates)`. The constructor
   `crates/cobre-sddp/src/simulation/pipeline.rs`;
   `SimulationError::InvalidConfiguration(String)` for caller-contract
   violations at the baked-template slice boundary.
-- **`broadcast_basis_cache` 4-broadcast wire format** — non-root MPI
-  ranks now receive full `CapturedBasis` metadata (`base_row_count`,
+- **`broadcast_basis_cache` 4-broadcast wire format** — non-root MPI ranks
+  now receive full `CapturedBasis` metadata (`base_row_count`,
   `cut_row_slots`, `state_at_capture`) instead of a shim with empty
   metadata. Wire format: length broadcast (i32), basis bytes (u8),
   slot-map broadcast (i32), state-at-capture broadcast (f64).
-- **Forward-pass `cut_batches` rebuild guard** — the rebuild is skipped
-  on the baked path, saving `O(num_stages × active_cuts × n_state)`
-  float writes per iteration when baked templates are in use.
+- **Forward-pass `cut_batches` rebuild guard** — the rebuild is skipped on
+  the baked path, saving `O(num_stages × active_cuts × n_state)` float
+  writes per iteration when baked templates are in use.
+
+- **Single `basis_reconstructions` counter** on `SolverStatistics`,
+  `SolverStatsDelta`, and `SolverStatsRow` replaces the four retired
+  counters. Incremented once per `reconstruct_basis` invocation with a
+  non-empty stored basis.
+
+#### Per-Worker Observability
+
+- **`scripts/test_per_opening_mpi_parity.sh`** and
+  **`scripts/compare_per_opening_parity.py`** — 1-rank / 2-rank / 4-rank
+  parity verification for per-opening solver statistics. Validates that
+  `training/solver/iterations.parquet` produces bit-identical results across
+  MPI configurations when the `rank` and `worker_id` columns are ignored.
 
 - **Production DECOMP support** — weekly+monthly mixed-resolution studies
   with External scenarios are now fully supported. This includes:
   - **Sub-monthly lag accumulation** — `StageLagTransition` precomputation
     in `cobre-core::temporal` with `accumulate_and_shift_lag_state` hot-path
-    function. Frozen-lag semantics between weekly stages preserve monthly
-    PAR resolution. Degenerates to identity for uniform monthly studies.
+    function. Frozen-lag semantics between weekly stages preserve monthly PAR
+    resolution. Degenerates to identity for uniform monthly studies.
   - **External standardization fix** — `standardize_external_inflow` now
     uses `StageLagTransition` for frozen-lag + accumulation logic, matching
     the runtime forward pass. Ensures eta values are consistent across
@@ -160,42 +254,40 @@ solver_stats_log, visited_archive, baked_templates)`. The constructor
 - **Pattern C & D temporal resolution support** — multi-resolution
   studies with sub-monthly and mixed-resolution stages are now fully
   supported. This includes:
-  - **Noise sharing** — weekly stages within the same month share
-    identical PAR noise draws via `noise_group_id` precomputation.
-    `ForwardSampler` and opening tree generators reuse noise across
-    same-group stages. Uniform monthly studies are unaffected (each
-    stage gets a unique group).
-  - **Observation aggregation** — `aggregate_observations_to_season`
-    in `cobre-stochastic` aggregates fine-grained observations (e.g.,
-    monthly) to coarser season boundaries (e.g., quarterly) using
-    duration-weighted averaging before PAR fitting. Enables quarterly
-    PAR models from monthly inflow history.
+  - **Noise sharing** — weekly stages within the same month share identical
+    PAR noise draws via `noise_group_id` precomputation. `ForwardSampler`
+    and opening tree generators reuse noise across same-group stages. Uniform
+    monthly studies are unaffected (each stage gets a unique group).
+  - **Observation aggregation** — `aggregate_observations_to_season` in
+    `cobre-stochastic` aggregates fine-grained observations (e.g., monthly)
+    to coarser season boundaries (e.g., quarterly) using duration-weighted
+    averaging before PAR fitting. Enables quarterly PAR models from monthly
+    inflow history.
   - **Past inflows temporal metadata** — `HydroPastInflows` gains an
-    optional `season_ids` field for lag-resolution validation against
-    the expected PAR resolution.
+    optional `season_ids` field for lag-resolution validation against the
+    expected PAR resolution.
   - **Multi-resolution PAR transition** — `StageLagTransition` gains
-    downstream accumulation fields. A ring buffer in `ScratchBuffers`
-    builds quarterly lag values during the monthly phase. At the
-    resolution boundary, the lag state is rebuilt from completed
-    quarterly lags. Zero overhead for uniform-resolution studies.
-- **D29 Pattern C integration test** — weekly stages with PAR(1)
-  noise sharing, `OutOfSample` noise, and `inflow_lags: true`.
-  Verifies noise group sharing and pipeline composition.
+    downstream accumulation fields. A ring buffer in `ScratchBuffers` builds
+    quarterly lag values during the monthly phase. At the resolution
+    boundary, the lag state is rebuilt from completed quarterly lags. Zero
+    overhead for uniform-resolution studies.
+- **D29 Pattern C integration test** — weekly stages with PAR(1) noise
+  sharing, `OutOfSample` noise, and `inflow_lags: true`. Verifies noise
+  group sharing and pipeline composition.
 - **D30 Pattern D integration test** — monthly-to-quarterly
-  multi-resolution study with observation aggregation, downstream
-  lag transition, and `Custom` season cycle type.
+  multi-resolution study with observation aggregation, downstream lag
+  transition, and `Custom` season cycle type.
 
 #### Type-Level Enforcement of Invariants
 
 - **`TrainingResult::new(...)`** — canonical constructor for
   `TrainingResult`. Takes all 11 fields as named parameters;
   `#[allow(clippy::too_many_arguments)]` is justified because the
-  constructor is the type-level replacement for the retired
-  struct-literal parity rule.
-- **Workspace-level `clippy::too_many_arguments = "deny"`** in
-  `Cargo.toml`, `crates/cobre-solver/Cargo.toml`, and
-  `crates/cobre-comm/Cargo.toml`. Any new offender must add
-  `#[allow(clippy::too_many_arguments)]` with a rustdoc
+  constructor is the type-level replacement for the retired struct-literal
+  parity rule.
+- **Workspace-level `clippy::too_many_arguments = "deny"`** in `Cargo.toml`,
+  `crates/cobre-solver/Cargo.toml`, and `crates/cobre-comm/Cargo.toml`. Any
+  new offender must add `#[allow(clippy::too_many_arguments)]` with a rustdoc
   justification.
 - **`CapturedBasis::to_broadcast_payload` /
   `try_from_broadcast_payload`** — sole owners of the 4-broadcast
@@ -204,33 +296,35 @@ solver_stats_log, visited_archive, baked_templates)`. The constructor
 ### Changed
 
 - **JSON schemas** regenerated for `config.json` (added `BoundaryPolicy`
-  under `policy.boundary`) and `initial_conditions.json` (added
-  `recent_observations` array with `RawRecentObservation` definition).
+  under `policy.boundary`; dropped `basis_padding`, `warm_start_basis_mode`,
+  `canonical_state`, and `angular_pruning`) and `initial_conditions.json`
+  (added `recent_observations` array with `RawRecentObservation` definition).
+  `book/src/schemas/config.schema.json` is the canonical location.
 - **Cut management pipeline reduced to two stages** (strategy-based
-  selection + budget enforcement). The intermediate angular diversity
-  pruning stage was observed to deactivate zero cuts under the default
-  `cosine_threshold=0.999` in production-scale systems
-  (`n_state >> 100`) — the clustering phase formed only singletons, so
-  the within-cluster dominance phase never ran. The feature was removed
-  in favour of explicit theoretical guarantees.
-- **Lower-bound LP is now strictly append-only.** The dedicated
-  stage-0 LB solver no longer rebuilds its LP periodically; cuts
-  generated during training are appended and never removed from the
-  LB LP, keeping the lower bound monotonically non-decreasing across
-  iterations regardless of run length. Cut selection (LML1/Level1/
-  Dominated and budget enforcement) continues to deactivate cuts in
-  the shared cut pool, which affects the forward and backward passes;
-  pool-deactivated cuts remain as LP rows in the LB solver.
+  selection + budget enforcement). The intermediate angular diversity pruning
+  stage was observed to deactivate zero cuts under the default
+  `cosine_threshold=0.999` in production-scale systems (`n_state >> 100`);
+  the clustering phase formed only singletons, so the within-cluster
+  dominance phase never ran. The feature was removed in favour of explicit
+  theoretical guarantees.
+- **Lower-bound LP is now strictly append-only.** The dedicated stage-0 LB
+  solver no longer rebuilds its LP periodically; cuts generated during
+  training are appended and never removed from the LB LP, keeping the lower
+  bound monotonically non-decreasing across iterations regardless of run
+  length. Cut selection (LML1/Level1/Dominated and budget enforcement)
+  continues to deactivate cuts in the shared cut pool, which affects the
+  forward and backward passes; pool-deactivated cuts remain as LP rows in
+  the LB solver.
 
 ### Removed
 
 #### Basis Reconstruction
 
-- **`SparseCut` module** — `crates/cobre-sddp/src/cut/sparse.rs`
-  deleted. The type was never instantiated in production; sparse
-  cut storage is handled by `indexer.nonzero_state_indices` in
-  `crates/cobre-sddp/src/indexer.rs`. Re-export
-  `cobre_sddp::cut::SparseCut` removed.
+- **`SparseCut` module** — `crates/cobre-sddp/src/cut/sparse.rs` deleted.
+  The type was never instantiated in production; sparse cut storage is
+  handled by `indexer.nonzero_state_indices` in
+  `crates/cobre-sddp/src/indexer.rs`. Re-export `cobre_sddp::cut::SparseCut`
+  removed.
 - **`CutSelectionStrategy::update_activity` method** — dead code. Metadata
   updates (`active_count`, `last_active_iter`) are performed inline by the
   backward pass at `crates/cobre-sddp/src/backward.rs:978-997`.
@@ -238,54 +332,65 @@ solver_stats_log, visited_archive, baked_templates)`. The constructor
   The `Dominated` cut selection algorithm uses a per-call local scratch buffer.
 
 - **Angular diversity pruning** — `angular_pruning.rs` module,
-  `AngularPruningParams`, `AngularPruningResult`,
-  `select_angular_dominated`, and `parse_angular_pruning_config`.
-  `TrainingEvent::AngularPruningComplete` variant removed.
-  `CutSelectionConfig.angular_pruning` field removed (breaking
-  config-file change — `config.json` files containing this field will
-  fail to deserialize).
+  `AngularPruningParams`, `AngularPruningResult`, `select_angular_dominated`,
+  and `parse_angular_pruning_config`. `TrainingEvent::AngularPruningComplete`
+  variant removed. `CutSelectionConfig.angular_pruning` field removed
+  (breaking config-file change — `config.json` files containing this field
+  will fail to deserialize).
 - **`active_after_angular` column** removed from
-  `training/cut_selection/iterations.parquet` (breaking output-schema
-  change — the column count drops from 10 to 9).
-- **LB LP periodic rebuild mechanism** — `needs_periodic_rebuild`
-  helper and the rebuild trigger in `training.rs`, together with
-  `CutRowMap::reset`, `CutRowMap::deactivate`, `CutRowMap::active_count`,
+  `training/cut_selection/iterations.parquet` (breaking output-schema change
+  — column count drops from 10 to 9).
+- **LB LP periodic rebuild mechanism** — `needs_periodic_rebuild` helper and
+  the rebuild trigger in `training.rs`, together with `CutRowMap::reset`,
+  `CutRowMap::deactivate`, `CutRowMap::active_count`,
   `CutRowMap::is_slot_active`, `CutRowMap::slot_for_lp_row`, and the
-  internal `row_to_slot` / `is_active` fields. `deactivate_cuts_in_lp`
-  in `forward.rs` removed. These components implemented a "phantom-row
-  purge" that could destroy LB monotonicity on runs exceeding ~50
-  iterations; they are no longer needed now that the LB LP is
-  append-only.
+  internal `row_to_slot` / `is_active` fields. `deactivate_cuts_in_lp` in
+  `forward.rs` removed. These components implemented a "phantom-row purge"
+  that could destroy LB monotonicity on runs exceeding ~50 iterations; they
+  are no longer needed now that the LB LP is append-only.
+
+#### Solver Observability Counters
+
+- **`clear_solver_count` and `clear_solver_failures`** removed from
+  `SolverStatistics`. Solver state is now cleared unconditionally inside
+  `HighsSolver::solve`; there is no separate `clear_solver_state` call to
+  count.
+- **`add_rows_count`, `total_add_rows_time_seconds`** removed from
+  `cobre_solver::SolverStatistics`. The `SolverInterface::add_rows` trait
+  method remains for the lower-bound append path.
+- **`add_rows_count`, `add_rows_time_ms`** removed from
+  `cobre_sddp::SolverStatsDelta`. `SOLVER_STATS_DELTA_SCALAR_FIELDS` = 13.
+- **`basis_preserved`, `basis_new_tight`, `basis_new_slack`,
+  `basis_demotions`** removed from `SolverStatistics`, `SolverStatsDelta`,
+  and `SolverStatsRow`. Replaced by the single `basis_reconstructions`
+  counter described above.
 
 #### Tooling
 
 - **`scripts/check_suppressions.py` deleted.** The count-based
-  `#[allow(clippy::too_many_arguments)]` budget is retired.
-  Replacement: `clippy::too_many_arguments` is a workspace-level
-  `deny` lint (see `Cargo.toml`). New offenders must add
-  `#[allow(clippy::too_many_arguments)]` with a rustdoc
-  justification. References to the script were removed from
-  `scripts/pre-commit`, `.github/workflows/ci.yml`, and
-  `CONTRIBUTING.md`.
-- **`.claude/architecture-rules.md` sections retired.** "Clippy
-  Suppression Policy" and "Function Length Suppressions" sections
-  are gone; "The Context Struct Pattern" and "Function Signature
-  Budgets" remain.
-- **`CLAUDE.md` hand-maintained invariants retired.** Three "Hard
-  Rules" bullets removed: "`CapturedBasis` metadata integrity",
+  `#[allow(clippy::too_many_arguments)]` budget is retired. Replacement:
+  `clippy::too_many_arguments` is a workspace-level `deny` lint (see
+  `Cargo.toml`). New offenders must add `#[allow(clippy::too_many_arguments)]`
+  with a rustdoc justification. References to the script were removed from
+  `scripts/pre-commit`, `.github/workflows/ci.yml`, and `CONTRIBUTING.md`.
+- **`.claude/architecture-rules.md` sections retired.** "Clippy Suppression
+  Policy" and "Function Length Suppressions" sections are gone; "The Context
+  Struct Pattern" and "Function Signature Budgets" remain.
+- **`CLAUDE.md` hand-maintained invariants retired.** Three "Hard Rules"
+  bullets removed: "`CapturedBasis` metadata integrity",
   "`TrainingResult` struct-literal parity", and "Never add
-  `#[allow(clippy::too_many_arguments)]`". The stale
-  `stored_cut_row_offset` sentence is also removed from the
-  `basis_reconstruct.rs` Architecture Guide entry.
+  `#[allow(clippy::too_many_arguments)]`". The stale `stored_cut_row_offset`
+  sentence is also removed from the `basis_reconstruct.rs` Architecture Guide
+  entry.
 
 ### Verified
 
 - D01-D30 + convertido SHA256 map matches v0.4.5 reference except for the
-  documented schema renames from ticket-007. All 90 stable parquet entries are
-  byte-identical between the pre-epic-03 baseline and the post-epic-03 build.
-  Convertido median wall-clock measurement deferred — convertido case absent on
-  this machine (see `docs/assessments/v0_4_5_reference.md` § Post-epic-03
-  verification for details).
+  documented schema renames from this release. All 90 stable parquet entries
+  are byte-identical between the pre-epic-03 baseline and the post-epic-07
+  build. Convertido median wall-clock measurement deferred — convertido case
+  absent on this machine (see `docs/assessments/v0_4_5_reference.md`
+  § Post-epic-03 verification for details).
 
 ## [0.4.4] - 2026-04-14
 

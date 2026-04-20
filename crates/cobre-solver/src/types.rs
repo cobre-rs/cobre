@@ -177,14 +177,8 @@ pub struct SolverStatistics {
     /// Total number of `load_model` calls.
     pub load_model_count: u64,
 
-    /// Total number of `add_rows` calls.
-    pub add_rows_count: u64,
-
     /// Cumulative wall-clock time spent in `load_model` calls, in seconds.
     pub total_load_model_time_seconds: f64,
-
-    /// Cumulative wall-clock time spent in `add_rows` calls, in seconds.
-    pub total_add_rows_time_seconds: f64,
 
     /// Cumulative wall-clock time spent in `set_row_bounds` and `set_col_bounds` calls, in seconds.
     pub total_set_bounds_time_seconds: f64,
@@ -195,35 +189,10 @@ pub struct SolverStatistics {
     /// Cold-start `solve(None)` does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
-    /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation
-    /// at the padding state (Strategy S3 / slot-tracked reconstruction).
-    ///
-    /// Incremented by the calling algorithm, not by the solver itself. A
-    /// non-zero value indicates that basis reconstruction is active and functioning.
-    pub basis_new_tight: u64,
-
-    /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
-    /// padding state (Strategy S3 / slot-tracked reconstruction).
-    ///
-    /// Incremented by the calling algorithm, not by the solver itself.
-    pub basis_new_slack: u64,
-
-    /// Number of cut rows whose slot identity was found in the stored basis
-    /// and whose status was copied directly during slot-tracked reconstruction
-    /// (Strategy S3+, ticket 003/004).
-    ///
-    /// Incremented by the calling algorithm via `record_reconstruction_stats`.
-    /// Ticket 005 adds the parquet column and writer wiring.
-    pub basis_preserved: u64,
-
-    /// Number of BASIC row statuses demoted to LOWER by
-    /// `enforce_basic_count_invariant` on the forward path to restore
-    /// `col_basic + row_basic == num_row` after cut-set churn (ticket-009).
-    ///
-    /// Incremented by the calling algorithm, not by the solver itself.
-    /// A non-zero value on the forward path is expected when dropped cuts had
-    /// BASIC status; zero on the backward path (no demotion pass applied there).
-    pub basis_demotions: u64,
+    /// Number of `reconstruct_basis` invocations with a non-empty stored basis.
+    /// Incremented via `record_reconstruction_stats`. A non-zero value indicates
+    /// basis reconstruction is active on this solver instance.
+    pub basis_reconstructions: u64,
 
     /// Per-level retry success histogram. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
@@ -646,11 +615,8 @@ mod tests {
         assert_eq!(stats.first_try_successes, 0);
         assert_eq!(stats.basis_offered, 0);
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
-        assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
-        assert_eq!(stats.basis_new_tight, 0);
-        assert_eq!(stats.basis_new_slack, 0);
-        assert_eq!(stats.basis_preserved, 0);
+        assert_eq!(stats.basis_reconstructions, 0);
         assert!(stats.retry_level_histogram.is_empty());
     }
 

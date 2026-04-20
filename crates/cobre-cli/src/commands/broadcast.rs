@@ -498,6 +498,46 @@ mod tests {
         );
     }
 
+    /// Confirms the post-epic-07 `BroadcastConfig` wire does not carry any of the
+    /// deleted fields from earlier epics.
+    ///
+    /// Postcard encodes fields by declaration order (no field names in the binary),
+    /// so the string check is a guardrail: if a future author switches to a
+    /// named-field serializer, stale field names would appear and this test fails.
+    #[test]
+    fn broadcast_config_wire_excludes_deleted_fields() {
+        use super::BroadcastConfig;
+
+        let json = r#"{
+            "training": {
+                "forward_passes": 4,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 10 }
+                ]
+            }
+        }"#;
+        let config: cobre_io::Config = serde_json::from_str(json).unwrap();
+        let bcast = BroadcastConfig::from_config(&config).unwrap();
+        let bytes = postcard::to_allocvec(&bcast).expect("postcard serialization must succeed");
+
+        // Postcard is binary, but struct field names are not serialized
+        // by default (fields are identified by declaration order). This
+        // test is a guardrail: if any future author switches to a
+        // named-field serializer (serde_json, bincode-named, etc.), the
+        // test would start catching stale field names.
+        let as_string = String::from_utf8_lossy(&bytes);
+        for stale in [
+            "warm_start_basis_mode",
+            "canonical_state_strategy",
+            "basis_padding",
+        ] {
+            assert!(
+                !as_string.contains(stale),
+                "BroadcastConfig postcard bytes must not contain '{stale}'"
+            );
+        }
+    }
+
     /// `BroadcastOpeningTree` wrapped in `Option` round-trips via `broadcast_value`
     /// with `LocalBackend`. Covers both the `None` and `Some` cases.
     ///

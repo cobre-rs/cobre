@@ -433,7 +433,6 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "idle_time_ms"
         | "solve_time_ms"
         | "load_model_time_ms"
-        | "add_rows_time_ms"
         | "set_bounds_time_ms"
         | "basis_set_time_ms"
         | "selection_time_ms" => return "ms",
@@ -679,25 +678,12 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "simplex_iterations") => "Total simplex iterations",
         ("solver_iterations", "solve_time_ms") => "Cumulative solve wall-clock time",
         ("solver_iterations", "load_model_time_ms") => "Cumulative load_model call time",
-        ("solver_iterations", "add_rows_time_ms") => "Cumulative add_rows call time",
         ("solver_iterations", "set_bounds_time_ms") => "Cumulative set_bounds call time",
         ("solver_iterations", "basis_set_time_ms") => "Cumulative set_basis call time",
-        ("solver_iterations", "basis_preserved") => {
-            "Cut rows whose status was copied from a stored basis via slot reconciliation \
-             (slot identity found in the warm-start basis)"
-        }
-        ("solver_iterations", "basis_new_tight") => {
-            "Newly-added cut rows assigned NONBASIC_LOWER after evaluation at the padding \
-             state (slot not found in stored basis)"
-        }
-        ("solver_iterations", "basis_new_slack") => {
-            "Newly-added cut rows assigned BASIC after evaluation at the padding state \
-             (slot not found in stored basis)"
-        }
-        ("solver_iterations", "basis_demotions") => {
-            "BASIC row statuses demoted to LOWER by enforce_basic_count_invariant on the \
-             forward path to restore col_basic + row_basic == num_row after cut-set churn \
-             (ticket-009). Zero on backward and simulation paths."
+        ("solver_iterations", "basis_reconstructions") => {
+            "Number of reconstruct_basis invocations: incremented once per \
+             warm-start solve that applied a stored basis via slot reconciliation. \
+             A non-zero value indicates basis reconstruction is active."
         }
         ("solver_iterations", "opening") => {
             "Opening (noise realization) index within the stage, for backward-pass \
@@ -1468,8 +1454,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 200,
-            "variables.csv must have exactly 200 data rows (one per column across all schemas)"
+            row_count, 196,
+            "variables.csv must have exactly 196 data rows (one per column across all schemas)"
         );
     }
 

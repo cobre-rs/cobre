@@ -225,28 +225,11 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.9.
     fn solver_name_version(&self) -> String;
 
-    /// Record slot-tracked basis reconstruction statistics.
-    ///
-    /// Called after each `reconstruct_basis` call on the forward or backward
-    /// path. Default implementation is a no-op; `HighsSolver` overrides to
-    /// accumulate into `SolverStatistics` fields.
-    ///
-    /// - `preserved`: cut rows whose slot identity was found in the stored
-    ///   basis and whose status was copied directly.
-    /// - `new_tight`: new cut rows (slot not in stored basis) evaluated as
-    ///   tight or violated at the padding state.
-    /// - `new_slack`: new cut rows evaluated as slack at the padding state.
-    /// - `demotions`: BASIC row statuses demoted to LOWER by
-    ///   `enforce_basic_count_invariant` on the forward path (ticket-009).
-    ///   Pass `0` on the backward path where no demotion pass is applied.
-    fn record_reconstruction_stats(
-        &mut self,
-        _preserved: u32,
-        _new_tight: u32,
-        _new_slack: u32,
-        _demotions: u32,
-    ) {
-    }
+    /// Record that `reconstruct_basis` applied a stored basis via slot reconciliation.
+    /// Default implementation is a no-op; `HighsSolver` overrides to increment
+    /// `SolverStatistics::basis_reconstructions` by 1.
+    /// A non-zero count indicates basis reconstruction is active on this solver instance.
+    fn record_reconstruction_stats(&mut self) {}
 }
 
 #[cfg(test)]

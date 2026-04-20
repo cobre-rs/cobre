@@ -1489,18 +1489,6 @@ fn model_persistence_regression_d01() {
         without_persistence_forward,
         with_persistence_forward
     );
-
-    // With incremental cut management on the lower bound solver, add_rows_count
-    // can exceed load_model_count because the LB solver persists across iterations
-    // and calls add_rows (via append_new_cuts_to_lp) without load_model. The
-    // important invariant is that load_model_count is reduced vs. non-persistent.
-    // add_rows_count should be reasonable: roughly load_model_count (for forward
-    // + backward which still do load_model per stage) plus iterations (for the
-    // LB solver's incremental appends).
-    assert!(
-        stats.add_rows_count > 0,
-        "add_rows_count should be positive when cuts exist"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1569,39 +1557,6 @@ fn incremental_lb_reduces_load_model_count() {
         total_without_incremental,
         stats.load_model_count
     );
-}
-
-/// Verify that `add_rows_count` reflects incremental appends: the LB solver
-/// calls `add_rows` once per iteration (to append new cuts), but does NOT
-/// rebuild the full cut batch.
-///
-/// With incremental LB, `add_rows_count` should exceed `load_model_count`
-/// because the LB solver calls `add_rows` on iterations 2+ without calling
-/// `load_model` first.
-#[test]
-fn incremental_lb_add_rows_exceeds_load_model() {
-    use cobre_solver::SolverInterface;
-
-    let case_dir = Path::new("../../examples/deterministic/d03-two-hydro-cascade");
-    let (result, solver) = run_deterministic_with_solver(case_dir);
-
-    assert_cost(result.final_lb, D03_EXPECTED_COST, 1e-4, "D03-add-rows");
-
-    let stats = solver.statistics();
-
-    // The LB solver calls add_rows on each iteration (to append new cuts)
-    // even though it only calls load_model once. This means
-    // add_rows_count > load_model_count when iterations > 1.
-    if result.iterations > 1 {
-        assert!(
-            stats.add_rows_count > stats.load_model_count,
-            "with incremental LB, add_rows_count ({}) should exceed \
-             load_model_count ({}) when iterations ({}) > 1",
-            stats.add_rows_count,
-            stats.load_model_count,
-            result.iterations
-        );
-    }
 }
 
 /// Verify that all D01-D15 deterministic tests pass with the incremental cut

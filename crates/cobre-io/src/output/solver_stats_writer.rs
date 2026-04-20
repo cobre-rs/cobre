@@ -55,25 +55,14 @@ pub struct SolverStatsRow {
     pub solve_time_ms: f64,
     /// Cumulative time in `load_model` calls, in milliseconds.
     pub load_model_time_ms: f64,
-    /// Cumulative time in `add_rows` calls, in milliseconds.
-    pub add_rows_time_ms: f64,
     /// Cumulative time in `set_row_bounds`/`set_col_bounds` calls, in milliseconds.
     pub set_bounds_time_ms: f64,
     /// Cumulative time in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
-    /// Number of cut rows whose status was preserved from a stored basis via slot
-    /// reconciliation during reconstruction.
-    pub basis_preserved: u64,
-    /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation
-    /// at the padding state.
-    pub basis_new_tight: u64,
-    /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
-    /// padding state.
-    pub basis_new_slack: u64,
-    /// Number of BASIC row statuses demoted to LOWER by
-    /// `enforce_basic_count_invariant` on the forward path (ticket-009).
-    /// Zero on backward and simulation paths.
-    pub basis_demotions: u64,
+    /// Number of `reconstruct_basis` invocations with a non-empty stored basis
+    /// during this phase (once per warm-start solve that applied a stored basis
+    /// via slot reconciliation).
+    pub basis_reconstructions: u64,
     /// Per-level retry success counts. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
@@ -150,8 +139,6 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
             .map(|r| r.load_model_time_ms)
             .collect::<Vec<_>>(),
     );
-    let add_rows_time_arr =
-        Float64Array::from(rows.iter().map(|r| r.add_rows_time_ms).collect::<Vec<_>>());
     let set_bounds_time_arr = Float64Array::from(
         rows.iter()
             .map(|r| r.set_bounds_time_ms)
@@ -159,14 +146,11 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
     );
     let basis_set_time_arr =
         Float64Array::from(rows.iter().map(|r| r.basis_set_time_ms).collect::<Vec<_>>());
-    let basis_preserved_arr =
-        UInt64Array::from(rows.iter().map(|r| r.basis_preserved).collect::<Vec<_>>());
-    let basis_new_tight_arr =
-        UInt64Array::from(rows.iter().map(|r| r.basis_new_tight).collect::<Vec<_>>());
-    let basis_new_slack_arr =
-        UInt64Array::from(rows.iter().map(|r| r.basis_new_slack).collect::<Vec<_>>());
-    let basis_demotions_arr =
-        UInt64Array::from(rows.iter().map(|r| r.basis_demotions).collect::<Vec<_>>());
+    let basis_reconstructions_arr = UInt64Array::from(
+        rows.iter()
+            .map(|r| r.basis_reconstructions)
+            .collect::<Vec<_>>(),
+    );
 
     vec![
         Arc::new(iteration_arr),
@@ -185,13 +169,9 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(simplex_iter_arr),
         Arc::new(solve_time_arr),
         Arc::new(load_model_time_arr),
-        Arc::new(add_rows_time_arr),
         Arc::new(set_bounds_time_arr),
         Arc::new(basis_set_time_arr),
-        Arc::new(basis_preserved_arr),
-        Arc::new(basis_new_tight_arr),
-        Arc::new(basis_new_slack_arr),
-        Arc::new(basis_demotions_arr),
+        Arc::new(basis_reconstructions_arr),
     ]
 }
 
@@ -310,13 +290,9 @@ mod tests {
                 simplex_iterations: 5000,
                 solve_time_ms: 42.5,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
@@ -336,13 +312,9 @@ mod tests {
                 simplex_iterations: 10000,
                 solve_time_ms: 85.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ]
@@ -362,13 +334,13 @@ mod tests {
 
         write_solver_stats(dir.path(), &rows).unwrap();
 
-        // iterations.parquet — 23 scalar columns (opening + rank + worker_id: Int32, nullable)
+        // iterations.parquet — 19 scalar columns (opening + rank + worker_id: Int32, nullable)
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         assert!(iter_path.exists());
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 23);
+        assert_eq!(batch.num_columns(), 19);
 
         let iteration_col = batch
             .column(0)
@@ -421,7 +393,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 23);
+        assert_eq!(builder.schema().fields().len(), 19);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -451,13 +423,9 @@ mod tests {
                 simplex_iterations: 2000,
                 solve_time_ms: 10.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 // Level 0: 5 recoveries, level 2: 1 recovery
                 retry_level_histogram: vec![5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             },
@@ -478,13 +446,9 @@ mod tests {
                 simplex_iterations: 5000,
                 solve_time_ms: 20.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ];
@@ -536,13 +500,9 @@ mod tests {
             simplex_iterations: 500,
             solve_time_ms: 1.0,
             load_model_time_ms: 0.0,
-            add_rows_time_ms: 0.0,
             set_bounds_time_ms: 0.0,
             basis_set_time_ms: 0.0,
-            basis_preserved: 0,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         }];
 
@@ -585,13 +545,9 @@ mod tests {
             simplex_iterations: 0,
             solve_time_ms: 0.0,
             load_model_time_ms: 0.0,
-            add_rows_time_ms: 0.0,
             set_bounds_time_ms: 0.0,
             basis_set_time_ms: 0.0,
-            basis_preserved: 0,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         }];
 
@@ -600,8 +556,8 @@ mod tests {
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         let batch = read_parquet(&iter_path);
 
-        // Schema must have exactly 23 columns after T002.
-        assert_eq!(batch.num_columns(), 23);
+        // Schema must have exactly 19 columns after epic-07 ticket-002.
+        assert_eq!(batch.num_columns(), 19);
 
         // rank column is at index 4, must be NULL.
         let rank_col = batch.column_by_name("rank").unwrap();
@@ -658,13 +614,9 @@ mod tests {
                 simplex_iterations: 1000,
                 solve_time_ms: 5.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
             // Backward rows (opening=Some(0..2)): 10, 20, 30 lp_solves → sum=60
@@ -685,13 +637,9 @@ mod tests {
                 simplex_iterations: 200,
                 solve_time_ms: 2.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
@@ -711,13 +659,9 @@ mod tests {
                 simplex_iterations: 400,
                 solve_time_ms: 4.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
             SolverStatsRow {
@@ -737,13 +681,9 @@ mod tests {
                 simplex_iterations: 600,
                 solve_time_ms: 6.0,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             },
         ];
@@ -822,13 +762,9 @@ mod tests {
                 simplex_iterations: u64::from(lp_solves) * 5,
                 solve_time_ms: f64::from(lp_solves) * 0.5,
                 load_model_time_ms: 0.0,
-                add_rows_time_ms: 0.0,
                 set_bounds_time_ms: 0.0,
                 basis_set_time_ms: 0.0,
-                basis_preserved: 0,
-                basis_new_tight: 0,
-                basis_new_slack: 0,
-                basis_demotions: 0,
+                basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
             }
         }

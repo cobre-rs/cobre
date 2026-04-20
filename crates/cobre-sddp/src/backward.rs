@@ -150,14 +150,14 @@ pub struct BackwardResult {
     /// all stages, in milliseconds.
     ///
     /// Computed per-stage as the sum over all workers of
-    /// `load_model_time_ms + add_rows_time_ms + set_bounds_time_ms + basis_set_time_ms`.
+    /// `load_model_time_ms + set_bounds_time_ms + basis_set_time_ms`.
     pub setup_time_ms: u64,
 
     /// Load-imbalance component of parallel overhead accumulated across all
     /// stages, in milliseconds.
     ///
     /// Computed per-stage as `max_worker_total_ms - avg_worker_total_ms`, where
-    /// `worker_total_ms = solve + load_model + add_rows + set_bounds + basis_set`
+    /// `worker_total_ms = solve + load_model + set_bounds + basis_set`
     /// for each worker. Measures how much the slowest worker exceeds the average.
     pub load_imbalance_ms: u64,
 
@@ -1103,36 +1103,25 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after)),
         );
 
-        // setup_time_ms: total non-solve work (load_model + add_rows + set_bounds + basis_set).
+        // setup_time_ms: total non-solve work (load_model + set_bounds + basis_set).
         let stage_setup_ms: f64 = worker_deltas
             .iter()
-            .map(|d| {
-                d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
-            })
+            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
             .sum();
 
         // Accumulate per-worker setup contribution into worker_timing_buf[BWD_SETUP]
         // (slot 8). Summed across all stages so the per-iteration emission in
         // `run_backward_pass` (after the stage loop) carries the full iteration total.
         for (ws, delta) in workspaces.iter_mut().zip(&worker_deltas) {
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_SETUP] += delta.load_model_time_ms
-                + delta.add_rows_time_ms
-                + delta.set_bounds_time_ms
-                + delta.basis_set_time_ms;
+            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_SETUP] +=
+                delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
         }
 
         // Per-worker elapsed: solve + setup phases.
         // Reuse pre-allocated buffer (clear+extend avoids per-stage allocation on the hot path).
         worker_totals.clear();
         worker_totals.extend(worker_deltas.iter().map(|d| {
-            d.solve_time_ms
-                + d.load_model_time_ms
-                + d.add_rows_time_ms
-                + d.set_bounds_time_ms
-                + d.basis_set_time_ms
+            d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
         }));
 
         let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
@@ -1936,9 +1925,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2041,9 +2030,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2146,9 +2135,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2247,9 +2236,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2348,9 +2337,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2447,9 +2436,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2590,9 +2579,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2711,9 +2700,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2837,9 +2826,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2950,9 +2939,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3073,9 +3062,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3190,9 +3179,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3301,9 +3290,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3419,9 +3408,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3576,9 +3565,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3668,9 +3657,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4053,9 +4042,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4223,9 +4212,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4398,9 +4387,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4527,9 +4516,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4665,9 +4654,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
-                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 15],
+                bwd_stats_counts: &[8 * 32 * 15],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4934,14 +4923,12 @@ mod tests {
     fn make_stats(
         solve_s: f64,
         load_s: f64,
-        add_rows_s: f64,
         set_bounds_s: f64,
         basis_set_s: f64,
     ) -> SolverStatistics {
         SolverStatistics {
             total_solve_time_seconds: solve_s,
             total_load_model_time_seconds: load_s,
-            total_add_rows_time_seconds: add_rows_s,
             total_set_bounds_time_seconds: set_bounds_s,
             total_basis_set_time_seconds: basis_set_s,
             ..SolverStatistics::default()
@@ -4966,22 +4953,13 @@ mod tests {
 
         let stage_setup_ms: f64 = worker_deltas
             .iter()
-            .map(|d| {
-                d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
-            })
+            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
             .sum();
 
         let worker_totals: Vec<f64> = worker_deltas
             .iter()
             .map(|d| {
-                d.solve_time_ms
-                    + d.load_model_time_ms
-                    + d.add_rows_time_ms
-                    + d.set_bounds_time_ms
-                    + d.basis_set_time_ms
+                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
             })
             .collect();
 
@@ -5018,10 +4996,10 @@ mod tests {
         // All setup times are zero; use only solve time to isolate imbalance.
         let zero = SolverStatistics::default();
         let pairs = vec![
-            (zero.clone(), make_stats(0.1, 0.0, 0.0, 0.0, 0.0)), // 100 ms solve
-            (zero.clone(), make_stats(0.2, 0.0, 0.0, 0.0, 0.0)), // 200 ms solve
-            (zero.clone(), make_stats(0.15, 0.0, 0.0, 0.0, 0.0)), // 150 ms solve
-            (zero.clone(), make_stats(0.18, 0.0, 0.0, 0.0, 0.0)), // 180 ms solve
+            (zero.clone(), make_stats(0.1, 0.0, 0.0, 0.0)), // 100 ms solve
+            (zero.clone(), make_stats(0.2, 0.0, 0.0, 0.0)), // 200 ms solve
+            (zero.clone(), make_stats(0.15, 0.0, 0.0, 0.0)), // 150 ms solve
+            (zero.clone(), make_stats(0.18, 0.0, 0.0, 0.0)), // 180 ms solve
         ];
         let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 250);
 
@@ -5043,22 +5021,13 @@ mod tests {
     #[test]
     fn decompose_setup_time_is_aggregate_non_solve_work() {
         let zero = SolverStatistics::default();
-        // Each worker: 0 solve + known setup split across the four sub-timers.
-        // Worker setup totals: 20, 25, 15, 22 ms (split evenly among the 4 timers).
+        // Each worker: 0 solve + known setup split across the three sub-timers.
+        // Worker setup totals: 20, 25, 15, 22 ms (put entirely in load_model timer).
         let pairs = vec![
-            (zero.clone(), make_stats(0.0, 0.005, 0.005, 0.005, 0.005)), // 20 ms total setup
-            (
-                zero.clone(),
-                make_stats(0.0, 0.00625, 0.00625, 0.00625, 0.00625),
-            ), // 25 ms
-            (
-                zero.clone(),
-                make_stats(0.0, 0.00375, 0.00375, 0.00375, 0.00375),
-            ), // 15 ms
-            (
-                zero.clone(),
-                make_stats(0.0, 0.0055, 0.0055, 0.0055, 0.0055),
-            ), // 22 ms
+            (zero.clone(), make_stats(0.0, 0.020, 0.0, 0.0)), // 20 ms total setup
+            (zero.clone(), make_stats(0.0, 0.025, 0.0, 0.0)), // 25 ms
+            (zero.clone(), make_stats(0.0, 0.015, 0.0, 0.0)), // 15 ms
+            (zero.clone(), make_stats(0.0, 0.022, 0.0, 0.0)), // 22 ms
         ];
         let (setup_ms, _imbalance_ms, _scheduling_ms) = decompose_overhead(&pairs, 300);
         assert_eq!(
@@ -5071,7 +5040,7 @@ mod tests {
     #[test]
     fn decompose_identical_workers_zero_imbalance() {
         let zero = SolverStatistics::default();
-        let after = make_stats(0.1, 0.01, 0.005, 0.002, 0.001);
+        let after = make_stats(0.1, 0.01, 0.002, 0.001);
         let pairs = vec![
             (zero.clone(), after.clone()),
             (zero.clone(), after.clone()),
@@ -5090,7 +5059,7 @@ mod tests {
     fn decompose_single_worker() {
         let zero = SolverStatistics::default();
         // 100 ms solve + 20 ms setup = 120 ms worker total.
-        let after = make_stats(0.1, 0.005, 0.005, 0.005, 0.005);
+        let after = make_stats(0.1, 0.020, 0.0, 0.0);
         let pairs = vec![(zero.clone(), after)];
         let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 150);
 
@@ -5109,7 +5078,7 @@ mod tests {
     fn decompose_scheduling_clamped_when_worker_exceeds_wall() {
         let zero = SolverStatistics::default();
         // Worker total = 200 ms, but wall = 180 ms → scheduling would be negative.
-        let after = make_stats(0.2, 0.0, 0.0, 0.0, 0.0);
+        let after = make_stats(0.2, 0.0, 0.0, 0.0);
         let pairs = vec![(zero.clone(), after)];
         let (_, _, scheduling_ms) = decompose_overhead(&pairs, 180);
         assert_eq!(scheduling_ms, 0, "negative scheduling must be clamped to 0");

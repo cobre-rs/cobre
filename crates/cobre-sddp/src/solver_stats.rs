@@ -43,14 +43,8 @@ pub struct SolverStatsDelta {
     /// Number of `load_model` calls in this phase.
     pub load_model_count: u64,
 
-    /// Number of `add_rows` calls in this phase.
-    pub add_rows_count: u64,
-
     /// Cumulative wall-clock time spent in `load_model` calls, in milliseconds.
     pub load_model_time_ms: f64,
-
-    /// Cumulative wall-clock time spent in `add_rows` calls, in milliseconds.
-    pub add_rows_time_ms: f64,
 
     /// Cumulative wall-clock time spent in `set_row_bounds`/`set_col_bounds` calls, in milliseconds.
     pub set_bounds_time_ms: f64,
@@ -58,30 +52,10 @@ pub struct SolverStatsDelta {
     /// Cumulative wall-clock time spent in `set_basis` FFI calls, in milliseconds.
     pub basis_set_time_ms: f64,
 
-    /// Number of newly-added cut rows assigned `NONBASIC_LOWER` after evaluation
-    /// at the padding state during this phase.
-    ///
+    /// Number of `reconstruct_basis` invocations with a non-empty stored basis.
     /// Application-level counter: not included in MPI packing or allreduce.
-    pub basis_new_tight: u64,
-
-    /// Number of newly-added cut rows assigned `BASIC` after evaluation at the
-    /// padding state during this phase.
-    ///
-    /// Application-level counter: not included in MPI packing or allreduce.
-    pub basis_new_slack: u64,
-
-    /// Number of stored cut rows whose status was preserved (slot found in
-    /// stored basis) by `reconstruct_basis` during this phase.
-    ///
-    /// Application-level counter: not included in MPI packing or allreduce.
-    pub basis_preserved: u64,
-
-    /// Number of BASIC row statuses demoted to LOWER by
-    /// `enforce_basic_count_invariant` on the forward path (ticket-009).
-    ///
-    /// Application-level counter: not included in MPI packing or allreduce.
-    /// Zero on the backward and simulation paths where no demotion pass is applied.
-    pub basis_demotions: u64,
+    /// A non-zero value indicates basis reconstruction is active.
+    pub basis_reconstructions: u64,
 
     /// Per-level retry success histogram delta. Length depends on the solver
     /// backend (e.g. 12 for `HiGHS`).
@@ -115,12 +89,8 @@ impl SolverStatsDelta {
             solve_time_ms: (after.total_solve_time_seconds - before.total_solve_time_seconds)
                 * 1000.0,
             load_model_count: after.load_model_count - before.load_model_count,
-            add_rows_count: after.add_rows_count - before.add_rows_count,
             load_model_time_ms: (after.total_load_model_time_seconds
                 - before.total_load_model_time_seconds)
-                * 1000.0,
-            add_rows_time_ms: (after.total_add_rows_time_seconds
-                - before.total_add_rows_time_seconds)
                 * 1000.0,
             set_bounds_time_ms: (after.total_set_bounds_time_seconds
                 - before.total_set_bounds_time_seconds)
@@ -128,10 +98,9 @@ impl SolverStatsDelta {
             basis_set_time_ms: (after.total_basis_set_time_seconds
                 - before.total_basis_set_time_seconds)
                 * 1000.0,
-            basis_new_tight: after.basis_new_tight.saturating_sub(before.basis_new_tight),
-            basis_new_slack: after.basis_new_slack.saturating_sub(before.basis_new_slack),
-            basis_preserved: after.basis_preserved.saturating_sub(before.basis_preserved),
-            basis_demotions: after.basis_demotions.saturating_sub(before.basis_demotions),
+            basis_reconstructions: after
+                .basis_reconstructions
+                .saturating_sub(before.basis_reconstructions),
             retry_level_histogram: after
                 .retry_level_histogram
                 .iter()
@@ -157,15 +126,10 @@ impl SolverStatsDelta {
         dst.simplex_iterations += rhs.simplex_iterations;
         dst.solve_time_ms += rhs.solve_time_ms;
         dst.load_model_count += rhs.load_model_count;
-        dst.add_rows_count += rhs.add_rows_count;
         dst.load_model_time_ms += rhs.load_model_time_ms;
-        dst.add_rows_time_ms += rhs.add_rows_time_ms;
         dst.set_bounds_time_ms += rhs.set_bounds_time_ms;
         dst.basis_set_time_ms += rhs.basis_set_time_ms;
-        dst.basis_new_tight += rhs.basis_new_tight;
-        dst.basis_new_slack += rhs.basis_new_slack;
-        dst.basis_preserved += rhs.basis_preserved;
-        dst.basis_demotions += rhs.basis_demotions;
+        dst.basis_reconstructions += rhs.basis_reconstructions;
         ensure_histogram_capacity(&mut dst.retry_level_histogram, &rhs.retry_level_histogram);
         for (d, s) in dst
             .retry_level_histogram
@@ -193,15 +157,10 @@ impl SolverStatsDelta {
             result.simplex_iterations += d.simplex_iterations;
             result.solve_time_ms += d.solve_time_ms;
             result.load_model_count += d.load_model_count;
-            result.add_rows_count += d.add_rows_count;
             result.load_model_time_ms += d.load_model_time_ms;
-            result.add_rows_time_ms += d.add_rows_time_ms;
             result.set_bounds_time_ms += d.set_bounds_time_ms;
             result.basis_set_time_ms += d.basis_set_time_ms;
-            result.basis_new_tight += d.basis_new_tight;
-            result.basis_new_slack += d.basis_new_slack;
-            result.basis_preserved += d.basis_preserved;
-            result.basis_demotions += d.basis_demotions;
+            result.basis_reconstructions += d.basis_reconstructions;
             ensure_histogram_capacity(&mut result.retry_level_histogram, &d.retry_level_histogram);
             for (dst, src) in result
                 .retry_level_histogram
@@ -236,15 +195,10 @@ pub fn aggregate_solver_statistics(
         result.first_try_successes += s.first_try_successes;
         result.basis_offered += s.basis_offered;
         result.load_model_count += s.load_model_count;
-        result.add_rows_count += s.add_rows_count;
         result.total_load_model_time_seconds += s.total_load_model_time_seconds;
-        result.total_add_rows_time_seconds += s.total_add_rows_time_seconds;
         result.total_set_bounds_time_seconds += s.total_set_bounds_time_seconds;
         result.total_basis_set_time_seconds += s.total_basis_set_time_seconds;
-        result.basis_new_tight += s.basis_new_tight;
-        result.basis_new_slack += s.basis_new_slack;
-        result.basis_preserved += s.basis_preserved;
-        result.basis_demotions += s.basis_demotions;
+        result.basis_reconstructions += s.basis_reconstructions;
         ensure_histogram_capacity(&mut result.retry_level_histogram, &s.retry_level_histogram);
         for (dst, src) in result
             .retry_level_histogram
@@ -277,23 +231,14 @@ pub fn aggregate_solver_statistics(
 /// - `delta`: the solver counter delta for this entry.
 pub type SolverStatsEntry = (u64, &'static str, i32, i32, i32, i32, SolverStatsDelta);
 
-/// Number of scalar fields in [`SolverStatsDelta`] (excludes the histogram `Vec`).
-///
-/// This constant defines the size of the fixed-size buffer used for MPI allreduce
-/// and allgatherv operations. The 15 fields are packed in declaration order:
-/// 10 `u64` fields (cast to `f64`) followed by 5 native `f64` fields.
-pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 15;
+/// Number of scalar fields in [`SolverStatsDelta`] (excludes histogram `Vec`).
+/// Buffer size for MPI allreduce/allgatherv: 8 `u64` fields cast to `f64` + 5 native `f64` fields.
+pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 13;
 
-/// Number of `f64` values packed per scenario in [`pack_scenario_stats`].
-///
-/// Each scenario occupies `scenario_id_as_f64` + the 15 scalar fields = 16 values.
+/// Packed `f64` stride per scenario: `scenario_id` + 13 scalar fields.
 pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
-/// Number of `f64` values per entry in [`pack_worker_opening_stats`].
-///
-/// Each entry encodes `[worker_id, slot_idx, 15 scalar fields]` for a fixed
-/// stride of `2 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 17`. Used by epic-04b T005's
-/// `allgatherv` of per-`(rank, worker_id, opening)` backward statistics.
+/// Packed `f64` stride per entry: `worker_id`, `slot_idx`, + 13 scalar fields (total 15).
 pub const WORKER_STATS_ENTRY_STRIDE: usize = 2 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
 /// Required `f64` buffer length for a per-worker per-slot pack payload.
@@ -306,20 +251,10 @@ pub fn worker_opening_stats_buffer_size(n_workers: usize, n_slots: usize) -> usi
     n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE
 }
 
-/// Pack the 15 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
-///
-/// The packing order matches the declaration order of [`SolverStatsDelta`]:
-/// - Indices 0–9: the ten `u64` fields cast to `f64` (exact for values ≤ 2^53).
-/// - Indices 10–14: the five native `f64` fields.
-///
-/// The `retry_level_histogram` (`Vec<u64>`) is excluded: it is not part of the
-/// summary allreduce and is not included in the per-scenario Parquet schema.
-///
-/// # Precision note
-///
-/// All `u64` fields represent event counts (LP solve counts, iteration counts).
-/// At realistic workloads (≤ 10^6 scenarios × 10^3 stages), these counts fit
-/// comfortably within the 53-bit mantissa of `f64`, so the cast is exact.
+/// Pack the 13 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
+/// Indices 0–7: eight `u64` fields cast to `f64`. Indices 8–12: five native `f64` fields.
+/// The `retry_level_histogram` is excluded from MPI packing and Parquet output.
+/// `u64` casts are exact for realistic event counts (≤ 2^53).
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] {
@@ -333,20 +268,15 @@ pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_
         delta.basis_consistency_failures as f64, // index 6
         delta.simplex_iterations as f64,         // index 7
         delta.load_model_count as f64,           // index 8
-        delta.add_rows_count as f64,             // index 9
-        delta.solve_time_ms,                     // index 10
-        delta.load_model_time_ms,                // index 11
-        delta.add_rows_time_ms,                  // index 12
-        delta.set_bounds_time_ms,                // index 13
-        delta.basis_set_time_ms,                 // index 14
+        delta.solve_time_ms,                     // index 9
+        delta.load_model_time_ms,                // index 10
+        delta.set_bounds_time_ms,                // index 11
+        delta.basis_set_time_ms,                 // index 12
     ]
 }
 
-/// Unpack a fixed-size `f64` array (produced by [`pack_delta_scalars`]) back into
-/// a [`SolverStatsDelta`].
-///
-/// The `retry_level_histogram` field is set to an empty `Vec` because the histogram
-/// is excluded from both the allreduce summary and the per-scenario Parquet gather.
+/// Unpack a fixed-size `f64` array (from [`pack_delta_scalars`]) back into a [`SolverStatsDelta`].
+/// The `retry_level_histogram` is set to empty (`Vec` excluded from MPI packing).
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> SolverStatsDelta {
@@ -360,27 +290,18 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         basis_consistency_failures: buf[6] as u64,
         simplex_iterations: buf[7] as u64,
         load_model_count: buf[8] as u64,
-        add_rows_count: buf[9] as u64,
-        solve_time_ms: buf[10],
-        load_model_time_ms: buf[11],
-        add_rows_time_ms: buf[12],
-        set_bounds_time_ms: buf[13],
-        basis_set_time_ms: buf[14],
-        // Basis reconstruction counters are application-level and excluded from MPI packing.
-        basis_new_tight: 0,
-        basis_new_slack: 0,
-        basis_preserved: 0,
-        basis_demotions: 0,
+        solve_time_ms: buf[9],
+        load_model_time_ms: buf[10],
+        set_bounds_time_ms: buf[11],
+        basis_set_time_ms: buf[12],
+        // Basis reconstruction counter is application-level and excluded from MPI packing.
+        basis_reconstructions: 0,
         retry_level_histogram: Vec::new(),
     }
 }
 
-/// Pack a slice of per-scenario `(scenario_id, delta)` pairs into a flat `f64`
-/// buffer for use with `allgatherv`.
-///
-/// Each scenario contributes [`SCENARIO_STATS_STRIDE`] values:
-/// `[scenario_id as f64, lp_solves as f64, ..., basis_set_time_ms]`.
-/// The histogram is excluded.
+/// Pack per-scenario `(scenario_id, delta)` pairs into a flat `f64` buffer for `allgatherv`.
+/// Each scenario contributes [`SCENARIO_STATS_STRIDE`] values. Histogram is excluded.
 #[must_use]
 pub fn pack_scenario_stats(stats: &[(u32, SolverStatsDelta)]) -> Vec<f64> {
     let mut buf = Vec::with_capacity(stats.len() * SCENARIO_STATS_STRIDE);
@@ -391,15 +312,9 @@ pub fn pack_scenario_stats(stats: &[(u32, SolverStatsDelta)]) -> Vec<f64> {
     buf
 }
 
-/// Unpack a flat `f64` buffer (produced by [`pack_scenario_stats`]) back into a
-/// `Vec<(u32, SolverStatsDelta)>`.
-///
-/// The buffer length must be a multiple of [`SCENARIO_STATS_STRIDE`].
-/// Returns an empty `Vec` for an empty buffer.
-///
-/// # Panics
-///
-/// Panics in debug builds if `buf.len()` is not a multiple of `SCENARIO_STATS_STRIDE`.
+/// Unpack a flat `f64` buffer (from [`pack_scenario_stats`]) back into a `Vec<(u32, SolverStatsDelta)>`.
+/// Buffer length must be a multiple of [`SCENARIO_STATS_STRIDE`].
+/// Panics in debug if length is not a multiple of `SCENARIO_STATS_STRIDE`.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
@@ -412,38 +327,22 @@ pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
         .map(|chunk| {
             let scenario_id = chunk[0] as u32;
             // `chunks_exact(SCENARIO_STATS_STRIDE)` guarantees chunk.len() ==
-            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 16.
-            // Index 1..=15 therefore covers exactly the 15 scalar field slots.
+            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 14.
+            // Index 1..=13 therefore covers exactly the 13 scalar field slots.
             let arr = [
                 chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7], chunk[8],
-                chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14], chunk[15],
+                chunk[9], chunk[10], chunk[11], chunk[12], chunk[13],
             ];
             (scenario_id, unpack_delta_scalars(&arr))
         })
         .collect()
 }
 
-/// Pack a worker-preserving per-slot buffer into a flat `f64` buffer for `allgatherv`.
-///
-/// Buffer layout (fixed stride of [`WORKER_STATS_ENTRY_STRIDE`] per entry):
-///
-/// ```text
-/// entry(w, k) = [w as f64, k as f64, <15 scalar fields>]
-/// ```
-///
-/// Entries are laid out in `(worker_id, slot_idx)` row-major order. `out` must
-/// be a caller-allocated slice of length
-/// `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`. Use
-/// [`worker_opening_stats_buffer_size`] to compute the size.
-///
-/// `stats` is a slice of length `n_workers * n_slots` laid out in the same
-/// `(worker_id, slot_idx)` row-major order; i.e. `stats[w * n_slots + k]` is
-/// the delta for worker `w` and slot `k`.
-///
-/// # Panics
-///
-/// Panics in debug builds if `out.len() != n_workers * n_slots *
-/// WORKER_STATS_ENTRY_STRIDE` or `stats.len() != n_workers * n_slots`.
+/// Pack per-worker per-slot buffer into a flat `f64` buffer for `allgatherv`.
+/// Fixed stride per entry: `[w as f64, k as f64, <13 scalar fields>]` in row-major order.
+/// `out` length must be `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`.
+/// `stats` length must be `n_workers * n_slots` (row-major: `stats[w * n_slots + k]`).
+/// Panics in debug if sizes don't match.
 #[allow(clippy::cast_precision_loss)]
 pub fn pack_worker_opening_stats(
     out: &mut [f64],
@@ -464,27 +363,15 @@ pub fn pack_worker_opening_stats(
     }
 }
 
-/// Unpack a flat `f64` buffer (from [`pack_worker_opening_stats`]) back into
-/// the caller-owned `SolverStatsDelta` slice.
-///
-/// `buf` must be `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE` floats in
-/// the exact layout emitted by [`pack_worker_opening_stats`].
-///
-/// `out` must be a slice of length `n_workers * n_slots` laid out in
-/// `(worker_id, slot_idx)` row-major order. Existing slot contents are
-/// overwritten.
-///
-/// The `worker_id` / `slot_idx` prefix floats in `buf` store the local
-/// rank-relative indices written by [`pack_worker_opening_stats`]. When
-/// `n_workers = n_ranks * n_workers_local`, the combined flat index `w` does
-/// not equal the stored `worker_id` for ranks > 0; the prefix is informational
-/// and is not asserted during unpack.
+/// Unpack a flat `f64` buffer (from [`pack_worker_opening_stats`]) into `out`.
+/// `buf` must be `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE` floats.
+/// `out` must be a slice of length `n_workers * n_slots` (row-major order; contents overwritten).
+/// The prefix `[worker_id, slot_idx]` per entry is informational (not asserted on unpack for ranks > 0).
+/// Panics in debug if buffer sizes don't match.
 ///
 /// # Panics
 ///
-/// Panics in debug builds if:
-/// - `buf.len() != n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`
-/// - `out.len() != n_workers * n_slots`
+/// Panics (in debug builds) if buffer lengths don't match the expected sizes.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -669,15 +556,10 @@ mod tests {
             first_try_successes: 7,
             basis_offered: 8,
             load_model_count: 5,
-            add_rows_count: 5,
             total_load_model_time_seconds: 1.0,
-            total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.1,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         };
         let after = SolverStatistics {
@@ -691,15 +573,10 @@ mod tests {
             first_try_successes: 15,
             basis_offered: 17,
             load_model_count: 12,
-            add_rows_count: 12,
             total_load_model_time_seconds: 3.0,
-            total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.3,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -714,9 +591,7 @@ mod tests {
         assert_eq!(delta.simplex_iterations, 600);
         assert!((delta.solve_time_ms - 2500.0).abs() < 1e-6);
         assert_eq!(delta.load_model_count, 7);
-        assert_eq!(delta.add_rows_count, 7);
         assert!((delta.load_model_time_ms - 2000.0).abs() < 1e-6);
-        assert!((delta.add_rows_time_ms - 1000.0).abs() < 1e-6);
         assert!((delta.set_bounds_time_ms - 500.0).abs() < 1e-6);
         assert!((delta.basis_set_time_ms - 200.0).abs() < 1e-6);
     }
@@ -734,15 +609,10 @@ mod tests {
             first_try_successes: 5,
             basis_offered: 3,
             load_model_count: 3,
-            add_rows_count: 3,
             total_load_model_time_seconds: 0.1,
-            total_add_rows_time_seconds: 0.05,
             total_set_bounds_time_seconds: 0.02,
             total_basis_set_time_seconds: 0.01,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         };
         let delta = SolverStatsDelta::from_snapshots(&snap, &snap);
@@ -756,7 +626,6 @@ mod tests {
         assert_eq!(delta.simplex_iterations, 0);
         assert!((delta.solve_time_ms).abs() < 1e-10);
         assert!((delta.load_model_time_ms).abs() < 1e-10);
-        assert!((delta.add_rows_time_ms).abs() < 1e-10);
         assert!((delta.set_bounds_time_ms).abs() < 1e-10);
         assert!((delta.basis_set_time_ms).abs() < 1e-10);
     }
@@ -781,15 +650,10 @@ mod tests {
             simplex_iterations: 500,
             solve_time_ms: 100.0,
             load_model_count: 5,
-            add_rows_count: 5,
             load_model_time_ms: 10.0,
-            add_rows_time_ms: 5.0,
             set_bounds_time_ms: 2.0,
             basis_set_time_ms: 1.0,
-            basis_new_tight: 3,
-            basis_new_slack: 7,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 3,
             retry_level_histogram: vec![0; 12],
         };
         let d2 = SolverStatsDelta {
@@ -803,15 +667,10 @@ mod tests {
             simplex_iterations: 800,
             solve_time_ms: 200.0,
             load_model_count: 10,
-            add_rows_count: 10,
             load_model_time_ms: 20.0,
-            add_rows_time_ms: 10.0,
             set_bounds_time_ms: 4.0,
             basis_set_time_ms: 2.0,
-            basis_new_tight: 5,
-            basis_new_slack: 2,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 5,
             retry_level_histogram: vec![0; 12],
         };
 
@@ -826,13 +685,10 @@ mod tests {
         assert_eq!(agg.simplex_iterations, 1300);
         assert!((agg.solve_time_ms - 300.0).abs() < 1e-6);
         assert_eq!(agg.load_model_count, 15);
-        assert_eq!(agg.add_rows_count, 15);
         assert!((agg.load_model_time_ms - 30.0).abs() < 1e-6);
-        assert!((agg.add_rows_time_ms - 15.0).abs() < 1e-6);
         assert!((agg.set_bounds_time_ms - 6.0).abs() < 1e-6);
         assert!((agg.basis_set_time_ms - 3.0).abs() < 1e-6);
-        assert_eq!(agg.basis_new_tight, 8);
-        assert_eq!(agg.basis_new_slack, 9);
+        assert_eq!(agg.basis_reconstructions, 8);
     }
 
     #[test]
@@ -848,15 +704,10 @@ mod tests {
             first_try_successes: 7,
             basis_offered: 8,
             load_model_count: 5,
-            add_rows_count: 5,
             total_load_model_time_seconds: 1.0,
-            total_add_rows_time_seconds: 0.5,
             total_set_bounds_time_seconds: 0.25,
             total_basis_set_time_seconds: 0.05,
-            basis_new_tight: 4,
-            basis_new_slack: 6,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 4,
             retry_level_histogram: vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         let s2 = SolverStatistics {
@@ -870,15 +721,10 @@ mod tests {
             first_try_successes: 15,
             basis_offered: 17,
             load_model_count: 12,
-            add_rows_count: 12,
             total_load_model_time_seconds: 3.0,
-            total_add_rows_time_seconds: 1.5,
             total_set_bounds_time_seconds: 0.75,
             total_basis_set_time_seconds: 0.15,
-            basis_new_tight: 10,
-            basis_new_slack: 20,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 10,
             retry_level_histogram: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
 
@@ -893,16 +739,13 @@ mod tests {
         assert_eq!(agg.first_try_successes, 22);
         assert_eq!(agg.basis_offered, 25);
         assert_eq!(agg.load_model_count, 17);
-        assert_eq!(agg.add_rows_count, 17);
         assert!((agg.total_load_model_time_seconds - 4.0).abs() < 1e-10);
-        assert!((agg.total_add_rows_time_seconds - 2.0).abs() < 1e-10);
         assert!((agg.total_set_bounds_time_seconds - 1.0).abs() < 1e-10);
         assert!((agg.total_basis_set_time_seconds - 0.2).abs() < 1e-10);
         assert_eq!(agg.retry_level_histogram[0], 1);
         assert_eq!(agg.retry_level_histogram[1], 2);
         assert_eq!(agg.retry_level_histogram[2], 0);
-        assert_eq!(agg.basis_new_tight, 14);
-        assert_eq!(agg.basis_new_slack, 26);
+        assert_eq!(agg.basis_reconstructions, 14);
     }
 
     fn make_delta(lp_solves: u64) -> SolverStatsDelta {
@@ -917,15 +760,10 @@ mod tests {
             simplex_iterations: lp_solves * 10,
             solve_time_ms: lp_solves as f64 * 0.5,
             load_model_count: 3,
-            add_rows_count: 4,
             load_model_time_ms: 1.5,
-            add_rows_time_ms: 2.5,
             set_bounds_time_ms: 0.25,
             basis_set_time_ms: 0.125,
-            basis_new_tight: 0,
-            basis_new_slack: 0,
-            basis_preserved: 0,
-            basis_demotions: 0,
+            basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
         }
     }
@@ -949,10 +787,8 @@ mod tests {
         );
         assert_eq!(unpacked.simplex_iterations, delta.simplex_iterations);
         assert_eq!(unpacked.load_model_count, delta.load_model_count);
-        assert_eq!(unpacked.add_rows_count, delta.add_rows_count);
         assert!((unpacked.solve_time_ms - delta.solve_time_ms).abs() < 1e-10);
         assert!((unpacked.load_model_time_ms - delta.load_model_time_ms).abs() < 1e-10);
-        assert!((unpacked.add_rows_time_ms - delta.add_rows_time_ms).abs() < 1e-10);
         assert!((unpacked.set_bounds_time_ms - delta.set_bounds_time_ms).abs() < 1e-10);
         assert!((unpacked.basis_set_time_ms - delta.basis_set_time_ms).abs() < 1e-10);
         // histogram is excluded from pack/unpack
@@ -1007,40 +843,35 @@ mod tests {
     }
 
     #[test]
-    fn test_pack_delta_scalars_no_clear_solver() {
-        // Regression: pack_delta_scalars must produce a 15-element array
-        // after obsolete clear_solver_* fields were deleted.
+    fn test_pack_delta_scalars_field_count() {
+        // Regression: pack_delta_scalars must produce a 13-element array
+        // after add_rows_count and add_rows_time_ms were deleted in epic-07 ticket-001.
         let delta = SolverStatsDelta::default();
         let packed = pack_delta_scalars(&delta);
         assert_eq!(
             packed.len(),
-            15,
-            "pack_delta_scalars must return 15 elements"
+            13,
+            "pack_delta_scalars must return 13 elements"
         );
         assert_eq!(packed.len(), SOLVER_STATS_DELTA_SCALAR_FIELDS);
+        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 13);
     }
 
     #[test]
     fn test_solver_stats_delta_includes_reconstruction_fields() {
         // Acceptance criterion: from_snapshots correctly computes the delta for
-        // basis_new_tight, basis_new_slack, and basis_preserved.
+        // basis_reconstructions.
         let before = SolverStatistics {
-            basis_new_tight: 3,
-            basis_new_slack: 5,
-            basis_preserved: 10,
+            basis_reconstructions: 10,
             ..SolverStatistics::default()
         };
         let after = SolverStatistics {
-            basis_new_tight: 10,
-            basis_new_slack: 12,
-            basis_preserved: 25,
+            basis_reconstructions: 25,
             ..SolverStatistics::default()
         };
 
         let delta = SolverStatsDelta::from_snapshots(&before, &after);
-        assert_eq!(delta.basis_new_tight, 7);
-        assert_eq!(delta.basis_new_slack, 7);
-        assert_eq!(delta.basis_preserved, 15);
+        assert_eq!(delta.basis_reconstructions, 15);
     }
 
     #[test]
@@ -1064,9 +895,7 @@ mod tests {
         assert_eq!(dst.simplex_iterations, 150); // 100 + 50
         assert!((dst.solve_time_ms - 7.5).abs() < 1e-10); // 5.0 + 2.5
         assert_eq!(dst.load_model_count, 6); // 3 + 3
-        assert_eq!(dst.add_rows_count, 8); // 4 + 4
         assert!((dst.load_model_time_ms - 3.0).abs() < 1e-10);
-        assert!((dst.add_rows_time_ms - 5.0).abs() < 1e-10);
         assert!((dst.set_bounds_time_ms - 0.5).abs() < 1e-10);
         assert!((dst.basis_set_time_ms - 0.25).abs() < 1e-10);
         // Histogram: [1+0, 0+3, 2+0, 0+1]
@@ -1284,8 +1113,8 @@ mod tests {
     /// T004: helper returns the precise `stride * n_workers * n_slots` size in `f64` units.
     #[test]
     fn test_pack_worker_opening_stats_buffer_size() {
-        assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 17);
-        assert_eq!(worker_opening_stats_buffer_size(10, 20), 3400);
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 15);
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 3000);
     }
 
     /// T004: layout invariants — `[w as f64, k as f64, ...]` per entry, row-major.
@@ -1300,12 +1129,88 @@ mod tests {
         // entry(w=0, k=0) at offset 0
         assert_eq!(buf[0], 0.0);
         assert_eq!(buf[1], 0.0);
-        // entry(w=0, k=1) at offset 17
+        // entry(w=0, k=1) at offset 15
         assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE], 0.0);
         assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE + 1], 1.0);
-        // entry(w=1, k=0) at offset 17 * 4 (n_slots=4 entries per worker)
+        // entry(w=1, k=0) at offset 15 * 4 (n_slots=4 entries per worker)
         let w1_k0 = WORKER_STATS_ENTRY_STRIDE * n_slots;
         assert_eq!(buf[w1_k0], 1.0);
         assert_eq!(buf[w1_k0 + 1], 0.0);
+    }
+
+    /// MPI wire-format pin: `SolverStatsDelta` pack/unpack uses a 13-element `f64`
+    /// array post-epic-07 ticket-001. Uses distinct nonzero values for every field
+    /// so that field-order swaps are caught at both pack and unpack.
+    #[test]
+    fn test_solver_stats_delta_mpi_wire_format_13_fields() {
+        // Wire-format constant assertions.
+        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 13);
+        assert_eq!(SCENARIO_STATS_STRIDE, 14);
+        assert_eq!(WORKER_STATS_ENTRY_STRIDE, 15);
+
+        // Construct a populated delta. Use distinct nonzero values
+        // to catch field-order swaps at pack/unpack.
+        let delta = SolverStatsDelta {
+            lp_solves: 1,
+            lp_successes: 2,
+            first_try_successes: 3,
+            lp_failures: 4,
+            retry_attempts: 5,
+            basis_offered: 6,
+            basis_consistency_failures: 7,
+            simplex_iterations: 8,
+            load_model_count: 9,
+            solve_time_ms: 10.5,
+            load_model_time_ms: 11.25,
+            set_bounds_time_ms: 12.125,
+            basis_set_time_ms: 13.0625,
+            basis_reconstructions: 42, // application-level; not in wire
+            retry_level_histogram: vec![1, 2, 3],
+        };
+
+        let packed = pack_delta_scalars(&delta);
+        assert_eq!(packed.len(), 13);
+
+        // Cross-check packed field ordering via explicit index reads.
+        // Indices 0..=8 are u64 fields cast to f64; indices 9..=12 are f64.
+        assert_eq!(packed[0], 1.0); // lp_solves
+        assert_eq!(packed[8], 9.0); // load_model_count
+        assert!((packed[9] - 10.5).abs() < 1e-10); // solve_time_ms
+
+        let unpacked = unpack_delta_scalars(&packed);
+
+        // Wire-carried fields must match.
+        assert_eq!(unpacked.lp_solves, 1);
+        assert_eq!(unpacked.lp_successes, 2);
+        assert_eq!(unpacked.first_try_successes, 3);
+        assert_eq!(unpacked.lp_failures, 4);
+        assert_eq!(unpacked.retry_attempts, 5);
+        assert_eq!(unpacked.basis_offered, 6);
+        assert_eq!(unpacked.basis_consistency_failures, 7);
+        assert_eq!(unpacked.simplex_iterations, 8);
+        assert_eq!(unpacked.load_model_count, 9);
+        assert!((unpacked.solve_time_ms - 10.5).abs() < 1e-10);
+        assert!((unpacked.load_model_time_ms - 11.25).abs() < 1e-10);
+        assert!((unpacked.set_bounds_time_ms - 12.125).abs() < 1e-10);
+        assert!((unpacked.basis_set_time_ms - 13.0625).abs() < 1e-10);
+
+        // Application-level fields are NOT in the wire — unpack zeros them.
+        assert_eq!(unpacked.basis_reconstructions, 0);
+        assert!(unpacked.retry_level_histogram.is_empty());
+    }
+
+    /// Pins the wire-format array length at the type level. The function signature
+    /// is `unpack_delta_scalars(&[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS])`, so the
+    /// compiler enforces the length. This test confirms the constant equals 13 and
+    /// that the `size_of` the array is exactly `13 * 8` bytes.
+    #[test]
+    fn test_unpack_delta_scalars_array_length_is_compile_time() {
+        assert_eq!(
+            std::mem::size_of::<[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]>(),
+            13 * std::mem::size_of::<f64>()
+        );
+        // Also confirm that a valid 13-element buffer round-trips without panic.
+        let buf: [f64; 13] = [0.0; 13];
+        let _ = unpack_delta_scalars(&buf);
     }
 }

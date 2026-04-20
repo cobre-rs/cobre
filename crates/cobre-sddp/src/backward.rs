@@ -859,7 +859,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
 /// - `ctx.base_rows.len() != num_stages`
 /// - `spec.risk_measures.len() != num_stages`
 /// - `baked.len() != num_stages`
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+///
+/// Structurally independent parameters: `workspaces` / `basis_store` are per-rank mutable buffers,
+/// `ctx`/`baked`/`fcf`/`cut_batches` are per-stage read/write state, `training_ctx` is study-level,
+/// `spec` is backward-specific config, `comm` is the communicator. All 5 context structs listed in
+/// `.claude/architecture-rules.md` are already in use.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &BasisStore,

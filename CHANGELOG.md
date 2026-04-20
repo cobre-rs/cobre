@@ -73,6 +73,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored by serde — but a one-line warning is emitted to stderr at parse
   time. Remove the key from `config.json` to suppress the warning.
 
+#### `TrainingResult` Construction
+
+- **`TrainingResult` is now `#[non_exhaustive]`.** External struct-literal
+  construction (`TrainingResult { final_lb, ... }`) is a compile error.
+  Replace with `TrainingResult::new(final_lb, final_ub, final_ub_std,
+final_gap, iterations, reason, total_time_ms, basis_cache,
+solver_stats_log, visited_archive, baked_templates)`. The constructor
+  takes all 11 fields explicitly; adding a new field in a future release
+  will force every caller to update via a compile error.
+
+#### `CapturedBasis` Wire Format Ownership
+
+- **New public methods** on `CapturedBasis`:
+  `to_broadcast_payload(&self, i32_buf: &mut Vec<i32>, f64_buf: &mut Vec<f64>)`
+  and
+  `try_from_broadcast_payload(stage, i32_buf, i32_cursor, f64_buf, f64_cursor) -> Result<Option<Self>, SddpError>`.
+  These are the sole owners of the 4-broadcast wire format (previously
+  hand-maintained inside `broadcast_basis_cache` in `training.rs`). The
+  byte layout is unchanged.
+
 ### Added
 
 #### Basis Reconstruction
@@ -165,6 +185,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-resolution study with observation aggregation, downstream
   lag transition, and `Custom` season cycle type.
 
+#### Type-Level Enforcement of Invariants
+
+- **`TrainingResult::new(...)`** — canonical constructor for
+  `TrainingResult`. Takes all 11 fields as named parameters;
+  `#[allow(clippy::too_many_arguments)]` is justified because the
+  constructor is the type-level replacement for the retired
+  struct-literal parity rule.
+- **Workspace-level `clippy::too_many_arguments = "deny"`** in
+  `Cargo.toml`, `crates/cobre-solver/Cargo.toml`, and
+  `crates/cobre-comm/Cargo.toml`. Any new offender must add
+  `#[allow(clippy::too_many_arguments)]` with a rustdoc
+  justification.
+- **`CapturedBasis::to_broadcast_payload` /
+  `try_from_broadcast_payload`** — sole owners of the 4-broadcast
+  basis-cache wire format. See Breaking Changes above.
+
 ### Changed
 
 - **JSON schemas** regenerated for `config.json` (added `BoundaryPolicy`
@@ -220,6 +256,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   purge" that could destroy LB monotonicity on runs exceeding ~50
   iterations; they are no longer needed now that the LB LP is
   append-only.
+
+#### Tooling
+
+- **`scripts/check_suppressions.py` deleted.** The count-based
+  `#[allow(clippy::too_many_arguments)]` budget is retired.
+  Replacement: `clippy::too_many_arguments` is a workspace-level
+  `deny` lint (see `Cargo.toml`). New offenders must add
+  `#[allow(clippy::too_many_arguments)]` with a rustdoc
+  justification. References to the script were removed from
+  `scripts/pre-commit`, `.github/workflows/ci.yml`, and
+  `CONTRIBUTING.md`.
+- **`.claude/architecture-rules.md` sections retired.** "Clippy
+  Suppression Policy" and "Function Length Suppressions" sections
+  are gone; "The Context Struct Pattern" and "Function Signature
+  Budgets" remain.
+- **`CLAUDE.md` hand-maintained invariants retired.** Three "Hard
+  Rules" bullets removed: "`CapturedBasis` metadata integrity",
+  "`TrainingResult` struct-literal parity", and "Never add
+  `#[allow(clippy::too_many_arguments)]`". The stale
+  `stored_cut_row_offset` sentence is also removed from the
+  `basis_reconstruct.rs` Architecture Guide entry.
 
 ### Verified
 

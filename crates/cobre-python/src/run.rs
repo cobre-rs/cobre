@@ -735,24 +735,24 @@ fn run_inner(
             );
 
             // Create a minimal TrainingResult for simulation warm-start.
-            let training_result = cobre_sddp::TrainingResult {
-                iterations: checkpoint.metadata.completed_iterations.into(),
-                final_lb: checkpoint.metadata.final_lower_bound,
-                final_ub: checkpoint
+            let training_result = cobre_sddp::TrainingResult::new(
+                checkpoint.metadata.final_lower_bound,
+                checkpoint
                     .metadata
                     .best_upper_bound
                     .unwrap_or(f64::INFINITY),
-                final_ub_std: 0.0,
-                final_gap: 0.0,
-                total_time_ms: 0,
-                reason: "loaded from checkpoint".to_string(),
-                solver_stats_log: Vec::new(),
+                0.0,
+                0.0,
+                checkpoint.metadata.completed_iterations.into(),
+                "loaded from checkpoint".to_string(),
+                0,
                 basis_cache,
-                visited_archive: None,
+                Vec::new(),
+                None,
                 // Baked templates are not stored in policy checkpoints. simulate() re-bakes all
                 // stage templates at startup from the FCF cut pool when baked_templates is None.
-                baked_templates: None,
-            };
+                None,
+            );
 
             let simulation = Some(run_simulation_phase_py(
                 &mut setup,

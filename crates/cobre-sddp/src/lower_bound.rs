@@ -113,7 +113,13 @@ pub struct LbEvalSpec<'a> {
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+///
+/// Structurally independent parameters: `solver` is the LB-specific solver instance,
+/// `fcf`/`initial_state`/`indexer` are study-level reads, `patch_buf`/`lb_cut_batch`/
+/// `lb_cut_row_map` are per-evaluation mutable scratch, `spec` is the evaluation config,
+/// `comm` is the communicator.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,

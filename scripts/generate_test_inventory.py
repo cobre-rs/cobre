@@ -40,12 +40,13 @@ GUARD_MARKERS: list[tuple[str, str]] = [
     ("stored_cut_row_offset", "stored-cut-row-offset"),
     ("broadcast_config.warm_start_basis_mode", "broadcast-warm-start-field"),
     ("broadcast_config.canonical_state_strategy", "broadcast-canonical-field"),
-    ("TrainingResult { ", "training-result-struct-literal"),
 ]
 
 _D_CASE_FILE_PATTERN = re.compile(r"deterministic\.rs|d\d{2}[-_]|d_case|conformance")
 _D_CASE_FN_PATTERN = re.compile(r"^d\d{2}_|^d\d{2}$|conformance_|determinism_")
-_FPHA_FILE_PATTERN = re.compile(r"fpha_fitting\.rs|fpha_computed\.rs|fpha_evaporation\.rs")
+_FPHA_FILE_PATTERN = re.compile(
+    r"fpha_fitting\.rs|fpha_computed\.rs|fpha_evaporation\.rs"
+)
 _FPHA_FN_PATTERN = re.compile(r"^fpha_")
 
 VALID_CATEGORIES = frozenset(
@@ -76,7 +77,6 @@ VALID_GUARDS = frozenset(
         "canonical-config-flag",
         "broadcast-warm-start-field",
         "broadcast-canonical-field",
-        "training-result-struct-literal",
         "fpha-slow",
         "d-case-determinism",
         "convertido-determinism",
@@ -150,8 +150,11 @@ def assign_guards(body_text: str, file_path: str, fn_name: str) -> str:
         guards.append("d-case-determinism")
     if "convertido" in body_text.lower():
         guards.append("convertido-determinism")
-    if (_FPHA_FILE_PATTERN.search(file_path) or _FPHA_FN_PATTERN.match(fn_name)
-            or "fpha_fitting" in file_path):
+    if (
+        _FPHA_FILE_PATTERN.search(file_path)
+        or _FPHA_FN_PATTERN.match(fn_name)
+        or "fpha_fitting" in file_path
+    ):
         guards.append("fpha-slow")
     seen: set[str] = set()
     unique = [g for g in guards if not (g in seen or seen.add(g))]
@@ -198,7 +201,9 @@ _INTEGRATION_TEST_FILES: frozenset[str] = frozenset(
     ]
 )
 
-_CONFORMANCE_FILES: frozenset[str] = frozenset(["crates/cobre-sddp/tests/deterministic.rs"])
+_CONFORMANCE_FILES: frozenset[str] = frozenset(
+    ["crates/cobre-sddp/tests/deterministic.rs"]
+)
 
 _E2E_FILES: frozenset[str] = frozenset(
     [
@@ -227,8 +232,6 @@ def assign_category(
     return "integration" if "/tests/" in file_path else "unit"
 
 
-
-
 def process_rows(
     raw_rows: list[dict[str, str]],
     repo_root: Path,
@@ -236,7 +239,9 @@ def process_rows(
     """Assign category and guards to each CSV row."""
     result: list[InventoryRow] = []
     for row in raw_rows:
-        body_text = extract_body_text(repo_root, row["file"], int(row["line"]), int(row["body_loc"]))
+        body_text = extract_body_text(
+            repo_root, row["file"], int(row["line"]), int(row["body_loc"])
+        )
         result.append(
             InventoryRow(
                 crate=row["crate"],
@@ -245,7 +250,9 @@ def process_rows(
                 function=row["function"],
                 body_loc=int(row["body_loc"]),
                 test_module=row["test_module"],
-                category=assign_category(row["file"], row["function"], body_text, row["test_module"]),
+                category=assign_category(
+                    row["file"], row["function"], body_text, row["test_module"]
+                ),
                 guards=assign_guards(body_text, row["file"], row["function"]),
                 notes="",
             )
@@ -264,9 +271,7 @@ def validate_rows(rows: list[InventoryRow]) -> list[str]:
         for guard in row.guards.split(","):
             g = guard.strip()
             if g not in VALID_GUARDS:
-                errors.append(
-                    f"Row {i + 1} ({row.function}): invalid guard '{g}'"
-                )
+                errors.append(f"Row {i + 1} ({row.function}): invalid guard '{g}'")
     return errors
 
 
@@ -293,7 +298,9 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
 
     lines.append("# Test Inventory — Architecture Unification")
     lines.append("")
-    lines.append("Canonical test-suite inventory. Taxonomy in `docs/assessments/test-inventory-taxonomy.md`.")
+    lines.append(
+        "Canonical test-suite inventory. Taxonomy in `docs/assessments/test-inventory-taxonomy.md`."
+    )
     lines.append("")
     lines.append("## 1. Summary")
     lines.append("")
@@ -387,7 +394,9 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
             "Epic 05 — Non-baked template removal (`non-baked`, `stored-cut-row-offset`, `add-rows-trait`)",
         ),
     ]:
-        epic_rows = [r for r in rows if any(g in epic_guards for g in r.guards.split(","))]
+        epic_rows = [
+            r for r in rows if any(g in epic_guards for g in r.guards.split(","))
+        ]
         lines.append(f"### {epic_title}")
         lines.append("")
         lines.append(f"**Count:** {len(epic_rows)}")
@@ -453,7 +462,7 @@ def generate_markdown(rows: list[InventoryRow], repo_root: Path) -> str:
             end = min(len(lines_list), row.line)
             context = "\n".join(lines_list[start:end])
             has_gate = (
-                '#[ignore' in context
+                "#[ignore" in context
                 or 'feature = "slow-tests"' in context
                 or 'feature = "fpha-slow"' in context
                 or "#[cfg(feature" in context
@@ -532,7 +541,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
 
-    repo_root: Path = (args.repo_root if args.repo_root is not None else Path.cwd()).resolve()
+    repo_root: Path = (
+        args.repo_root if args.repo_root is not None else Path.cwd()
+    ).resolve()
 
     # Validate repo root
     if not (repo_root / "Cargo.toml").exists():
@@ -597,7 +608,7 @@ def main(argv: list[str] | None = None) -> None:
     guard_counts: Counter[str] = Counter()
     for row in rows:
         for g in row.guards.split(","):
-            if (g := g.strip()):
+            if g := g.strip():
                 guard_counts[g] += 1
     print("  Category breakdown:", file=sys.stderr)
     for cat, count in sorted(cat_counts.items()):

@@ -1,7 +1,7 @@
 [package]
 name = "cobre-python"
 description = "Python bindings for the Cobre power systems solver — import cobre from Python scripts and Jupyter notebooks"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.86"
 license = "Apache-2.0"
@@ -19,12 +19,12 @@ doc = false
 
 [dependencies]
 pyo3 = { version = "0.28.2", features = ["extension-module", "abi3-py312"] }
-cobre-core = { version = "0.4.4", path = "../cobre-core" }
-cobre-io = { version = "0.4.4", path = "../cobre-io" }
-cobre-sddp = { version = "0.4.4", path = "../cobre-sddp" }
-cobre-stochastic = { version = "0.4.4", path = "../cobre-stochastic" }
-cobre-solver = { version = "0.4.4", path = "../cobre-solver" }
-cobre-comm = { version = "0.4.4", path = "../cobre-comm" }
+cobre-core = { version = "0.5.0", path = "../cobre-core" }
+cobre-io = { version = "0.5.0", path = "../cobre-io" }
+cobre-sddp = { version = "0.5.0", path = "../cobre-sddp" }
+cobre-stochastic = { version = "0.5.0", path = "../cobre-stochastic" }
+cobre-solver = { version = "0.5.0", path = "../cobre-solver" }
+cobre-comm = { version = "0.5.0", path = "../cobre-comm" }
 rayon = "1"
 arrow = { version = "58", default-features = false, features = ["ipc"] }
 parquet = { version = "58", default-features = false, features = ["arrow"] }

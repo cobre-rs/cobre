@@ -33,7 +33,6 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{StageSelectionRecord, TrainingEvent};
-use cobre_solver::Basis;
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
 use cobre_solver::StageTemplate;
@@ -85,6 +84,7 @@ pub struct TrainingOutcome {
 }
 
 /// Summary statistics produced when the training loop terminates.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TrainingResult {
     /// Final lower bound at termination.
@@ -136,6 +136,50 @@ pub struct TrainingResult {
     /// Always `Some` — templates are baked unconditionally before the first
     /// iteration of the training loop and never reverted.
     pub baked_templates: Option<Vec<StageTemplate>>,
+}
+
+impl TrainingResult {
+    /// Construct a `TrainingResult` with explicit field values.
+    ///
+    /// Prefer this constructor over struct-literal syntax for compiler-enforced
+    /// parity when adding new fields.
+    ///
+    /// Structurally independent parameters: each of the 11 fields is the output
+    /// of a distinct training-loop stage (convergence metrics, timing, basis
+    /// cache, solver stats, visited archive, baked templates). Absorbing them
+    /// into a context struct would not reduce the argument count at the call
+    /// sites, because each call site constructs the full `TrainingResult` as
+    /// the terminal value — there is no shared upstream context to forward.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::similar_names)]
+    pub fn new(
+        final_lb: f64,
+        final_ub: f64,
+        final_ub_std: f64,
+        final_gap: f64,
+        iterations: u64,
+        reason: String,
+        total_time_ms: u64,
+        basis_cache: Vec<Option<CapturedBasis>>,
+        solver_stats_log: Vec<SolverStatsEntry>,
+        visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
+        baked_templates: Option<Vec<StageTemplate>>,
+    ) -> Self {
+        Self {
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            iterations,
+            reason,
+            total_time_ms,
+            basis_cache,
+            solver_stats_log,
+            visited_archive,
+            baked_templates,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,16 +236,13 @@ fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
 /// Returns `SddpError::Communication` if any `comm.broadcast` call fails.
 /// Returns `SddpError::Validation` if any length prefix is inconsistent with
 /// the received buffer size, naming the offending stage in the message.
-// Basis lengths and slot counts are bounded by LP column/row counts and cut
-// pool sizes, which fit comfortably in i32. The i32<->usize casts here are
-// deliberate: MPI broadcast requires CommData (which requires Copy), ruling
-// out usize. The u32->i32 cast for cut_row_slots is guarded by the allow
-// attribute below; slot values are LP pool indices (always non-negative).
+// Buffer length scalars are broadcast as i32 (MPI CommData requires Copy,
+// ruling out usize). The usize→i32 casts are bounded by LP column/row
+// counts; the i32→usize casts on the receive side are lossless.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines
+    clippy::cast_sign_loss
 )]
 fn broadcast_basis_cache<C: Communicator>(
     basis_store: &crate::workspace::BasisStore,
@@ -223,41 +264,16 @@ fn broadcast_basis_cache<C: Communicator>(
     // flat buffers (one i32 for integer/status fields, one f64 for
     // state_at_capture) and broadcast both.
     //
-    // i32 buffer layout per stage:
-    //   [sentinel(0 or 1)]
-    //   if sentinel == 1:
-    //     [col_len, row_len, base_row_count, cut_slot_count, state_len: i32]
-    //     [col_status: col_len × i32]
-    //     [row_status: row_len × i32]
-    //     [cut_row_slots as i32: cut_slot_count × i32]
-    //
-    // f64 buffer layout (no framing — sequential across stages):
-    //   if sentinel == 1:
-    //     [state_at_capture: state_len × f64]
+    // Wire format is owned by CapturedBasis::to_broadcast_payload /
+    // CapturedBasis::try_from_broadcast_payload. The None case writes a
+    // 0_i32 sentinel directly; the Some case delegates to the method.
     let mut buf: Vec<i32> = Vec::new();
     let mut f64_buf: Vec<f64> = Vec::new();
     if comm.rank() == 0 {
         for t in 0..num_stages {
             match basis_store.get(0, t) {
                 None => buf.push(0_i32),
-                Some(captured) => {
-                    let cut_slot_count = captured.cut_row_slots.len();
-                    let state_len = captured.state_at_capture.len();
-                    buf.push(1_i32);
-                    buf.push(captured.basis.col_status.len() as i32);
-                    buf.push(captured.basis.row_status.len() as i32);
-                    buf.push(captured.base_row_count as i32);
-                    buf.push(cut_slot_count as i32);
-                    buf.push(state_len as i32);
-                    buf.extend_from_slice(&captured.basis.col_status);
-                    buf.extend_from_slice(&captured.basis.row_status);
-                    // cast_sign_loss: slot values are u32 LP pool indices
-                    // (always non-negative) cast to i32 for CommData transport
-                    for &slot in &captured.cut_row_slots {
-                        buf.push(slot as i32);
-                    }
-                    f64_buf.extend_from_slice(&captured.state_at_capture);
-                }
+                Some(captured) => captured.to_broadcast_payload(&mut buf, &mut f64_buf),
             }
         }
     }
@@ -282,101 +298,18 @@ fn broadcast_basis_cache<C: Communicator>(
     comm.broadcast(&mut f64_buf, 0).map_err(SddpError::from)?;
 
     // Step 5: deserialize back into Vec<Option<CapturedBasis>>.
-    // All index arithmetic is bounds-checked to convert a corrupted broadcast
-    // into a recoverable error instead of an index-out-of-bounds panic.
-    // Two cursors: pos for the i32 buffer, f64_pos for the f64 buffer.
     let mut cache: Vec<Option<CapturedBasis>> = Vec::with_capacity(num_stages);
     let mut pos = 0_usize;
     let mut f64_pos = 0_usize;
     for stage in 0..num_stages {
-        if pos >= buf.len() {
-            return Err(SddpError::Validation(format!(
-                "broadcast_basis_cache: buffer truncated at stage {stage} (pos={pos}, len={})",
-                buf.len()
-            )));
-        }
-        let sentinel = buf[pos];
-        pos += 1;
-        if sentinel == 0 {
-            cache.push(None);
-        } else {
-            // Read 5 length/metadata fields: col_len, row_len, base_row_count,
-            // cut_slot_count, state_len.
-            if pos + 5 > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading lengths at stage {stage}"
-                )));
-            }
-            let col_len = buf[pos] as usize;
-            pos += 1;
-            let row_len = buf[pos] as usize;
-            pos += 1;
-            let base_row_count = buf[pos] as usize;
-            pos += 1;
-            let cut_slot_count = buf[pos] as usize;
-            pos += 1;
-            let state_len = buf[pos] as usize;
-            pos += 1;
-
-            // Read col_status.
-            if pos + col_len > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading col_status at stage {stage} \
-                     (need {col_len}, have {})",
-                    buf.len() - pos
-                )));
-            }
-            let col_status = buf[pos..pos + col_len].to_vec();
-            pos += col_len;
-
-            // Read row_status.
-            if pos + row_len > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading row_status at stage {stage} \
-                     (need {row_len}, have {})",
-                    buf.len() - pos
-                )));
-            }
-            let row_status = buf[pos..pos + row_len].to_vec();
-            pos += row_len;
-
-            // Read cut_row_slots (stored as i32, cast back to u32).
-            if pos + cut_slot_count > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading cut_row_slots at stage \
-                     {stage} (need {cut_slot_count}, have {})",
-                    buf.len() - pos
-                )));
-            }
-            // cast_sign_loss: values were originally u32 LP pool indices cast to
-            // i32 on the pack side; casting back to u32 is lossless.
-            let cut_row_slots: Vec<u32> = buf[pos..pos + cut_slot_count]
-                .iter()
-                .map(|&v| v as u32)
-                .collect();
-            pos += cut_slot_count;
-
-            // Read state_at_capture from the f64 buffer.
-            if f64_pos + state_len > f64_buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: f64 buffer truncated reading state_at_capture at \
-                     stage {stage} (need {state_len}, have {})",
-                    f64_buf.len() - f64_pos
-                )));
-            }
-            let state_at_capture = f64_buf[f64_pos..f64_pos + state_len].to_vec();
-            f64_pos += state_len;
-
-            cache.push(Some(CapturedBasis {
-                basis: Basis {
-                    col_status,
-                    row_status,
-                },
-                base_row_count,
-                cut_row_slots,
-                state_at_capture,
-            }));
-        }
+        let captured = CapturedBasis::try_from_broadcast_payload(
+            stage,
+            &buf,
+            &mut pos,
+            &f64_buf,
+            &mut f64_pos,
+        )?;
+        cache.push(captured);
     }
 
     Ok(cache)
@@ -712,19 +645,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             #[allow(clippy::cast_possible_truncation)]
             let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
             return Ok(TrainingOutcome {
-                result: TrainingResult {
+                result: TrainingResult::new(
                     final_lb,
                     final_ub,
                     final_ub_std,
                     final_gap,
-                    iterations: completed_iterations,
-                    reason: "error".to_string(),
+                    completed_iterations,
+                    "error".to_string(),
                     total_time_ms,
                     basis_cache,
                     solver_stats_log,
-                    visited_archive: visited_archive.take(),
-                    baked_templates: Some(baked_templates.clone()),
-                },
+                    visited_archive.take(),
+                    Some(baked_templates.clone()),
+                ),
                 error: Some($e),
             });
         }};
@@ -1284,19 +1217,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let basis_cache = broadcast_basis_cache(&basis_store, num_stages, comm)?;
 
     Ok(TrainingOutcome {
-        result: TrainingResult {
+        result: TrainingResult::new(
             final_lb,
             final_ub,
             final_ub_std,
             final_gap,
-            iterations: completed_iterations,
-            reason: termination_reason,
+            completed_iterations,
+            termination_reason,
             total_time_ms,
             basis_cache,
             solver_stats_log,
             visited_archive,
-            baked_templates: Some(baked_templates),
-        },
+            Some(baked_templates),
+        ),
         error: None,
     })
 }
@@ -1345,6 +1278,7 @@ mod tests {
         TrainingConfig,
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
+        solver_stats::SolverStatsDelta,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -4054,5 +3988,70 @@ mod tests {
             "iteration 2 bake must have baked at least one cut row (backward pass \
              generated cuts on iteration 1)"
         );
+    }
+
+    /// AC ticket-001: `TrainingResult::new` assigns every field correctly.
+    ///
+    /// Calls the canonical constructor with 11 explicit, distinct values and
+    /// asserts each field on the returned struct. The test fails at compile time
+    /// if any field is renamed, reordered, or removed without a corresponding
+    /// update to the constructor signature.
+    #[test]
+    fn ac_training_result_new_assigns_all_fields() {
+        use crate::workspace::CapturedBasis;
+
+        let basis_cache = vec![Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 3,
+            cut_row_slots: vec![4_u32],
+            state_at_capture: vec![5.0_f64],
+        })];
+        // SolverStatsEntry is a 7-tuple:
+        // (iteration: u64, phase: &'static str, stage: i32, opening: i32,
+        //  rank: i32, worker_id: i32, delta: SolverStatsDelta)
+        let solver_stats_log = vec![(
+            7_u64,
+            "forward",
+            -1_i32,
+            -1_i32,
+            0_i32,
+            -1_i32,
+            SolverStatsDelta::default(),
+        )];
+
+        let result = super::TrainingResult::new(
+            1.5_f64,                       // final_lb
+            2.5_f64,                       // final_ub
+            0.25_f64,                      // final_ub_std
+            0.1_f64,                       // final_gap
+            42_u64,                        // iterations
+            "iteration_limit".to_string(), // reason
+            9_999_u64,                     // total_time_ms
+            basis_cache,
+            solver_stats_log,
+            None, // visited_archive
+            None, // baked_templates
+        );
+
+        assert_eq!(result.final_lb, 1.5_f64, "final_lb");
+        assert_eq!(result.final_ub, 2.5_f64, "final_ub");
+        assert_eq!(result.final_ub_std, 0.25_f64, "final_ub_std");
+        assert_eq!(result.final_gap, 0.1_f64, "final_gap");
+        assert_eq!(result.iterations, 42_u64, "iterations");
+        assert_eq!(result.reason, "iteration_limit", "reason");
+        assert_eq!(result.total_time_ms, 9_999_u64, "total_time_ms");
+        assert_eq!(result.basis_cache.len(), 1, "basis_cache length");
+        let captured = result.basis_cache[0].as_ref().expect("basis_cache[0]");
+        assert_eq!(captured.base_row_count, 3, "basis_cache[0].base_row_count");
+        assert_eq!(result.solver_stats_log.len(), 1, "solver_stats_log length");
+        assert_eq!(
+            result.solver_stats_log[0].0, 7_u64,
+            "solver_stats_log[0].0 (iteration)"
+        );
+        assert!(result.visited_archive.is_none(), "visited_archive");
+        assert!(result.baked_templates.is_none(), "baked_templates");
     }
 }

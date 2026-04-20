@@ -1262,7 +1262,12 @@ fn estimate_ar_with_pacf(
 /// their ceilings reach 0.
 ///
 /// This implements NEWAVE's `reducao_ordem` algorithm.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+///
+/// Structurally independent parameters: `estimates` is the in/out estimate vector,
+/// `n_seasons`/`hydro_ids` are dimension data, `group_obs`/`stats_map` are observation
+/// lookups, `initial_max_order`/`z_alpha`/`max_coeff_magnitude` are PAR-fit knobs.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn iterative_pacf_reduction(
     estimates: &mut [ArCoefficientEstimate],
     n_seasons: usize,

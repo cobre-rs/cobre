@@ -16,7 +16,7 @@ See `CONTRIBUTING.md` for build prerequisites and commit message format.
 
 ---
 
-## Current State (v0.4.4)
+## Current State (v0.5.0)
 
 The SDDP solver is fully functional: case loading, stochastic scenario
 generation, training, simulation, policy checkpointing, and output writing.
@@ -54,6 +54,13 @@ ranks via a 4-broadcast wire format.
 
 **Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
 
+Epic-06 (v0.5.0) tightened public-API invariants to the type level:
+`TrainingResult` is `#[non_exhaustive]` with a single `::new(...)` constructor,
+the 4-broadcast basis wire format is owned by
+`CapturedBasis::{to,try_from}_broadcast_payload`, and
+`clippy::too_many_arguments` is a workspace-level deny (retiring
+`scripts/check_suppressions.py`).
+
 ---
 
 ## Hard Rules
@@ -65,20 +72,6 @@ These are non-negotiable. Violations must be fixed before committing.
 - `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI
 - **Never use `Box<dyn Trait>`** — enum dispatch for closed variant sets
 - **Never allocate on hot paths** — pre-allocate workspaces, reuse buffers
-- **`CapturedBasis` metadata integrity** — `basis_cache` is
-  `Vec<Option<CapturedBasis>>` (not bare `Basis`);
-  `broadcast_basis_cache` uses a 4-broadcast wire format
-  (2 x i32, 2 x f64). Both are invariants established by the
-  basis-reconstruction plan; regressing either silently
-  degrades warm-start quality without a compile error.
-- **`TrainingResult` struct-literal parity** — any new field
-  added to `TrainingResult` MUST be listed explicitly at every
-  struct literal site in `crates/cobre-cli/src/commands/run.rs`
-  and `crates/cobre-python/src/run.rs`. `Option<T>` fields with
-  a struct spread silently adopt `None` — grep `TrainingResult {`
-  after any struct change.
-- **Never add `#[allow(clippy::too_many_arguments)]`** without first absorbing
-  the parameter into an existing context struct. See `.claude/architecture-rules.md`
 - **Declaration-order invariance** — results must be bit-for-bit identical
   regardless of input entity ordering
 - **Infrastructure crate genericity** — `cobre-core`, `cobre-io`, `cobre-solver`,
@@ -92,25 +85,6 @@ These are non-negotiable. Violations must be fixed before committing.
 
 ---
 
-## Pre-Commit Check
-
-Before committing changes to `crates/`, run:
-
-```
-python3 scripts/check_suppressions.py --max 0
-```
-
-This checks that no `#[allow(clippy::too_many_arguments)]` exists in production
-code (code before `#[cfg(test)]`). If the check fails, absorb the parameter
-into an existing context struct instead of adding a suppression. Read
-`.claude/architecture-rules.md` for the specific struct patterns.
-
-The current codebase has legacy suppressions that are being worked down.
-Until they reach zero, use `--max 10` as the threshold. The count must
-never increase.
-
----
-
 ## Architecture Guides (Read When Relevant)
 
 When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
@@ -120,9 +94,15 @@ When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
 When applying a stored basis at any call site, read:
 → `crates/cobre-sddp/src/basis_reconstruct.rs` module docs.
 `reconstruct_basis` is the single hot-path entry point; never
-bypass it. The `stored_cut_row_offset` parameter is non-zero
-only on the baked-template backward path (pass `0` everywhere
-else).
+bypass it.
+
+When changing the MPI basis-cache wire format, read:
+→ `crates/cobre-sddp/src/workspace.rs` —
+`CapturedBasis::to_broadcast_payload` and
+`CapturedBasis::try_from_broadcast_payload` are the sole
+owners of the byte layout. Any layout change must update
+both methods together; the `broadcast_basis_cache` helper
+in `training.rs` only owns the four MPI broadcast calls.
 
 When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`

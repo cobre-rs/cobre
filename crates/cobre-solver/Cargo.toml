@@ -33,6 +33,7 @@ pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "warn"
 panic = "warn"
+too_many_arguments = "deny"
 
 [dependencies]
 

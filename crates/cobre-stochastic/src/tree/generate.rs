@@ -99,9 +99,15 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 ///
 /// Panics (debug-only) if `noise_group_ids` is `Some` and its length differs
 /// from `stages.len()`.
-// TODO: absorb historical_library + external_scenario_counts into OpeningTreeInputs
-// to reduce argument count (currently 8/7).
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+///
+/// Structurally independent parameters: `base_seed`/`stages`/`dim`/`correlation`/`entity_order`/`dims`
+/// are primary inputs; `historical_library`/`external_scenario_counts`/`noise_group_ids` are optional
+/// extensions. The pre-existing TODO proposes absorbing the optionals into `OpeningTreeInputs`;
+/// pursue in a follow-up epic.
+// TODO: absorb historical_library + external_scenario_counts + noise_group_ids into
+// OpeningTreeInputs to reduce argument count (currently 9 — 6 required + 3 optional).
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn generate_opening_tree(
     base_seed: u64,
     stages: &[Stage],

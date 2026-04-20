@@ -1210,7 +1210,12 @@ pub fn build_sampler_from_ctx<'a>(
 /// - `initial_state.len() != indexer.n_state`
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+///
+/// Structurally independent parameters: `workspaces` / `basis_store` are per-rank mutable,
+/// `ctx`/`baked`/`fcf` are per-stage read/write state, `training_ctx` is study-level,
+/// `batch` is per-iteration config, `records` is the trajectory output.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,

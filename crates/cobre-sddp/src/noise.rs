@@ -452,6 +452,11 @@ pub(crate) fn transform_load_noise(
 ///
 /// Computes `max_gen * clamp(mean + std * η, 0, 1) * block_factor` for each
 /// NCS entity and block, where `mean` and `std` are dimensionless factors.
+///
+/// Structurally independent parameters: `raw_noise` is the shared noise vector,
+/// `n_hydros`/`n_load_buses`/`stage`/`block_count` are dimension offsets,
+/// `stochastic` is the NCS model, `ncs_max_gen` is the max-generation lookup,
+/// `ncs_col_upper_buf` is the output.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],

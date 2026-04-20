@@ -347,7 +347,6 @@ Before tagging a new release:
    python3 scripts/check_claudemd_version.py
    python3 scripts/check_book_version.py
    python3 scripts/check_python_parity.py --max 0
-   python3 scripts/check_suppressions.py --max 10
    ```
 4. Run `cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings`
 5. Tag: `git tag v<version>`

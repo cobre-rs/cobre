@@ -86,6 +86,171 @@ impl CapturedBasis {
         self.cut_row_slots.clear();
         self.state_at_capture.clear();
     }
+
+    /// Append this basis's wire-format payload to the output buffers.
+    ///
+    /// The layout mirrors the pack loop in
+    /// `broadcast_basis_cache` (`training.rs`). This method is the
+    /// type-level owner of the wire format; any future change must
+    /// update both this method and
+    /// [`CapturedBasis::try_from_broadcast_payload`] together.
+    ///
+    /// Pushes the following into `i32_buf` in order:
+    /// - `1_i32` sentinel (present)
+    /// - `col_status.len()` as `i32`
+    /// - `row_status.len()` as `i32`
+    /// - `base_row_count` as `i32`
+    /// - `cut_row_slots.len()` as `i32`
+    /// - `state_at_capture.len()` as `i32`
+    /// - `col_status[..]`
+    /// - `row_status[..]`
+    /// - `cut_row_slots[..]` cast to `i32`
+    ///
+    /// Pushes `state_at_capture[..]` into `f64_buf`.
+    ///
+    /// The callers (currently `broadcast_basis_cache`) are
+    /// responsible for writing the `0_i32` "no basis" sentinel
+    /// when `Option<CapturedBasis>` is `None`.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    pub fn to_broadcast_payload(&self, i32_buf: &mut Vec<i32>, f64_buf: &mut Vec<f64>) {
+        i32_buf.push(1_i32);
+        i32_buf.push(self.basis.col_status.len() as i32);
+        i32_buf.push(self.basis.row_status.len() as i32);
+        i32_buf.push(self.base_row_count as i32);
+        i32_buf.push(self.cut_row_slots.len() as i32);
+        i32_buf.push(self.state_at_capture.len() as i32);
+        i32_buf.extend_from_slice(&self.basis.col_status);
+        i32_buf.extend_from_slice(&self.basis.row_status);
+        // u32 -> i32: slot values are LP pool indices (always
+        // non-negative) that fit comfortably in i32.
+        for &slot in &self.cut_row_slots {
+            i32_buf.push(slot as i32);
+        }
+        f64_buf.extend_from_slice(&self.state_at_capture);
+    }
+
+    /// Deserialise one stage's payload from the two wire-format
+    /// buffers, advancing the cursors past the consumed bytes.
+    ///
+    /// Returns `Ok(None)` when the sentinel read is `0` (no basis
+    /// for this stage). Returns `Ok(Some(captured))` when the
+    /// sentinel is `1` and the payload is complete.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SddpError::Validation` if the `i32_buf` or
+    /// `f64_buf` is truncated at any of the bounded reads
+    /// (sentinel, five length fields, `col_status`, `row_status`,
+    /// `cut_row_slots`, `state_at_capture`). The error message names
+    /// the affected stage and the expected vs. available byte
+    /// count.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
+    pub fn try_from_broadcast_payload(
+        stage: usize,
+        i32_buf: &[i32],
+        i32_cursor: &mut usize,
+        f64_buf: &[f64],
+        f64_cursor: &mut usize,
+    ) -> Result<Option<Self>, crate::SddpError> {
+        // Mirrors the unpack loop at training.rs:284-383.
+
+        // Read sentinel.
+        if *i32_cursor >= i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated at stage {stage} \
+                 (pos={}, len={})",
+                *i32_cursor,
+                i32_buf.len()
+            )));
+        }
+        let sentinel = i32_buf[*i32_cursor];
+        *i32_cursor += 1;
+
+        if sentinel == 0 {
+            return Ok(None);
+        }
+
+        // Read 5 length/metadata fields: col_len, row_len, base_row_count,
+        // cut_slot_count, state_len.
+        if *i32_cursor + 5 > i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated reading lengths at stage {stage}"
+            )));
+        }
+        let col_len = i32_buf[*i32_cursor] as usize;
+        *i32_cursor += 1;
+        let row_len = i32_buf[*i32_cursor] as usize;
+        *i32_cursor += 1;
+        let base_row_count = i32_buf[*i32_cursor] as usize;
+        *i32_cursor += 1;
+        let cut_slot_count = i32_buf[*i32_cursor] as usize;
+        *i32_cursor += 1;
+        let state_len = i32_buf[*i32_cursor] as usize;
+        *i32_cursor += 1;
+
+        // Read col_status.
+        if *i32_cursor + col_len > i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated reading col_status at stage \
+                 {stage} (need {col_len}, have {})",
+                i32_buf.len() - *i32_cursor
+            )));
+        }
+        let col_status = i32_buf[*i32_cursor..*i32_cursor + col_len].to_vec();
+        *i32_cursor += col_len;
+
+        // Read row_status.
+        if *i32_cursor + row_len > i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated reading row_status at stage \
+                 {stage} (need {row_len}, have {})",
+                i32_buf.len() - *i32_cursor
+            )));
+        }
+        let row_status = i32_buf[*i32_cursor..*i32_cursor + row_len].to_vec();
+        *i32_cursor += row_len;
+
+        // Read cut_row_slots (stored as i32, cast back to u32).
+        if *i32_cursor + cut_slot_count > i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated reading cut_row_slots at stage \
+                 {stage} (need {cut_slot_count}, have {})",
+                i32_buf.len() - *i32_cursor
+            )));
+        }
+        // cast_sign_loss: values were originally u32 LP pool indices cast to
+        // i32 on the pack side; casting back to u32 is lossless.
+        let cut_row_slots: Vec<u32> = i32_buf[*i32_cursor..*i32_cursor + cut_slot_count]
+            .iter()
+            .map(|&v| v as u32)
+            .collect();
+        *i32_cursor += cut_slot_count;
+
+        // Read state_at_capture from the f64 buffer.
+        if *f64_cursor + state_len > f64_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: f64 buffer truncated reading state_at_capture at \
+                 stage {stage} (need {state_len}, have {})",
+                f64_buf.len() - *f64_cursor
+            )));
+        }
+        let state_at_capture = f64_buf[*f64_cursor..*f64_cursor + state_len].to_vec();
+        *f64_cursor += state_len;
+
+        Ok(Some(Self {
+            basis: cobre_solver::Basis {
+                col_status,
+                row_status,
+            },
+            base_row_count,
+            cut_row_slots,
+            state_at_capture,
+        }))
+    }
 }
 
 use crate::lp_builder::PatchBuffer;
@@ -1126,6 +1291,281 @@ mod tests {
             assert_eq!(ws.rank, 3);
             assert!(ws.worker_id >= 0 && ws.worker_id < 5);
             assert!(seen.insert(ws.worker_id), "worker_id duplicated");
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // CapturedBasis wire-format round-trip tests (ticket-003)
+    // ---------------------------------------------------------------------------
+
+    /// Round-trip test: single stage with fully populated metadata.
+    ///
+    /// Constructs a `CapturedBasis` with known fields, packs via
+    /// `to_broadcast_payload`, then unpacks via `try_from_broadcast_payload`.
+    /// Asserts field-by-field equality with the original.
+    #[test]
+    fn test_captured_basis_round_trip_populated() {
+        let original = CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2, 3],
+                row_status: vec![4_i32, 5],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![10_u32, 20],
+            state_at_capture: vec![1.5_f64, 2.5, 3.5],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        original.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let result = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("round-trip must not fail");
+        let recovered = result.expect("sentinel is 1; must return Some");
+
+        assert_eq!(
+            recovered.basis.col_status, original.basis.col_status,
+            "col_status"
+        );
+        assert_eq!(
+            recovered.basis.row_status, original.basis.row_status,
+            "row_status"
+        );
+        assert_eq!(
+            recovered.base_row_count, original.base_row_count,
+            "base_row_count"
+        );
+        assert_eq!(
+            recovered.cut_row_slots, original.cut_row_slots,
+            "cut_row_slots"
+        );
+        assert_eq!(
+            recovered.state_at_capture, original.state_at_capture,
+            "state_at_capture"
+        );
+        // Cursors must have advanced past the full payload.
+        assert_eq!(i32_cursor, i32_buf.len(), "i32_cursor must be at end");
+        assert_eq!(f64_cursor, f64_buf.len(), "f64_cursor must be at end");
+    }
+
+    /// Round-trip test: single stage with empty `cut_row_slots` and
+    /// empty `state_at_capture`.
+    #[test]
+    fn test_captured_basis_round_trip_empty_metadata() {
+        let original = CapturedBasis {
+            basis: Basis {
+                col_status: vec![7_i32, 8],
+                row_status: vec![9_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        original.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let result = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("round-trip must not fail");
+        let recovered = result.expect("sentinel is 1; must return Some");
+
+        assert_eq!(recovered.basis.col_status, original.basis.col_status);
+        assert_eq!(recovered.basis.row_status, original.basis.row_status);
+        assert_eq!(recovered.base_row_count, original.base_row_count);
+        assert!(
+            recovered.cut_row_slots.is_empty(),
+            "cut_row_slots must be empty"
+        );
+        assert!(
+            recovered.state_at_capture.is_empty(),
+            "state_at_capture must be empty"
+        );
+        assert_eq!(i32_cursor, i32_buf.len(), "i32_cursor must be at end");
+        assert_eq!(f64_cursor, f64_buf.len(), "f64_cursor must be at end");
+    }
+
+    /// Multi-stage round-trip: one `Some` stage followed by one `None` stage.
+    ///
+    /// Packs the `Some` stage via `to_broadcast_payload`, writes a `0_i32`
+    /// sentinel for the `None` stage, then loops `try_from_broadcast_payload`
+    /// twice and asserts the recovered `Option`s match.
+    #[test]
+    fn test_captured_basis_round_trip_multi_stage() {
+        let populated = CapturedBasis {
+            basis: Basis {
+                col_status: vec![11_i32, 22, 33],
+                row_status: vec![44_i32, 55, 66],
+            },
+            base_row_count: 2,
+            cut_row_slots: vec![100_u32, 200, 300],
+            state_at_capture: vec![0.1_f64, 0.2],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+
+        // Stage 0: Some — pack via method.
+        populated.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+        // Stage 1: None — caller writes the 0 sentinel directly.
+        i32_buf.push(0_i32);
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+
+        // Unpack stage 0.
+        let stage0 = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("stage 0 must not fail")
+        .expect("stage 0 sentinel is 1; must return Some");
+
+        assert_eq!(stage0.basis.col_status, populated.basis.col_status);
+        assert_eq!(stage0.basis.row_status, populated.basis.row_status);
+        assert_eq!(stage0.base_row_count, populated.base_row_count);
+        assert_eq!(stage0.cut_row_slots, populated.cut_row_slots);
+        assert_eq!(stage0.state_at_capture, populated.state_at_capture);
+
+        // Unpack stage 1 — must return None, advancing cursor by 1.
+        let stage1 = CapturedBasis::try_from_broadcast_payload(
+            1,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("stage 1 must not fail");
+        assert!(stage1.is_none(), "stage 1 sentinel is 0; must return None");
+
+        assert_eq!(
+            i32_cursor,
+            i32_buf.len(),
+            "i32_cursor must be at end after both stages"
+        );
+        assert_eq!(
+            f64_cursor,
+            f64_buf.len(),
+            "f64_cursor must be at end after both stages"
+        );
+    }
+
+    /// Truncated i32 buffer: truncate the packed buffer by 1 element, assert
+    /// `Err(SddpError::Validation(msg))` where `msg` contains "truncated" and
+    /// the stage index.
+    #[test]
+    fn test_captured_basis_truncated_i32_buffer() {
+        use crate::SddpError;
+
+        let cb = CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2],
+                row_status: vec![3_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![5_u32],
+            state_at_capture: vec![9.9_f64],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        cb.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        // Truncate i32 buffer by 1.
+        i32_buf.pop();
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let err = CapturedBasis::try_from_broadcast_payload(
+            7,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect_err("truncated buffer must return Err");
+
+        match err {
+            SddpError::Validation(ref msg) => {
+                assert!(
+                    msg.contains("truncated"),
+                    "error message must contain 'truncated', got: {msg}"
+                );
+                assert!(
+                    msg.contains('7'),
+                    "error message must contain stage index 7, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got {other:?}"),
+        }
+    }
+
+    /// Truncated f64 buffer: pack a basis with non-empty `state_at_capture`,
+    /// truncate the f64 buffer by 1, assert `Err(SddpError::Validation(msg))`
+    /// where `msg` mentions `state_at_capture` and the stage index.
+    #[test]
+    fn test_captured_basis_truncated_f64_buffer() {
+        use crate::SddpError;
+
+        let cb = CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![1.0_f64, 2.0, 3.0],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        cb.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        // Truncate f64 buffer by 1.
+        f64_buf.pop();
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let err = CapturedBasis::try_from_broadcast_payload(
+            3,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect_err("truncated f64 buffer must return Err");
+
+        match err {
+            SddpError::Validation(ref msg) => {
+                assert!(
+                    msg.contains("state_at_capture"),
+                    "error message must contain 'state_at_capture', got: {msg}"
+                );
+                assert!(
+                    msg.contains('3'),
+                    "error message must contain stage index 3, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got {other:?}"),
         }
     }
 }

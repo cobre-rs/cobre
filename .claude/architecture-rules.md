@@ -55,46 +55,6 @@ add `#[allow(clippy::too_many_arguments)]`.
 
 ---
 
-## Clippy Suppression Policy
-
-**`#[allow(clippy::too_many_arguments)]` is a signal, not a solution.**
-
-When clippy fires `too_many_arguments` on production code (code before
-`#[cfg(test)]`), the correct action is:
-
-1. Identify which parameters belong together
-2. Find the appropriate context struct from the table above
-3. Add the parameters as fields on that struct
-4. If no existing struct fits, create a new named struct
-5. Only suppress the lint if the function genuinely needs all parameters
-   independently (e.g., generic constructors with unrelated fields)
-
-**Never suppress the lint on hot-path functions** (`forward.rs`, `backward.rs`,
-`training.rs`, `simulation/pipeline.rs`, `lower_bound.rs`). These functions are
-called millions of times; their signatures are the public contract of the
-training loop.
-
-Run `python3 scripts/check_suppressions.py --check too_many_arguments --max 10`
-before committing. The count must never increase. The target is 0.
-
----
-
-## Function Length Suppressions
-
-Current baseline: **57** production `too_many_lines` suppressions.
-Target: reduce through function splitting. The count must never increase.
-
-Run `python3 scripts/check_suppressions.py --check too_many_lines --max 57`
-before committing changes to `crates/`.
-
-Combined check (both lints at once):
-
-```
-python3 scripts/check_suppressions.py --check too_many_arguments --check too_many_lines --max 74
-```
-
----
-
 ## Common Mistakes to Avoid
 
 **Adding `cut_batches: &mut [RowBatch]` as a parameter.** This is per-stage

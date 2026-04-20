@@ -508,3 +508,22 @@ epic-05 close.
   simulation-pipeline legacy arm via simulation-startup
   re-bake) are bit-for-bit equivalent to the pre-epic baseline
   for the parquet outputs covered by the v0.4.5 map.
+
+## Post-epic-06 verification (2026-04-20)
+
+Captured on branch `feat/architecture-unification` after epic-06 close at
+workspace version v0.5.0.
+
+- 27 D-cases captured via `./target/release/cobre run <case> --output target/v045-reference-post-epic06/<case> --threads 1 --quiet`.
+- Convertido case absent on this machine (no `~/git/cobre-bridge/example/convertido` directory); skipped per the reference convention.
+- SHA256 map matches the post-04a allowlist: `compare_v045_reference.py` reports "all mismatches are in the expected-drifts allowlist (90/90 files byte-identical, 0 allowlisted drift(s))". No new `EXPECTED_DRIFTS` entries were added.
+- Python parity test (`crates/cobre-python/tests/test_solver_stats_parity.py`) exit 0 — 6 tests SKIPPED (cobre-python not installed in the Python env; pytest exited 0 with zero failures).
+- MPI parity test (`scripts/test_per_opening_mpi_parity.sh`) exit 0 — 1-rank vs 2-rank vs 4-rank comparisons PASS on all 13 per-opening counter columns (40 rows each).
+- Full workspace test suite: 3,695 tests pass, 0 fail. Test count delta vs post-epic-05 baseline reflects the +6 tests added in epic-06 (1 from ticket-001's `TrainingResult::new` unit test + 5 from ticket-003's `CapturedBasis` round-trip / truncation tests).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` exit 0.
+- `cargo fmt --all --check` exit 0.
+
+Confirms epic-06 type-surface reshapes (`TrainingResult` `#[non_exhaustive]`
++ `::new(...)`, `CapturedBasis::{to,try_from}_broadcast_payload`, clippy
+workspace deny on `too_many_arguments`, retired `scripts/check_suppressions.py`)
+are runtime-neutral for the parquet outputs covered by the v0.4.5 map.

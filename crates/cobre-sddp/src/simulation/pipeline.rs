@@ -196,6 +196,11 @@ struct ScenarioIds<'a> {
 ///
 /// When `row_scale` is empty (no prescaling), the function does a bulk memcpy
 /// without per-element division, matching the old fast path.
+///
+/// Structurally independent parameters: template buffers (`template_row_lower`,
+/// `row_scale`, `scratch_buf`), load-RHS buffer (`load_rhs_buf`), and load-dimension
+/// indices (`n_load_buses`, `load_balance_row_start`, `n_blks`, `load_bus_indices`)
+/// are per-call scratch or lookup tables with no natural grouping.
 #[allow(clippy::too_many_arguments)]
 fn build_row_lower_unscaled<'a>(
     template_row_lower: &[f64],
@@ -941,11 +946,13 @@ fn dispatch_scenario_result(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `initial_state.len() != indexer.n_state`
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::too_many_lines,
-    clippy::too_many_arguments
-)]
+///
+/// Structurally independent parameters: `workspaces` is the per-rank solver pool,
+/// `ctx`/`fcf`/`training_ctx` are study-level, `config`/`output` are simulation-specific,
+/// `baked_templates`/`stage_bases` are checkpoint-provided state, `comm` is the communicator.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_lines)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,

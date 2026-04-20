@@ -484,24 +484,24 @@ fn load_policy_for_simulation(
     let basis_cache =
         cobre_sddp::build_basis_cache_from_checkpoint(setup.num_stages(), &checkpoint.stage_bases);
 
-    Ok(cobre_sddp::TrainingResult {
-        iterations: checkpoint.metadata.completed_iterations.into(),
-        final_lb: checkpoint.metadata.final_lower_bound,
-        final_ub: checkpoint
+    Ok(cobre_sddp::TrainingResult::new(
+        checkpoint.metadata.final_lower_bound,
+        checkpoint
             .metadata
             .best_upper_bound
             .unwrap_or(f64::INFINITY),
-        final_ub_std: 0.0,
-        final_gap: 0.0,
-        total_time_ms: 0,
-        reason: "loaded from checkpoint".to_string(),
-        solver_stats_log: Vec::new(),
+        0.0,
+        0.0,
+        checkpoint.metadata.completed_iterations.into(),
+        "loaded from checkpoint".to_string(),
+        0,
         basis_cache,
-        visited_archive: None,
+        Vec::new(),
+        None,
         // Baked templates are not stored in policy checkpoints. simulate() re-bakes all stage
         // templates at startup from the FCF cut pool when baked_templates is None.
-        baked_templates: None,
-    })
+        None,
+    ))
 }
 
 /// Set up the communicator, terminal, rayon pool, and resolve the output directory.

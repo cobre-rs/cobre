@@ -275,19 +275,19 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 /// use cobre_sddp::{build_training_output, TrainingResult, FutureCostFunction};
 /// use cobre_core::TrainingEvent;
 ///
-/// let result = TrainingResult {
-///     final_lb: 100.0,
-///     final_ub: 110.0,
-///     final_ub_std: 5.0,
-///     final_gap: 0.091,
-///     iterations: 1,
-///     reason: "iteration_limit".to_string(),
-///     total_time_ms: 500,
-///     basis_cache: Vec::new(),
-///     solver_stats_log: Vec::new(),
-///     visited_archive: None,
-///     baked_templates: None
-/// };
+/// let result = TrainingResult::new(
+///     100.0,
+///     110.0,
+///     5.0,
+///     0.091,
+///     1,
+///     "iteration_limit".to_string(),
+///     500,
+///     Vec::new(),
+///     Vec::new(),
+///     None,
+///     None,
+/// );
 ///
 /// let events = vec![TrainingEvent::IterationSummary {
 ///     iteration: 1,
@@ -509,19 +509,19 @@ mod tests {
     use crate::{FutureCostFunction, TrainingResult};
 
     fn make_result(reason: &str, lb: f64, ub: f64, gap: f64, iterations: u64) -> TrainingResult {
-        TrainingResult {
-            final_lb: lb,
-            final_ub: ub,
-            final_ub_std: 0.0,
-            final_gap: gap,
+        TrainingResult::new(
+            lb,
+            ub,
+            0.0,
+            gap,
             iterations,
-            reason: reason.to_string(),
-            total_time_ms: 1_000,
-            basis_cache: Vec::new(),
-            solver_stats_log: Vec::new(),
-            visited_archive: None,
-            baked_templates: None,
-        }
+            reason.to_string(),
+            1_000,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
     }
 
     fn make_iteration_summary(iter: u64, lb: f64, ub: f64, gap: f64) -> TrainingEvent {

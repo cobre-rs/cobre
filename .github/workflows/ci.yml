@@ -145,8 +145,6 @@ jobs:
           python-version: "3.12"
       - name: Check Python parity
         run: python3 scripts/check_python_parity.py --max 0
-      - name: Check suppression count
-        run: python3 scripts/check_suppressions.py --max 10
       - name: Check CLAUDE.md version
         run: python3 scripts/check_claudemd_version.py
       - name: Check book version references

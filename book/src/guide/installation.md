@@ -46,7 +46,7 @@ cobre version
 Expected output (exact versions and arch will vary):
 
 ```
-cobre   v0.4.4
+cobre   v0.5.0
 solver: HiGHS
 comm:   local
 zstd:   enabled

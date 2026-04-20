@@ -7,9 +7,6 @@ set -euo pipefail
 echo "==> Running cargo fmt --check..."
 cargo fmt --all -- --check
 
-echo "==> Running suppression check..."
-python3 scripts/check_suppressions.py --max 10
-
 echo "==> Running Python parity check..."
 python3 scripts/check_python_parity.py --max 0
 

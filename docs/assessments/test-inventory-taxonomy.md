@@ -24,28 +24,27 @@ Exactly one category per test. When a test fits two labels, pick the narrower on
 
 A test may carry one or more guard labels (comma-separated). A test with no deletable guard is tagged `generic`.
 
-| Label                            | Meaning — test depends on this code path                                                                         |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `alien-only`                     | Test exercises `WarmStartBasisMode::AlienOnly` or the alien FFI path directly.                                   |
-| `non-alien-first`                | Test exercises `WarmStartBasisMode::NonAlienFirst` (the path that stays).                                        |
-| `canonical-disabled`             | Test exercises `CanonicalStateStrategy::Disabled`.                                                               |
-| `canonical-clearsolver`          | Test exercises `CanonicalStateStrategy::ClearSolver` (the path that stays).                                      |
-| `non-baked`                      | Test exercises the legacy (non-baked) template / `add_rows` path.                                                |
-| `baked`                          | Test exercises baked templates (the path that stays).                                                            |
-| `stored-cut-row-offset`          | Test depends on the non-zero `stored_cut_row_offset` parameter in `reconstruct_basis`.                           |
-| `solve-with-basis-trait`         | Test calls `SolverInterface::solve_with_basis` as a distinct trait method (folded into `solve` in a later step). |
-| `clear-solver-state-trait`       | Test calls `SolverInterface::clear_solver_state` as a trait method (removed in a later step).                    |
-| `add-rows-trait`                 | Test calls `SolverInterface::add_rows` (removed in a later step).                                                |
-| `warm-start-config-flag`         | Test depends on parsing `training.solver.warm_start_basis_mode` from config.                                     |
-| `canonical-config-flag`          | Test depends on parsing `training.solver.canonical_state` from config.                                           |
-| `broadcast-warm-start-field`     | Test depends on `BroadcastConfig::warm_start_basis_mode` wire field.                                             |
-| `broadcast-canonical-field`      | Test depends on `BroadcastConfig::canonical_state_strategy` wire field.                                          |
-| `training-result-struct-literal` | Test constructs `TrainingResult { ... }` using struct-literal syntax (migrates to builder in a later step).      |
-| `fpha-slow`                      | Test is in the `fpha_*` slow-suite group.                                                                        |
-| `d-case-determinism`             | Test is one of D01–D30 deterministic regression cases.                                                           |
-| `convertido-determinism`         | Test consumes the convertido golden artifact.                                                                    |
-| `unified-path`                   | Test targets the new `run_stage_solve` surface (pre-populated empty until that surface exists).                  |
-| `generic`                        | Test does not depend on any specific deletable code path. Survives all refactoring steps.                        |
+| Label                        | Meaning — test depends on this code path                                                                         |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `alien-only`                 | Test exercises `WarmStartBasisMode::AlienOnly` or the alien FFI path directly.                                   |
+| `non-alien-first`            | Test exercises `WarmStartBasisMode::NonAlienFirst` (the path that stays).                                        |
+| `canonical-disabled`         | Test exercises `CanonicalStateStrategy::Disabled`.                                                               |
+| `canonical-clearsolver`      | Test exercises `CanonicalStateStrategy::ClearSolver` (the path that stays).                                      |
+| `non-baked`                  | Test exercises the legacy (non-baked) template / `add_rows` path.                                                |
+| `baked`                      | Test exercises baked templates (the path that stays).                                                            |
+| `stored-cut-row-offset`      | Test depends on the non-zero `stored_cut_row_offset` parameter in `reconstruct_basis`.                           |
+| `solve-with-basis-trait`     | Test calls `SolverInterface::solve_with_basis` as a distinct trait method (folded into `solve` in a later step). |
+| `clear-solver-state-trait`   | Test calls `SolverInterface::clear_solver_state` as a trait method (removed in a later step).                    |
+| `add-rows-trait`             | Test calls `SolverInterface::add_rows` (removed in a later step).                                                |
+| `warm-start-config-flag`     | Test depends on parsing `training.solver.warm_start_basis_mode` from config.                                     |
+| `canonical-config-flag`      | Test depends on parsing `training.solver.canonical_state` from config.                                           |
+| `broadcast-warm-start-field` | Test depends on `BroadcastConfig::warm_start_basis_mode` wire field.                                             |
+| `broadcast-canonical-field`  | Test depends on `BroadcastConfig::canonical_state_strategy` wire field.                                          |
+| `fpha-slow`                  | Test is in the `fpha_*` slow-suite group.                                                                        |
+| `d-case-determinism`         | Test is one of D01–D30 deterministic regression cases.                                                           |
+| `convertido-determinism`     | Test consumes the convertido golden artifact.                                                                    |
+| `unified-path`               | Test targets the new `run_stage_solve` surface (pre-populated empty until that surface exists).                  |
+| `generic`                    | Test does not depend on any specific deletable code path. Survives all refactoring steps.                        |
 
 ---
 
@@ -58,5 +57,4 @@ Informational table linking guard labels to the refactoring step at which they a
 |    3 | `alien-only`, `warm-start-config-flag`, `broadcast-warm-start-field`                                                             |
 |    4 | `canonical-disabled`, `canonical-config-flag`, `broadcast-canonical-field`, `clear-solver-state-trait`, `solve-with-basis-trait` |
 |    5 | `non-baked`, `stored-cut-row-offset`, `add-rows-trait`                                                                           |
-|    6 | `training-result-struct-literal`                                                                                                 |
 |    9 | `parameter-sweep` (consolidation candidates), any `fpha-slow` test missing the slow-tests feature gate                           |

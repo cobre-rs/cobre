@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, Float64Builder, Int32Builder, Int64Builder, RecordB
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use super::{IterationRecord, TrainingOutput};
+use super::{IterationRecord, TrainingOutput, WorkerTimingRecord};
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{convergence_schema, iteration_timing_schema};
@@ -55,6 +55,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 ///         peak_active: 0,
 ///     },
 ///     cut_selection_records: Vec::new(),
+///     worker_timing_records: Vec::new(),
 /// };
 /// writer.write(&training)?;
 /// # Ok(())
@@ -124,7 +125,7 @@ impl TrainingParquetWriter {
         let convergence_path = self.output_dir.join("training/convergence.parquet");
         write_parquet(&convergence_path, &convergence_batch, &self.config)?;
 
-        let timing_batch = build_iteration_timing_batch(records)?;
+        let timing_batch = build_iteration_timing_batch(&training_output.worker_timing_records)?;
         let timing_path = self.output_dir.join("training/timing/iterations.parquet");
         write_parquet(&timing_path, &timing_batch, &self.config)?;
 
@@ -198,14 +199,23 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
 
 /// Build a `RecordBatch` for `training/timing/iterations.parquet`.
 ///
-/// Reads per-phase timing fields from each [`IterationRecord`] and writes them
-/// as `i64` millisecond columns.
+/// Each [`WorkerTimingRecord`] produces exactly one row. `rank` is always
+/// non-null. `worker_id` is `NULL` for rank-aggregated rows and carries the
+/// per-worker index for per-worker rows. The 16 timing columns come from the
+/// `timings` array at the corresponding slot index.
+///
+/// Schema: `iteration(i32), rank(i32 nullable), worker_id(i32 nullable),`
+/// then 16 `Int64` timing columns in slot order.
 #[allow(clippy::cast_possible_wrap)]
-fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBatch, OutputError> {
+fn build_iteration_timing_batch(
+    records: &[WorkerTimingRecord],
+) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(iteration_timing_schema());
     let n = records.len();
 
     let mut iteration = Int32Builder::with_capacity(n);
+    let mut rank = Int32Builder::with_capacity(n);
+    let mut worker_id = Int32Builder::with_capacity(n);
     let mut forward_wall_ms = Int64Builder::with_capacity(n);
     let mut backward_wall_ms = Int64Builder::with_capacity(n);
     let mut cut_selection_ms = Int64Builder::with_capacity(n);
@@ -224,27 +234,38 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
 
     for rec in records {
         iteration.append_value(rec.iteration as i32);
-        forward_wall_ms.append_value(rec.time_forward_wall_ms as i64);
-        backward_wall_ms.append_value(rec.time_backward_wall_ms as i64);
-        cut_selection_ms.append_value(rec.time_cut_selection_ms as i64);
-        mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
-        cut_sync_ms.append_value(rec.time_cut_sync_ms as i64);
-        lower_bound_ms.append_value(rec.time_lower_bound_ms as i64);
-        state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
-        cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
-        bwd_setup_ms.append_value(rec.time_bwd_setup_ms as i64);
-        bwd_load_imbalance_ms.append_value(rec.time_bwd_load_imbalance_ms as i64);
-        bwd_scheduling_overhead_ms.append_value(rec.time_bwd_scheduling_overhead_ms as i64);
-        fwd_setup_ms.append_value(rec.time_fwd_setup_ms as i64);
-        fwd_load_imbalance_ms.append_value(rec.time_fwd_load_imbalance_ms as i64);
-        fwd_scheduling_overhead_ms.append_value(rec.time_fwd_scheduling_overhead_ms as i64);
-        overhead_ms.append_value(rec.time_overhead_ms as i64);
+        rank.append_value(rec.rank);
+        worker_id.append_option(rec.worker_id);
+        // Slot indices match the column order defined by iteration_timing_schema():
+        //   0: forward_wall_ms   1: backward_wall_ms  2: cut_selection_ms
+        //   3: mpi_allreduce_ms  4: cut_sync_ms        5: lower_bound_ms
+        //   6: state_exchange_ms 7: cut_batch_build_ms 8: bwd_setup_ms
+        //   9: bwd_load_imbalance_ms  10: bwd_scheduling_overhead_ms
+        //  11: fwd_setup_ms  12: fwd_load_imbalance_ms  13: fwd_scheduling_overhead_ms
+        //  14: overhead_ms   15: reserved
+        forward_wall_ms.append_value(rec.timings[0] as i64);
+        backward_wall_ms.append_value(rec.timings[1] as i64);
+        cut_selection_ms.append_value(rec.timings[2] as i64);
+        mpi_allreduce_ms.append_value(rec.timings[3] as i64);
+        cut_sync_ms.append_value(rec.timings[4] as i64);
+        lower_bound_ms.append_value(rec.timings[5] as i64);
+        state_exchange_ms.append_value(rec.timings[6] as i64);
+        cut_batch_build_ms.append_value(rec.timings[7] as i64);
+        bwd_setup_ms.append_value(rec.timings[8] as i64);
+        bwd_load_imbalance_ms.append_value(rec.timings[9] as i64);
+        bwd_scheduling_overhead_ms.append_value(rec.timings[10] as i64);
+        fwd_setup_ms.append_value(rec.timings[11] as i64);
+        fwd_load_imbalance_ms.append_value(rec.timings[12] as i64);
+        fwd_scheduling_overhead_ms.append_value(rec.timings[13] as i64);
+        overhead_ms.append_value(rec.timings[14] as i64);
     }
 
     RecordBatch::try_new(
         schema,
         vec![
             Arc::new(iteration.finish()),
+            Arc::new(rank.finish()),
+            Arc::new(worker_id.finish()),
             Arc::new(forward_wall_ms.finish()),
             Arc::new(backward_wall_ms.finish()),
             Arc::new(cut_selection_ms.finish()),
@@ -429,6 +450,16 @@ mod tests {
                 peak_active: 95,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
+        }
+    }
+
+    fn make_worker_timing_record(iteration: u32) -> WorkerTimingRecord {
+        WorkerTimingRecord {
+            iteration,
+            rank: 0,
+            worker_id: None,
+            timings: [100, 200, 10, 5, 8, 3, 4, 7, 50, 60, 20, 40, 30, 15, 12, 0],
         }
     }
 
@@ -483,13 +514,13 @@ mod tests {
 
     #[test]
     fn iteration_timing_batch_field_count() {
-        let records: Vec<IterationRecord> = (1..=3).map(|i| make_record(i, Some(1.0))).collect();
+        let records: Vec<WorkerTimingRecord> = (1..=3).map(make_worker_timing_record).collect();
         let batch = build_iteration_timing_batch(&records).expect("timing batch must be built");
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            16,
-            "iteration_timing schema has 16 columns"
+            18,
+            "iteration_timing schema has 18 columns (16 timings + iteration + rank + worker_id)"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -501,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn iteration_timing_columns_six_decomposed_overhead() {
         use arrow::array::Int64Array;
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -545,7 +577,36 @@ mod tests {
             })
             .collect();
 
-        let training = make_training_output(records.clone());
+        // Build matching WorkerTimingRecord rank-aggregated rows directly so the
+        // writer has data to emit (post-T007, the timing parquet reads from
+        // worker_timing_records, not convergence_records).
+        let worker_records: Vec<WorkerTimingRecord> = (1u32..=3)
+            .map(|i| WorkerTimingRecord {
+                iteration: i,
+                rank: 0,
+                worker_id: None,
+                timings: [
+                    100,
+                    200,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    u64::from(i) * 10,
+                    u64::from(i) * 20,
+                    u64::from(i) * 30,
+                    u64::from(i) * 40,
+                    u64::from(i) * 50,
+                    u64::from(i) * 60,
+                    0,
+                    0,
+                ],
+            })
+            .collect();
+        let mut training = make_training_output(records.clone());
+        training.worker_timing_records = worker_records;
         let writer = TrainingParquetWriter::new(tmp.path(), &config).expect("new must succeed");
         writer.write(&training).expect("write must succeed");
 
@@ -560,7 +621,7 @@ mod tests {
         let batch = reader.next().expect("must have rows").expect("batch Ok");
 
         assert_eq!(batch.num_rows(), 3);
-        assert_eq!(batch.num_columns(), 16, "must have 16 columns");
+        assert_eq!(batch.num_columns(), 18, "must have 18 columns (post-T007)");
 
         // Verify that old column names are absent.
         assert!(
@@ -772,7 +833,11 @@ mod tests {
         let config = ParquetWriterConfig::default();
 
         let records: Vec<IterationRecord> = (1..=5).map(|i| make_record(i, Some(1.0))).collect();
-        let training = make_training_output(records);
+        let mut training = make_training_output(records);
+        // Post-T007 the timing parquet reads from worker_timing_records, not
+        // convergence_records. Add 5 rank-aggregated rows for parity with the
+        // convergence rows.
+        training.worker_timing_records = (1u32..=5).map(make_worker_timing_record).collect();
 
         let writer = TrainingParquetWriter::new(tmp.path(), &config).expect("new must succeed");
         writer.write(&training).expect("write must succeed");
@@ -795,7 +860,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 16);
+        assert_eq!(batch.num_columns(), 18, "post-T007 schema has 18 columns");
     }
 
     #[test]

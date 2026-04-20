@@ -1644,6 +1644,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }]
     }
 
@@ -2465,6 +2466,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
             })
             .collect();
         let result_4 = simulate(
@@ -3475,6 +3477,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3788,6 +3791,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -4092,6 +4096,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }]
     }
 

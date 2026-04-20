@@ -671,6 +671,189 @@ def _report_dimensions(t: pl.DataFrame) -> None:
     print()
 
 
+# Threshold for flagging a per-stage straggler ratio as suspicious.
+PER_WORKER_STRAGGLER_THRESHOLD = 2.0
+
+
+def _report_per_worker_imbalance(t: pl.DataFrame) -> None:
+    """Section 11 (epic-04b T009): per-worker straggler attribution.
+
+    For each backward stage, computes max-vs-mean per-worker `solve_time_ms`
+    and flags `straggler_ratio > PER_WORKER_STRAGGLER_THRESHOLD` with a `*`.
+    Also surfaces the persistently-slowest workers across the full run.
+    Skips if the parquet predates epic-04b (no `rank` / `worker_id` columns).
+    """
+    _header("11. Per-worker imbalance")
+    if "rank" not in t.columns or "worker_id" not in t.columns:
+        print("  (no per-worker columns — skipping)")
+        print()
+        return
+
+    bw = t.filter(
+        (pl.col("phase") == "backward")
+        & pl.col("rank").is_not_null()
+        & pl.col("worker_id").is_not_null(),
+    )
+    if len(bw) == 0:
+        print("  (no per-worker backward rows — skipping)")
+        print()
+        return
+
+    # Sub-table 1: per-stage straggler ratio.
+    per_stage = (
+        bw.group_by(["stage", "rank", "worker_id"])
+        .agg(pl.col("solve_time_ms").sum().alias("worker_total_ms"))
+        .group_by("stage")
+        .agg(
+            [
+                pl.len().alias("n_workers"),
+                pl.col("worker_total_ms").min().alias("min_ms"),
+                pl.col("worker_total_ms").mean().alias("mean_ms"),
+                pl.col("worker_total_ms").max().alias("max_ms"),
+                pl.col("worker_total_ms").arg_max().alias("argmax_idx"),
+                pl.col("rank").alias("ranks"),
+                pl.col("worker_id").alias("worker_ids"),
+            ],
+        )
+        .with_columns(
+            (pl.col("max_ms") / pl.col("mean_ms").clip(lower_bound=1e-9)).alias(
+                "straggler_ratio",
+            ),
+        )
+        .sort("straggler_ratio", descending=True)
+        .head(20)
+    )
+
+    print("  Per-stage straggler ratio (top 20):")
+    print(
+        f"  {'stage':>6}  {'n_workers':>9}  {'min_ms':>10}  {'mean_ms':>10}  "
+        f"{'max_ms':>10}  {'ratio':>8}  straggler_id",
+    )
+    for row in per_stage.iter_rows(named=True):
+        argmax = int(row["argmax_idx"])
+        ranks = list(row["ranks"])
+        wids = list(row["worker_ids"])
+        s_rank = ranks[argmax] if argmax < len(ranks) else -1
+        s_wid = wids[argmax] if argmax < len(wids) else -1
+        ratio = row["straggler_ratio"]
+        flag = " *" if ratio > PER_WORKER_STRAGGLER_THRESHOLD else ""
+        print(
+            f"  {row['stage']:>6}  {row['n_workers']:>9}  {row['min_ms']:>10.1f}  "
+            f"{row['mean_ms']:>10.1f}  {row['max_ms']:>10.1f}  "
+            f"{ratio:>7.2f}{flag:<2}  (rank={s_rank}, wid={s_wid})",
+        )
+
+    # Sub-table 2: persistent straggler workers (top 10 by total ms).
+    total_bw_ms = float(bw["solve_time_ms"].sum())
+    persistent = (
+        bw.group_by(["rank", "worker_id"])
+        .agg(pl.col("solve_time_ms").sum().alias("total_ms"))
+        .sort("total_ms", descending=True)
+        .head(10)
+    )
+    print()
+    print("  Persistent straggler workers (top 10 by total backward solve_time_ms):")
+    print(f"  {'rank':>4}  {'worker_id':>9}  {'total_ms':>12}  {'pct':>7}")
+    for row in persistent.iter_rows(named=True):
+        pct = (row["total_ms"] / total_bw_ms * 100.0) if total_bw_ms > 0 else 0.0
+        print(
+            f"  {row['rank']:>4}  {row['worker_id']:>9}  {row['total_ms']:>12.1f}  "
+            f"{pct:>6.2f}%",
+        )
+    print()
+
+
+def _report_per_worker_timing_imbalance(timing_path: Path | None) -> None:
+    """Section 12 (epic-04b T009): per-worker timing imbalance + cross-check.
+
+    Reads `training/timing/iterations.parquet` (T007 expansion) and surfaces
+    per-iteration min/mean/max per-worker `backward_wall_ms` and
+    `bwd_setup_ms`. Cross-references the sum of (max-mean) per iteration
+    against the rank-level `bwd_load_imbalance_ms` total (within ±10 %).
+    Skips gracefully on pre-04b timing parquets that lack `worker_id`.
+    """
+    _header("12. Per-worker timing imbalance")
+    if timing_path is None or not timing_path.exists():
+        print("  (timing parquet not found — skipping)")
+        print()
+        return
+
+    t = pl.read_parquet(timing_path)
+    if "worker_id" not in t.columns:
+        print("  (no per-worker timing rows — skipping)")
+        print()
+        return
+
+    per_worker = t.filter(pl.col("worker_id").is_not_null())
+    if len(per_worker) == 0:
+        print("  (no per-worker timing rows — skipping)")
+        print()
+        return
+
+    # Per-iteration imbalance for the two per-worker contributions.
+    print("  Per-iteration per-worker imbalance (last 20 iterations):")
+    print(
+        f"  {'iter':>5}  {'metric':<18}  {'min_ms':>10}  {'mean_ms':>10}  "
+        f"{'max_ms':>10}  {'(max-mean)/mean':>16}",
+    )
+    for col in ("backward_wall_ms", "bwd_setup_ms"):
+        if col not in per_worker.columns:
+            continue
+        agg = (
+            per_worker.group_by("iteration")
+            .agg(
+                [
+                    pl.col(col).min().alias("mn"),
+                    pl.col(col).mean().alias("mu"),
+                    pl.col(col).max().alias("mx"),
+                ],
+            )
+            .sort("iteration")
+            .tail(20)
+        )
+        for row in agg.iter_rows(named=True):
+            mu = float(row["mu"])
+            mx = float(row["mx"])
+            ratio = (mx - mu) / mu if mu > 0 else 0.0
+            print(
+                f"  {row['iteration']:>5}  {col:<18}  {row['mn']:>10.1f}  "
+                f"{mu:>10.1f}  {mx:>10.1f}  {ratio:>15.2%}",
+            )
+
+    # Cross-reference against the rank-level bwd_load_imbalance_ms total.
+    if (
+        "bwd_load_imbalance_ms" in t.columns
+        and "backward_wall_ms" in per_worker.columns
+    ):
+        rank_imbalance_total = float(
+            t.filter(pl.col("worker_id").is_null())["bwd_load_imbalance_ms"].sum(),
+        )
+        per_iter_imbalance = (
+            per_worker.group_by("iteration")
+            .agg(
+                [
+                    pl.col("backward_wall_ms").max().alias("mx"),
+                    pl.col("backward_wall_ms").mean().alias("mu"),
+                ],
+            )
+            .with_columns((pl.col("mx") - pl.col("mu")).alias("delta"))
+        )
+        per_worker_imbalance_total = float(per_iter_imbalance["delta"].sum())
+        denom = max(rank_imbalance_total, 1.0)
+        pct_diff = (
+            abs(per_worker_imbalance_total - rank_imbalance_total) / denom * 100.0
+        )
+        status = "OK" if pct_diff <= 10.0 else "MISMATCH"
+        print()
+        print(
+            f"  Cross-check: per-worker max-minus-mean total = "
+            f"{per_worker_imbalance_total:.1f} ms; rank-level "
+            f"bwd_load_imbalance_ms total = {rank_imbalance_total:.1f} ms; "
+            f"diff = {pct_diff:.1f}% — {status}",
+        )
+    print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Analyze training/solver/iterations.parquet for SDDP performance diagnostics.",
@@ -710,6 +893,8 @@ def main() -> int:
     _report_sizing(t)
     _report_timing_breakdown(paths.timing)
     _report_cut_selection(t, paths.cut_selection)
+    _report_per_worker_imbalance(t)
+    _report_per_worker_timing_imbalance(paths.timing)
     return 0
 
 

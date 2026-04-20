@@ -76,17 +76,76 @@ TIMING_COLS: list[str] = [
 
 
 def _load_sorted(path: Path) -> pa.Table:
-    """Load a parquet file and sort by SORT_KEYS."""
+    """Load a parquet file, aggregate per-(rank, worker_id) rows (epic-04b T005),
+    and sort by SORT_KEYS.
+
+    Post-T005, the parquet contains one row per ``(iteration, phase, stage,
+    opening, rank, worker_id)`` tuple. To compare across rank counts we must
+    first aggregate via ``SUM(...) GROUP BY (iteration, phase, stage, opening)``
+    so the row shape matches the pre-T005 reference (one row per
+    ``(iteration, phase, stage, opening)``).
+
+    Pre-T005 parquets (without ``rank`` / ``worker_id`` columns) are returned
+    as-is for backward compatibility.
+    """
     if not path.exists():
         print(f"ERROR: parquet file not found: {path}", file=sys.stderr)
         sys.exit(2)
     table = pq.read_table(str(path))
+
+    has_per_worker = "rank" in table.schema.names and "worker_id" in table.schema.names
+    if has_per_worker:
+        table = _aggregate_per_worker(table)
+
     # pyarrow sort_indices returns indices; apply them for a sorted table.
     sort_indices = pc.sort_indices(
         table,
         sort_keys=[(k, "ascending") for k in SORT_KEYS],
     )
     return table.take(sort_indices)
+
+
+def _aggregate_per_worker(table: pa.Table) -> pa.Table:
+    """SUM all numeric counter columns across (rank, worker_id) per group.
+
+    Group key: ``SORT_KEYS`` (iteration, phase, stage, opening). Backward rows
+    are first asserted to carry one row per ``(rank, worker_id)`` distinct pair
+    per group (no duplicates from MPI allgatherv layout bugs); forward and
+    lower_bound rows have ``worker_id IS NULL`` and pass through unchanged
+    aside from the SUM aggregation.
+    """
+    # Backward rows carry per-worker_id; forward / lower_bound rows are NULL on
+    # worker_id. Verify the (rank, worker_id) tuple is unique per group on the
+    # backward subset — duplicates would indicate an unpack-order bug in T005.
+    backward_mask = pc.equal(table.column("phase"), "backward")
+    backward = table.filter(backward_mask)
+    if backward.num_rows > 0:
+        # Count rows per (group_key, rank, worker_id). Any count > 1 is a bug.
+        dup_check = backward.group_by(
+            [*SORT_KEYS, "rank", "worker_id"],
+        ).aggregate([("phase", "count")])
+        max_count = pc.max(dup_check.column("phase_count")).as_py()
+        if max_count is not None and max_count > 1:
+            print(
+                f"ERROR: per-(rank, worker_id) row appears {max_count} times in some "
+                "backward (iter, phase, stage, opening) group — allgatherv layout bug",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # All numeric columns except the group keys, rank, and worker_id are summed.
+    numeric_cols = [
+        name
+        for name in table.schema.names
+        if name not in SORT_KEYS and name not in ("rank", "worker_id", "phase")
+    ]
+    aggregations = [(col, "sum") for col in numeric_cols]
+    grouped = table.group_by(SORT_KEYS).aggregate(aggregations)
+    # Rename the *_sum columns back to the original names so downstream
+    # comparisons see the same schema as pre-T005 parquets.
+    rename_map = {f"{c}_sum": c for c in numeric_cols}
+    new_names = [rename_map.get(name, name) for name in grouped.schema.names]
+    return grouped.rename_columns(new_names)
 
 
 def _compare_tables(
@@ -121,7 +180,9 @@ def _compare_tables(
             )
         )
         ne_indices = pc.list_flatten(
-            pa.chunked_array([pa.array([pc.indices_nonzero(not_equal_mask).to_pylist()])])
+            pa.chunked_array(
+                [pa.array([pc.indices_nonzero(not_equal_mask).to_pylist()])]
+            )
         ).to_pylist()
 
         if ne_indices:

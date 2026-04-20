@@ -53,7 +53,8 @@ use crate::{
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     solver_stats::{
-        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, aggregate_solver_statistics,
+        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        aggregate_solver_statistics,
     },
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
@@ -751,6 +752,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut bwd_stage_worker_stats_buf =
         StageWorkerStatsBuffer::new(fwd_pool.workspaces.len(), bwd_max_openings);
 
+    // MPI allgatherv buffers for per-(rank, worker, opening) backward stats (epic-04b T005).
+    // All four are allocated once here and reused per stage and per iteration — zero
+    // hot-path allocation. Sizes are derived from constants that do not change for the run.
+    let n_workers_local = fwd_pool.workspaces.len();
+    let n_ranks = comm.size();
+    let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
+    let mut bwd_stats_send_buf: Vec<f64> = vec![0.0; send_stride];
+    let mut bwd_stats_recv_buf: Vec<f64> = vec![0.0; n_ranks * send_stride];
+    let bwd_stats_counts: Vec<usize> = vec![send_stride; n_ranks];
+    let bwd_stats_displs: Vec<usize> = (0..n_ranks).map(|r| r * send_stride).collect();
+    let mut bwd_stats_unpack_buf: Vec<SolverStatsDelta> =
+        vec![SolverStatsDelta::default(); n_ranks * n_workers_local * bwd_max_openings];
+
     for iteration in (start_iteration + 1)..=max_iterations {
         // Check external shutdown flag before each iteration's convergence
         // evaluation. The flag is set by signal handlers or test harnesses.
@@ -767,6 +781,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             total_forward_passes,
             iteration,
             fwd_offset: my_fwd_offset,
+            event_sender: event_sender.as_ref(),
         };
 
         // Snapshot pool stats before forward pass.
@@ -812,7 +827,9 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 iteration,
                 "forward",
                 i32::try_from(stage_idx).unwrap_or(i32::MAX),
-                -1,
+                -1,       // opening: no opening dimension on the forward pass
+                fwd_rank, // rank: this rank's MPI rank
+                -1,       // worker_id: -1 sentinel → NULL at the writer boundary
                 delta.clone(),
             ));
         }
@@ -866,6 +883,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             global_increments_buf: &mut bwd_global_increments_buf,
             real_states_buf: &mut bwd_real_states_buf,
             stage_worker_stats_buf: &mut bwd_stage_worker_stats_buf,
+            bwd_stats_send_buf: &mut bwd_stats_send_buf,
+            bwd_stats_recv_buf: &mut bwd_stats_recv_buf,
+            bwd_stats_counts: &bwd_stats_counts,
+            bwd_stats_displs: &bwd_stats_displs,
+            bwd_stats_unpack_buf: &mut bwd_stats_unpack_buf,
+            event_sender: event_sender.as_ref(),
         };
 
         let backward_result = match run_backward_pass(
@@ -886,25 +909,28 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // Buffers are borrowed by bwd_spec and automatically available for
         // the next iteration after bwd_spec is dropped here.
 
-        // Store per-stage, per-opening backward deltas and compute aggregate solve time.
-        // stage_stats is Vec<(usize, Vec<SolverStatsDelta>)> — one inner Vec per stage,
-        // with length n_openings. Push one SolverStatsEntry per (stage, opening) pair.
+        // Store per-(rank, worker_id, opening) backward deltas and compute aggregate solve time.
+        // stage_stats is Vec<(usize, Vec<(rank, worker_id, omega, delta)>)>.
+        // Push one SolverStatsEntry per (stage, rank, worker_id, opening) 4-tuple.
         let bwd_solve_time_ms = {
             let agg = SolverStatsDelta::aggregate(
                 backward_result
                     .stage_stats
                     .iter()
-                    .flat_map(|(_, per_opening)| per_opening.iter()),
+                    .flat_map(|(_, entries)| entries.iter().map(|(_, _, _, d)| d)),
             );
             let total_ms = agg.solve_time_ms;
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            for (stage_idx, per_opening) in &backward_result.stage_stats {
-                for (omega_usize, delta) in per_opening.iter().enumerate() {
+            for (stage_idx, entries) in &backward_result.stage_stats {
+                for (rank, worker_id, omega, delta) in entries {
                     solver_stats_log.push((
                         iteration,
                         "backward",
                         *stage_idx as i32,
-                        omega_usize as i32,
+                        i32::try_from(*omega)
+                            .expect("opening index is bounded well below i32::MAX"),
+                        *rank,
+                        *worker_id,
                         delta.clone(),
                     ));
                 }
@@ -1166,7 +1192,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
         let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
         let lb_solve_time_ms = lb_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "lower_bound", -1, -1, lb_delta));
+        solver_stats_log.push((
+            iteration,
+            "lower_bound",
+            -1,       // stage: no per-stage dimension on lower_bound
+            -1,       // opening: no opening dimension on lower_bound
+            fwd_rank, // rank: this rank's MPI rank
+            -1,       // worker_id: -1 sentinel → NULL at the writer boundary
+            lb_delta,
+        ));
         #[allow(clippy::cast_possible_truncation)]
         let lb_wall_ms = lb_wall_start.elapsed().as_millis() as u64;
 
@@ -1292,7 +1326,7 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1899,11 +1933,12 @@ mod tests {
     /// before `IterationLimit(2)` triggers. The receiver must collect exactly:
     ///
     /// - 1 `TrainingStarted`
-    /// - 2 × (`ForwardPassComplete`, `ForwardSyncComplete`, `BackwardPassComplete`,
-    ///   `CutSyncComplete`, `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
+    /// - 2 × (`WorkerTiming` (Forward), `ForwardPassComplete`, `ForwardSyncComplete`,
+    ///   `WorkerTiming` (Backward), `BackwardPassComplete`, `CutSyncComplete`,
+    ///   `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
     /// - 1 `TrainingFinished`
     ///
-    /// = 1 + 14 + 1 = 16 events.
+    /// = 1 + 18 + 1 = 20 events.
     #[test]
     fn ac_train_emits_correct_event_sequence() {
         let n_stages = 2;
@@ -1994,14 +2029,14 @@ mod tests {
         drop(fcf); // not needed; just for clarity
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-        // 1 TrainingStarted + 2*(7 per-iteration) + 1 TrainingFinished = 16
-        // Per-iteration: ForwardPassComplete, ForwardSyncComplete,
-        //   BackwardPassComplete, CutSyncComplete, TemplateBakeComplete,
-        //   ConvergenceUpdate, IterationSummary
+        // 1 TrainingStarted + 2*(9 per-iteration) + 1 TrainingFinished = 20
+        // Per-iteration: WorkerTiming(Forward), ForwardPassComplete,
+        //   ForwardSyncComplete, WorkerTiming(Backward), BackwardPassComplete,
+        //   CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary
         assert_eq!(
             events.len(),
-            16,
-            "expected 16 events, got {} ({events:?})",
+            20,
+            "expected 20 events, got {} ({events:?})",
             events.len()
         );
 
@@ -2014,50 +2049,251 @@ mod tests {
             "last event must be TrainingFinished"
         );
 
-        // Check per-iteration event pattern for iteration 1 (events[1..8])
+        // Check per-iteration event pattern for iteration 1 (events[1..10])
         assert!(matches!(
             events[1],
-            TrainingEvent::ForwardPassComplete { .. }
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Forward,
+                ..
+            }
         ));
         assert!(matches!(
             events[2],
-            TrainingEvent::ForwardSyncComplete { .. }
-        ));
-        assert!(matches!(
-            events[3],
-            TrainingEvent::BackwardPassComplete { .. }
-        ));
-        assert!(matches!(events[4], TrainingEvent::CutSyncComplete { .. }));
-        assert!(matches!(
-            events[5],
-            TrainingEvent::TemplateBakeComplete { .. }
-        ));
-        assert!(matches!(events[6], TrainingEvent::ConvergenceUpdate { .. }));
-        assert!(matches!(events[7], TrainingEvent::IterationSummary { .. }));
-
-        // Iteration 2 (events[8..15]) follows the same pattern.
-        assert!(matches!(
-            events[8],
             TrainingEvent::ForwardPassComplete { .. }
         ));
         assert!(matches!(
-            events[9],
+            events[3],
             TrainingEvent::ForwardSyncComplete { .. }
         ));
         assert!(matches!(
-            events[10],
+            events[4],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Backward,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[5],
             TrainingEvent::BackwardPassComplete { .. }
         ));
-        assert!(matches!(events[11], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(events[6], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(
+            events[7],
+            TrainingEvent::TemplateBakeComplete { .. }
+        ));
+        assert!(matches!(events[8], TrainingEvent::ConvergenceUpdate { .. }));
+        assert!(matches!(events[9], TrainingEvent::IterationSummary { .. }));
+
+        // Iteration 2 (events[10..19]) follows the same pattern.
+        assert!(matches!(
+            events[10],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Forward,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[11],
+            TrainingEvent::ForwardPassComplete { .. }
+        ));
         assert!(matches!(
             events[12],
-            TrainingEvent::TemplateBakeComplete { .. }
+            TrainingEvent::ForwardSyncComplete { .. }
         ));
         assert!(matches!(
             events[13],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Backward,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[14],
+            TrainingEvent::BackwardPassComplete { .. }
+        ));
+        assert!(matches!(events[15], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(
+            events[16],
+            TrainingEvent::TemplateBakeComplete { .. }
+        ));
+        assert!(matches!(
+            events[17],
             TrainingEvent::ConvergenceUpdate { .. }
         ));
-        assert!(matches!(events[14], TrainingEvent::IterationSummary { .. }));
+        assert!(matches!(events[18], TrainingEvent::IterationSummary { .. }));
+    }
+
+    /// AC C2 + C3 for ticket-006: with 4 workers and 1 iteration, exactly
+    /// `2 * n_workers_local = 8` WorkerTiming events are emitted with `rank = 0`
+    /// and `worker_id ∈ {0, 1, 2, 3}`; AND the sum of `timings[BWD_SETUP]` across
+    /// the 4 backward emissions equals `BackwardPassComplete.setup_time_ms` for
+    /// the same iteration (within ±1 ms numerical tolerance).
+    #[test]
+    fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
+        use cobre_core::{
+            WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP, WorkerTimingPhase,
+        };
+
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 4,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(1),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+
+        // Collect all WorkerTiming events and the BackwardPassComplete event.
+        let worker_events: Vec<&TrainingEvent> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::WorkerTiming { .. }))
+            .collect();
+        // C2: exactly 8 WorkerTiming events (4 workers × 2 phases × 1 iteration).
+        assert_eq!(
+            worker_events.len(),
+            8,
+            "expected 8 WorkerTiming events (4 workers × 2 phases × 1 iter), got {}",
+            worker_events.len()
+        );
+
+        // C2: rank=0, worker_id ∈ {0,1,2,3}, iteration=1 for every event.
+        let mut fwd_workers = std::collections::BTreeSet::new();
+        let mut bwd_workers = std::collections::BTreeSet::new();
+        let mut bwd_setup_sum_ms = 0.0_f64;
+        for ev in &worker_events {
+            let TrainingEvent::WorkerTiming {
+                rank,
+                worker_id,
+                iteration,
+                phase,
+                timings,
+            } = ev
+            else {
+                unreachable!()
+            };
+            assert_eq!(*rank, 0, "expected rank=0 in single-rank stub");
+            assert!(
+                (0..4).contains(worker_id),
+                "worker_id {worker_id} out of [0,4)"
+            );
+            assert_eq!(*iteration, 1, "expected iteration=1 (max_iterations=1)");
+            match phase {
+                WorkerTimingPhase::Forward => {
+                    assert!(
+                        fwd_workers.insert(*worker_id),
+                        "worker_id {worker_id} duplicated in Forward emissions"
+                    );
+                    // Forward-only slots can be non-zero; backward-only slots must be 0.
+                    assert_eq!(timings[WORKER_TIMING_SLOT_BWD_SETUP], 0.0);
+                }
+                WorkerTimingPhase::Backward => {
+                    assert!(
+                        bwd_workers.insert(*worker_id),
+                        "worker_id {worker_id} duplicated in Backward emissions"
+                    );
+                    bwd_setup_sum_ms += timings[WORKER_TIMING_SLOT_BWD_SETUP];
+                    // Backward-only slots can be non-zero; forward-only slots must be 0.
+                    assert_eq!(timings[WORKER_TIMING_SLOT_FWD_SETUP], 0.0);
+                }
+            }
+        }
+        assert_eq!(fwd_workers.len(), 4, "expected 4 distinct forward workers");
+        assert_eq!(bwd_workers.len(), 4, "expected 4 distinct backward workers");
+
+        // C3: setup-sum invariant — sum of per-worker BWD_SETUP equals
+        // BackwardPassComplete.setup_time_ms within ±1 ms tolerance.
+        // (BackwardPassComplete.setup_time_ms is u64; per-worker timings are f64.)
+        let bwd_setup_total_ms_u64 = events
+            .iter()
+            .find_map(|e| match e {
+                TrainingEvent::BackwardPassComplete { setup_time_ms, .. } => Some(*setup_time_ms),
+                _ => None,
+            })
+            .expect("BackwardPassComplete event must exist");
+        #[allow(clippy::cast_precision_loss)]
+        let bwd_setup_total_ms = bwd_setup_total_ms_u64 as f64;
+        assert!(
+            (bwd_setup_sum_ms - bwd_setup_total_ms).abs() < 1.0,
+            "sum of per-worker BWD_SETUP ({bwd_setup_sum_ms} ms) must match \
+             BackwardPassComplete.setup_time_ms ({bwd_setup_total_ms} ms) within ±1 ms"
+        );
     }
 
     /// AC: `train_result_fields_populated`

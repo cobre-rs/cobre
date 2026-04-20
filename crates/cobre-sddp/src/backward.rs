@@ -82,9 +82,13 @@
 //! hot-path allocations from Cobre's perspective.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
+use cobre_core::{
+    TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WorkerTimingPhase,
+};
 use cobre_solver::{RowBatch, SolverInterface, SolverStatistics};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
@@ -96,10 +100,19 @@ use crate::{
     forward::{build_cut_row_batch_into, build_delta_cut_row_batch_into},
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer},
+    solver_stats::{
+        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        pack_worker_opening_stats, unpack_worker_opening_stats,
+    },
     state_exchange::ExchangeBuffers,
     workspace::{BasisStore, SolverWorkspace},
 };
+
+/// Per-`(rank, worker_id, opening)` solver delta collected during a single
+/// backward stage, as returned inside [`BackwardResult::stage_stats`].
+///
+/// Layout: `(rank, worker_id, opening_index, delta)`.
+pub type StageWorkerOpeningDelta = (i32, i32, usize, SolverStatsDelta);
 
 /// Result produced by the backward pass on a single rank.
 #[derive(Debug, Clone)]
@@ -114,14 +127,16 @@ pub struct BackwardResult {
     /// Number of LP solves performed during this backward pass.
     pub lp_solves: u64,
 
-    /// Per-stage, per-opening solver statistics deltas.
+    /// Per-stage, per-`(rank, worker_id, opening)` solver statistics deltas.
     ///
-    /// Each entry is `(successor_stage_index, per_opening_deltas)` where the
-    /// stage index identifies which stage's LP was solved (the successor), not
-    /// the stage where cuts are added. The inner `Vec<SolverStatsDelta>` has
-    /// length `n_openings` for that stage — one delta per opening index.
+    /// Each outer entry is `(successor_stage_index, per_worker_opening_deltas)`.
+    /// The inner `Vec` element is `(rank, worker_id, omega, delta)`: one entry per
+    /// `(MPI rank, rayon worker, opening index)` triple gathered via `allgatherv`.
+    /// Only includes entries where `omega < n_openings(successor)` AND
+    /// `delta.lp_solves > 0 || omega == 0` (preserves the omega=0 "stage visited"
+    /// sentinel while skipping padded buffer slots).
     /// Entries are in reverse stage order (matching the backward iteration direction).
-    pub stage_stats: Vec<(usize, Vec<SolverStatsDelta>)>,
+    pub stage_stats: Vec<(usize, Vec<StageWorkerOpeningDelta>)>,
 
     /// Wall-clock time for state exchange (`allgatherv`) accumulated across
     /// all stages, in milliseconds.
@@ -279,9 +294,7 @@ pub struct BackwardPassSpec<'a> {
     ///
     /// Shape: `n_workers_local × max_openings`. After the parallel region at
     /// each stage, each worker's `per_opening_stats` slice is copied into this
-    /// buffer via `set(ws.worker_id, omega, ...)`. The summed-over-workers view
-    /// used by the parquet writer is then derived from the buffer instead of
-    /// summing the worker arrays directly, preserving byte-identical output.
+    /// buffer via `set(ws.worker_id, omega, ...)`.
     ///
     /// `reset()` is called at the **start of each stage** (inside the stage loop,
     /// before the parallel region) so stale data from the previous stage never
@@ -289,6 +302,52 @@ pub struct BackwardPassSpec<'a> {
     ///
     /// Allocated once at training setup; never reallocated on the hot path.
     pub stage_worker_stats_buf: &'a mut StageWorkerStatsBuffer,
+
+    /// MPI send buffer for the per-`(worker, opening)` stats `allgatherv`.
+    ///
+    /// Length: `n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
+    /// Packed from `stage_worker_stats_buf` after each stage's parallel region via
+    /// `pack_worker_opening_stats`. Allocated once at training setup; never
+    /// reallocated on the hot path.
+    pub bwd_stats_send_buf: &'a mut Vec<f64>,
+
+    /// MPI receive buffer for the per-`(rank, worker, opening)` stats `allgatherv`.
+    ///
+    /// Length: `n_ranks * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
+    /// After `allgatherv`, rank 0 unpacks this into `bwd_stats_unpack_buf`. All ranks
+    /// allocate the same buffer size (allgatherv is all→all). Allocated once at training
+    /// setup; never reallocated on the hot path.
+    pub bwd_stats_recv_buf: &'a mut Vec<f64>,
+
+    /// Per-rank element counts for the `allgatherv` of backward stats.
+    ///
+    /// Each rank sends `n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`
+    /// `f64` values. All entries are equal (uniform partition). Length: `n_ranks`.
+    /// Allocated once at training setup; never reallocated on the hot path.
+    pub bwd_stats_counts: &'a [usize],
+
+    /// Displacement array for the `allgatherv` of backward stats.
+    ///
+    /// `displs[r] = r * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
+    /// Length: `n_ranks`. Allocated once at training setup; never reallocated on the hot path.
+    pub bwd_stats_displs: &'a [usize],
+
+    /// Unpack destination buffer for the per-`(rank, worker, opening)` stats on rank 0.
+    ///
+    /// Length: `n_ranks * n_workers_local * bwd_max_openings` `SolverStatsDelta` entries.
+    /// Only rank 0 reads from this after unpacking; non-root ranks hold a pre-allocated
+    /// but unused buffer (allgatherv is all→all, so all ranks hold the recv buffer).
+    /// Allocated once at training setup; never reallocated on the hot path.
+    pub bwd_stats_unpack_buf: &'a mut Vec<SolverStatsDelta>,
+
+    /// Optional event channel for emitting [`TrainingEvent::WorkerTiming`] events.
+    ///
+    /// When `Some`, one `WorkerTiming { phase: Backward, .. }` event is emitted
+    /// per rayon worker per iteration after the parallel region completes. When
+    /// `None`, no events are emitted and no overhead is incurred. Send errors
+    /// (receiver dropped) are silently ignored, matching the existing `emit`
+    /// helper semantics.
+    pub event_sender: Option<&'a Sender<TrainingEvent>>,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -743,6 +802,11 @@ fn process_stage_backward<S: SolverInterface + Send>(
             // but we can't know exactly; use local_work as an upper bound.
             let mut staged: Vec<StagedCut> = Vec::with_capacity(local_work.max(1));
 
+            // Per-worker wall clock for this stage's contribution to backward_wall_ms
+            // (slot 1). Captured at the closure boundary, not inside the trial-point
+            // loop, to avoid inflating with loop overhead.
+            let worker_stage_wall_start = Instant::now();
+
             loop {
                 let m = next_trial.fetch_add(1, Ordering::Relaxed);
                 if m >= local_work {
@@ -759,6 +823,12 @@ fn process_stage_backward<S: SolverInterface + Send>(
                     m,
                 )?);
             }
+
+            // Accumulate per-worker elapsed into the iteration-level timing buffer.
+            // Slot 1 = backward_wall_ms: sum across stages for this worker.
+            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_WALL] +=
+                worker_stage_wall_start.elapsed().as_secs_f64() * 1_000.0;
+
             Ok(staged)
         })
         .collect()
@@ -836,7 +906,11 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         .map(|ws| ws.solver.statistics().solve_count)
         .sum();
     let mut cuts_generated: usize = 0;
-    let mut stage_stats: Vec<(usize, Vec<SolverStatsDelta>)> = Vec::new();
+    let mut stage_stats: Vec<(usize, Vec<StageWorkerOpeningDelta>)> = Vec::new();
+    let n_workers_local = workspaces.len();
+    let n_ranks = comm.size();
+    let bwd_max_openings =
+        spec.bwd_stats_send_buf.len() / n_workers_local.max(1) / WORKER_STATS_ENTRY_STRIDE;
     let mut state_exchange_ms: u64 = 0;
     let mut cut_batch_build_ms: u64 = 0;
     let mut setup_ms: u64 = 0;
@@ -853,6 +927,13 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     // Pre-allocate per-worker delta and total buffers; reused via clear()+extend() each stage.
     let mut worker_deltas: Vec<SolverStatsDelta> = Vec::with_capacity(workspaces.len());
     let mut worker_totals: Vec<f64> = Vec::with_capacity(workspaces.len());
+
+    // Reset per-worker timing buffers to zero at the iteration boundary so that
+    // the accumulation across stages starts clean. Slots are zeroed individually;
+    // the whole [f64; 16] is stack-resident Copy, so fill(0.0) is a write of 128 bytes.
+    for ws in workspaces.iter_mut() {
+        ws.worker_timing_buf.fill(0.0);
+    }
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
         // When the caller supplies forward-pass records, perform the per-stage
@@ -1056,6 +1137,16 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             })
             .sum();
 
+        // Accumulate per-worker setup contribution into worker_timing_buf[BWD_SETUP]
+        // (slot 8). Summed across all stages so the per-iteration emission in
+        // `run_backward_pass` (after the stage loop) carries the full iteration total.
+        for (ws, delta) in workspaces.iter_mut().zip(&worker_deltas) {
+            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_SETUP] += delta.load_model_time_ms
+                + delta.add_rows_time_ms
+                + delta.set_bounds_time_ms
+                + delta.basis_set_time_ms;
+        }
+
         // Per-worker elapsed: solve + setup phases.
         // Reuse pre-allocated buffer (clear+extend avoids per-stage allocation on the hot path).
         worker_totals.clear();
@@ -1094,11 +1185,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             scheduling_ms += stage_scheduling_ms as u64;
         }
 
-        // Gather per-worker per_opening_stats into the flat buffer (T003).
-        // The buffer is reset at the top of each stage so stale data from the
-        // previous stage never accumulates.  After gathering, derive the
-        // summed-over-workers Vec<SolverStatsDelta> that the parquet writer
-        // currently expects — byte-identical to the pre-T003 direct sum.
+        // Gather per-worker per_opening_stats into the local StageWorkerStatsBuffer
+        // (T003). Reset first so stale data from the previous stage never accumulates.
         spec.stage_worker_stats_buf.reset();
         for ws in workspaces.iter() {
             debug_assert_eq!(
@@ -1116,22 +1204,92 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                 );
             }
         }
-        // Derive the summed-over-workers view (parquet writer contract preserved).
-        let stage_per_opening: Vec<SolverStatsDelta> = {
-            let n_w = spec.stage_worker_stats_buf.n_workers();
-            let mut sum_vec = vec![SolverStatsDelta::default(); n_openings];
-            for (omega, slot) in sum_vec.iter_mut().enumerate().take(n_openings) {
-                for w in 0..n_w {
-                    SolverStatsDelta::accumulate_into(
-                        slot,
-                        spec.stage_worker_stats_buf.get(w, omega),
-                    );
+
+        // Pack the local worker stats into the MPI send buffer (T004 layout).
+        pack_worker_opening_stats(
+            spec.bwd_stats_send_buf,
+            spec.stage_worker_stats_buf.as_slice(),
+            n_workers_local,
+            bwd_max_openings,
+        );
+
+        // Gather per-worker stats from all ranks (T005).
+        // allgatherv collects n_workers_local * bwd_max_openings * STRIDE f64s from
+        // every rank into a rank-major receive buffer. The LocalBackend (np=1) treats
+        // this as an identity copy — no branch needed.
+        comm.allgatherv(
+            spec.bwd_stats_send_buf,
+            spec.bwd_stats_recv_buf,
+            spec.bwd_stats_counts,
+            spec.bwd_stats_displs,
+        )
+        .map_err(SddpError::Communication)?;
+
+        // Rank 0 (and all ranks — allgatherv is all→all) unpacks the receive buffer
+        // into per-(rank, worker_id, opening) SolverStatsDelta entries.
+        // Only rank 0 uses these for parquet output; other ranks hold the buffer
+        // for potential future use (zero extra allocation).
+        debug_assert_eq!(
+            spec.bwd_stats_recv_buf.len(),
+            n_ranks * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE,
+            "recv buffer length must equal n_ranks * n_workers_local * bwd_max_openings * STRIDE"
+        );
+        unpack_worker_opening_stats(
+            spec.bwd_stats_recv_buf,
+            spec.bwd_stats_unpack_buf,
+            n_ranks * n_workers_local,
+            bwd_max_openings,
+        );
+
+        // Build the per-(rank, worker_id, opening) stage_stats entries.
+        // Skip padded slots (omega >= n_openings) and zero-solve slots unless omega == 0
+        // (the omega=0 sentinel preserves "stage was visited" semantics from epic-04a).
+        let mut stage_entries: Vec<StageWorkerOpeningDelta> = Vec::new();
+        for r in 0..n_ranks {
+            let rank_i32 = i32::try_from(r).map_err(|_| {
+                SddpError::Validation(format!(
+                    "MPI rank count {r} overflows i32 (max {})",
+                    i32::MAX
+                ))
+            })?;
+            for w in 0..n_workers_local {
+                let wid_i32 = i32::try_from(w).map_err(|_| {
+                    SddpError::Validation(format!(
+                        "worker count {w} overflows i32 (max {})",
+                        i32::MAX
+                    ))
+                })?;
+                for omega in 0..n_openings {
+                    let flat = (r * n_workers_local + w) * bwd_max_openings + omega;
+                    let delta = spec.bwd_stats_unpack_buf[flat].clone();
+                    if delta.lp_solves > 0 || omega == 0 {
+                        stage_entries.push((rank_i32, wid_i32, omega, delta));
+                    }
                 }
             }
-            sum_vec
-        };
+        }
 
-        stage_stats.push((successor, stage_per_opening));
+        stage_stats.push((successor, stage_entries));
+    }
+
+    // Emit one WorkerTiming { phase: Backward } event per worker, carrying the
+    // per-iteration totals accumulated across all stages. The rank-level
+    // BackwardPassComplete event (emitted by the training loop caller) is unaffected.
+    //
+    // Slots populated per worker:
+    //   [1]  backward_wall_ms  — accumulated in process_stage_backward per stage
+    //   [8]  bwd_setup_ms      — accumulated after worker_deltas per stage above
+    // All other slots remain 0 on Backward WorkerTiming events (rank-only fields).
+    if let Some(sender) = spec.event_sender {
+        for ws in workspaces.iter() {
+            let _ = sender.send(TrainingEvent::WorkerTiming {
+                rank: ws.rank,
+                worker_id: ws.worker_id,
+                iteration: spec.iteration,
+                phase: WorkerTimingPhase::Backward,
+                timings: ws.worker_timing_buf,
+            });
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -1170,7 +1328,7 @@ mod tests {
         StageIndexer, TrajectoryRecord,
         context::{BakedTemplates, StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
-        solver_stats::StageWorkerStatsBuffer,
+        solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -1441,6 +1599,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }]
     }
 
@@ -1811,6 +1970,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -1910,6 +2075,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2009,6 +2180,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2104,6 +2281,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2199,6 +2382,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2292,6 +2481,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         );
@@ -2429,6 +2624,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2544,6 +2745,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2664,6 +2871,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2771,6 +2984,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2785,6 +3004,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn forward_pass_index_matches_global_scenario_index() {
         // Acceptance criterion: when a cut is generated for global trial point
         // m=5, then `fcf.add_cut(stage, iteration, 5, ...)` is called with
@@ -2887,6 +3107,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -2998,6 +3224,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -3103,6 +3335,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -3215,6 +3453,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         );
@@ -3306,6 +3550,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }];
         let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -3365,6 +3610,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -3406,6 +3657,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
             })
             .collect();
         let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -3450,6 +3702,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -3761,6 +4019,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         };
         let mut workspaces = vec![ws];
 
@@ -3828,6 +4087,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -3930,6 +4195,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3991,6 +4257,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -4094,6 +4366,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -4159,6 +4432,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -4198,6 +4477,7 @@ mod tests {
     /// scope for CI. This test validates the structural invariant (sync is
     /// called per-stage inside the loop) and exercises the full code path.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn per_stage_cut_sync_invariant_after_bug1_fix() {
         use cobre_comm::LocalBackend;
 
@@ -4281,6 +4561,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -4321,6 +4607,7 @@ mod tests {
     /// Uses `MockSolver::always_ok_with_binding_cuts` so that cut rows
     /// return positive duals, making them appear binding when evaluated.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn metadata_sync_updates_active_count_and_last_active_iter() {
         use cobre_comm::LocalBackend;
 
@@ -4412,6 +4699,12 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+                bwd_stats_counts: &[8 * 32 * 17],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
             },
             &comm,
         )
@@ -4529,6 +4822,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
             })
             .collect();
 
@@ -4590,7 +4884,22 @@ mod tests {
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
+                bwd_stats_send_buf: &mut vec![
+                    0.0;
+                    n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE
+                ],
+                bwd_stats_recv_buf: &mut vec![
+                    0.0;
+                    n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE
+                ],
+                bwd_stats_counts: &[n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![
+                    SolverStatsDelta::default();
+                    n_workers * n_openings
+                ],
+                event_sender: None,
             },
             &comm,
         )
@@ -4838,5 +5147,412 @@ mod tests {
         let pairs = vec![(zero.clone(), after)];
         let (_, _, scheduling_ms) = decompose_overhead(&pairs, 180);
         assert_eq!(scheduling_ms, 0, "negative scheduling must be clamped to 0");
+    }
+
+    // ── T005: allgatherv per-worker stats unit tests ──────────────────────────
+
+    /// T005-A: single-rank (np=1) backward pass with 2 workers.
+    ///
+    /// Constructs a 2-worker `StageWorkerStatsBuffer::new(2, 4)` and uses
+    /// `StubComm` (which echoes send→recv, simulating `LocalBackend` np=1).
+    /// After one backward iteration, `BackwardResult::stage_stats` must
+    /// contain 2 entries per non-zero opening (`worker_id` 0 and `worker_id` 1),
+    /// both with `rank = 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
+    fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 2_usize;
+        let n_openings = 4_usize;
+        let n_workers = 2_usize;
+        let local_work = 4_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+
+        let solution = solution_1_0(100.0, -5.0);
+        let states: Vec<Vec<f64>> = (0..local_work).map(|i| vec![(i + 1) as f64]).collect();
+        let mut exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits in i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    recon_slot_lookup: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
+            })
+            .collect();
+
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
+        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
+        let send_sz = n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE;
+
+        let result = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &not_baked(),
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 0,
+                local_work: exchange.local_count(),
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
+                bwd_stats_send_buf: &mut vec![0.0; send_sz],
+                // np=1: recv == send (StubComm echoes)
+                bwd_stats_recv_buf: &mut vec![0.0; send_sz],
+                bwd_stats_counts: &[send_sz],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![
+                    SolverStatsDelta::default();
+                    n_workers * n_openings
+                ],
+                event_sender: None,
+            },
+            &StubComm,
+        )
+        .expect("single-rank 2-worker backward must not error");
+
+        // The 2-stage system has 1 backward stage (t=0, successor=1).
+        // stage_stats must contain exactly 1 entry (one successor).
+        assert_eq!(
+            result.stage_stats.len(),
+            1,
+            "expected 1 backward stage entry (successor=1)"
+        );
+        let (successor, entries) = &result.stage_stats[0];
+        assert_eq!(*successor, 1_usize, "successor index must be 1");
+
+        // Every entry must have rank=0 (np=1 StubComm).
+        for (rank, _wid, _omega, _delta) in entries {
+            assert_eq!(*rank, 0_i32, "all entries must have rank=0 for np=1");
+        }
+        // Both worker_id values (0 and 1) must appear at omega=0.
+        let omega0_wids: Vec<i32> = entries
+            .iter()
+            .filter(|(_, _, omega, _)| *omega == 0)
+            .map(|(_, wid, _, _)| *wid)
+            .collect();
+        assert!(
+            omega0_wids.contains(&0),
+            "worker_id=0 must appear at omega=0"
+        );
+        assert!(
+            omega0_wids.contains(&1),
+            "worker_id=1 must appear at omega=0"
+        );
+    }
+
+    /// T005-B: multi-rank (np=2) backward pass with stub communicator.
+    ///
+    /// Uses a `DualRankStubComm` whose `size()` returns 2 and whose
+    /// `allgatherv` concatenates a manually injected "remote rank" payload
+    /// (a copy of the send buffer). Asserts that the unpacked
+    /// `stage_stats` contains entries for both `rank=0` and `rank=1`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
+    fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
+        use crate::lp_builder::PatchBuffer;
+
+        /// Stub communicator simulating np=2: `allgatherv` fills recv with
+        /// `[send, send]` (rank-0 and a synthetic rank-1 copy).
+        struct DualRankStubComm;
+
+        impl Communicator for DualRankStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                counts: &[usize],
+                displs: &[usize],
+            ) -> Result<(), CommError> {
+                // Fill each rank's slot in recv using the provided counts/displs.
+                // Both ranks contribute `send` (rank-1 is a synthetic copy of rank-0).
+                for (r, (&count, &displ)) in counts.iter().zip(displs).enumerate() {
+                    let src = &send[..count.min(send.len())];
+                    recv[displ..displ + src.len()].copy_from_slice(src);
+                    let _ = r; // suppress unused warning in cfg(test)
+                }
+                Ok(())
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                _op: ReduceOp,
+            ) -> Result<(), CommError> {
+                recv[..send.len()].copy_from_slice(send);
+                Ok(())
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let n_stages = 2_usize;
+        let n_openings = 2_usize;
+        let n_workers = 1_usize;
+        let n_ranks = 2_usize;
+        let local_work = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+
+        let solution = solution_1_0(100.0, -5.0);
+        let states: Vec<Vec<f64>> = (0..local_work).map(|i| vec![(i + 1) as f64]).collect();
+        let mut exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits in i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    recon_slot_lookup: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
+            })
+            .collect();
+
+        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
+        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
+        let send_sz = n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE;
+
+        let result = run_backward_pass(
+            &mut workspaces,
+            &basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &not_baked(),
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 0,
+                local_work: exchange.local_count(),
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
+                bwd_stats_send_buf: &mut vec![0.0; send_sz],
+                // np=2: recv holds two copies of the send block.
+                bwd_stats_recv_buf: &mut vec![0.0; n_ranks * send_sz],
+                bwd_stats_counts: &[send_sz, send_sz],
+                bwd_stats_displs: &[0, send_sz],
+                bwd_stats_unpack_buf: &mut vec![
+                    SolverStatsDelta::default();
+                    n_ranks * n_workers * n_openings
+                ],
+                event_sender: None,
+            },
+            &DualRankStubComm,
+        )
+        .expect("dual-rank stub backward must not error");
+
+        // With np=2, stage_stats for successor=1 must contain entries from
+        // both rank=0 and rank=1 (DualRankStubComm copies the rank-0 block
+        // into the rank-1 slot, so both appear in the unpacked output).
+        assert_eq!(result.stage_stats.len(), 1);
+        let (_, entries) = &result.stage_stats[0];
+
+        let ranks_seen: Vec<i32> = entries
+            .iter()
+            .map(|(rank, _, _, _)| *rank)
+            .collect::<std::collections::HashSet<i32>>()
+            .into_iter()
+            .collect();
+        assert!(
+            ranks_seen.contains(&0),
+            "rank=0 must appear in stage_stats; got {ranks_seen:?}"
+        );
+        assert!(
+            ranks_seen.contains(&1),
+            "rank=1 must appear in stage_stats; got {ranks_seen:?}"
+        );
     }
 }

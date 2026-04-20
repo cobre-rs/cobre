@@ -90,7 +90,7 @@ pub use output::{
     MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
     MetadataProblemDimensions, MetadataScenarios, OutputContext, OutputError, ParquetWriterConfig,
     SimulationMetadata, SimulationOutput, SolverStatsRow, TrainingMetadata, TrainingOutput,
-    TrainingParquetWriter, get_hostname, now_iso8601, read_convergence_summary,
+    TrainingParquetWriter, WorkerTimingRecord, get_hostname, now_iso8601, read_convergence_summary,
     read_simulation_metadata, read_training_metadata, write_cut_selection_records,
     write_dictionaries, write_fpha_hyperplanes, write_provenance_report, write_results,
     write_scaling_report, write_simulation_metadata, write_simulation_results,

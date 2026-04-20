@@ -225,13 +225,17 @@ fn export_stochastic_artifacts_py(
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
 /// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
-/// and `None` for forward, `lower_bound`, and simulation rows.
+/// and `None` for forward, `lower_bound`, and simulation rows. `rank` and `worker_id`
+/// are `Some` for backward rows (from allgatherv unpack) and `None` for forward,
+/// lower_bound, and simulation rows (no per-worker dimension yet).
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
     opening: Option<i32>,
+    rank: Option<i32>,
+    worker_id: Option<i32>,
     delta: &SolverStatsDelta,
 ) -> SolverStatsRow {
     SolverStatsRow {
@@ -239,8 +243,8 @@ fn delta_to_stats_row(
         phase: phase.to_string(),
         stage,
         opening,
-        rank: None,      // populated in T005 (MPI allgatherv per-worker stats)
-        worker_id: None, // populated in T005 (MPI allgatherv per-worker stats)
+        rank,
+        worker_id,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
@@ -328,11 +332,25 @@ fn write_training_artifacts(
             .result
             .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, opening, delta)| {
+            .map(|(iter, phase, stage, opening, rank, worker_id, delta)| {
                 let opening_opt = if *opening == -1 { None } else { Some(*opening) };
+                // worker_id == -1 means "no per-worker dimension" → NULL in parquet.
+                let worker_id_opt = if *worker_id == -1 {
+                    None
+                } else {
+                    Some(*worker_id)
+                };
                 #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
                 let id = *iter as u32;
-                delta_to_stats_row(id, phase, *stage, opening_opt, delta)
+                delta_to_stats_row(
+                    id,
+                    phase,
+                    *stage,
+                    opening_opt,
+                    Some(*rank),
+                    worker_id_opt,
+                    delta,
+                )
             })
             .collect();
         cobre_io::write_solver_stats(output_dir, &rows)
@@ -423,13 +441,14 @@ fn run_simulation_phase_py(
     let mut sim_out = sim_writer.finalize(0);
     sim_out.failed = write_failures;
 
-    // Simulation has no opening dimension; opening is always None.
+    // Simulation has no opening dimension and no per-worker dimension yet;
+    // opening, rank, and worker_id are all None.
     if !sim_run_result.solver_stats.is_empty() {
         let rows: Vec<SolverStatsRow> = sim_run_result
             .solver_stats
             .iter()
             .map(|(scenario_id, _opening, delta)| {
-                delta_to_stats_row(*scenario_id, "simulation", -1, None, delta)
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, None, None, delta)
             })
             .collect();
         cobre_io::write_simulation_solver_stats(output_dir, &rows)

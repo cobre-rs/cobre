@@ -238,7 +238,13 @@ pub(crate) fn convergence_schema() -> Schema {
 
 /// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
 ///
-/// 16 fields. Top-level non-overlapping phases: `forward_wall_ms`,
+/// 18 fields. Row semantics (T007): one row per `(iteration, rank)` for
+/// rank-only sequential values (`worker_id = NULL`), and one row per
+/// `(iteration, rank, worker_id)` for per-worker parallel-region values.
+/// `SUM(col) GROUP BY iteration` recovers the pre-T007 single-row-per-iteration
+/// value for each of the 16 timing columns.
+///
+/// Top-level non-overlapping phases: `forward_wall_ms`,
 /// `backward_wall_ms`, `cut_selection_ms`, `mpi_allreduce_ms`,
 /// `lower_bound_ms`. Sub-components of backward: `cut_sync_ms`,
 /// `state_exchange_ms`, `cut_batch_build_ms`, `bwd_setup_ms`,
@@ -248,6 +254,8 @@ pub(crate) fn convergence_schema() -> Schema {
 pub(crate) fn iteration_timing_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
+        Field::new("rank", DataType::Int32, true),
+        Field::new("worker_id", DataType::Int32, true),
         Field::new("forward_wall_ms", DataType::Int64, false),
         Field::new("backward_wall_ms", DataType::Int64, false),
         Field::new("cut_selection_ms", DataType::Int64, false),
@@ -356,7 +364,7 @@ pub(crate) fn cut_selection_schema() -> Schema {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
@@ -732,20 +740,32 @@ mod tests {
         let schema = iteration_timing_schema();
         assert_eq!(
             schema.fields().len(),
-            16,
-            "iteration_timing schema must have 16 fields"
+            18,
+            "iteration_timing schema must have 18 fields"
         );
     }
 
     #[test]
-    fn iteration_timing_schema_all_non_nullable() {
+    fn iteration_timing_schema_rank_worker_nullable() {
         let schema = iteration_timing_schema();
+        // rank (position 1) and worker_id (position 2) must be nullable.
+        let rank_field = schema
+            .field_with_name("rank")
+            .expect("rank field must exist");
+        assert!(rank_field.is_nullable(), "rank must be nullable");
+        let worker_id_field = schema
+            .field_with_name("worker_id")
+            .expect("worker_id field must exist");
+        assert!(worker_id_field.is_nullable(), "worker_id must be nullable");
+        // All other 16 timing columns must be non-nullable.
         for field in schema.fields() {
-            assert!(
-                !field.is_nullable(),
-                "iteration_timing field '{}' must not be nullable",
-                field.name()
-            );
+            if field.name() != "rank" && field.name() != "worker_id" {
+                assert!(
+                    !field.is_nullable(),
+                    "iteration_timing field '{}' must not be nullable",
+                    field.name()
+                );
+            }
         }
     }
 
@@ -847,7 +867,7 @@ mod tests {
             ("inflow_lags", 4),
             ("generic_violations", 5),
             ("convergence", 13),
-            ("iteration_timing", 16),
+            ("iteration_timing", 18),
             ("rank_timing", 8),
             ("cut_selection", 9),
             ("solver_iterations", 23),

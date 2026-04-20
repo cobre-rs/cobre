@@ -285,6 +285,18 @@ pub struct SolverWorkspace<S: SolverInterface> {
     /// Simulation-only workspaces (constructed with `max_openings = 0`)
     /// start with empty buffers; the backward pass will never touch them.
     pub(crate) backward_accum: BackwardAccumulators,
+
+    /// Zero-allocation timing payload buffer for [`TrainingEvent::WorkerTiming`].
+    ///
+    /// Accumulated by the rayon closure inside the parallel region (forward or
+    /// backward) and moved into the event payload after the region completes.
+    /// Reset to `[0.0; 16]` at the start of each iteration boundary before any
+    /// accumulation begins. The fixed-size array is stack-resident and Copy;
+    /// no heap allocation occurs per event.
+    ///
+    /// Slot indices mirror `iteration_timing_schema` column order — see
+    /// [`cobre_core::WORKER_TIMING_SLOT_FWD_WALL`] and siblings for the mapping.
+    pub worker_timing_buf: [f64; 16],
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
@@ -324,6 +336,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 sizing.initial_pool_capacity,
                 sizing.n_state,
             ),
+            worker_timing_buf: [0.0_f64; 16],
         }
     }
 }
@@ -440,6 +453,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                         sizing.initial_pool_capacity,
                         sizing.n_state,
                     ),
+                    worker_timing_buf: [0.0_f64; 16],
                 }
             })
             .collect();
@@ -494,6 +508,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     sizing.initial_pool_capacity,
                     sizing.n_state,
                 ),
+                worker_timing_buf: [0.0_f64; 16],
             });
         }
         Ok(Self { workspaces })

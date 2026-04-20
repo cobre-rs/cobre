@@ -140,11 +140,13 @@ fn d01_case_dir() -> std::path::PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Aggregate `SolverStatsDelta` across all `"forward"` log entries.
-fn sum_forward_deltas(log: &[(u64, &'static str, i32, i32, SolverStatsDelta)]) -> SolverStatsDelta {
+fn sum_forward_deltas(
+    log: &[(u64, &'static str, i32, i32, i32, i32, SolverStatsDelta)],
+) -> SolverStatsDelta {
     SolverStatsDelta::aggregate(
         log.iter()
-            .filter(|(_, phase, _, _, _)| *phase == "forward")
-            .map(|(_, _, _, _, d)| d),
+            .filter(|(_, phase, _, _, _, _, _)| *phase == "forward")
+            .map(|(_, _, _, _, _, _, d)| d),
     )
 }
 
@@ -611,8 +613,8 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
         let iter2_fwd: Vec<&SolverStatsDelta> = result2
             .solver_stats_log
             .iter()
-            .filter(|(iter, phase, _, _, _)| *iter == 2 && *phase == "forward")
-            .map(|(_, _, _, _, d)| d)
+            .filter(|(iter, phase, _, _, _, _, _)| *iter == 2 && *phase == "forward")
+            .map(|(_, _, _, _, _, _, d)| d)
             .collect();
 
         assert!(

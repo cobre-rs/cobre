@@ -34,6 +34,35 @@
 //!
 //! See [`TrainingEvent`] for the full variant catalogue.
 
+/// Phase discriminant for [`TrainingEvent::WorkerTiming`].
+///
+/// Distinguishes whether the timing buffer was captured during the forward
+/// or backward parallel region so that [`ticket-007`] can place the row on
+/// the correct iteration-timing parquet column.
+#[derive(Clone, Debug)]
+pub enum WorkerTimingPhase {
+    /// Timing captured from the forward-pass parallel region.
+    Forward,
+    /// Timing captured from the backward-pass parallel region.
+    Backward,
+}
+
+/// Number of timing slots in the `[f64; 16]` payload of
+/// [`TrainingEvent::WorkerTiming`].
+pub const WORKER_TIMING_SLOT_COUNT: usize = 16;
+
+/// Slot index for `forward_wall_ms` (populated only on `Forward` phase events).
+pub const WORKER_TIMING_SLOT_FWD_WALL: usize = 0;
+
+/// Slot index for `backward_wall_ms` (populated only on `Backward` phase events).
+pub const WORKER_TIMING_SLOT_BWD_WALL: usize = 1;
+
+/// Slot index for `bwd_setup_ms` (populated only on `Backward` phase events).
+pub const WORKER_TIMING_SLOT_BWD_SETUP: usize = 8;
+
+/// Slot index for `fwd_setup_ms` (populated only on `Forward` phase events).
+pub const WORKER_TIMING_SLOT_FWD_SETUP: usize = 11;
+
 /// Result of evaluating a single stopping rule at a given iteration.
 ///
 /// The [`TrainingEvent::ConvergenceUpdate`] variant carries a [`Vec`] of these,
@@ -92,7 +121,7 @@ pub struct StageSelectionRecord {
 /// The enum has 15 variants: 11 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c + per-worker)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
@@ -106,6 +135,7 @@ pub struct StageSelectionRecord {
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
+/// | pw   | [`Self::WorkerTiming`]         | Per-worker timing (2 × n\_workers per iteration)       |
 ///
 /// ## Lifecycle events
 ///
@@ -404,11 +434,69 @@ pub enum TrainingEvent {
         /// Total wall-clock time for the simulation run, in milliseconds.
         elapsed_ms: u64,
     },
+
+    /// Per-worker timing for one phase of one iteration.
+    ///
+    /// Emitted `n_workers_local` times per `(iteration, phase)` pair — once
+    /// for every rayon worker in the local pool — after the parallel region
+    /// completes. For a 10-worker / 50-iteration run this produces
+    /// `2 × 10 × 50 = 1 000` extra events; the fixed-size `[f64; 16]`
+    /// payload (128 bytes) is moved by value so no heap allocation occurs
+    /// per event.
+    ///
+    /// ## Slot mapping
+    ///
+    /// Slot indices map to columns of `iteration_timing_schema` in declaration
+    /// order (skipping `iteration`, which is the row key):
+    ///
+    /// | Slot | Column                       | Per-worker?                         |
+    /// |------|------------------------------|-------------------------------------|
+    /// | 0    | `forward_wall_ms`            | yes — Forward emit only; 0 on Backward |
+    /// | 1    | `backward_wall_ms`           | yes — Backward emit only; 0 on Forward |
+    /// | 2    | `cut_selection_ms`           | NO (rank-only); always 0            |
+    /// | 3    | `mpi_allreduce_ms`           | NO (rank-only); always 0            |
+    /// | 4    | `cut_sync_ms`                | NO (rank-only); always 0            |
+    /// | 5    | `lower_bound_ms`             | NO (rank-only sequential); always 0 |
+    /// | 6    | `state_exchange_ms`          | NO (rank-only); always 0            |
+    /// | 7    | `cut_batch_build_ms`         | NO (rank-only sequential); always 0 |
+    /// | 8    | `bwd_setup_ms`               | yes — Backward emit only; 0 on Forward |
+    /// | 9    | `bwd_load_imbalance_ms`      | NO (synthetic rank-level); always 0 |
+    /// | 10   | `bwd_scheduling_overhead_ms` | NO (synthetic rank-level); always 0 |
+    /// | 11   | `fwd_setup_ms`               | yes — Forward emit only; 0 on Backward |
+    /// | 12   | `fwd_load_imbalance_ms`      | NO (synthetic rank-level); always 0 |
+    /// | 13   | `fwd_scheduling_overhead_ms` | NO (synthetic rank-level); always 0 |
+    /// | 14   | `overhead_ms`                | NO (rank-only residual); always 0   |
+    /// | 15   | reserved                     | always 0 (future use)               |
+    ///
+    /// ## Recovery invariant
+    ///
+    /// For every slot that carries a per-worker value (0, 1, 8, 11):
+    /// `SUM(slot_value) GROUP BY (iteration, slot)` over the `WorkerTiming`
+    /// events for a given phase equals the corresponding field on the
+    /// rank-level `BackwardPassComplete` / `IterationSummary` event for the
+    /// same iteration. Slots 2–7, 9–10, 12–15 are always zero on
+    /// `WorkerTiming` events; the rank-level events carry the authoritative
+    /// values there.
+    WorkerTiming {
+        /// MPI rank that owns this worker.
+        rank: i32,
+        /// Rayon worker index within this rank's pool (`0..n_workers_local`).
+        worker_id: i32,
+        /// Training iteration (1-based), matching the rank-level events.
+        iteration: u64,
+        /// Forward or Backward, distinguishing the two per-iteration emissions.
+        phase: WorkerTimingPhase,
+        /// Fixed-size timing payload; slot mapping documented in the variant
+        /// doc comment above and in [`WORKER_TIMING_SLOT_FWD_WALL`],
+        /// [`WORKER_TIMING_SLOT_BWD_WALL`], [`WORKER_TIMING_SLOT_BWD_SETUP`],
+        /// [`WORKER_TIMING_SLOT_FWD_SETUP`].
+        timings: [f64; WORKER_TIMING_SLOT_COUNT],
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{StoppingRuleResult, TrainingEvent};
+    use super::{StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_COUNT, WorkerTimingPhase};
 
     // Helper: build one of each variant with representative values.
     fn make_all_variants() -> Vec<TrainingEvent> {
@@ -527,16 +615,23 @@ mod tests {
                 output_dir: "/tmp/output".to_string(),
                 elapsed_ms: 20_000,
             },
+            TrainingEvent::WorkerTiming {
+                rank: 0,
+                worker_id: 2,
+                iteration: 1,
+                phase: WorkerTimingPhase::Backward,
+                timings: [0.0; WORKER_TIMING_SLOT_COUNT],
+            },
         ]
     }
 
     #[test]
-    fn all_fourteen_variants_construct() {
+    fn all_fifteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            14,
-            "expected exactly 14 TrainingEvent variants"
+            15,
+            "expected exactly 15 TrainingEvent variants"
         );
     }
 
@@ -753,6 +848,52 @@ mod tests {
         assert_eq!(cuts_evicted, 5);
         assert_eq!(stages_processed, 12);
         assert_eq!(enforcement_time_ms, 3);
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn worker_timing_fields_accessible() {
+        let mut timings = [0.0_f64; WORKER_TIMING_SLOT_COUNT];
+        for (i, slot) in timings.iter_mut().enumerate() {
+            *slot = (i as f64) * 1.5 + 0.25;
+        }
+        let event = TrainingEvent::WorkerTiming {
+            rank: 2,
+            worker_id: 3,
+            iteration: 7,
+            phase: WorkerTimingPhase::Forward,
+            timings,
+        };
+        let TrainingEvent::WorkerTiming {
+            rank,
+            worker_id,
+            iteration,
+            phase,
+            timings: t,
+        } = event
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(rank, 2);
+        assert_eq!(worker_id, 3);
+        assert_eq!(iteration, 7);
+        assert!(
+            !format!("{phase:?}").is_empty(),
+            "WorkerTimingPhase::Forward debug must be non-empty"
+        );
+        for (i, &v) in t.iter().enumerate() {
+            let expected = (i as f64) * 1.5 + 0.25;
+            assert!(
+                (v - expected).abs() < f64::EPSILON,
+                "slot {i}: expected {expected}, got {v}"
+            );
+        }
+        // Verify Backward variant debug is also non-empty.
+        let bwd = WorkerTimingPhase::Backward;
+        assert!(
+            !format!("{bwd:?}").is_empty(),
+            "WorkerTimingPhase::Backward debug must be non-empty"
+        );
     }
 
     #[test]

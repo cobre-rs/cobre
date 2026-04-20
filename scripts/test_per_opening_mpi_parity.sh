@@ -26,6 +26,11 @@
 #   - Timing columns (solve_time_ms, basis_set_time_ms, load_model_time_ms,
 #     add_rows_time_ms, set_bounds_time_ms) are excluded from the comparison
 #     because wall-clock time is inherently rank-count-dependent.
+#   - Post-epic-04b T005, parquets carry per-(rank, worker_id) backward rows.
+#     The Python comparator first SUMs all numeric counter columns over those
+#     rows GROUP BY (iteration, phase, stage, opening), recovering the pre-T005
+#     row shape so cross-rank comparison is meaningful. It also asserts each
+#     (rank, worker_id) tuple appears exactly once per backward group.
 #   - Output directories target/parity_1, target/parity_2, and target/parity_4
 #     are preserved on failure for post-mortem investigation.
 #   - On success, output directories are cleaned up.

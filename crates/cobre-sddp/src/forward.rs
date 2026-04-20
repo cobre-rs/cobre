@@ -67,10 +67,14 @@
 //! [`RowBatch`] built by `build_cut_row_batch`, which runs once per stage
 //! template (before the scenario loop) — not once per scenario.
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::WelfordAccumulator;
+use cobre_core::{
+    TrainingEvent, WORKER_TIMING_SLOT_FWD_SETUP, WORKER_TIMING_SLOT_FWD_WALL, WelfordAccumulator,
+    WorkerTimingPhase,
+};
 use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
@@ -693,7 +697,7 @@ pub fn append_new_cuts_to_lp<S: SolverInterface>(
 ///
 /// Groups the per-iteration, per-rank scalar arguments that are forwarded
 /// from [`crate::train`] into [`run_forward_pass`].
-pub struct ForwardPassBatch {
+pub struct ForwardPassBatch<'a> {
     /// Number of forward-pass scenarios assigned to this rank.
     pub local_forward_passes: usize,
     /// Total forward passes across all MPI ranks. Used for LHS stratification
@@ -705,6 +709,13 @@ pub struct ForwardPassBatch {
     pub iteration: u64,
     /// Global index of this rank's first forward pass for seed derivation.
     pub fwd_offset: usize,
+    /// Optional channel for emitting [`TrainingEvent::WorkerTiming`] events.
+    ///
+    /// When `Some`, one event is emitted per rayon worker after the parallel
+    /// region completes, carrying the accumulated wall and setup timings for
+    /// the forward phase. When `None` (the default for tests), no events are
+    /// emitted.
+    pub event_sender: Option<&'a Sender<TrainingEvent>>,
 }
 
 /// Compute the scenario range `[start, end)` for worker `worker_id` when
@@ -1194,7 +1205,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     fcf: &FutureCostFunction,
     cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
-    batch: &ForwardPassBatch,
+    batch: &ForwardPassBatch<'_>,
     records: &mut [TrajectoryRecord],
 ) -> Result<ForwardResult, SddpError> {
     let TrainingContext {
@@ -1212,6 +1223,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         total_forward_passes,
         iteration,
         fwd_offset,
+        event_sender,
     } = batch;
     let (num_stages, forward_passes) = (horizon.num_stages(), *local_forward_passes);
 
@@ -1310,6 +1322,13 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     // Collect per-worker snapshots before the parallel region (needed for overhead decomposition).
     let worker_stats_before: Vec<_> = workspaces.iter().map(|ws| ws.solver.statistics()).collect();
 
+    // Reset per-worker timing accumulators at the iteration boundary.
+    // Each worker accumulates into worker_timing_buf[FWD_WALL] inside the
+    // parallel region; FWD_SETUP is filled from worker_deltas afterward.
+    for ws in workspaces.iter_mut() {
+        ws.worker_timing_buf.fill(0.0);
+    }
+
     // Each worker collects per-scenario costs in local scenario index order.
     let parallel_start = Instant::now();
     #[allow(clippy::type_complexity)]
@@ -1321,6 +1340,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         .enumerate()
         .map(
             |(w, (((ws, worker_records), mut basis_slice), mut per_stage_stats))| {
+                let worker_wall_start = Instant::now();
                 let (start_m, end_m) = partition(forward_passes, n_workers, w);
                 let n_local = end_m - start_m;
                 let mut trajectory_costs = vec![0.0_f64; n_local];
@@ -1461,6 +1481,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                 }
 
                 let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
+                ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_WALL] +=
+                    worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
                 Ok((trajectory_costs, local_solves, per_stage_stats))
             },
         )
@@ -1517,6 +1539,27 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         clippy::cast_sign_loss            // f64 as u64: clamped non-negative
     )]
     let fwd_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
+
+    // Accumulate per-worker forward-setup time into timing buf slot FWD_SETUP,
+    // then emit one WorkerTiming event per worker when an event sender is present.
+    // worker_deltas is ordered by worker index (same order as workspaces).
+    for (ws, delta) in workspaces.iter_mut().zip(&worker_deltas) {
+        ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_SETUP] += delta.load_model_time_ms
+            + delta.add_rows_time_ms
+            + delta.set_bounds_time_ms
+            + delta.basis_set_time_ms;
+    }
+    if let Some(sender) = event_sender {
+        for ws in workspaces.iter() {
+            let _ = sender.send(TrainingEvent::WorkerTiming {
+                rank: ws.rank,
+                worker_id: ws.worker_id,
+                iteration: *iteration,
+                phase: WorkerTimingPhase::Forward,
+                timings: ws.worker_timing_buf,
+            });
+        }
+    }
 
     // Merge per-worker cost vectors in global scenario index order (canonical).
     // Simultaneously merge per-stage stats by summing element-wise across workers.
@@ -2280,6 +2323,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         }
     }
 
@@ -2413,6 +2457,7 @@ mod tests {
                 total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -2535,6 +2580,7 @@ mod tests {
                 total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         );
@@ -2663,6 +2709,7 @@ mod tests {
                 total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -3108,6 +3155,7 @@ mod tests {
                 total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -3276,6 +3324,7 @@ mod tests {
                 total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records1,
         )
@@ -3316,6 +3365,7 @@ mod tests {
                 total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records4,
         )
@@ -3423,6 +3473,7 @@ mod tests {
                 total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -3736,6 +3787,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -3927,6 +3979,7 @@ mod tests {
                 total_forward_passes: config.loop_config.forward_passes as usize,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -4171,6 +4224,7 @@ mod tests {
                 total_forward_passes: n_scenarios,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         );
@@ -4251,6 +4305,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -4309,6 +4364,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -4384,6 +4440,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: [0.0_f64; 16],
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -4442,6 +4499,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -4540,6 +4598,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -5104,6 +5163,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 1, // iteration >= 1 so baked.ready is meaningful
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )
@@ -5200,6 +5260,7 @@ mod tests {
                 total_forward_passes: 1,
                 iteration: 0,
                 fwd_offset: 0,
+                event_sender: None,
             },
             &mut records,
         )

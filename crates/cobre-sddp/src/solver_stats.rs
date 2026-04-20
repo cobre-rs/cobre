@@ -257,7 +257,8 @@ pub fn aggregate_solver_statistics(
     result
 }
 
-/// A single row in the solver stats log: (iteration, phase, stage, opening, delta).
+/// A single row in the solver stats log:
+/// `(iteration, phase, stage, opening, rank, worker_id, delta)`.
 ///
 /// - `iteration`: 1-based iteration number.
 /// - `phase`: `"forward"`, `"backward"`, or `"lower_bound"` — a `&'static str`
@@ -265,9 +266,16 @@ pub fn aggregate_solver_statistics(
 /// - `stage`: stage index for backward phase (per-stage), `-1` for forward/LB.
 /// - `opening`: opening index `0..n_openings` for backward rows; `-1` for
 ///   forward, lower-bound, and simulation rows (no opening dimension).
-///   The parquet writer (ticket-007) maps `-1` to a NULL `Int32` column.
+///   The parquet writer maps `-1` to a NULL `Int32` column.
+/// - `rank`: MPI rank that produced this row. `-1` maps to NULL at the writer
+///   boundary. Forward and lower-bound rows carry the local rank; backward rows
+///   carry the actual rank from the allgatherv unpack.
+/// - `worker_id`: rayon worker that produced this row. `-1` maps to NULL at the
+///   writer boundary. Forward and lower-bound rows carry `-1` (no per-worker
+///   dimension yet); backward rows carry the actual `worker_id` from the `allgatherv`
+///   unpack.
 /// - `delta`: the solver counter delta for this entry.
-pub type SolverStatsEntry = (u64, &'static str, i32, i32, SolverStatsDelta);
+pub type SolverStatsEntry = (u64, &'static str, i32, i32, i32, i32, SolverStatsDelta);
 
 /// Number of scalar fields in [`SolverStatsDelta`] (excludes the histogram `Vec`).
 ///
@@ -415,121 +423,6 @@ pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
         .collect()
 }
 
-/// Pack backward per-stage × per-opening stats into a flat `f64` buffer.
-///
-/// Layout (where `SCALARS = SOLVER_STATS_DELTA_SCALAR_FIELDS`):
-/// ```text
-///   [stage_0_id: f64]
-///   [n_openings_0: f64]
-///   [delta_0_0: SCALARS floats]
-///   [delta_0_1: SCALARS floats]
-///   ...
-///   [stage_1_id: f64]
-///   [n_openings_1: f64]
-///   ...
-/// ```
-///
-/// Each stage entry contributes `2 + n_openings_i * SOLVER_STATS_DELTA_SCALAR_FIELDS`
-/// values to the buffer. The per-stage length prefix (`n_openings_i`) makes the format
-/// robust to variable opening counts across stages.
-///
-/// The histogram field of [`SolverStatsDelta`] is excluded (as in all other MPI
-/// packers in this module).
-///
-/// # Current usage
-///
-/// This function is currently **unused at the CLI's MPI-allreduce path**: backward
-/// stats are computed rank-locally and rank-0 writes them directly. This helper is
-/// the foundation for a future full per-stage × per-opening cross-rank aggregation
-/// (`allgatherv`), as described in the discussion-doc Step 1 design, and is required
-/// by the cross-MPI parity integration test (ticket-010).
-#[must_use]
-#[allow(clippy::cast_precision_loss)]
-pub fn pack_backward_opening_stats(stage_stats: &[(usize, Vec<SolverStatsDelta>)]) -> Vec<f64> {
-    let mut buf = Vec::new();
-    for (stage_id, openings) in stage_stats {
-        buf.push(*stage_id as f64);
-        buf.push(openings.len() as f64);
-        for delta in openings {
-            buf.extend_from_slice(&pack_delta_scalars(delta));
-        }
-    }
-    buf
-}
-
-/// Unpack a flat `f64` buffer (from [`pack_backward_opening_stats`]) back
-/// into a `Vec<(usize, Vec<SolverStatsDelta>)>`.
-///
-/// The buffer must be produced by [`pack_backward_opening_stats`] and is
-/// self-consistent by construction. Each stage entry is decoded as:
-/// `[stage_id: f64][n_openings: f64][delta_0: SCALARS floats]...[delta_{n-1}: SCALARS floats]`.
-///
-/// The histogram field of each unpacked [`SolverStatsDelta`] is set to an
-/// empty `Vec` (as in [`unpack_delta_scalars`]).
-///
-/// # Panics
-///
-/// Panics if the buffer is malformed (truncated mid-delta). In practice this
-/// cannot occur when the buffer was produced by [`pack_backward_opening_stats`].
-///
-/// # Current usage
-///
-/// This function is currently **unused at the CLI's MPI-allreduce path**.
-/// It is the matching counterpart to [`pack_backward_opening_stats`] and is
-/// required by the cross-MPI parity integration test (ticket-010). See
-/// [`pack_backward_opening_stats`] for the wire-format description.
-#[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn unpack_backward_opening_stats(buf: &[f64]) -> Vec<(usize, Vec<SolverStatsDelta>)> {
-    let scalars = SOLVER_STATS_DELTA_SCALAR_FIELDS;
-    let mut out = Vec::new();
-    let mut cursor = 0;
-    while cursor < buf.len() {
-        if cursor + 1 >= buf.len() {
-            debug_assert!(false, "malformed buffer: truncated stage header");
-            break;
-        }
-        let stage_id = buf[cursor] as usize;
-        cursor += 1;
-        let n_openings = buf[cursor] as usize;
-        cursor += 1;
-        if cursor + n_openings * scalars > buf.len() {
-            debug_assert!(false, "malformed buffer: truncated opening payload");
-            break;
-        }
-        let mut openings = Vec::with_capacity(n_openings);
-        for _ in 0..n_openings {
-            let s = cursor;
-            let arr = [
-                buf[s],
-                buf[s + 1],
-                buf[s + 2],
-                buf[s + 3],
-                buf[s + 4],
-                buf[s + 5],
-                buf[s + 6],
-                buf[s + 7],
-                buf[s + 8],
-                buf[s + 9],
-                buf[s + 10],
-                buf[s + 11],
-                buf[s + 12],
-                buf[s + 13],
-                buf[s + 14],
-            ];
-            openings.push(unpack_delta_scalars(&arr));
-            cursor += scalars;
-        }
-        out.push((stage_id, openings));
-    }
-    debug_assert_eq!(
-        cursor,
-        buf.len(),
-        "cursor must end exactly at buf.len() for a well-formed buffer"
-    );
-    out
-}
-
 /// Pack a worker-preserving per-slot buffer into a flat `f64` buffer for `allgatherv`.
 ///
 /// Buffer layout (fixed stride of [`WORKER_STATS_ENTRY_STRIDE`] per entry):
@@ -581,15 +474,17 @@ pub fn pack_worker_opening_stats(
 /// `(worker_id, slot_idx)` row-major order. Existing slot contents are
 /// overwritten.
 ///
-/// The `worker_id` / `slot_idx` prefix floats in `buf` are used as
-/// debug-asserted consistency checks; they must match the layout index.
+/// The `worker_id` / `slot_idx` prefix floats in `buf` store the local
+/// rank-relative indices written by [`pack_worker_opening_stats`]. When
+/// `n_workers = n_ranks * n_workers_local`, the combined flat index `w` does
+/// not equal the stored `worker_id` for ranks > 0; the prefix is informational
+/// and is not asserted during unpack.
 ///
 /// # Panics
 ///
 /// Panics in debug builds if:
 /// - `buf.len() != n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`
 /// - `out.len() != n_workers * n_slots`
-/// - `buf[base] != w as f64` or `buf[base + 1] != k as f64` for some entry.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -606,8 +501,12 @@ pub fn unpack_worker_opening_stats(
     for w in 0..n_workers {
         for k in 0..n_slots {
             let entry_base = (w * n_slots + k) * WORKER_STATS_ENTRY_STRIDE;
-            debug_assert_eq!(buf[entry_base] as usize, w);
-            debug_assert_eq!(buf[entry_base + 1] as usize, k);
+            // NOTE: The prefix fields buf[entry_base] (worker_id) and
+            // buf[entry_base + 1] (slot_idx) store the LOCAL rank-relative
+            // indices written by pack_worker_opening_stats on each rank.
+            // When n_workers = n_ranks * n_workers_local, the combined flat
+            // index w does NOT equal the local worker_id for ranks > 0, so
+            // these fields are informational only and not asserted here.
             let scalars: [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] = buf
                 [entry_base + 2..entry_base + WORKER_STATS_ENTRY_STRIDE]
                 .try_into()
@@ -1176,130 +1075,59 @@ mod tests {
 
     #[test]
     fn test_solver_stats_log_per_opening_shape() {
-        // AC-002: SolverStatsEntry is a 5-tuple with opening at index 3.
-        // Forward entries now use a real stage index (>= 0) and opening == -1
-        // (ticket-011a: per-stage forward rows, no opening dimension).
-        // LB/simulation entries continue to use stage == -1, opening == -1.
-        // Backward entries use opening >= 0.
-        let fwd_entry: SolverStatsEntry = (1, "forward", 0, -1, make_delta(4));
-        let bwd_entry_0: SolverStatsEntry = (1, "backward", 2, 0, make_delta(2));
-        let bwd_entry_1: SolverStatsEntry = (1, "backward", 2, 1, make_delta(3));
-        let lb_entry: SolverStatsEntry = (1, "lower_bound", -1, -1, make_delta(1));
+        // AC-002: SolverStatsEntry is a 7-tuple (iteration, phase, stage, opening,
+        // rank, worker_id, delta). Forward entries use a real stage index (>= 0)
+        // and opening == -1, worker_id == -1 (no per-worker dimension yet).
+        // LB entries continue to use stage == -1, opening == -1, worker_id == -1.
+        // Backward entries carry real (rank, worker_id) from allgatherv unpack.
+        let fwd_entry: SolverStatsEntry = (1, "forward", 0, -1, 0, -1, make_delta(4));
+        let bwd_entry_0: SolverStatsEntry = (1, "backward", 2, 0, 0, 0, make_delta(2));
+        let bwd_entry_1: SolverStatsEntry = (1, "backward", 2, 1, 0, 1, make_delta(3));
+        let lb_entry: SolverStatsEntry = (1, "lower_bound", -1, -1, 0, -1, make_delta(1));
 
         let log: Vec<SolverStatsEntry> = vec![fwd_entry, bwd_entry_0, bwd_entry_1, lb_entry];
 
-        // Verify the forward entry has a real stage index and opening == -1.
-        let (_, phase_fwd, stage_fwd, opening_fwd, _) = &log[0];
+        // Verify the forward entry has a real stage index, opening == -1, worker_id == -1.
+        let (_, phase_fwd, stage_fwd, opening_fwd, _rank_fwd, worker_id_fwd, _) = &log[0];
         assert_eq!(*phase_fwd, "forward");
         assert!(
             *stage_fwd >= 0,
             "forward stage must be a real stage index, got {stage_fwd}"
         );
         assert_eq!(*opening_fwd, -1);
+        assert_eq!(
+            *worker_id_fwd, -1,
+            "forward rows have no per-worker dimension"
+        );
 
-        // Verify backward entries carry correct opening indices.
-        let (_, _, stage0, opening0, delta0) = &log[1];
+        // Verify backward entries carry correct opening indices and worker ids.
+        let (_, _, stage0, opening0, rank0, worker_id0, delta0) = &log[1];
         assert_eq!(*stage0, 2);
         assert_eq!(*opening0, 0);
+        assert_eq!(*rank0, 0);
+        assert_eq!(*worker_id0, 0);
         assert_eq!(delta0.lp_solves, 2);
 
-        let (_, _, stage1, opening1, delta1) = &log[2];
+        let (_, _, stage1, opening1, rank1, worker_id1, delta1) = &log[2];
         assert_eq!(*stage1, 2);
         assert_eq!(*opening1, 1);
+        assert_eq!(*rank1, 0);
+        assert_eq!(*worker_id1, 1);
         assert_eq!(delta1.lp_solves, 3);
 
-        // Verify that collapsing across openings yields the per-stage total.
+        // Verify that collapsing across openings/workers yields the per-stage total.
         let backward_entries: Vec<&SolverStatsDelta> = log
             .iter()
-            .filter(|(_, ph, _, _, _)| *ph == "backward")
-            .map(|(_, _, _, _, d)| d)
+            .filter(|(_, ph, _, _, _, _, _)| *ph == "backward")
+            .map(|(_, _, _, _, _, _, d)| d)
             .collect();
         let collapsed = SolverStatsDelta::aggregate(backward_entries.into_iter());
         assert_eq!(collapsed.lp_solves, 5); // 2 + 3
 
-        // Verify that LB entry has opening == -1.
-        let (_, _, _, opening_lb, _) = &log[3];
+        // Verify that LB entry has opening == -1, worker_id == -1.
+        let (_, _, _, opening_lb, _, worker_id_lb, _) = &log[3];
         assert_eq!(*opening_lb, -1);
-    }
-
-    #[test]
-    fn test_pack_unpack_backward_opening_stats_roundtrip() {
-        // Roundtrip equality on a 3-stage fixture: stages have [2, 3, 1] openings.
-        let stage_stats: Vec<(usize, Vec<SolverStatsDelta>)> = vec![
-            (0, vec![make_delta(10), make_delta(20)]),
-            (1, vec![make_delta(30), make_delta(40), make_delta(50)]),
-            (2, vec![make_delta(60)]),
-        ];
-
-        let buf = pack_backward_opening_stats(&stage_stats);
-        let unpacked = unpack_backward_opening_stats(&buf);
-
-        assert_eq!(unpacked.len(), stage_stats.len());
-
-        for (i, (orig_stage_id, orig_openings)) in stage_stats.iter().enumerate() {
-            let (got_stage_id, got_openings) = &unpacked[i];
-            assert_eq!(got_stage_id, orig_stage_id);
-            assert_eq!(got_openings.len(), orig_openings.len());
-
-            for (j, orig_delta) in orig_openings.iter().enumerate() {
-                let got_delta = &got_openings[j];
-                assert_eq!(got_delta.lp_solves, orig_delta.lp_solves);
-                assert_eq!(got_delta.lp_successes, orig_delta.lp_successes);
-                assert_eq!(
-                    got_delta.first_try_successes,
-                    orig_delta.first_try_successes
-                );
-                assert_eq!(got_delta.lp_failures, orig_delta.lp_failures);
-                assert_eq!(got_delta.retry_attempts, orig_delta.retry_attempts);
-                assert_eq!(got_delta.basis_offered, orig_delta.basis_offered);
-                assert_eq!(
-                    got_delta.basis_consistency_failures,
-                    orig_delta.basis_consistency_failures
-                );
-                assert_eq!(got_delta.simplex_iterations, orig_delta.simplex_iterations);
-                assert_eq!(got_delta.load_model_count, orig_delta.load_model_count);
-                assert_eq!(got_delta.add_rows_count, orig_delta.add_rows_count);
-                assert!((got_delta.solve_time_ms - orig_delta.solve_time_ms).abs() < 1e-10);
-                assert!(
-                    (got_delta.load_model_time_ms - orig_delta.load_model_time_ms).abs() < 1e-10
-                );
-                assert!((got_delta.add_rows_time_ms - orig_delta.add_rows_time_ms).abs() < 1e-10);
-                assert!(
-                    (got_delta.set_bounds_time_ms - orig_delta.set_bounds_time_ms).abs() < 1e-10
-                );
-                assert!((got_delta.basis_set_time_ms - orig_delta.basis_set_time_ms).abs() < 1e-10);
-                // histogram is excluded from pack/unpack
-                assert!(got_delta.retry_level_histogram.is_empty());
-            }
-        }
-    }
-
-    #[test]
-    fn test_pack_backward_opening_stats_empty() {
-        // Empty input produces empty buffer; unpack of empty buffer produces empty vec.
-        let buf = pack_backward_opening_stats(&[]);
-        assert!(buf.is_empty());
-        let unpacked = unpack_backward_opening_stats(&buf);
-        assert!(unpacked.is_empty());
-    }
-
-    #[test]
-    fn test_pack_backward_opening_stats_layout_invariant() {
-        // Buffer length equals sum_over_stages(2 + n_openings_i * SCALARS).
-        let stage_stats: Vec<(usize, Vec<SolverStatsDelta>)> = vec![
-            (0, vec![make_delta(1), make_delta(2)]), // 2 openings
-            (1, vec![make_delta(3), make_delta(4), make_delta(5)]), // 3 openings
-            (2, vec![make_delta(6)]),                // 1 opening
-        ];
-
-        let buf = pack_backward_opening_stats(&stage_stats);
-
-        let expected_len: usize = stage_stats
-            .iter()
-            .map(|(_, openings)| 2 + openings.len() * SOLVER_STATS_DELTA_SCALAR_FIELDS)
-            .sum();
-
-        assert_eq!(buf.len(), expected_len);
+        assert_eq!(*worker_id_lb, -1);
     }
 
     /// ticket-011a: per-stage forward `stage_stats` summed element-wise across workers.
@@ -1354,6 +1182,8 @@ mod tests {
 
         // Verify the log shape: one SolverStatsEntry per stage with stage index 0..3.
         // (ticket-011a: forward rows use real stage index, opening sentinel -1 → NULL)
+        // 7-tuple: (iter, phase, stage, opening, rank, worker_id, delta)
+        // Forward rows carry rank = local rank, worker_id = -1 (no per-worker dimension).
         let log: Vec<SolverStatsEntry> = stage_stats
             .iter()
             .enumerate()
@@ -1363,6 +1193,8 @@ mod tests {
                     "forward",
                     i32::try_from(t).expect("stage fits i32"),
                     -1_i32,
+                    0_i32,  // rank
+                    -1_i32, // worker_id sentinel → NULL at writer
                     delta.clone(),
                 )
             })
@@ -1370,7 +1202,7 @@ mod tests {
 
         assert_eq!(log.len(), 3, "one entry per stage");
         for (t, entry) in log.iter().enumerate() {
-            let (_, phase, stage, opening, _) = entry;
+            let (_, phase, stage, opening, _rank, worker_id, _) = entry;
             assert_eq!(*phase, "forward");
             assert_eq!(
                 *stage,
@@ -1378,6 +1210,7 @@ mod tests {
                 "stage index must match loop variable"
             );
             assert_eq!(*opening, -1, "forward rows have no opening dimension");
+            assert_eq!(*worker_id, -1, "forward rows have no per-worker dimension");
         }
     }
 

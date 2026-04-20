@@ -250,7 +250,8 @@ pub fn run_progress_thread(
                     | TrainingEvent::BudgetEnforcementComplete { .. }
                     | TrainingEvent::TemplateBakeComplete { .. }
                     | TrainingEvent::ConvergenceUpdate { .. }
-                    | TrainingEvent::CheckpointComplete { .. } => {}
+                    | TrainingEvent::CheckpointComplete { .. }
+                    | TrainingEvent::WorkerTiming { .. } => {}
                 }
             } else {
                 if let Some(bar) = training_bar.take() {

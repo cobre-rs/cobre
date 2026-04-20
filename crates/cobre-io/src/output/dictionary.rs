@@ -605,6 +605,18 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("convergence", "lp_solves") => "Total LP solves in iteration",
         // ── iteration_timing ──────────────────────────────────────────────
         ("iteration_timing", "iteration") => "Iteration number (1-based)",
+        ("iteration_timing", "rank") => {
+            "MPI rank that produced this row (epic-04b T007). Always set; \
+             single-rank runs use 0."
+        }
+        ("iteration_timing", "worker_id") => {
+            "Rayon worker index within the rank's pool (epic-04b T007). NULL on \
+             rank-aggregated rows that carry rank-only timings (cut_selection, \
+             mpi_allreduce, cut_sync, lower_bound, state_exchange, cut_batch_build, \
+             load_imbalance / scheduling_overhead, overhead). Set on per-worker \
+             rows that carry parallel-region timings (forward_wall, backward_wall, \
+             fwd_setup, bwd_setup)."
+        }
         ("iteration_timing", "forward_wall_ms") => "Forward pass wall-clock time",
         ("iteration_timing", "backward_wall_ms") => "Backward pass wall-clock time",
         ("iteration_timing", "cut_selection_ms") => "Cut selection time",
@@ -1456,8 +1468,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 198,
-            "variables.csv must have exactly 198 data rows (one per column across all schemas)"
+            row_count, 200,
+            "variables.csv must have exactly 200 data rows (one per column across all schemas)"
         );
     }
 

@@ -1048,7 +1048,15 @@ fn run_training_phase(
 
 /// Aggregate solver statistics from the training stats log.
 fn aggregate_solver_stats(
-    stats_log: &[(u64, &'static str, i32, i32, cobre_sddp::SolverStatsDelta)],
+    stats_log: &[(
+        u64,
+        &'static str,
+        i32,
+        i32,
+        i32,
+        i32,
+        cobre_sddp::SolverStatsDelta,
+    )],
 ) -> (u64, u64, u64, f64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
@@ -1057,9 +1065,9 @@ fn aggregate_solver_stats(
     let mut basis_offered = 0u64;
     let mut basis_consistency_failures = 0u64;
     let mut simplex = 0u64;
-    // Iterate over all entries, summing across all phases and openings.
-    // The opening dimension is collapsed here: the CLI summary reports totals.
-    for (_, _, _, _, delta) in stats_log {
+    // Iterate over all entries, summing across all phases, openings, ranks, and workers.
+    // All dimensions are collapsed here: the CLI summary reports totals.
+    for (_, _, _, _, _, _, delta) in stats_log {
         first_try += delta.first_try_successes;
         retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
         failed += delta.lp_failures;
@@ -1479,13 +1487,17 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
 /// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
-/// and `None` for forward, `lower_bound`, and simulation rows.
+/// and `None` for forward, `lower_bound`, and simulation rows. `rank` and `worker_id`
+/// are `Some` for backward rows (from allgatherv unpack) and `None` for forward,
+/// `lower_bound`, and simulation rows (no per-worker dimension yet).
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
     opening: Option<i32>,
+    rank: Option<i32>,
+    worker_id: Option<i32>,
     delta: &cobre_sddp::SolverStatsDelta,
 ) -> cobre_io::SolverStatsRow {
     cobre_io::SolverStatsRow {
@@ -1493,8 +1505,8 @@ fn delta_to_stats_row(
         phase: phase.to_string(),
         stage,
         opening,
-        rank: None,      // populated in T005 (MPI allgatherv per-worker stats)
-        worker_id: None, // populated in T005 (MPI allgatherv per-worker stats)
+        rank,
+        worker_id,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
@@ -1563,18 +1575,35 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
     .map_err(CliError::from)?;
 
     // Write training solver stats to training/solver/iterations.parquet.
-    // Each entry in solver_stats_log is a 5-tuple (iteration, phase, stage, opening, delta).
-    // Backward rows carry a non-negative opening index; forward/LB rows carry -1 (mapped to None).
+    // Each entry in solver_stats_log is a 7-tuple
+    // (iteration, phase, stage, opening, rank, worker_id, delta).
+    // Backward rows carry non-negative opening/rank/worker_id from allgatherv unpack.
+    // Forward/LB rows carry opening=-1 → None; worker_id=-1 → None (no per-worker
+    // dimension yet on those phases).
     if !args.training_result.solver_stats_log.is_empty() {
         let rows: Vec<cobre_io::SolverStatsRow> = args
             .training_result
             .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, opening, delta)| {
+            .map(|(iter, phase, stage, opening, rank, worker_id, delta)| {
                 let opening_opt = if *opening == -1 { None } else { Some(*opening) };
+                // worker_id == -1 means "no per-worker dimension" → NULL in parquet.
+                let worker_id_opt = if *worker_id == -1 {
+                    None
+                } else {
+                    Some(*worker_id)
+                };
                 #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
                 let id = *iter as u32;
-                delta_to_stats_row(id, phase, *stage, opening_opt, delta)
+                delta_to_stats_row(
+                    id,
+                    phase,
+                    *stage,
+                    opening_opt,
+                    Some(*rank),
+                    worker_id_opt,
+                    delta,
+                )
             })
             .collect();
         cobre_io::write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
@@ -1623,13 +1652,14 @@ fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliErr
         .map_err(CliError::from)?;
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
-    // Simulation has no opening dimension; opening is always None.
+    // Simulation has no opening dimension and no per-worker dimension yet;
+    // opening, rank, and worker_id are all None.
     if !args.sim_solver_stats.is_empty() {
         let rows: Vec<cobre_io::SolverStatsRow> = args
             .sim_solver_stats
             .iter()
             .map(|(scenario_id, delta)| {
-                delta_to_stats_row(*scenario_id, "simulation", -1, None, delta)
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, None, None, delta)
             })
             .collect();
         cobre_io::write_simulation_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
@@ -1787,33 +1817,39 @@ mod tests {
     }
 
     #[test]
-    fn test_delta_to_stats_row_backward_carries_opening() {
-        // Backward rows must carry Some(opening) in the output row.
+    fn test_delta_to_stats_row_backward_carries_opening_rank_worker() {
+        // Backward rows must carry Some(opening), Some(rank), Some(worker_id).
         let delta = make_delta(10);
-        let row = delta_to_stats_row(1, "backward", 2, Some(0), &delta);
+        let row = delta_to_stats_row(1, "backward", 2, Some(0), Some(1), Some(3), &delta);
         assert_eq!(row.opening, Some(0));
+        assert_eq!(row.rank, Some(1));
+        assert_eq!(row.worker_id, Some(3));
         assert_eq!(row.stage, 2);
         assert_eq!(row.phase, "backward");
         assert_eq!(row.lp_solves, 10);
     }
 
     #[test]
-    fn test_delta_to_stats_row_forward_opening_is_none() {
-        // Forward rows must carry None for opening and a real stage index >= 0.
+    fn test_delta_to_stats_row_forward_opening_and_worker_id_are_none() {
+        // Forward rows must carry None for opening and worker_id; rank is Some.
         // ticket-011a: forward rows use stage = real stage index, not -1.
         let delta = make_delta(4);
-        let row = delta_to_stats_row(1, "forward", 0, None, &delta);
+        let row = delta_to_stats_row(1, "forward", 0, None, Some(0), None, &delta);
         assert_eq!(row.opening, None);
+        assert_eq!(row.rank, Some(0));
+        assert_eq!(row.worker_id, None);
         assert_eq!(row.stage, 0);
         assert_eq!(row.lp_solves, 4);
     }
 
     #[test]
-    fn test_delta_to_stats_row_simulation_opening_is_none() {
-        // Simulation rows must carry None for opening.
+    fn test_delta_to_stats_row_simulation_rank_and_worker_id_are_none() {
+        // Simulation rows must carry None for opening, rank, and worker_id.
         let delta = make_delta(7);
-        let row = delta_to_stats_row(42, "simulation", -1, None, &delta);
+        let row = delta_to_stats_row(42, "simulation", -1, None, None, None, &delta);
         assert_eq!(row.opening, None);
+        assert_eq!(row.rank, None);
+        assert_eq!(row.worker_id, None);
         assert_eq!(row.iteration, 42);
     }
 }

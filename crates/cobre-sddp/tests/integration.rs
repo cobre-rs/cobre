@@ -49,9 +49,9 @@ use cobre_stochastic::{
 
 use cobre_sddp::{
     CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-    RiskMeasure, SddpError, StageContext, StageIndexer, StageWorkerStatsBuffer, StoppingMode,
-    StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction,
-    train,
+    RiskMeasure, SddpError, SolverStatsDelta, StageContext, StageIndexer, StageWorkerStatsBuffer,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
+    cut::fcf::FutureCostFunction, train,
 };
 
 // ===========================================================================
@@ -905,13 +905,19 @@ fn train_emits_correct_event_sequence() {
 
     let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-    assert_eq!(events.len(), 23);
+    // 1 TrainingStarted + 3*(9 per-iteration) + 1 TrainingFinished = 29
+    // Per-iteration: WorkerTiming(Forward), ForwardPassComplete,
+    //   ForwardSyncComplete, WorkerTiming(Backward), BackwardPassComplete,
+    //   CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary
+    assert_eq!(events.len(), 29);
     assert!(matches!(events[0], TrainingEvent::TrainingStarted { .. }));
-    assert!(matches!(events[22], TrainingEvent::TrainingFinished { .. }));
+    assert!(matches!(events[28], TrainingEvent::TrainingFinished { .. }));
 
     let per_iter_types: &[fn(&TrainingEvent) -> bool] = &[
+        |e| matches!(e, TrainingEvent::WorkerTiming { .. }),
         |e| matches!(e, TrainingEvent::ForwardPassComplete { .. }),
         |e| matches!(e, TrainingEvent::ForwardSyncComplete { .. }),
+        |e| matches!(e, TrainingEvent::WorkerTiming { .. }),
         |e| matches!(e, TrainingEvent::BackwardPassComplete { .. }),
         |e| matches!(e, TrainingEvent::CutSyncComplete { .. }),
         |e| matches!(e, TrainingEvent::TemplateBakeComplete { .. }),
@@ -920,7 +926,7 @@ fn train_emits_correct_event_sequence() {
     ];
 
     for iter_idx in 0..3usize {
-        let offset = 1 + iter_idx * 7;
+        let offset = 1 + iter_idx * 9;
         for (step, &check_fn) in per_iter_types.iter().enumerate() {
             assert!(check_fn(&events[offset + step]));
         }
@@ -1931,6 +1937,7 @@ fn forward_pass_uses_baked_template_on_iter_2() {
         total_forward_passes: n_fwd,
         iteration: 1,
         fwd_offset: 0,
+        event_sender: None,
     };
 
     let add_rows_before_iter1 = workspaces_iter1[0].solver.add_rows_count;
@@ -2002,6 +2009,7 @@ fn forward_pass_uses_baked_template_on_iter_2() {
         total_forward_passes: n_fwd,
         iteration: 2,
         fwd_offset: 0,
+        event_sender: None,
     };
 
     let add_rows_before_iter2 = workspaces_iter2[0].solver.add_rows_count;
@@ -2262,6 +2270,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             iteration: 1,
             local_work: n_fwd,
             fwd_offset: 0,
+            event_sender: None,
             risk_measures: &vec![RiskMeasure::Expectation; n_stages],
             cut_activity_tolerance: 0.0,
             cut_sync_bufs: &mut csb_legacy,
@@ -2272,6 +2281,11 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
             stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+            bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_counts: &[8 * 32 * 17],
+            bwd_stats_displs: &[0],
+            bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
         },
         &StubComm,
     )
@@ -2323,6 +2337,7 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             iteration: 2,
             local_work: n_fwd,
             fwd_offset: 0,
+            event_sender: None,
             risk_measures: &vec![RiskMeasure::Expectation; n_stages],
             cut_activity_tolerance: 0.0,
             cut_sync_bufs: &mut csb_baked,
@@ -2333,6 +2348,11 @@ fn backward_pass_uses_delta_batch_on_iter_2() {
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
             stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+            bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_counts: &[8 * 32 * 17],
+            bwd_stats_displs: &[0],
+            bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
         },
         &StubComm,
     )

@@ -47,9 +47,10 @@ use cobre_sddp::{
     BackwardPassSpec, BakedTemplates, BasisStore, CutManagementConfig, CutSyncBuffers,
     EntityCounts, EventConfig, ExchangeBuffers, ForwardPassBatch, FutureCostFunction, HorizonMode,
     InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StageWorkerStatsBuffer,
-    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext, TrajectoryRecord,
-    WorkspaceSizing, run_backward_pass, run_forward_pass, simulate, train,
+    SimulationOutputSpec, SolverStatsDelta, SolverWorkspace, StageContext, StageIndexer,
+    StageWorkerStatsBuffer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    TrainingContext, TrajectoryRecord, WorkspaceSizing, run_backward_pass, run_forward_pass,
+    simulate, train,
 };
 
 // ---------------------------------------------------------------------------
@@ -437,6 +438,7 @@ fn forward_uses_stage_solve() {
         total_forward_passes: n_scenarios,
         iteration: 1,
         fwd_offset: 0,
+        event_sender: None,
     };
 
     let solve_count_before = workspaces[0].solver.statistics().solve_count;
@@ -601,6 +603,7 @@ fn backward_uses_stage_solve() {
         total_forward_passes: n_scenarios,
         iteration: 1,
         fwd_offset: 0,
+        event_sender: None,
     };
 
     // --- Forward pass ---
@@ -666,6 +669,12 @@ fn backward_uses_stage_solve() {
             global_increments_buf: &mut Vec::new(),
             real_states_buf: &mut Vec::new(),
             stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+            bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 17],
+            bwd_stats_counts: &[8 * 32 * 17],
+            bwd_stats_displs: &[0],
+            bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+            event_sender: None,
         },
         &comm,
     )

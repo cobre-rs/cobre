@@ -89,5 +89,9 @@ pub use temporal::{
     Transition,
 };
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};
-pub use training_event::{StageSelectionRecord, StoppingRuleResult, TrainingEvent};
+pub use training_event::{
+    StageSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP,
+    WORKER_TIMING_SLOT_BWD_WALL, WORKER_TIMING_SLOT_COUNT, WORKER_TIMING_SLOT_FWD_SETUP,
+    WORKER_TIMING_SLOT_FWD_WALL, WorkerTimingPhase,
+};
 pub use welford::WelfordAccumulator;

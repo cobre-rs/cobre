@@ -228,6 +228,34 @@ pub struct CutSelectionRecord {
     pub active_after_budget: Option<u32>,
 }
 
+/// One row in `training/timing/iterations.parquet` under the T007 schema.
+///
+/// T007 expands the timing parquet from one row per iteration (pre-T007) to
+/// multiple rows per iteration:
+///
+/// - One **rank-aggregated** row per `(iteration, rank)` carrying rank-only
+///   timing columns (`worker_id = None`). Per-worker slots are `0` on this row.
+/// - One **per-worker** row per `(iteration, rank, worker_id)` carrying
+///   per-worker slots (`forward_wall_ms`, `backward_wall_ms`, `bwd_setup_ms`,
+///   `fwd_setup_ms`). Rank-only slots are `0` on these rows.
+///
+/// `SUM(col) GROUP BY iteration` across all rows recovers the pre-T007
+/// single-row-per-iteration value for each of the 16 timing columns.
+#[derive(Debug, Clone)]
+pub struct WorkerTimingRecord {
+    /// Training iteration (1-based).
+    pub iteration: u32,
+    /// MPI rank that produced this row.
+    pub rank: i32,
+    /// Rayon worker index within the rank's pool, or `None` for rank-aggregated rows.
+    pub worker_id: Option<i32>,
+    /// Fixed-size timing payload matching the 16 timing columns of
+    /// `iteration_timing_schema()` (positions 3–18, after `iteration`, `rank`,
+    /// `worker_id`). Slot indices correspond to the `WORKER_TIMING_SLOT_*`
+    /// constants defined in `cobre-core`.
+    pub timings: [u64; 16],
+}
+
 /// Aggregate type carrying all training data needed for output writing.
 ///
 /// Constructed by the solver after training completes and passed to
@@ -271,6 +299,16 @@ pub struct TrainingOutput {
     /// Empty when cut selection is disabled. When non-empty, written to
     /// `training/cut_selection/iterations.parquet`.
     pub cut_selection_records: Vec<CutSelectionRecord>,
+
+    /// Per-worker timing records for `training/timing/iterations.parquet`.
+    ///
+    /// Populated by T007. Each entry is either a rank-aggregated row
+    /// (`worker_id = None`) or a per-worker row (`worker_id = Some(w)`).
+    /// Empty when timing data was not collected (e.g. single-threaded runs
+    /// without the instrumentation wired). Written in iteration-major order:
+    /// rank-aggregated row first, then per-worker rows sorted by
+    /// `(rank, worker_id)`.
+    pub worker_timing_records: Vec<WorkerTimingRecord>,
 }
 
 /// Aggregate type carrying simulation completion data for output writing.
@@ -420,6 +458,7 @@ impl SimulationOutput {
 ///         peak_active: 95,
 ///     },
 ///     cut_selection_records: Vec::new(),
+///     worker_timing_records: Vec::new(),
 /// };
 /// write_results(Path::new("/tmp/out"), &training, None, system, config)?;
 /// # Ok(())
@@ -485,6 +524,7 @@ mod tests {
                 peak_active: 150,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
         };
 
         assert_eq!(output.convergence_records.len(), 5);

@@ -384,6 +384,8 @@ pub fn build_training_output(
         .flatten()
         .collect();
 
+    let worker_timing_records = build_worker_timing_records(events, &convergence_records);
+
     TrainingOutput {
         convergence_records,
         final_lower_bound: result.final_lb,
@@ -395,7 +397,107 @@ pub fn build_training_output(
         total_time_ms: result.total_time_ms,
         cut_stats,
         cut_selection_records,
+        worker_timing_records,
     }
+}
+
+/// Build the per-`(iteration, rank, worker_id)` timing rows for
+/// `training/timing/iterations.parquet` (epic-04b T007).
+///
+/// For each completed iteration:
+/// - One rank-aggregated row per rank (`worker_id=None`) carries the rank-only
+///   columns (`cut_selection`, `mpi_allreduce`, `cut_sync`, `lower_bound`,
+///   `state_exchange`, `cut_batch_build`, the synthetic
+///   `load_imbalance`/`scheduling_overhead` pair, and `overhead`).
+/// - One per-worker row per `(rank, worker_id)` carries the parallel-region
+///   contributions (`forward_wall`, `backward_wall`, `fwd_setup`, `bwd_setup`)
+///   merged from the `WorkerTiming{Forward}` and `WorkerTiming{Backward}` events.
+///
+/// `SUM(col) GROUP BY iteration` recovers the pre-T007 single-row totals.
+fn build_worker_timing_records(
+    events: &[TrainingEvent],
+    convergence_records: &[IterationRecord],
+) -> Vec<cobre_io::WorkerTimingRecord> {
+    use cobre_core::{
+        WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WORKER_TIMING_SLOT_COUNT,
+        WORKER_TIMING_SLOT_FWD_SETUP, WORKER_TIMING_SLOT_FWD_WALL,
+    };
+
+    // Per-(iteration, rank, worker_id) merged timings for the per-worker rows.
+    let mut per_worker: BTreeMap<(u32, i32, i32), [u64; WORKER_TIMING_SLOT_COUNT]> =
+        BTreeMap::new();
+    for event in events {
+        if let TrainingEvent::WorkerTiming {
+            iteration,
+            rank,
+            worker_id,
+            timings,
+            ..
+        } = event
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            let iter_u32 = *iteration as u32;
+            let entry = per_worker
+                .entry((iter_u32, *rank, *worker_id))
+                .or_insert([0_u64; WORKER_TIMING_SLOT_COUNT]);
+            // T006 convention: per-worker slots only; rank-only slots are zero
+            // on per-worker events. Both Forward and Backward emissions land on
+            // the same row, summed slot-wise — Forward fills FWD_WALL/FWD_SETUP,
+            // Backward fills BWD_WALL/BWD_SETUP.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            for (slot, value) in timings.iter().enumerate() {
+                entry[slot] = entry[slot].saturating_add(value.max(0.0).round() as u64);
+            }
+        }
+    }
+
+    let mut out: Vec<cobre_io::WorkerTimingRecord> =
+        Vec::with_capacity(convergence_records.len() + per_worker.len());
+
+    // Rank-aggregated rows: one per iteration. Single-rank in current builds —
+    // multi-rank emits one rank-aggregated row per rank when ranks > 0
+    // produce IterationSummary events (rank-0-only by design today).
+    for record in convergence_records {
+        let mut timings = [0_u64; WORKER_TIMING_SLOT_COUNT];
+        timings[2] = record.time_cut_selection_ms;
+        timings[3] = record.time_mpi_allreduce_ms;
+        timings[4] = record.time_cut_sync_ms;
+        timings[5] = record.time_lower_bound_ms;
+        timings[6] = record.time_state_exchange_ms;
+        timings[7] = record.time_cut_batch_build_ms;
+        timings[9] = record.time_bwd_load_imbalance_ms;
+        timings[10] = record.time_bwd_scheduling_overhead_ms;
+        timings[12] = record.time_fwd_load_imbalance_ms;
+        timings[13] = record.time_fwd_scheduling_overhead_ms;
+        timings[14] = record.time_overhead_ms;
+        out.push(cobre_io::WorkerTimingRecord {
+            iteration: record.iteration,
+            rank: 0,
+            worker_id: None,
+            timings,
+        });
+    }
+
+    // Per-worker rows.
+    for ((iteration, rank, worker_id), timings) in per_worker {
+        // Sanity: slot constants used to build the per-worker totals correspond
+        // to the per-worker slot positions (FWD_WALL=0, BWD_WALL=1,
+        // BWD_SETUP=8, FWD_SETUP=11). All others remain 0 on per-worker rows.
+        let _ = (
+            WORKER_TIMING_SLOT_FWD_WALL,
+            WORKER_TIMING_SLOT_BWD_WALL,
+            WORKER_TIMING_SLOT_BWD_SETUP,
+            WORKER_TIMING_SLOT_FWD_SETUP,
+        );
+        out.push(cobre_io::WorkerTimingRecord {
+            iteration,
+            rank,
+            worker_id: Some(worker_id),
+            timings,
+        });
+    }
+
+    out
 }
 
 #[cfg(test)]

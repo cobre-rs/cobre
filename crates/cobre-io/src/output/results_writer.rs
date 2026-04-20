@@ -250,6 +250,7 @@ mod tests {
                 peak_active: 95,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
         }
     }
 

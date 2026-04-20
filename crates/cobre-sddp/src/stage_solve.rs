@@ -178,15 +178,18 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
             &mut ws.scratch_basis,
             &mut ws.scratch.recon_slot_lookup,
         );
-        // Baked path: no delta cut rows, so num_row == base_row_count.
-        // enforce_basic_count_invariant is a no-op when the basis already
-        // balances, but applying it uniformly closes the simulation-drift
-        // bug class (source doc AD-2).
+        // base_row_for_invariant = n_state bounds demotion to the non-state-
+        // fixing rows [n_state, num_row). Cut-selection between iterations can
+        // shrink baked.num_rows, making reconstruct_basis truncate stored rows;
+        // if the dropped tail contained any LOWER entries, total_basic exceeds
+        // num_row and the non-alien setBasis rejects. With this bound the
+        // enforcer demotes trailing BASIC rows from the baked-cut and
+        // structural-balance range until the invariant holds. State-fixing
+        // rows at [0, n_state) are equality constraints and never BASIC, so
+        // excluding them from the scan is safe.
         let num_row_for_invariant = baked.num_rows;
-        let base_row_for_invariant = baked.num_rows;
+        let base_row_for_invariant = inputs.indexer.n_state;
 
-        // Enforce basic-count invariant across all phases (source doc AD-2):
-        // no-op on the baked path in the common case.
         enforce_basic_count_invariant(
             &mut ws.scratch_basis,
             num_row_for_invariant,

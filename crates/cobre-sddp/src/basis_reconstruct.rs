@@ -1287,6 +1287,89 @@ mod tests {
         );
     }
 
+    // (d) Baked-path truncation case — regression for convertido_a iter-4 crash.
+    //
+    // When cut selection deactivates cuts between iterations, baked[t].num_rows
+    // shrinks from L_old to L_new < L_old. The stored forward basis was captured
+    // against L_old; reconstruct_basis truncates row_status to L_new. If the
+    // dropped tail [L_new, L_old) contained any LOWER entries, the remaining
+    // basis carries excess BASIC equal to that count. The caller (stage_solve.rs)
+    // must pass base_row_count = n_state (not baked.num_rows) so the enforcer's
+    // scan range [n_state, num_row) is non-empty and can demote the excess.
+    #[test]
+    fn reconstructed_basis_preserves_invariant_on_baked_truncation() {
+        // L_old = 5, L_new = 3, tail [3..5) has one LOWER entry.
+        let num_cols = 3usize;
+        let n_state = 1usize;
+        let l_old = 5usize;
+        let l_new = 3usize;
+
+        // Build a stored basis with the chosen row pattern; make_stored_basis
+        // initialises template rows to BASIC, so we override row_status below.
+        let mut stored = make_stored_basis(l_old, num_cols, &[], &[], &[1.0]);
+        stored.basis.col_status.clear();
+        stored.basis.col_status.extend_from_slice(&[B, B, L]);
+        // Stored row pattern [L, B, B, B, L]: truncated tail [3..5) = [B, L]
+        // has one LOWER entry → excess = 1 after truncation to L_new = 3.
+        stored.basis.row_status.clear();
+        stored.basis.row_status.extend_from_slice(&[L, B, B, B, L]);
+
+        let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
+        let stored_row_basic = stored.basis.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(col_basic + stored_row_basic, l_old, "stored LP invariant");
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 16];
+
+        // Baked path: empty cut iterator — all cuts live in the baked template.
+        let stats = reconstruct_basis(
+            &stored,
+            target(l_new, num_cols),
+            std::iter::empty::<(usize, f64, &[f64])>(),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+        );
+        assert_eq!(stats, ReconstructionStats::default());
+        assert_eq!(out.row_status.len(), l_new);
+
+        let row_basic_before = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_before,
+            l_new + 1,
+            "truncation leaves excess = 1 (one LOWER dropped from the tail)",
+        );
+
+        // The buggy call (base_row_count == num_row) is a no-op.
+        let mut out_noop = out.clone();
+        let noop_demotions = enforce_basic_count_invariant(&mut out_noop, l_new, l_new);
+        assert_eq!(
+            noop_demotions, 0,
+            "old caller args (base_row_count == num_row) cannot demote",
+        );
+        let noop_total = col_basic + out_noop.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            noop_total,
+            l_new + 1,
+            "old caller args leave the excess in place — this is the bug",
+        );
+
+        // The fixed call (base_row_count == n_state) demotes one BASIC.
+        let demotions = enforce_basic_count_invariant(&mut out, l_new, n_state);
+        assert_eq!(demotions, 1, "fixed caller args demote one trailing BASIC");
+
+        let row_basic_after = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic_after,
+            l_new,
+            "invariant restored after the fix",
+        );
+    }
+
     // (c) New cuts added after drops.
     //
     // New cuts are always classified BASIC (ticket-008). They grow num_row by 1

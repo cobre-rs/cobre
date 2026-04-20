@@ -498,8 +498,8 @@ fn load_policy_for_simulation(
         solver_stats_log: Vec::new(),
         basis_cache,
         visited_archive: None,
-        // Baked templates are not stored in policy checkpoints; the
-        // simulation path will use the fallback load_model + add_rows path.
+        // Baked templates are not stored in policy checkpoints. simulate() re-bakes all stage
+        // templates at startup from the FCF cut pool when baked_templates is None.
         baked_templates: None,
     })
 }

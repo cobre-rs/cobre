@@ -76,7 +76,7 @@ pub mod workspace;
 
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
 pub use config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
-pub use context::{BakedTemplates, StageContext, TrainingContext};
+pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};
 pub use cut_selection::{

@@ -62,9 +62,9 @@ pub struct StageInputs<'a> {
     pub current_state: &'a [f64],
     /// Stored basis from the previous iteration, if any.
     pub stored_basis: Option<&'a CapturedBasis>,
-    /// Baked stage template, if the baked path is active; `None` on the
-    /// legacy path. `Some(_)` is the baked path; `None` is legacy.
-    pub baked_template: Option<&'a StageTemplate>,
+    /// Baked stage template for this stage. Always populated — the caller
+    /// guarantees that baked templates have been constructed before the solve.
+    pub baked_template: &'a StageTemplate,
     /// Stage index `t`.
     pub stage_index: usize,
     /// Scenario index `m`.
@@ -164,51 +164,30 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
             tolerance: 1e-7,
         };
 
-        // Baked arm: empty iterator (cuts are structural).
-        // Legacy arm: active cut iterator.
-        let (recon_stats, num_row_for_invariant, base_row_for_invariant) =
-            if let Some(baked) = inputs.baked_template {
-                let stats = reconstruct_basis(
-                    captured,
-                    ReconstructionTarget {
-                        base_row_count: baked.num_rows,
-                        num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
-                    },
-                    std::iter::empty(),
-                    padding,
-                    0,
-                    &mut ws.scratch_basis,
-                    &mut ws.scratch.recon_slot_lookup,
-                );
-                // Baked path: no delta cut rows, so num_row == base_row_count.
-                // enforce_basic_count_invariant is a no-op when the basis already
-                // balances, but applying it uniformly closes the simulation-drift
-                // bug class (source doc AD-2).
-                (stats, baked.num_rows, baked.num_rows)
-            } else {
-                let stats = reconstruct_basis(
-                    captured,
-                    ReconstructionTarget {
-                        base_row_count: inputs.stage_context.templates[inputs.stage_index].num_rows,
-                        num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
-                    },
-                    inputs.pool.active_cuts(),
-                    padding,
-                    0,
-                    &mut ws.scratch_basis,
-                    &mut ws.scratch.recon_slot_lookup,
-                );
-                let num_row = inputs.stage_context.templates[inputs.stage_index].num_rows
-                    + inputs.pool.active_cuts().count();
-                (
-                    stats,
-                    num_row,
-                    inputs.stage_context.templates[inputs.stage_index].num_rows,
-                )
-            };
+        // All solves now use the baked path: cuts are structural rows in the
+        // baked template; the delta-cut iterator is always empty (AD-3).
+        let baked = inputs.baked_template;
+        let stats = reconstruct_basis(
+            captured,
+            ReconstructionTarget {
+                base_row_count: baked.num_rows,
+                num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
+            },
+            std::iter::empty(),
+            padding,
+            &mut ws.scratch_basis,
+            &mut ws.scratch.recon_slot_lookup,
+        );
+        // Baked path: no delta cut rows, so num_row == base_row_count.
+        // enforce_basic_count_invariant is a no-op when the basis already
+        // balances, but applying it uniformly closes the simulation-drift
+        // bug class (source doc AD-2).
+        let num_row_for_invariant = baked.num_rows;
+        let base_row_for_invariant = baked.num_rows;
+        let recon_stats = stats;
 
         // Enforce basic-count invariant across all phases (source doc AD-2):
-        // no-op on baked arm in common case; corrects excess BASIC on legacy arm.
+        // no-op on the baked path in the common case.
         let demotions = enforce_basic_count_invariant(
             &mut ws.scratch_basis,
             num_row_for_invariant,
@@ -284,7 +263,7 @@ fn map_solver_error(
 
 #[cfg(test)]
 mod tests {
-    use cobre_solver::{HighsSolver, RowBatch, SolverError, SolverInterface, StageTemplate};
+    use cobre_solver::{HighsSolver, SolverError, SolverInterface, StageTemplate};
 
     use super::{Phase, StageInputs, run_stage_solve};
     use crate::{
@@ -400,32 +379,7 @@ mod tests {
         StageIndexer::new(1, 0)
     }
 
-    /// Build a `CapturedBasis` where `col_basic + row_basic == num_row + excess`.
-    ///
-    /// Achieved by marking `excess` extra cut rows as BASIC instead of LOWER.
-    fn make_excess_basis(base_rows: usize, cut_count: usize, excess: usize) -> CapturedBasis {
-        let num_row = base_rows + cut_count;
-        let num_cols = 3_usize;
-        let mut cb = CapturedBasis::new(num_cols, num_row, base_rows, cut_count, 1);
-        // Column statuses: first `num_row` columns are BASIC, rest are LOWER.
-        cb.basis.col_status.clear();
-        for j in 0..num_cols {
-            cb.basis.col_status.push(if j < num_row { B } else { L });
-        }
-        // Row statuses: all BASIC — plus `excess` extra BASIC cut rows that
-        // will be demoted by `enforce_basic_count_invariant`.
-        cb.basis.row_status.clear();
-        cb.basis.row_status.resize(num_row + excess, B);
-        // Slot metadata: one slot per stored cut row (including the excess rows).
-        for s in 0..(cut_count + excess) {
-            #[allow(clippy::cast_possible_truncation)]
-            cb.cut_row_slots.push(s as u32);
-        }
-        // Capture state: [0.0].
-        cb.state_at_capture.push(0.0);
-        cb
-    }
-
+    /// Build a baked `StageTemplate` with the given total row count.
     // -----------------------------------------------------------------------
     // Test 1: cold start — `stored_basis: None` returns default stats
     // -----------------------------------------------------------------------
@@ -445,7 +399,7 @@ mod tests {
             pool: &pool,
             current_state: &[0.0],
             stored_basis: None,
-            baked_template: None,
+            baked_template: &template,
             stage_index: 0,
             scenario_index: 0,
             horizon_is_terminal: false,
@@ -465,51 +419,55 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 2: warm start, excess BASIC count — demotions == 3
+    // Test 2: warm start on the baked path — successful solve returns outcome
     // -----------------------------------------------------------------------
 
+    /// Verifies that a warm-start with a valid `CapturedBasis` on the baked
+    /// path completes successfully.  On the baked path all cut rows are
+    /// structural, so `reconstruct_basis` uses an empty iterator and
+    /// `enforce_basic_count_invariant` is a no-op (no excess BASIC rows).
+    ///
+    /// Basis accounting: `CapturedBasis` is built with `base_row_count=2` and
+    /// `cut_row_slots=[]` (no stored cut rows).  `reconstruct_basis` with
+    /// `target.base_row_count=2` copies the 2 stored row statuses.
+    /// With 2 BASIC col statuses + 0 BASIC row statuses, `total_basic=2 == num_row=2`.
     #[test]
-    fn run_stage_solve_warm_start_excess_basic_demotes() {
+    fn run_stage_solve_warm_start_baked_path_succeeds() {
         let template = make_template();
         let templates = std::slice::from_ref(&template);
         let ctx = make_context(templates);
+        let pool = make_empty_pool();
         let indexer = make_indexer();
-
-        // Build LP with 3 cut rows: template (2 rows) + 3 cuts = 5 rows total.
-        // Stored basis has 2 base rows + 3 matching cut rows, but with
-        // col_basic + row_basic = num_row + 3 (excess = 3).
-        // After reconstruct_basis, enforce_basic_count_invariant must demote 3.
-        //
-        // Accounting (num_row=5, num_cols=3):
-        //   col_status: all 3 cols BASIC (j < num_row=5) → col_basic = 3
-        //   row_status: all 5 entries BASIC (preserved from stored) → row_basic = 5
-        //   total_basic = 8, excess = 8 - 5 = 3 → demotions = 3.
         let mut ws = make_workspace(&template);
         ws.scratch.recon_slot_lookup = vec![None; 16];
-        let batch = RowBatch {
-            num_rows: 3,
-            row_starts: vec![0_i32, 2, 4, 6],
-            col_indices: vec![0_i32, 1, 0_i32, 1, 0_i32, 1],
-            values: vec![-1.0, 1.0, -1.0, 1.0, -1.0, 1.0],
-            row_lower: vec![-100.0, -100.0, -100.0],
-            row_upper: vec![f64::INFINITY, f64::INFINITY, f64::INFINITY],
-        };
-        ws.solver.add_rows(&batch);
 
-        let mut pool = CutPool::new(16, 1, 1, 0);
-        pool.add_cut(0, 0, 1.0, &[0.0]);
-        pool.add_cut(1, 0, 2.0, &[0.0]);
-        pool.add_cut(2, 0, 3.0, &[0.0]);
-
-        let captured = make_excess_basis(2, 3, 3);
+        // Build a CapturedBasis with base_row_count=2, 0 cut rows.
+        // col_status: first 2 cols BASIC (needed to match num_row=2),
+        // row_status: 2 LOWER entries (rows are at bound in optimal solution).
+        // total_basic = col_basic(2) + row_basic(0) = 2 == num_row(2). Valid.
+        let mut captured = CapturedBasis::new(
+            template.num_cols,
+            template.num_rows,
+            template.num_rows,
+            0,
+            1,
+        );
+        captured.basis.col_status.clear();
+        captured.basis.col_status.push(B); // x0 BASIC
+        captured.basis.col_status.push(B); // x1 BASIC
+        captured.basis.col_status.push(L); // x2 LOWER
+        captured.basis.row_status.clear();
+        captured.basis.row_status.push(L); // row 0 at bound
+        captured.basis.row_status.push(L); // row 1 at bound
+        captured.state_at_capture.push(6.0); // captured at state = [6.0]
 
         let inputs = StageInputs {
             stage_context: &ctx,
             indexer: &indexer,
             pool: &pool,
-            current_state: &[0.0],
+            current_state: &[6.0],
             stored_basis: Some(&captured),
-            baked_template: None,
+            baked_template: &template,
             stage_index: 0,
             scenario_index: 0,
             horizon_is_terminal: false,
@@ -520,17 +478,19 @@ mod tests {
         let result = run_stage_solve(&mut ws, Phase::Simulation, &inputs);
         assert!(
             result.is_ok(),
-            "solve with excess BASIC should succeed: {result:?}"
+            "warm start on baked path should succeed: {result:?}"
         );
-        // Verify demotions by inspecting the scratch_basis.
-        // enforce_basic_count_invariant demotes trailing BASIC cut rows (indices >= 2)
-        // to LOWER until excess is resolved.  With excess=3 and 3 cut rows, all 3
-        // cut-row entries become LOWER.
-        let cut_lower_count = ws.scratch_basis.row_status[2..]
+        // No cut rows → no demotions. Row statuses are all LOWER (non-basic).
+        let lower_count = ws
+            .scratch_basis
+            .row_status
             .iter()
             .filter(|&&s| s == L)
             .count();
-        assert_eq!(cut_lower_count, 3, "3 demotions expected");
+        assert_eq!(
+            lower_count, 2,
+            "both rows should be LOWER after reconstruction"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -553,7 +513,7 @@ mod tests {
             pool: &pool,
             current_state: &[],
             stored_basis: None,
-            baked_template: None,
+            baked_template: &template,
             stage_index: 0,
             scenario_index: 7,
             horizon_is_terminal: false,
@@ -618,7 +578,7 @@ mod tests {
             pool: &pool,
             current_state: &[0.0],
             stored_basis: Some(&all_lower),
-            baked_template: None,
+            baked_template: &template,
             stage_index: 0,
             scenario_index: 3,
             horizon_is_terminal: false,

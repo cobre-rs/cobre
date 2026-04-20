@@ -18,14 +18,6 @@
 //! (slot found → preserved) or evaluates the cut at `padding_state` to assign
 //! tight/slack (slot not found → new).
 //!
-//! ## `stored_cut_row_offset`
-//!
-//! On the baked-template path, some cut rows are baked into the template base and
-//! do not appear in the delta-cut iterator.  Pass `stored_cut_row_offset` equal to
-//! the number of baked cut rows so the helper skips those entries in
-//! `stored.cut_row_slots` and reads row statuses at the correct position.  For
-//! the forward path and the legacy backward path, pass `0`.
-//!
 //! ## Forward-path basic-count invariant (ticket-009)
 //!
 //! On the forward path, cut selection may drop cuts whose stored row status was
@@ -65,7 +57,6 @@
 //!     target,
 //!     cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
 //!     padding,
-//!     0,
 //!     &mut out,
 //!     &mut lookup,
 //! );
@@ -157,13 +148,6 @@ pub struct ReconstructionStats {
 ///   Backward path: `padding.state = captured.state_at_capture` (the fix from
 ///   ticket 004 — preserved rows were captured at that state so new rows must
 ///   be evaluated at the same state for a consistent basis).
-/// - `stored_cut_row_offset` — number of entries at the start of
-///   `stored.cut_row_slots` to skip.  Pass `0` for the forward path and the
-///   legacy backward path.  On the baked-template backward path, pass
-///   `baked_cut_count` (= `baked_template_num_rows - template_num_rows`) so
-///   the baked-row slots — which the caller has absorbed into
-///   `target.base_row_count` by passing `baked.num_rows` there — are not
-///   treated as reconcilable delta rows.
 /// - `out` — destination basis (caller owns; cleared and refilled in place).
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
 ///   at least `max_slot + 1`.  Grown in place if undersized (hot path should
@@ -184,7 +168,6 @@ pub fn reconstruct_basis<'a, I>(
     target: ReconstructionTarget,
     current_cut_rows: I,
     padding: PaddingContext<'_>,
-    stored_cut_row_offset: usize,
     out: &mut Basis,
     slot_lookup: &mut Vec<Option<u32>>,
 ) -> ReconstructionStats
@@ -208,12 +191,7 @@ where
         );
     }
 
-    // The reconcilable portion of stored.cut_row_slots starts at stored_cut_row_offset.
-    // On the baked path, the first `stored_cut_row_offset` entries correspond to rows
-    // that are now structural (baked into the template base) and must not be
-    // re-reconciled as delta cut rows.
-    let reconcilable_slots =
-        &stored.cut_row_slots[stored_cut_row_offset.min(stored.cut_row_slots.len())..];
+    let reconcilable_slots = stored.cut_row_slots.as_slice();
 
     // (a) Column statuses — copy stored, then resize to target if lengths differ.
     out.col_status.clear();
@@ -258,7 +236,7 @@ where
     }
     slot_lookup.fill(None);
     // `position` here is the index within reconcilable_slots (0-based), so the
-    // stored row index is `stored.base_row_count + stored_cut_row_offset + position`.
+    // stored row index is `stored.base_row_count + position`.
     #[allow(clippy::cast_possible_truncation)]
     for (position, &slot) in reconcilable_slots.iter().enumerate() {
         slot_lookup[slot as usize] = Some(position as u32);
@@ -269,9 +247,8 @@ where
     for (target_slot, intercept, coefficients) in current_cut_rows {
         let row_status_byte = if let Some(pos) = slot_lookup.get(target_slot).and_then(|o| *o) {
             // Slot was in the stored basis — copy its row status.
-            // The stored row index accounts for the offset: baked-path skips
-            // `stored_cut_row_offset` entries before `pos` within the cut section.
-            let stored_row_idx = stored.base_row_count + stored_cut_row_offset + pos as usize;
+            // The stored row index is `stored.base_row_count + position`.
+            let stored_row_idx = stored.base_row_count + pos as usize;
             stats.preserved += 1;
             stored.basis.row_status[stored_row_idx]
         } else {
@@ -485,7 +462,6 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -531,7 +507,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -569,7 +544,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -614,7 +588,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -680,7 +653,6 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -724,7 +696,6 @@ mod tests {
                 theta: 10.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -762,7 +733,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -800,7 +770,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -814,78 +783,6 @@ mod tests {
                 new_tight: 0,
                 new_slack: 1
             }
-        );
-    }
-
-    /// AC (ticket-004): `stored_cut_row_offset` skips baked-row entries.
-    ///
-    /// Given:
-    ///   `stored.cut_row_slots` = [10, 11, 20, 21]
-    ///   `stored.base_row_count` = 2
-    ///   `stored.basis.row_status` = [A, B, C, D, E, F]  (6 rows: 2 base + 4 cut)
-    ///   `stored_cut_row_offset` = 2  (first 2 slots are baked into the base)
-    ///   current cut rows yield slots [20, 21]
-    ///
-    /// Expected: preserved = 2, statuses copied from stored row indices
-    ///   slot 20 at reconcilable pos 0 -> stored row = base(2) + offset(2) + pos(0) = 4 -> E (L)
-    ///   slot 21 at reconcilable pos 1 -> stored row = base(2) + offset(2) + pos(1) = 5 -> F (B)
-    #[test]
-    fn test_stored_cut_row_offset_skips_baked_rows() {
-        // Layout: base_rows=2, cut_slots=[10,11,20,21], statuses=[C,D,E,F] (D=L, F=B here)
-        // Use distinct marker values: row_status = [B,B, L,B,L,B] (base=2, cuts=[L,B,L,B])
-        let stored = make_stored_basis(2, 3, &[10, 11, 20, 21], &[L, B, L, B], &[9.0, 9.0, 9.0]);
-        // stored.basis.row_status = [B, B, L, B, L, B]
-        //   indices:                  0  1  2  3  4  5
-        // base_row_count=2, cut section starts at index 2:
-        //   stored pos 0 (slot 10) -> row 2 -> L
-        //   stored pos 1 (slot 11) -> row 3 -> B
-        //   stored pos 2 (slot 20) -> row 4 -> L
-        //   stored pos 3 (slot 21) -> row 5 -> B
-        // With offset=2: reconcilable = [20, 21]
-        //   slot 20 -> reconcilable pos 0 -> stored_row_idx = 2 + 2 + 0 = 4 -> L
-        //   slot 21 -> reconcilable pos 1 -> stored_row_idx = 2 + 2 + 1 = 5 -> B
-
-        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
-            (20, 0.0, vec![0.0, 0.0, 0.0]),
-            (21, 0.0, vec![0.0, 0.0, 0.0]),
-        ];
-        let mut out = Basis::new(0, 0);
-        let mut lookup: Vec<Option<u32>> = vec![None; 32];
-
-        // target_base = baked template rows (includes baked cut rows), e.g. 4
-        // (= stored.base_row_count + baked_cut_count = 2 + 2)
-        let stats = reconstruct_basis(
-            &stored,
-            target(4, 3), // baked template has 4 rows (base=2 + 2 baked cuts)
-            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
-            PaddingContext {
-                state: &[9.0, 9.0, 9.0],
-                theta: 100.0,
-                tolerance: 1e-7,
-            },
-            2, // stored_cut_row_offset = baked_cut_count
-            &mut out,
-            &mut lookup,
-        );
-
-        assert_eq!(
-            stats,
-            ReconstructionStats {
-                preserved: 2,
-                new_tight: 0,
-                new_slack: 0,
-            },
-            "both delta slots must be preserved from the stored basis"
-        );
-        // out has 4 base rows (from stored) + 2 delta cut rows = 6 total.
-        // The 2 delta rows (indices 4 and 5) must match stored rows 4 and 5.
-        assert_eq!(
-            out.row_status[4], stored.basis.row_status[4],
-            "slot 20: preserved from stored row 4 (L)"
-        );
-        assert_eq!(
-            out.row_status[5], stored.basis.row_status[5],
-            "slot 21: preserved from stored row 5 (B)"
         );
     }
 
@@ -937,7 +834,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -991,7 +887,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -1128,7 +1023,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0, // baked path: offset = 0
             &mut out,
             &mut lookup,
         );
@@ -1180,7 +1074,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -1284,7 +1177,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -1366,7 +1258,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );
@@ -1449,7 +1340,6 @@ mod tests {
                 theta: 100.0,
                 tolerance: 1e-7,
             },
-            0,
             &mut out,
             &mut lookup,
         );

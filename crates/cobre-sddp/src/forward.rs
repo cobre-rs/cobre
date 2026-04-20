@@ -87,7 +87,7 @@ use rayon::iter::{
 
 use crate::{
     FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
-    context::{BakedTemplates, StageContext, TrainingContext},
+    context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
@@ -589,6 +589,20 @@ pub fn build_delta_cut_row_batch_into(
 /// [`build_cut_row_batch_into`]: negated state coefficients with column
 /// scaling and a positive theta column entry.
 ///
+/// # Role in post-epic-05 architecture
+///
+/// There are three production callers of
+/// [`SolverInterface::add_rows`]
+/// post-epic-05: this function (lower-bound LP), the backward pass delta-cut
+/// append in `cobre_sddp::backward::load_backward_lp`, and a test-only
+/// fallback path in `cobre_sddp::lower_bound`. The training-loop forward pass
+/// does not call `add_rows`; it uses pre-baked templates exclusively. The
+/// lower-bound LP grows monotonically across iterations (new cuts are appended;
+/// nothing is ever removed), and re-baking its template each iteration would
+/// increase cumulative setup cost from `O(n_iters)` to `O(n_iters^2)`. The
+/// append-only design is therefore intentional and is not pursued for
+/// replacement.
+///
 /// # Arguments
 ///
 /// - `solver`: the live LP solver instance with a loaded model.
@@ -758,8 +772,12 @@ struct StageKey<'a> {
     iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.
     raw_noise: &'a [f64],
-    /// Total LP row count (template + active cuts) for pre-allocating basis
-    /// storage and avoiding per-scenario heap reallocation.
+    /// Total LP row count, equal to `baked[t].num_rows` after epic-05
+    /// (the baked template absorbs all active cut rows as structural
+    /// rows). Used to pre-allocate basis storage and avoid
+    /// per-scenario heap reallocation. Consumed by
+    /// `run_forward_stage` (line 849), the captured-basis metadata
+    /// computation (line 1072), and `CapturedBasis::new` (line 1085).
     basis_row_capacity: usize,
     /// True when the last study stage (`T-1`) has at least one warm-start
     /// (boundary) cut.  When true, the theta column at the terminal stage is
@@ -774,14 +792,10 @@ struct StageKey<'a> {
     pool: &'a CutPool,
     /// Baked stage template for stage `t`.
     ///
-    /// Always `None` in ticket-003 so that the forward pass continues to use
-    /// the legacy (`pool.active_cuts()`) reconstruction arm and produces
-    /// bit-for-bit identical results vs. the pre-epic baseline.
-    ///
-    /// Tickets 010/011 will switch this to
-    /// `baked.ready.then(|| &baked.templates[t])` when the baked forward
-    /// path is intentionally activated.
-    baked_template: Option<&'a StageTemplate>,
+    /// Always populated on the always-baked forward path. The baked template
+    /// contains all active cuts as structural rows; `run_stage_solve` uses the
+    /// empty-iterator reconstruction path.
+    baked_template: &'a StageTemplate,
 }
 
 /// Populate `CapturedBasis` metadata after a forward solve.
@@ -1201,9 +1215,8 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,
     ctx: &StageContext<'_>,
-    baked: &BakedTemplates<'_>,
+    baked: &[StageTemplate],
     fcf: &FutureCostFunction,
-    cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
     batch: &ForwardPassBatch<'_>,
     records: &mut [TrajectoryRecord],
@@ -1229,43 +1242,11 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
     debug_assert_eq!(records.len(), forward_passes * num_stages);
     debug_assert_eq!(initial_state.len(), indexer.n_state);
-    if baked.ready {
-        debug_assert_eq!(
-            baked.templates.len(),
-            num_stages,
-            "baked templates length mismatch: expected {num_stages}, got {}",
-            baked.templates.len()
-        );
-    }
-
-    let start = Instant::now();
-    // Populate `cut_batches` only on the legacy (non-baked) load path.
-    // On the baked path (`baked.ready == true`):
-    //   - The forward inner loop at line 1311 calls `load_model(&baked.templates[t])`
-    //     and does NOT call `add_rows(&cut_batches[t])`.
-    //   - The backward pass overwrites `cut_batches[successor]` for
-    //     `successor = t+1, t+2, ..., num_stages-1` before any read.
-    //   - `cut_batches[0]` is never read on the baked path.
-    // On entry, `cut_batches` is either zero-rows (first iteration) or
-    // carries coherent stale batches from a prior backward pass; both
-    // are acceptable because the backward pass re-initializes each
-    // successor slot before any read. The debug_assert below rejects
-    // only genuinely malformed buffers (e.g. partial writes).
-    // This gate saves O(num_stages × active_cuts × n_state) writes per
-    // iteration on the baked path. The buffer is pre-allocated, so no
-    // allocation is avoided, only memory-bandwidth cost.
-    if !baked.ready {
-        for (t, batch) in cut_batches.iter_mut().enumerate().take(num_stages) {
-            build_cut_row_batch_into(batch, fcf, t, indexer, &ctx.templates[t].col_scale);
-        }
-    }
-    debug_assert!(
-        !baked.ready
-            || cut_batches
-                .iter()
-                .take(num_stages)
-                .all(|b| b.num_rows == 0 || b.row_lower.len() == b.num_rows),
-        "baked path: cut_batches must be either zero-rows or coherent (row_lower.len() == num_rows) before backward pass reinitializes"
+    debug_assert_eq!(
+        baked.len(),
+        num_stages,
+        "baked templates length mismatch: expected {num_stages}, got {}",
+        baked.len()
     );
     let sampler = build_forward_sampler(ForwardSamplerConfig {
         class_schemes: ClassSchemes {
@@ -1286,6 +1267,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         external_ncs_library: training_ctx.external_ncs_library,
     })?;
     let n_workers = workspaces.len().max(1);
+    let start = Instant::now();
 
     let mut remaining: &mut [TrajectoryRecord] = records;
     let mut record_slices: Vec<&mut [TrajectoryRecord]> = Vec::with_capacity(n_workers);
@@ -1362,16 +1344,9 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
 
                     for (local_m, m) in (start_m..end_m).enumerate() {
                         // Reload model per scenario to ensure deterministic LP state across thread assignments.
-                        // When baked templates are ready, the active cut rows are already structural rows
-                        // in the baked template — no add_rows call is needed.
-                        if baked.ready {
-                            ws.solver.load_model(&baked.templates[t]);
-                        } else {
-                            ws.solver.load_model(&ctx.templates[t]);
-                            if cut_batches[t].num_rows > 0 {
-                                ws.solver.add_rows(&cut_batches[t]);
-                            }
-                        }
+                        // The active cut rows are already structural rows in the baked template —
+                        // no add_rows call is needed.
+                        ws.solver.load_model(&baked[t]);
                         ws.current_state.clear();
                         let src: &[f64] = if t == 0 {
                             initial_state
@@ -1443,19 +1418,10 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                             num_stages,
                             iteration: *iteration,
                             raw_noise,
-                            basis_row_capacity: if baked.ready {
-                                baked.templates[t].num_rows
-                            } else {
-                                ctx.templates[t].num_rows + cut_batches[t].num_rows
-                            },
+                            basis_row_capacity: baked[t].num_rows,
                             terminal_has_boundary_cuts,
                             pool: &fcf.pools[t],
-                            // Always None until ticket-010 activates the baked
-                            // forward path. Passing None forces the legacy
-                            // (pool.active_cuts()) reconstruction arm so that
-                            // forward-pass behavior is bit-for-bit identical to
-                            // the pre-epic baseline.
-                            baked_template: None,
+                            baked_template: &baked[t],
                         };
                         // Snapshot solver statistics before the stage solve so the
                         // per-stage delta can be accumulated without hot-path allocation.
@@ -1628,46 +1594,9 @@ mod tests {
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
         StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
         config::{CutManagementConfig, EventConfig, LoopConfig},
-        context::{BakedTemplates, StageContext, TrainingContext},
+        context::{StageContext, TrainingContext},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
-
-    /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
-    ///
-    /// Used by unit tests that call `run_forward_pass` directly and do not
-    /// exercise baked-template behaviour.
-    fn not_baked() -> BakedTemplates<'static> {
-        BakedTemplates {
-            templates: &[],
-            ready: false,
-        }
-    }
-
-    /// Return a `BakedTemplates` with `ready = true` backed by the given slice.
-    ///
-    /// Used by unit tests that exercise the baked path where the forward inner
-    /// loop calls `load_model(&baked.templates[t])` instead of rebuilding from
-    /// `cut_batches`.
-    fn baked_ready(templates: &[StageTemplate]) -> BakedTemplates<'_> {
-        BakedTemplates {
-            templates,
-            ready: true,
-        }
-    }
-
-    /// Create a `Vec<RowBatch>` of empty batches, one per stage.
-    fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
-        (0..n_stages)
-            .map(|_| RowBatch {
-                num_rows: 0,
-                row_starts: Vec::new(),
-                col_indices: Vec::new(),
-                values: Vec::new(),
-                row_lower: Vec::new(),
-                row_upper: Vec::new(),
-            })
-            .collect()
-    }
 
     // ── Mock solver ──────────────────────────────────────────────────────────
 
@@ -2432,9 +2361,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2555,9 +2483,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -2684,9 +2611,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3130,9 +3056,8 @@ mod tests {
             std::slice::from_mut(ws),
             basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3299,9 +3224,8 @@ mod tests {
             std::slice::from_mut(&mut ws1),
             &mut basis_store1,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3340,9 +3264,8 @@ mod tests {
             &mut workspaces4,
             &mut basis_store4,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3448,9 +3371,8 @@ mod tests {
             &mut workspaces,
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3762,9 +3684,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -3954,9 +3875,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -4199,9 +4119,8 @@ mod tests {
             &mut workspaces,
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -4339,9 +4258,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -4474,9 +4392,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -4573,9 +4490,8 @@ mod tests {
             std::slice::from_mut(&mut ws),
             &mut basis_store,
             &ctx,
-            &not_baked(),
+            &templates,
             &fcf,
-            &mut empty_cut_batches(templates.len()),
             &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
@@ -5078,205 +4994,5 @@ mod tests {
         assert_eq!(batch.num_rows, 1);
         // Prior garbage must be gone.
         assert_eq!(batch.row_starts.len(), 2);
-    }
-
-    // ── Unit tests: forward cut_batches rebuild gate ─────────────────────────
-
-    /// AC: `baked.ready` == true → rebuild loop is skipped, `cut_batches` unchanged.
-    ///
-    /// A 2-stage FCF with one active cut in pool[0] is used so that
-    /// `build_cut_row_batch_into` would write `num_rows == 1` if it ran.
-    /// After `run_forward_pass` with `baked.ready == true` the batches must
-    /// still have `num_rows == 0`, proving the gate prevented the rebuild.
-    #[test]
-    fn forward_pass_baked_ready_skips_cut_batches_rebuild() {
-        let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(4, 0.0, indexer.theta, 0.0);
-        let solver = MockSolver::always_ok(solution);
-
-        // 2-stage FCF; add one active cut to stage 0 so rebuild would set
-        // cut_batches[0].num_rows == 1 if it executed.
-        let mut fcf = FutureCostFunction::new(2, indexer.n_state, 1, 10, &[0; 2]);
-        fcf.add_cut(0, 0, 0, 5.0, &[1.0]);
-        assert_eq!(
-            fcf.pools[0].active_count(),
-            1,
-            "pre-condition: one active cut in pool[0]"
-        );
-
-        let templates = vec![minimal_template_1_0(), minimal_template_1_0()];
-        let base_rows = vec![2usize, 2];
-        let stochastic = make_stochastic_context_1_hydro_3_stages();
-        let stages = make_stages_3();
-
-        let ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize, 1],
-            ncs_max_gen: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
-
-        let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(1, 2);
-        let mut cut_batches = empty_cut_batches(2);
-        let mut records = empty_records(2); // 1 forward_pass × 2 stages
-
-        let baked_templates = vec![minimal_template_1_0(), minimal_template_1_0()];
-        let baked = baked_ready(&baked_templates);
-
-        let _ = run_forward_pass(
-            std::slice::from_mut(&mut ws),
-            &mut basis_store,
-            &ctx,
-            &baked,
-            &fcf,
-            &mut cut_batches,
-            &TrainingContext {
-                horizon: &HorizonMode::Finite { num_stages: 2 },
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &vec![0.0_f64; indexer.n_state],
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &stages[..2],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                recent_accum_seed: &[],
-                recent_weight_seed: 0.0,
-            },
-            &ForwardPassBatch {
-                local_forward_passes: 1,
-                total_forward_passes: 1,
-                iteration: 1, // iteration >= 1 so baked.ready is meaningful
-                fwd_offset: 0,
-                event_sender: None,
-            },
-            &mut records,
-        )
-        .expect("forward pass must succeed on baked path");
-
-        // The gate must have prevented build_cut_row_batch_into from running:
-        // every batch must still have num_rows == 0.
-        for (t, b) in cut_batches.iter().enumerate() {
-            assert_eq!(
-                b.num_rows, 0,
-                "baked.ready=true must skip cut_batches rebuild at stage {t}"
-            );
-        }
-    }
-
-    /// AC: `baked.ready` == false → rebuild loop runs, `cut_batches` populated.
-    ///
-    /// Same 2-stage FCF as the sibling test. With `not_baked()` the gate
-    /// does not apply and `cut_batches[0].num_rows` must equal
-    /// `fcf.pools[0].active_count() == 1` after the call.
-    #[test]
-    fn forward_pass_baked_not_ready_rebuilds_cut_batches() {
-        let indexer = StageIndexer::new(1, 0);
-        let solution = fixed_solution(4, 0.0, indexer.theta, 0.0);
-        let solver = MockSolver::always_ok(solution);
-
-        // 2-stage FCF; one active cut in stage 0.
-        let mut fcf = FutureCostFunction::new(2, indexer.n_state, 1, 10, &[0; 2]);
-        fcf.add_cut(0, 0, 0, 5.0, &[1.0]);
-        assert_eq!(
-            fcf.pools[0].active_count(),
-            1,
-            "pre-condition: one active cut in pool[0]"
-        );
-        assert_eq!(
-            fcf.pools[1].active_count(),
-            0,
-            "pre-condition: no cuts in pool[1]"
-        );
-
-        let templates = vec![minimal_template_1_0(), minimal_template_1_0()];
-        let base_rows = vec![2usize, 2];
-        let stochastic = make_stochastic_context_1_hydro_3_stages();
-        let stages = make_stages_3();
-
-        let ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize, 1],
-            ncs_max_gen: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-            stage_lag_transitions: &[],
-            noise_group_ids: &[],
-            downstream_par_order: 0,
-        };
-
-        let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(1, 2);
-        let mut cut_batches = empty_cut_batches(2);
-        let mut records = empty_records(2); // 1 forward_pass × 2 stages
-
-        let _ = run_forward_pass(
-            std::slice::from_mut(&mut ws),
-            &mut basis_store,
-            &ctx,
-            &not_baked(),
-            &fcf,
-            &mut cut_batches,
-            &TrainingContext {
-                horizon: &HorizonMode::Finite { num_stages: 2 },
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &vec![0.0_f64; indexer.n_state],
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &stages[..2],
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                recent_accum_seed: &[],
-                recent_weight_seed: 0.0,
-            },
-            &ForwardPassBatch {
-                local_forward_passes: 1,
-                total_forward_passes: 1,
-                iteration: 0,
-                fwd_offset: 0,
-                event_sender: None,
-            },
-            &mut records,
-        )
-        .expect("forward pass must succeed on non-baked path");
-
-        // The fallback rebuild must have run: stage 0 has one active cut,
-        // stage 1 has none.
-        assert_eq!(
-            cut_batches[0].num_rows,
-            fcf.pools[0].active_count(),
-            "non-baked path must populate cut_batches[0] with active cuts"
-        );
-        assert_eq!(
-            cut_batches[1].num_rows,
-            fcf.pools[1].active_count(),
-            "non-baked path must populate cut_batches[1] (zero cuts → zero rows)"
-        );
     }
 }

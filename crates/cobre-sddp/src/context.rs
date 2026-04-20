@@ -88,22 +88,6 @@ impl StageContext<'_> {
     }
 }
 
-/// Per-stage baked LP templates produced by the training loop's step 4d.
-///
-/// When `ready` is `true`, each `templates[t]` contains base structural rows
-/// plus all currently-active Benders cut rows. Forward and backward passes use
-/// `load_model(templates[t])` and append only delta cuts.
-///
-/// When `ready` is `false`, the legacy path loads base template and appends
-/// the full active-cut batch.
-pub struct BakedTemplates<'a> {
-    /// Per-stage baked LP templates. When `ready` is `true`, length must equal
-    /// the number of study stages.
-    pub templates: &'a [StageTemplate],
-    /// Whether the baked templates have been populated by at least one bake.
-    pub ready: bool,
-}
-
 /// Immutable algorithm-level configuration for the training loop.
 ///
 /// Groups the read-only parameters shared by the training loop, forward pass,

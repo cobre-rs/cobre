@@ -89,15 +89,15 @@ use cobre_comm::{Communicator, ReduceOp};
 use cobre_core::{
     TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WorkerTimingPhase,
 };
-use cobre_solver::{RowBatch, SolverInterface, SolverStatistics};
+use cobre_solver::{RowBatch, SolverInterface, SolverStatistics, StageTemplate};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
     FutureCostFunction, SddpError, TrajectoryRecord,
-    context::{BakedTemplates, StageContext, TrainingContext},
+    context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
-    forward::{build_cut_row_batch_into, build_delta_cut_row_batch_into},
+    forward::build_delta_cut_row_batch_into,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
     solver_stats::{
@@ -372,8 +372,9 @@ struct SuccessorSpec<'a> {
     num_cuts_at_successor: usize,
     /// Base row count of the successor template (excludes cuts).
     template_num_rows: usize,
-    /// Baked LP template for the successor stage, when `ready == true`.
-    baked_template: Option<&'a cobre_solver::StageTemplate>,
+    /// Baked LP template for the successor stage. Always populated — baking
+    /// is complete before the backward pass begins.
+    baked_template: &'a cobre_solver::StageTemplate,
     /// Ordered slot indices of the active cuts at the successor stage.
     successor_active_slots: &'a [usize],
     /// Basis store for warm-starting each worker's first opening solve.
@@ -386,25 +387,17 @@ struct SuccessorSpec<'a> {
     successor_pool: &'a CutPool,
 }
 
-/// Load the stage LP template and append cuts once per trial point.
+/// Load the stage LP template and append delta cuts once per trial point.
 ///
 /// Called once before the opening loop in [`process_trial_point_backward`].
-/// The LP structure (template + cuts) is identical across all openings for
-/// the same trial point — only the noise-dependent bounds change.
+/// The LP structure (baked template + delta cuts) is identical across all
+/// openings for the same trial point — only the noise-dependent bounds change.
 fn load_backward_lp<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
-    ctx: &StageContext<'_>,
     succ: &SuccessorSpec<'_>,
 ) {
-    if let Some(baked) = succ.baked_template {
-        // Baked path: load pre-baked template, then append delta cuts.
-        ws.solver.load_model(baked);
-        if succ.cut_batch.num_rows > 0 {
-            ws.solver.add_rows(succ.cut_batch);
-        }
-    } else {
-        // Legacy path: load base template, then append full active-cut batch.
-        ws.solver.load_model(&ctx.templates[succ.successor]);
+    ws.solver.load_model(succ.baked_template);
+    if succ.cut_batch.num_rows > 0 {
         ws.solver.add_rows(succ.cut_batch);
     }
 }
@@ -553,7 +546,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // evaluating new rows at `x_hat` mixed two different states.
         //
         // Baked path: reconcile only delta slots (offset = baked_cut_count).
-        // Legacy path: reconcile the full active-cut set (offset = 0).
         //
         // BasisStore is read-only; the scratch copy absorbs all mutation.
         //
@@ -574,8 +566,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             } else {
                 None
             },
-            // baked_template: None for behavior-preservation; wired in tickets 010–011.
-            baked_template: None,
+            baked_template: succ.baked_template,
             stage_index: s,
             scenario_index: scenario,
             iteration: Some(spec.iteration),
@@ -616,11 +607,11 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         let cut_duals_owned: Vec<f64> = if succ.num_cuts_at_successor > 0 {
             // Dual extraction for cut binding-activity tracking.
             //
-            // Layout invariant (both baked and legacy paths):
+            // Layout invariant:
             //   [0, template_num_rows)               — base structural rows
             //   [template_num_rows, template_num_rows + num_cuts_at_successor) — cut rows
             //
-            // On the baked path, `num_cuts_at_successor` = baked_cut_count + delta_cut_count:
+            // The baked template contains:
             //   [template_num_rows, baked_template_num_rows) — baked cut rows (from prior iters)
             //   [baked_template_num_rows, baked_template_num_rows + num_delta_cuts) — delta rows
             //
@@ -757,7 +748,7 @@ fn process_stage_backward<S: SolverInterface + Send>(
             // Per-worker, per-stage: hoist load_model unconditionally.
             // Solve-to-solve independence is delivered by `HighsSolver::solve`
             // internally via `Highs_clearSolver` (AD-4 contract, ticket-002).
-            load_backward_lp(ws, ctx, succ);
+            load_backward_lp(ws, succ);
 
             // Grow outcomes buffer monotonically to cover this stage's n_openings.
             // Never shrinks — excess capacity from earlier larger stages is reused.
@@ -867,13 +858,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
 /// - `ctx.templates.len() != num_stages`
 /// - `ctx.base_rows.len() != num_stages`
 /// - `spec.risk_measures.len() != num_stages`
-/// - `baked.ready && baked.templates.len() != num_stages`
+/// - `baked.len() != num_stages`
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &BasisStore,
     ctx: &StageContext<'_>,
-    baked: &BakedTemplates<'_>,
+    baked: &[StageTemplate],
     fcf: &mut FutureCostFunction,
     cut_batches: &mut [RowBatch],
     training_ctx: &TrainingContext<'_>,
@@ -892,13 +883,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     debug_assert_eq!(ctx.templates.len(), num_stages);
     debug_assert_eq!(ctx.base_rows.len(), num_stages);
     debug_assert_eq!(spec.risk_measures.len(), num_stages);
-    if baked.ready {
-        debug_assert_eq!(
-            baked.templates.len(),
-            num_stages,
-            "baked.templates.len() must equal num_stages when baked.ready"
-        );
-    }
+    debug_assert_eq!(baked.len(), num_stages, "baked.len() must equal num_stages");
 
     let start = Instant::now();
     let solves_before: u64 = workspaces
@@ -972,35 +957,21 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             .resize(n_openings, 1.0_f64 / n_openings as f64);
 
         let batch_start = Instant::now();
-        // Build the cut batch: delta-only when baked templates are ready,
-        // full active set on the legacy path (iteration 1 or baking disabled).
+        // Build the delta-only cut batch for the baked path.
         let template_num_rows = ctx.templates[successor].num_rows;
-        let (baked_template, num_cuts_at_successor) = if baked.ready {
-            build_delta_cut_row_batch_into(
-                &mut cut_batches[successor],
-                fcf,
-                successor,
-                indexer,
-                &ctx.templates[successor].col_scale,
-                spec.iteration,
-            );
-            let baked_tmpl = &baked.templates[successor];
-            let baked_num_rows = baked_tmpl.num_rows;
-            let num_delta = cut_batches[successor].num_rows;
-            // Total cuts = baked cut rows (beyond base template) + delta rows.
-            let total_cuts = (baked_num_rows - template_num_rows) + num_delta;
-            (Some(baked_tmpl), total_cuts)
-        } else {
-            build_cut_row_batch_into(
-                &mut cut_batches[successor],
-                fcf,
-                successor,
-                indexer,
-                &ctx.templates[successor].col_scale,
-            );
-            let num_cuts = cut_batches[successor].num_rows;
-            (None, num_cuts)
-        };
+        build_delta_cut_row_batch_into(
+            &mut cut_batches[successor],
+            fcf,
+            successor,
+            indexer,
+            &ctx.templates[successor].col_scale,
+            spec.iteration,
+        );
+        let baked_tmpl = &baked[successor];
+        let baked_num_rows = baked_tmpl.num_rows;
+        let num_delta = cut_batches[successor].num_rows;
+        // Total cuts = baked cut rows (beyond base template) + delta rows.
+        let num_cuts_at_successor = (baked_num_rows - template_num_rows) + num_delta;
         #[allow(clippy::cast_possible_truncation)]
         {
             cut_batch_build_ms += batch_start.elapsed().as_millis() as u64;
@@ -1017,7 +988,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             cut_batch: &cut_batches[successor],
             num_cuts_at_successor,
             template_num_rows,
-            baked_template,
+            baked_template: baked_tmpl,
             successor_active_slots: spec.successor_active_slots_buf,
             basis_store,
             cut_activity_tolerance: spec.cut_activity_tolerance,
@@ -1326,22 +1297,11 @@ mod tests {
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
         StageIndexer, TrajectoryRecord,
-        context::{BakedTemplates, StageContext, TrainingContext},
+        context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE},
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
-
-    /// Return a `BakedTemplates` that signals the legacy (non-baked) path.
-    ///
-    /// Used by unit tests that call `run_backward_pass` directly and do not
-    /// exercise baked-template behaviour.
-    fn not_baked() -> BakedTemplates<'static> {
-        BakedTemplates {
-            templates: &[],
-            ready: false,
-        }
-    }
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
         (0..n_stages)
@@ -1934,7 +1894,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2039,7 +1999,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2144,7 +2104,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2245,7 +2205,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2346,7 +2306,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2445,7 +2405,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2588,7 +2548,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2709,7 +2669,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2835,7 +2795,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -2948,7 +2908,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3071,7 +3031,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3188,7 +3148,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3299,7 +3259,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3417,7 +3377,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -3574,7 +3534,7 @@ mod tests {
             &mut workspaces_1,
             &basis_store_1,
             &ctx,
-            &not_baked(),
+            &templates,
             &mut fcf_1,
             &mut empty_cut_batches(n_stages),
             &TrainingContext {
@@ -3666,7 +3626,7 @@ mod tests {
             &mut workspaces_4,
             &basis_store_4,
             &ctx,
-            &not_baked(),
+            &templates,
             &mut fcf_4,
             &mut empty_cut_batches(n_stages),
             &TrainingContext {
@@ -4051,7 +4011,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4221,7 +4181,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4396,7 +4356,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4525,7 +4485,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4663,7 +4623,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -4849,7 +4809,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -5248,7 +5208,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {
@@ -5483,7 +5443,7 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &not_baked(),
+            &templates,
             &mut fcf,
             &mut empty_cut_batches(templates.len()),
             &TrainingContext {

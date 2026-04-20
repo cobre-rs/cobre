@@ -57,7 +57,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelI
 use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
-    forward::{build_cut_row_batch, partition},
+    forward::{build_cut_row_batch_into, partition},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
@@ -255,14 +255,12 @@ struct SimStageIds {
 
 /// Load-path inputs bundled for `solve_simulation_stage`.
 ///
-/// When `baked_template` is `Some`, the LP is loaded via `load_model(baked)`
-/// with no follow-up `add_rows`. When `None`, the fallback pair
-/// `load_model(ctx.templates[t]) + add_rows(cut_batch)` runs.
+/// The LP is loaded via `load_model(baked_template)` — the baked template
+/// already embeds all active cut rows as structural rows. No `add_rows` call
+/// is needed.
 struct SimStageLoadSpec<'a> {
-    /// Cut rows to append on the fallback path; unused when `baked_template` is `Some`.
-    cut_batch: &'a RowBatch,
-    /// Baked template selecting the baked load path; `None` selects the fallback.
-    baked_template: Option<&'a StageTemplate>,
+    /// Baked template for this stage; always populated after the startup re-bake.
+    baked_template: &'a StageTemplate,
     /// Warm-start basis captured during training at this stage, if any.
     warm_basis: Option<&'a CapturedBasis>,
 }
@@ -270,8 +268,7 @@ struct SimStageLoadSpec<'a> {
 /// Per-stage batched form of [`SimStageLoadSpec`] consumed by
 /// `process_scenario_stages`; indexed by stage via [`Self::stage`].
 struct SimScenarioLoadSpec<'a> {
-    cut_batches: &'a [RowBatch],
-    baked_templates: Option<&'a [StageTemplate]>,
+    baked_templates: &'a [StageTemplate],
     stage_bases: &'a [Option<CapturedBasis>],
 }
 
@@ -279,8 +276,7 @@ impl<'a> SimScenarioLoadSpec<'a> {
     #[inline]
     fn stage(&self, t: usize) -> SimStageLoadSpec<'a> {
         SimStageLoadSpec {
-            cut_batch: &self.cut_batches[t],
-            baked_template: self.baked_templates.map(|b| &b[t]),
+            baked_template: &self.baked_templates[t],
             warm_basis: self.stage_bases.get(t).and_then(Option::as_ref),
         }
     }
@@ -328,17 +324,10 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// warm-start basis is a read-only, per-stage artifact from training, so
 /// determinism is preserved.
 ///
-/// When `baked_template` is `Some`, `load_model(baked_template)` is used with
-/// no subsequent `add_rows` — the cut rows are already structural rows in the
-/// baked template. When `None`, the legacy `load_model(base) + add_rows` path
-/// is used, matching the forward-pass branching in `forward.rs:1311-1318`.
-///
-/// Reconstruction follows the forward-pass pattern (`forward.rs:940-977`)
-/// exactly: grow the slot-lookup scratch, evaluate theta at the current state,
-/// then call `reconstruct_basis` with either an empty iterator (baked path —
-/// all cuts are structural) or `pool.active_cuts()` (fallback path). The two
-/// arms are written out separately to keep iterator types monomorphic, avoiding
-/// `Box<dyn Iterator>` which is banned by project rules.
+/// `load_model(baked_template)` is always used — the cut rows are already
+/// structural rows in the baked template; no `add_rows` call is needed.
+/// When `baked_templates` was `None` on `simulate` entry, the startup re-bake
+/// already produced a local `Vec<StageTemplate>` before this function is reached.
 #[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
@@ -358,17 +347,9 @@ fn solve_simulation_stage<S: SolverInterface>(
         ..
     } = training_ctx;
     let t = ids.t;
-    // Mirror the forward-pass load-path branching (forward.rs:1311-1318):
-    // when baked templates are ready, the active cut rows are already structural
-    // rows in the baked template — no add_rows call is needed.
-    if let Some(baked) = load_spec.baked_template {
-        ws.solver.load_model(baked);
-    } else {
-        ws.solver.load_model(&ctx.templates[t]);
-        if load_spec.cut_batch.num_rows > 0 {
-            ws.solver.add_rows(load_spec.cut_batch);
-        }
-    }
+    // The baked template already embeds all active cut rows as structural rows.
+    // No add_rows call is needed.
+    ws.solver.load_model(load_spec.baked_template);
     ws.patch_buf.fill_forward_patches(
         indexer,
         &ws.current_state,
@@ -1015,25 +996,40 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
         }
     }
 
-    // Build cut-batch vector for the fallback (non-baked) path.
-    // On the baked path this precomputation is skipped; an empty-batch vector
-    // is allocated instead so that downstream indexing into cut_batches[t]
-    // remains valid (the content is never consumed on the baked path).
-    let cut_batches: Vec<RowBatch> = if baked_templates.is_none() {
-        (0..num_stages)
-            .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
-            .collect()
+    // If the caller did not provide baked templates (e.g., checkpoint-loaded
+    // simulation), re-bake them locally from the loaded FCF.  Cost is
+    // O(num_stages * num_active_cuts), a one-time setup amortised across the
+    // simulation's per-scenario LP solves (AD-3 trade-off: N copies of
+    // Vec<StageTemplate> vs per-iteration Option<> runtime branching).
+    let owned_baked: Option<Vec<StageTemplate>> = if baked_templates.is_none() {
+        let mut owned = Vec::with_capacity(num_stages);
+        let mut bake_batch = RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        };
+        for t in 0..num_stages {
+            build_cut_row_batch_into(
+                &mut bake_batch,
+                fcf,
+                t,
+                indexer,
+                &ctx.templates[t].col_scale,
+            );
+            let mut baked = StageTemplate::empty();
+            cobre_solver::bake_rows_into_template(&ctx.templates[t], &bake_batch, &mut baked);
+            owned.push(baked);
+        }
+        Some(owned)
     } else {
-        (0..num_stages)
-            .map(|_| RowBatch {
-                num_rows: 0,
-                row_starts: Vec::new(),
-                col_indices: Vec::new(),
-                values: Vec::new(),
-                row_lower: Vec::new(),
-                row_upper: Vec::new(),
-            })
-            .collect()
+        None
+    };
+    let baked_templates: &[StageTemplate] = match (baked_templates, owned_baked.as_deref()) {
+        (Some(b), _) | (None, Some(b)) => b,
+        (None, None) => unreachable!("owned_baked is Some when baked_templates is None"),
     };
     let scenario_range = assign_scenarios(config.n_scenarios, rank, comm.size());
     #[allow(clippy::cast_possible_truncation)]
@@ -1084,7 +1080,6 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
 
                 let stats_before = ws.solver.statistics();
                 let load_spec = SimScenarioLoadSpec {
-                    cut_batches: &cut_batches,
                     baked_templates,
                     stage_bases,
                 };
@@ -4436,24 +4431,20 @@ mod tests {
     }
 
     /// Acceptance criterion (ticket-009 AC #2): when `baked_templates` is `None`
-    /// (legacy path), `add_rows` is called exactly `n_scenarios * n_stages` times.
+    /// (fallback path), `add_rows` is called only when cuts exist.
     ///
     /// The FCF has 0 active cuts, so `cut_batch.num_rows == 0` for every stage,
-    /// meaning `add_rows` is gated by `if cut_batch.num_rows > 0` and will
-    /// NOT be called even on the legacy path when there are no cuts. We use a
-    /// non-trivial FCF with at least one cut to verify the counter properly.
-    /// Since seeding cuts in a unit test is complex, we verify the structural
-    /// contract: with no cuts `add_rows_count == 0` on both paths; the key
-    /// distinction is that on the baked path `load_model` is called against the
-    /// baked template (which the caller controls), while on the fallback path
-    /// it is called against `ctx.templates[t]`. The absence of `add_rows` when
-    /// `num_rows == 0` is identical on both paths — the baked path simply never
-    /// calls `add_rows` regardless of cut count.
+    /// meaning `add_rows` is gated by `if cut_batch.num_rows > 0`. This test
+    /// verifies the structural contract: with no cuts `add_rows_count == 0` on
+    /// the fallback path. When `baked_templates` is provided, `load_model` is
+    /// called against the baked template; when `None`, it is called against
+    /// `ctx.templates[t]`. The absence of `add_rows` when `num_rows == 0` holds
+    /// in both cases.
     ///
-    /// To cleanly test the fallback counter path, we verify that `add_rows_count`
+    /// To test the fallback counter path, we verify that `add_rows_count`
     /// remains 0 on a zero-cut fallback run and that `load_count` equals
-    /// `n_scenarios * n_stages` (same as baked path), confirming the fallback
-    /// path calls `load_model` the same number of times.
+    /// `n_scenarios * n_stages`, confirming the fallback path calls `load_model`
+    /// the same number of times as the baked path.
     #[test]
     fn simulate_fallback_path_issues_expected_add_rows() {
         let n_stages = 2;

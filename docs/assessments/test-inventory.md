@@ -3766,3 +3766,87 @@ There are 4 `e2e` tests that run the full training/simulation pipeline.
 ### Parse errors
 
 _No parse errors reported._
+
+---
+
+## 6. Post-epic-05 State (2026-04-19)
+
+This section records the final inventory state after all epic-05 tickets
+(ticket-002 through ticket-005, ticket-007) completed. The Section 3
+guard-tagged tables above reflect the **pre-epic-05** snapshot and are
+preserved as historical reference.
+
+### Summary
+
+**Workspace test count post-epic-05:** 3402
+(captured by `cargo nextest run --workspace --all-features`, 2026-04-19)
+
+Net delta from epic-05: -4 tests (four deletions, zero additions).
+
+### Verification grep results (all must be zero hits)
+
+| Check | Command | Result |
+| ----- | ------- | ------ |
+| `unified_run_path.rs` absent | `test -f crates/cobre-sddp/tests/unified_run_path.rs` | FILE ABSENT |
+| `forward_pass_baked_ready` removed | `rg "forward_pass_baked_ready" crates/cobre-sddp/` | 0 hits |
+| `test_stored_cut_row_offset_skips_baked_rows` removed | `rg "test_stored_cut_row_offset_skips_baked_rows" crates/` | 0 hits |
+| `baked_template: None` removed from stage_solve | `rg "baked_template: None" crates/cobre-sddp/src/stage_solve.rs` | 0 hits |
+
+### Tests deleted by tickets 002 and 003
+
+Four tests were removed across epic-05:
+
+| Ticket | File | Approx. line | Function | Guard |
+| ------ | ---- | -----------: | -------- | ----- |
+| 002 | `crates/cobre-sddp/tests/unified_run_path.rs` | (entire file) | entire file deleted | `unified-path` |
+| 002 | `crates/cobre-sddp/tests/integration.rs` | ~1925 | `forward_pass_baked_ready_non_baked_skips_cut_rebuild` | `non-baked` (not in guard table) |
+| 002 | `crates/cobre-sddp/tests/integration.rs` | ~2254 | `forward_pass_baked_ready_baked_performs_cut_rebuild` | `non-baked` (not in guard table) |
+| 002 | `crates/cobre-sddp/src/forward.rs` | — | `forward_pass_baked_ready_skips_cut_batches_rebuild` | `non-baked` (in-file) |
+| 003 | `crates/cobre-sddp/src/basis_reconstruct.rs` | ~832 | `test_stored_cut_row_offset_skips_baked_rows` | `stored-cut-row-offset` |
+
+Note: the `unified_run_path.rs` file housed the two `forward_pass_baked_ready_*`
+integration tests; the three "ticket-002" rows above reflect the two tests in
+`integration.rs` plus the one in `forward.rs`, for a total of four deleted tests.
+
+### Inventory mistag: `test_slot_lookup_growth_safe_in_release`
+
+The test at `crates/cobre-sddp/src/basis_reconstruct.rs:783` carries the
+`stored-cut-row-offset` guard in the Section 3 Epic-05 table, but this guard
+is incorrect. The test exercises the slot-lookup growth path; it passes `0`
+as the `stored_cut_row_offset` argument and never exercises the non-zero
+offset logic. Ticket-003 retained this test (updating the call site to remove
+the now-deleted offset parameter) and flagged the mistag in its Context
+section. The mistag is preserved as-is in the Section 3 table above; correcting
+the guard label is a future inventory-maintenance pass.
+
+### `add-rows-trait`-tagged tests: retained (34 tests)
+
+The Section 3 Epic-05 table lists 34 tests carrying the `add-rows-trait` guard
+(the summary table in Section 1 also records 34; ticket-007 spec cited "33",
+reflecting a count taken before `run_stage_solve_warm_start_excess_basic_demotes`
+was added to the guard table during ticket-004 planning). All 34 are retained.
+
+**Rationale:** `SolverInterface::add_rows` survives epic-05. Ticket-005
+determined that the method has three legitimate callers that cannot be removed:
+
+1. `forward.rs` — `append_new_cuts_to_lp` (incremental cut append during training)
+2. `backward.rs` — `load_backward_lp` (backward LP construction)
+3. `lower_bound.rs` — test fallback path
+
+Because the trait method and its primary production callers remain, all 34
+tests that exercise the `add_rows` API (directly against `HighsSolver` in
+`cobre-solver`, via FPHA fitting and evaporation helpers in
+`crates/cobre-sddp/src/lp_builder/template.rs`, or against the in-file
+`MockSolver` in `stage_solve.rs`) are live tests of a live API and must be
+kept.
+
+**Affected files and counts:**
+
+| File | add-rows-trait tests | Notes |
+| ---- | -------------------: | ----- |
+| `crates/cobre-sddp/src/lp_builder/template.rs` | 9 | 4 carry co-guard `fpha-slow` |
+| `crates/cobre-sddp/src/stage_solve.rs` | 1 | `run_stage_solve_warm_start_excess_basic_demotes` |
+| `crates/cobre-solver/src/highs.rs` | 7 | direct `HighsSolver` tests |
+| `crates/cobre-solver/src/trait_def.rs` | 1 | `test_noop_solver_all_methods` |
+| `crates/cobre-solver/tests/conformance.rs` | 16 | integration conformance suite |
+| **Total** | **34** | |

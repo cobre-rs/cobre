@@ -49,12 +49,15 @@ TIMING_COLS = frozenset(
     }
 )
 
-# Expected schema for training/solver/iterations.parquet after ticket-007.
+# Expected schema for training/solver/iterations.parquet after epic-04b (ticket-009).
+# rank and worker_id were added in epic-04b as columns 5 and 6 (after opening).
 EXPECTED_COLUMNS = [
     "iteration",
     "phase",
     "stage",
     "opening",
+    "rank",
+    "worker_id",
     "lp_solves",
     "lp_successes",
     "lp_retries",
@@ -258,7 +261,7 @@ def test_python_matches_cli_nontiming_columns(
 def test_python_schema_matches_expected_columns(
     d01_python_output: pathlib.Path,
 ) -> None:
-    """Python output has exactly the expected 21-column schema from ticket-007."""
+    """Python output has exactly the expected 23-column schema (rank + worker_id added in epic-04b)."""
     schema = pq.read_schema(
         d01_python_output / "training" / "solver" / "iterations.parquet"
     )

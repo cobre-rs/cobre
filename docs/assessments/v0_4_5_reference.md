@@ -494,3 +494,17 @@ No performance regression is flagged; the measurement is deferred to the
 reference machine where convertido is available. See the "Notes on
 convertido" section above for instructions on adding convertido hashes when
 the reference machine is available.
+
+## Post-epic-05 verification (2026-04-19)
+
+Captured on branch `feat/architecture-unification` after
+epic-05 close.
+
+- 27 D-cases + convertido captured.
+- SHA256 map matches the post-04a allowlist (no new entries
+  required).
+- Confirms epic-05 deletions (`BakedTemplates::ready`,
+  `stored_cut_row_offset`, training-loop legacy arm,
+  simulation-pipeline legacy arm via simulation-startup
+  re-bake) are bit-for-bit equivalent to the pre-epic baseline
+  for the parquet outputs covered by the v0.4.5 map.

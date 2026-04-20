@@ -65,10 +65,32 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.1.
     fn load_model(&mut self, template: &StageTemplate);
 
-    /// Appends constraint rows to the dynamic constraint region (step 2 of rebuild).
+    /// Append constraint rows to the dynamic constraint region.
     ///
-    /// Requires [`load_model`](Self::load_model) called first and `cuts` to have
-    /// valid CSR data with column indices in `[0, num_cols)` (panic on violation).
+    /// Requires [`load_model`](Self::load_model) called first and
+    /// `cuts` to have valid CSR data with column indices in
+    /// `[0, num_cols)` (panic on violation).
+    ///
+    /// # Caller patterns
+    ///
+    /// In a baked-template architecture, the primary LP solve path
+    /// loads pre-materialized templates that already contain all
+    /// active rows as structural rows; that path does not call
+    /// `add_rows`. Three legitimate caller patterns survive:
+    ///
+    /// 1. **Per-iteration delta append**: when a downstream pass
+    ///    needs to extend a previously-baked template with rows
+    ///    generated mid-iteration, `add_rows` appends those delta
+    ///    rows on top of the baked template rather than triggering
+    ///    a re-bake at every stage.
+    /// 2. **Append-only LP managers**: an LP that grows
+    ///    monotonically across iterations (cuts only added, never
+    ///    removed) keeps cumulative setup cost at `O(n)` by
+    ///    appending rather than re-baking. Re-baking the template
+    ///    each iteration would be `O(n^2)` and is not pursued.
+    /// 3. **Test-only fallback**: a no-tracking-map branch in some
+    ///    test contexts performs a full rebuild via
+    ///    [`load_model`](Self::load_model) followed by `add_rows`.
     ///
     /// See Solver Interface Trait SS2.2.
     fn add_rows(&mut self, cuts: &RowBatch);

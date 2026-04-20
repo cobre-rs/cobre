@@ -42,7 +42,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{
     SddpError, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
-    context::{BakedTemplates, StageContext, TrainingContext},
+    context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
     cut::CutRowMap,
     cut::fcf::FutureCostFunction,
@@ -133,10 +133,8 @@ pub struct TrainingResult {
 
     /// Final-iteration baked templates, one per stage.
     ///
-    /// `Some` if the bake step ran at least once during training (i.e.,
-    /// `baked_templates_ready == true` at termination).
-    /// `None` if training completed 0 or 1 iterations before any bake step
-    /// executed, so callers can distinguish "no bake" from "baked but empty".
+    /// Always `Some` — templates are baked unconditionally before the first
+    /// iteration of the training loop and never reverted.
     pub baked_templates: Option<Vec<StageTemplate>>,
 }
 
@@ -655,8 +653,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Epic-03 template baking: per-stage baked templates + reusable cut row
     // batches. The baked template at index t has num_rows =
     // stage_ctx.templates[t].num_rows + fcf.pools[t].active_count() after
-    // every bake. `baked_templates_ready` starts false because no bake has
-    // run yet; set true after the first bake in step 4c.
+    // every bake.
     let mut baked_templates: Vec<StageTemplate> =
         (0..num_stages).map(|_| StageTemplate::empty()).collect();
     let mut bake_row_batches: Vec<RowBatch> = (0..num_stages)
@@ -669,7 +666,19 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             row_upper: Vec::new(),
         })
         .collect();
-    let mut baked_templates_ready: bool = false;
+
+    // Pre-bake every stage template with an empty cut batch so that
+    // iteration 1's forward and backward passes can use the baked
+    // load path. Empty-batch bake is a structural copy of the base
+    // template (verified by bake_rows_into_template's
+    // test_bake_empty_rows_copies_base).
+    for t in 0..num_stages {
+        cobre_solver::bake_rows_into_template(
+            &stage_ctx.templates[t],
+            &bake_row_batches[t], // already initialized with num_rows = 0
+            &mut baked_templates[t],
+        );
+    }
 
     // CutRowMap for the lower bound solver's append-only cut management.
     // The LB solver is dedicated to stage 0 and persists across iterations,
@@ -714,11 +723,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     basis_cache,
                     solver_stats_log,
                     visited_archive: visited_archive.take(),
-                    baked_templates: if baked_templates_ready {
-                        Some(baked_templates.clone())
-                    } else {
-                        None
-                    },
+                    baked_templates: Some(baked_templates.clone()),
                 },
                 error: Some($e),
             });
@@ -788,17 +793,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let fwd_stats_before =
             aggregate_solver_statistics(fwd_pool.workspaces.iter().map(|w| w.solver.statistics()));
 
-        let fwd_baked = BakedTemplates {
-            templates: &baked_templates,
-            ready: baked_templates_ready,
-        };
         let forward_result = match run_forward_pass(
             &mut fwd_pool.workspaces,
             &mut basis_store,
             stage_ctx,
-            &fwd_baked,
+            &baked_templates,
             fcf,
-            &mut cut_batches,
             training_ctx,
             &fwd_batch,
             &mut records[..fwd_record_len],
@@ -895,7 +895,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             &mut fwd_pool.workspaces,
             &basis_store,
             stage_ctx,
-            &fwd_baked,
+            &baked_templates,
             fcf,
             &mut cut_batches,
             training_ctx,
@@ -1152,7 +1152,6 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 bake_time_ms,
             },
         );
-        baked_templates_ready = true;
 
         // Snapshot solver stats and wall-clock before lower bound evaluation.
         let lb_wall_start = Instant::now();
@@ -1296,11 +1295,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             basis_cache,
             solver_stats_log,
             visited_archive,
-            baked_templates: if baked_templates_ready {
-                Some(baked_templates)
-            } else {
-                None
-            },
+            baked_templates: Some(baked_templates),
         },
         error: None,
     })

@@ -91,7 +91,7 @@ use crate::{
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
-    solver_stats::{BasisSource, SolverStatsDelta},
+    solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
 
@@ -1110,15 +1110,6 @@ fn run_forward_stage<S: SolverInterface + Send>(
             &ws.current_state[..indexer.n_state],
         );
         *basis_slice.get_mut(m, t) = Some(captured);
-    }
-    // Epic 05 AD-4: tag this slot as last-written by the forward pass.
-    // Only write Forward when the current tag is not Backward: a Backward tag
-    // means the backward pass wrote this slot in a previous iteration, and the
-    // next backward pass should see that provenance so it reports
-    // BasisSource::Backward (≥0.95 hit rate invariant). For fresh slots
-    // (None_) or slots that previously held a forward basis, Forward is correct.
-    if basis_slice.get_with_origin(m, t).1 != BasisSource::Backward {
-        basis_slice.set_origin(m, t, BasisSource::Forward);
     }
     Ok(stage_cost)
 }

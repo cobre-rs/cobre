@@ -6,75 +6,11 @@
 //! CLI display.
 
 use cobre_solver::SolverStatistics;
-use thiserror::Error;
-
-/// Write-origin tag for a `BasisStore` slot, used to track which pass last
-/// wrote the basis at a given `(scenario, stage)` pair.
-///
-/// Under the unified-store design (Epic 05), `BasisStore` is the single source
-/// of truth. The tag records which pass performed the most recent write:
-///
-/// - `Backward` — last written by a backward-pass ω=0 capture; the common case
-///   for iteration ≥ 2. The slot holds the basis from the most recent backward
-///   solve at this `(m, s)`.
-/// - `Forward` — last written by a forward-pass capture; covers iteration-1
-///   backward reads (where no backward write has occurred yet) and any
-///   post-infeasibility recovery where the backward pass skipped the write.
-/// - `None_` — the slot is empty; returned by [`BasisStore::get_with_origin`]
-///   when no basis has been written to the slot.
-///
-/// The tag is meaningful only for backward-pass ω=0 rows. Forward-pass,
-/// `lower_bound`, simulation, and ω≥1 backward rows always carry
-/// `BasisSource::None_` (which maps to NULL at the parquet boundary).
-///
-/// Discriminants are stable across releases; the parquet column writer
-/// in `cobre-io` and the MPI wire format both rely on
-/// `i8::from(BasisSource)` matching these values exactly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[repr(i8)]
-pub enum BasisSource {
-    /// Slot is empty — no basis has been written (cold-start or pathological
-    /// infeasibility cascade).
-    #[default]
-    None_ = 0,
-    /// Slot was last written by a backward-pass ω=0 capture.
-    Backward = 1,
-    /// Slot was last written by a forward-pass capture.
-    Forward = 2,
-}
-
-impl From<BasisSource> for i8 {
-    fn from(src: BasisSource) -> Self {
-        src as i8
-    }
-}
-
-impl TryFrom<i8> for BasisSource {
-    type Error = BasisSourceError;
-
-    fn try_from(value: i8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::None_),
-            1 => Ok(Self::Backward),
-            2 => Ok(Self::Forward),
-            _ => Err(BasisSourceError(value)),
-        }
-    }
-}
-
-/// Error returned by `TryFrom<i8> for BasisSource` when the discriminant is out of range.
-#[derive(Debug, Clone, PartialEq, Error)]
-#[error("invalid BasisSource discriminant {0}")]
-pub struct BasisSourceError(pub i8);
 
 /// Per-phase delta of solver counters, computed from before/after snapshots.
 ///
 /// All integer fields represent the difference between the after and before snapshots.
 /// `solve_time_ms` is the wall-clock time delta in milliseconds.
-///
-/// `basis_source` is per-opening and is **not** summed by [`SolverStatsDelta::accumulate_into`]
-/// or [`SolverStatsDelta::aggregate`]. Aggregating a slice of deltas produces a delta whose
-/// `basis_source` field is `BasisSource::None_` (the default of the freshly constructed result).
 #[derive(Debug, Clone, Default)]
 pub struct SolverStatsDelta {
     /// Number of LP solves in this phase.
@@ -124,12 +60,6 @@ pub struct SolverStatsDelta {
     /// Per-level retry success histogram delta. Length depends on the solver
     /// backend (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
-
-    /// Provenance of the warm-start basis offered on this (iter, stage, opening) solve.
-    ///
-    /// Per-opening: not summed by `accumulate_into` or `aggregate`.
-    /// Defaults to `BasisSource::None_`. Populated by ticket-002 at the backward read site.
-    pub basis_source: BasisSource,
 }
 
 /// Resize histogram on first use to match the source histogram length.
@@ -177,7 +107,6 @@ impl SolverStatsDelta {
                 .zip(&before.retry_level_histogram)
                 .map(|(a, b)| a - b)
                 .collect(),
-            basis_source: BasisSource::None_,
         }
     }
 
@@ -187,7 +116,6 @@ impl SolverStatsDelta {
     /// allocation. Used on the hot backward-pass path to accumulate per-opening
     /// deltas across trial points within a single worker.
     pub fn accumulate_into(dst: &mut Self, rhs: &Self) {
-        // basis_source is per-opening; aggregate is undefined
         dst.lp_solves += rhs.lp_solves;
         dst.lp_successes += rhs.lp_successes;
         dst.first_try_successes += rhs.first_try_successes;
@@ -217,7 +145,6 @@ impl SolverStatsDelta {
     /// Returns `Default` (all zeros) for an empty iterator.
     #[must_use]
     pub fn aggregate<'a>(deltas: impl Iterator<Item = &'a Self>) -> Self {
-        // basis_source is per-opening; aggregate is undefined
         let mut result = Self::default();
         for d in deltas {
             result.lp_solves += d.lp_solves;
@@ -305,14 +232,13 @@ pub fn aggregate_solver_statistics(
 pub type SolverStatsEntry = (u64, &'static str, i32, i32, i32, i32, SolverStatsDelta);
 
 /// Number of scalar fields in [`SolverStatsDelta`] (excludes histogram `Vec`).
-/// Buffer size for MPI allreduce/allgatherv: 8 `u64` fields cast to `f64` + 5 native `f64` fields
-/// + 1 `i8`-via-`f64` discriminant slot for `basis_source` at index 13.
-pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 14;
+/// Buffer size for MPI allreduce/allgatherv: 8 `u64` fields cast to `f64` + 5 native `f64` fields.
+pub const SOLVER_STATS_DELTA_SCALAR_FIELDS: usize = 13;
 
-/// Packed `f64` stride per scenario: `scenario_id` + 14 scalar fields.
+/// Packed `f64` stride per scenario: `scenario_id` + 13 scalar fields.
 pub const SCENARIO_STATS_STRIDE: usize = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
-/// Packed `f64` stride per entry: `worker_id`, `slot_idx`, + 14 scalar fields (total 16).
+/// Packed `f64` stride per entry: `worker_id`, `slot_idx`, + 13 scalar fields (total 15).
 pub const WORKER_STATS_ENTRY_STRIDE: usize = 2 + SOLVER_STATS_DELTA_SCALAR_FIELDS;
 
 /// Required `f64` buffer length for a per-worker per-slot pack payload.
@@ -325,9 +251,8 @@ pub fn worker_opening_stats_buffer_size(n_workers: usize, n_slots: usize) -> usi
     n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE
 }
 
-/// Pack the 14 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
+/// Pack the 13 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
 /// Indices 0–7: eight `u64` fields cast to `f64`. Indices 8–12: five native `f64` fields.
-/// Index 13: `basis_source` discriminant cast `i8 as f64` (exact for `-128..=127`).
 /// The `retry_level_histogram` is excluded from MPI packing and Parquet output.
 /// `u64` casts are exact for realistic event counts (≤ 2^53).
 #[must_use]
@@ -347,25 +272,14 @@ pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_
         delta.load_model_time_ms,                // index 10
         delta.set_bounds_time_ms,                // index 11
         delta.basis_set_time_ms,                 // index 12
-        f64::from(i8::from(delta.basis_source)), // index 13
     ]
 }
 
 /// Unpack a fixed-size `f64` array (from [`pack_delta_scalars`]) back into a [`SolverStatsDelta`].
 /// The `retry_level_histogram` and `basis_reconstructions` are excluded from MPI packing and reset to defaults.
-/// On corrupt wire data (index 13 is not a valid `BasisSource` discriminant), `basis_source`
-/// degrades silently to `BasisSource::None_` in release builds; a `debug_assert!` fires in debug.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> SolverStatsDelta {
-    let basis_source_i8 = buf[13] as i8;
-    let basis_source = BasisSource::try_from(basis_source_i8).unwrap_or_else(|_| {
-        debug_assert!(
-            false,
-            "invalid basis_source discriminant in wire: {basis_source_i8}"
-        );
-        BasisSource::None_
-    });
     SolverStatsDelta {
         lp_solves: buf[0] as u64,
         lp_successes: buf[1] as u64,
@@ -382,7 +296,6 @@ pub fn unpack_delta_scalars(buf: &[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]) -> So
         basis_set_time_ms: buf[12],
         basis_reconstructions: 0,
         retry_level_histogram: Vec::new(),
-        basis_source,
     }
 }
 
@@ -413,11 +326,11 @@ pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
         .map(|chunk| {
             let scenario_id = chunk[0] as u32;
             // `chunks_exact(SCENARIO_STATS_STRIDE)` guarantees chunk.len() ==
-            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 15.
-            // Index 1..=14 therefore covers exactly the 14 scalar field slots.
+            // SCENARIO_STATS_STRIDE = 1 + SOLVER_STATS_DELTA_SCALAR_FIELDS = 14.
+            // Index 1..=13 therefore covers exactly the 13 scalar field slots.
             let arr = [
                 chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7], chunk[8],
-                chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14],
+                chunk[9], chunk[10], chunk[11], chunk[12], chunk[13],
             ];
             (scenario_id, unpack_delta_scalars(&arr))
         })
@@ -425,7 +338,7 @@ pub fn unpack_scenario_stats(buf: &[f64]) -> Vec<(u32, SolverStatsDelta)> {
 }
 
 /// Pack per-worker per-slot buffer into a flat `f64` buffer for `allgatherv`.
-/// Fixed stride per entry: `[w as f64, k as f64, <13 scalar fields>]` in row-major order.
+/// Fixed stride per entry: `[w as f64, k as f64, <SOLVER_STATS_DELTA_SCALAR_FIELDS scalar fields>]` in row-major order.
 /// `out` length must be `n_workers * n_slots * WORKER_STATS_ENTRY_STRIDE`.
 /// `stats` length must be `n_workers * n_slots` (row-major: `stats[w * n_slots + k]`).
 /// Panics in debug if sizes don't match.
@@ -741,7 +654,6 @@ mod tests {
             basis_set_time_ms: 1.0,
             basis_reconstructions: 3,
             retry_level_histogram: vec![0; 12],
-            basis_source: BasisSource::None_,
         };
         let d2 = SolverStatsDelta {
             lp_solves: 20,
@@ -759,7 +671,6 @@ mod tests {
             basis_set_time_ms: 2.0,
             basis_reconstructions: 5,
             retry_level_histogram: vec![0; 12],
-            basis_source: BasisSource::None_,
         };
 
         let agg = SolverStatsDelta::aggregate([d1, d2].iter());
@@ -853,7 +764,6 @@ mod tests {
             basis_set_time_ms: 0.125,
             basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
-            basis_source: BasisSource::None_,
         }
     }
 
@@ -933,17 +843,16 @@ mod tests {
 
     #[test]
     fn test_pack_delta_scalars_field_count() {
-        // Regression: pack_delta_scalars must produce a 14-element array
-        // after basis_source discriminant slot was added in epic-02 ticket-001.
+        // Regression: pack_delta_scalars must produce a 13-element array.
         let delta = SolverStatsDelta::default();
         let packed = pack_delta_scalars(&delta);
         assert_eq!(
             packed.len(),
-            14,
-            "pack_delta_scalars must return 14 elements"
+            13,
+            "pack_delta_scalars must return 13 elements"
         );
         assert_eq!(packed.len(), SOLVER_STATS_DELTA_SCALAR_FIELDS);
-        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 14);
+        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 13);
     }
 
     #[test]
@@ -1202,8 +1111,8 @@ mod tests {
     /// T004: helper returns the precise `stride * n_workers * n_slots` size in `f64` units.
     #[test]
     fn test_pack_worker_opening_stats_buffer_size() {
-        assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 16);
-        assert_eq!(worker_opening_stats_buffer_size(10, 20), 3200);
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 15);
+        assert_eq!(worker_opening_stats_buffer_size(10, 20), 3000);
     }
 
     /// T004: layout invariants — `[w as f64, k as f64, ...]` per entry, row-major.
@@ -1218,24 +1127,24 @@ mod tests {
         // entry(w=0, k=0) at offset 0
         assert_eq!(buf[0], 0.0);
         assert_eq!(buf[1], 0.0);
-        // entry(w=0, k=1) at offset 15
+        // entry(w=0, k=1) at offset WORKER_STATS_ENTRY_STRIDE (= 15)
         assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE], 0.0);
         assert_eq!(buf[WORKER_STATS_ENTRY_STRIDE + 1], 1.0);
-        // entry(w=1, k=0) at offset 15 * 4 (n_slots=4 entries per worker)
+        // entry(w=1, k=0) at offset WORKER_STATS_ENTRY_STRIDE * n_slots (= 15 * 4)
         let w1_k0 = WORKER_STATS_ENTRY_STRIDE * n_slots;
         assert_eq!(buf[w1_k0], 1.0);
         assert_eq!(buf[w1_k0 + 1], 0.0);
     }
 
-    /// MPI wire-format pin: `SolverStatsDelta` pack/unpack uses a 14-element `f64`
-    /// array post-epic-02 ticket-001. Uses distinct nonzero values for every field
-    /// so that field-order swaps are caught at both pack and unpack.
+    /// MPI wire-format pin: `SolverStatsDelta` pack/unpack uses a 13-element `f64` array.
+    /// Uses distinct nonzero values for every field so that field-order swaps are caught
+    /// at both pack and unpack.
     #[test]
-    fn test_solver_stats_delta_mpi_wire_format_14_fields() {
+    fn test_solver_stats_delta_mpi_wire_format_13_fields() {
         // Wire-format constant assertions.
-        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 14);
-        assert_eq!(SCENARIO_STATS_STRIDE, 15);
-        assert_eq!(WORKER_STATS_ENTRY_STRIDE, 16);
+        assert_eq!(SOLVER_STATS_DELTA_SCALAR_FIELDS, 13);
+        assert_eq!(SCENARIO_STATS_STRIDE, 14);
+        assert_eq!(WORKER_STATS_ENTRY_STRIDE, 15);
 
         // Construct a populated delta. Use distinct nonzero values
         // to catch field-order swaps at pack/unpack.
@@ -1255,19 +1164,17 @@ mod tests {
             basis_set_time_ms: 13.0625,
             basis_reconstructions: 42, // application-level; not in wire
             retry_level_histogram: vec![1, 2, 3],
-            basis_source: BasisSource::Backward,
         };
 
         let packed = pack_delta_scalars(&delta);
-        assert_eq!(packed.len(), 14);
+        assert_eq!(packed.len(), 13);
 
         // Cross-check packed field ordering via explicit index reads.
         // Indices 0..=8 are u64 fields cast to f64; indices 9..=12 are f64.
-        // Index 13 is the basis_source discriminant cast to f64.
         assert_eq!(packed[0], 1.0); // lp_solves
         assert_eq!(packed[8], 9.0); // load_model_count
         assert!((packed[9] - 10.5).abs() < 1e-10); // solve_time_ms
-        assert_eq!(packed[13], 1.0); // BasisSource::Backward discriminant
+        assert!((packed[12] - 13.0625).abs() < 1e-10); // basis_set_time_ms
 
         let unpacked = unpack_delta_scalars(&packed);
 
@@ -1285,7 +1192,6 @@ mod tests {
         assert!((unpacked.load_model_time_ms - 11.25).abs() < 1e-10);
         assert!((unpacked.set_bounds_time_ms - 12.125).abs() < 1e-10);
         assert!((unpacked.basis_set_time_ms - 13.0625).abs() < 1e-10);
-        assert_eq!(unpacked.basis_source, BasisSource::Backward);
 
         // Application-level fields are NOT in the wire — unpack zeros them.
         assert_eq!(unpacked.basis_reconstructions, 0);
@@ -1294,75 +1200,16 @@ mod tests {
 
     /// Pins the wire-format array length at the type level. The function signature
     /// is `unpack_delta_scalars(&[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS])`, so the
-    /// compiler enforces the length. This test confirms the constant equals 14 and
-    /// that the `size_of` the array is exactly `14 * 8` bytes.
+    /// compiler enforces the length. This test confirms the constant equals 13 and
+    /// that the `size_of` the array is exactly `13 * 8` bytes.
     #[test]
     fn test_unpack_delta_scalars_array_length_is_compile_time() {
         assert_eq!(
             std::mem::size_of::<[f64; SOLVER_STATS_DELTA_SCALAR_FIELDS]>(),
-            14 * std::mem::size_of::<f64>()
+            13 * std::mem::size_of::<f64>()
         );
-        // Also confirm that a valid 14-element buffer round-trips without panic.
-        let buf: [f64; 14] = [0.0; 14];
+        // Also confirm that a valid 13-element buffer round-trips without panic.
+        let buf: [f64; 13] = [0.0; 13];
         let _ = unpack_delta_scalars(&buf);
-    }
-
-    /// Pin the `BasisSource` discriminant values and `From`/`TryFrom` conversions.
-    #[test]
-    fn test_basis_source_discriminants() {
-        assert_eq!(BasisSource::None_ as i8, 0);
-        assert_eq!(BasisSource::Backward as i8, 1);
-        assert_eq!(BasisSource::Forward as i8, 2);
-
-        assert_eq!(i8::from(BasisSource::Backward), 1_i8);
-
-        assert_eq!(BasisSource::try_from(2_i8).unwrap(), BasisSource::Forward);
-        assert!(BasisSource::try_from(7_i8).is_err());
-    }
-
-    /// The default variant must be `None_`.
-    #[test]
-    fn test_basis_source_default_is_none() {
-        assert_eq!(BasisSource::default(), BasisSource::None_);
-    }
-
-    /// Aggregating deltas that have a non-`None_` `basis_source` must leave the
-    /// result's `basis_source` at `BasisSource::None_` (the freshly-constructed default).
-    #[test]
-    fn test_aggregate_does_not_touch_basis_source() {
-        let d1 = SolverStatsDelta {
-            lp_solves: 1,
-            basis_source: BasisSource::Backward,
-            ..SolverStatsDelta::default()
-        };
-        let d2 = SolverStatsDelta {
-            lp_solves: 2,
-            basis_source: BasisSource::Forward,
-            ..SolverStatsDelta::default()
-        };
-        let agg = SolverStatsDelta::aggregate([d1, d2].iter());
-        assert_eq!(
-            agg.basis_source,
-            BasisSource::None_,
-            "aggregate result must have basis_source == None_"
-        );
-    }
-
-    /// Round-trip pack→unpack must recover `basis_source` for every variant.
-    #[test]
-    fn test_pack_unpack_basis_source_round_trip() {
-        for src in [
-            BasisSource::None_,
-            BasisSource::Backward,
-            BasisSource::Forward,
-        ] {
-            let delta = SolverStatsDelta {
-                basis_source: src,
-                ..SolverStatsDelta::default()
-            };
-            let packed = pack_delta_scalars(&delta);
-            let unpacked = unpack_delta_scalars(&packed);
-            assert_eq!(unpacked.basis_source, src, "round-trip failed for {src:?}");
-        }
     }
 }

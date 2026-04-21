@@ -102,7 +102,7 @@ use crate::{
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
     solver_stats::{
-        BasisSource, SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
         pack_worker_opening_stats, unpack_worker_opening_stats,
     },
     state_exchange::ExchangeBuffers,
@@ -493,24 +493,16 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     }
 }
 
-/// Resolve the ω=0 warm-start basis from the worker's `BasisStoreSliceMut`,
-/// returning the basis reference and the write-origin tag (Epic 05 AD-4).
+/// Resolve the ω=0 warm-start basis from the worker's `BasisStoreSliceMut`.
 ///
-/// Under the unified-store design there is no separate backward store: a single
-/// `basis_slice.get_with_origin(m, s)` lookup returns whichever pass last
-/// wrote the slot.  The tag is `BasisSource::Backward` when the backward pass
-/// last wrote it (the common case for iteration ≥ 2), `BasisSource::Forward`
-/// when only the forward pass has written it (iteration 1), and
-/// `BasisSource::None_` when the slot is empty.
-///
-/// Returns `(None, BasisSource::None_)` when the slot is empty.
+/// Returns `None` when the slot is empty (cold start or no prior capture).
 #[inline]
 fn resolve_backward_basis<'a>(
     basis_slice: &'a BasisStoreSliceMut<'_>,
     m: usize,
     s: usize,
-) -> (Option<&'a CapturedBasis>, BasisSource) {
-    basis_slice.get_with_origin(m, s)
+) -> Option<&'a CapturedBasis> {
+    basis_slice.get(m, s)
 }
 
 /// Process one trial point `m` in the backward pass, iterating over all openings.
@@ -578,13 +570,10 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // Openings 1+: HiGHS retains internal factorization from the previous
         // solve — only bounds/RHS changed via `patch_opening_bounds`, so
         // `solve()` hot-starts without redundant refactorization (P3b).
-        // Epic 05 unified store: a single get_with_origin lookup returns the basis
-        // and write-origin tag. The tag reflects whichever pass last wrote the slot
-        // (Backward for iter≥2, Forward for iter=1, None_ when empty).
-        let (stored_basis, omega_basis_source) = if omega == 0 {
+        let stored_basis = if omega == 0 {
             resolve_backward_basis(basis_slice, m, s)
         } else {
-            (None, BasisSource::None_)
+            None
         };
         let inputs = crate::stage_solve::StageInputs {
             stage_context: ctx,
@@ -683,16 +672,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             &mut ws.backward_accum.per_opening_stats[omega],
             &opening_delta,
         );
-        // Record the ω=0 warm-start source for observability (epic-02 ticket-002).
-        // `accumulate_into` leaves `basis_source` untouched (ticket-001 contract);
-        // overwrite with the current trial point's source so the final per-opening
-        // value reflects the latest (and, for this epic, single) trial point's
-        // source. Multiple trial points at a given (iter, stage, worker) will
-        // overwrite in loop order; the analyzer in ticket-004 aggregates across
-        // trial points by reading the final value, which is correct for all
-        // three variants (backward/forward/none) because a single worker processes
-        // each (m, s) pair deterministically.
-        ws.backward_accum.per_opening_stats[omega].basis_source = omega_basis_source;
 
         let out = &mut ws.backward_accum.outcomes[omega];
         out.coefficients.copy_from_slice(&state_duals);
@@ -767,8 +746,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 );
                 *basis_slice.get_mut(m, s) = Some(captured);
             }
-            // Epic 05 AD-4: tag this slot as last-written by the backward pass.
-            basis_slice.set_origin(m, s, BasisSource::Backward);
         }
     }
 
@@ -2045,9 +2022,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2150,9 +2127,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2255,9 +2232,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2356,9 +2333,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2457,9 +2434,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2556,9 +2533,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2699,9 +2676,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2820,9 +2797,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -2946,9 +2923,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3059,9 +3036,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3182,9 +3159,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3300,9 +3277,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3411,9 +3388,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3530,9 +3507,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3687,9 +3664,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -3779,9 +3756,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4164,9 +4141,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4334,9 +4311,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4509,9 +4486,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4638,9 +4615,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -4776,9 +4753,9 @@ mod tests {
                 global_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * 16],
-                bwd_stats_counts: &[8 * 32 * 16],
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
                 event_sender: None,
@@ -5782,132 +5759,44 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // resolve_backward_basis_* unit tests (T3 rewrite — single-store write-origin)
+    // resolve_backward_basis_* unit tests
     // ---------------------------------------------------------------------------
 
     #[test]
-    fn resolve_backward_basis_returns_backward_origin_when_slot_last_written_by_backward() {
-        // Given: BasisStore[0, 1] has Some(CapturedBasis) with origin Backward.
-        // Then: resolve_backward_basis returns (Some(_), BasisSource::Backward).
-        use crate::solver_stats::BasisSource;
+    fn resolve_backward_basis_returns_some_when_slot_is_populated() {
+        // Given: BasisStore[0, 1] has Some(CapturedBasis).
+        // Then: resolve_backward_basis returns Some(_).
         use crate::workspace::{BasisStore, CapturedBasis};
 
         let b = CapturedBasis::new(2, 2, 0, 0, 0);
         let mut store = BasisStore::new(1, 2);
         *store.get_mut(0, 1) = Some(b);
-        store.set_origin(0, 1, BasisSource::Backward);
 
         let slices = store.split_workers_mut(1);
         let slice = &slices[0];
-        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 1);
+        let basis_ref = super::resolve_backward_basis(slice, 0, 1);
 
-        assert!(
-            basis_ref.is_some(),
-            "expected Some when slot has a basis written by backward pass"
-        );
-        assert_eq!(
-            source,
-            BasisSource::Backward,
-            "expected Backward origin tag"
-        );
-        drop(slices);
-    }
-
-    #[test]
-    fn resolve_backward_basis_returns_forward_origin_when_slot_last_written_by_forward() {
-        // Given: BasisStore[0, 0] has Some(CapturedBasis) with origin Forward
-        //        (the iter-1 cold-start case: forward wrote, backward has not yet).
-        // Then: resolve_backward_basis returns (Some(_), BasisSource::Forward).
-        use crate::solver_stats::BasisSource;
-        use crate::workspace::{BasisStore, CapturedBasis};
-
-        let b = CapturedBasis::new(2, 2, 0, 0, 0);
-        let mut store = BasisStore::new(1, 2);
-        *store.get_mut(0, 0) = Some(b);
-        store.set_origin(0, 0, BasisSource::Forward);
-
-        let slices = store.split_workers_mut(1);
-        let slice = &slices[0];
-        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 0);
-
-        assert!(
-            basis_ref.is_some(),
-            "expected Some when slot has a basis written by forward pass"
-        );
-        assert_eq!(source, BasisSource::Forward, "expected Forward origin tag");
+        assert!(basis_ref.is_some(), "expected Some when slot has a basis");
         drop(slices);
     }
 
     #[test]
     fn resolve_backward_basis_returns_none_when_slot_is_empty() {
         // Given: BasisStore[0, 1] is None (cold-start, slot never written).
-        // Then: resolve_backward_basis returns (None, BasisSource::None_).
-        use crate::solver_stats::BasisSource;
+        // Then: resolve_backward_basis returns None.
         use crate::workspace::BasisStore;
 
         let mut store = BasisStore::new(1, 2);
         let slices = store.split_workers_mut(1);
         let slice = &slices[0];
-        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 1);
+        let basis_ref = super::resolve_backward_basis(slice, 0, 1);
 
         assert!(basis_ref.is_none(), "expected None for empty slot");
-        assert_eq!(
-            source,
-            BasisSource::None_,
-            "expected None_ origin for empty slot"
-        );
         drop(slices);
     }
 
-    #[test]
-    fn resolve_backward_basis_reports_latest_write_origin() {
-        // Given: BasisStore[0, 0] is first written with Forward origin (iter-1 forward
-        //        capture), then overwritten with Backward origin (iter-2 backward capture).
-        // Then: after the second write, resolve_backward_basis returns
-        //       (Some(_), BasisSource::Backward) — the tag reflects the latest write.
-        use crate::solver_stats::BasisSource;
-        use crate::workspace::{BasisStore, CapturedBasis};
-
-        let b_fwd = CapturedBasis::new(2, 2, 0, 0, 0);
-        let mut store = BasisStore::new(1, 2);
-
-        // First write: forward pass.
-        *store.get_mut(0, 0) = Some(b_fwd);
-        store.set_origin(0, 0, BasisSource::Forward);
-
-        // Verify intermediate state.
-        {
-            let slices = store.split_workers_mut(1);
-            let slice = &slices[0];
-            let (_, source) = super::resolve_backward_basis(slice, 0, 0);
-            assert_eq!(source, BasisSource::Forward, "after forward write: Forward");
-            drop(slices);
-        }
-
-        // Second write: backward pass overwrites the same slot.
-        store.set_origin(0, 0, BasisSource::Backward);
-
-        // Verify final state reflects the latest write.
-        {
-            let slices = store.split_workers_mut(1);
-            let slice = &slices[0];
-            let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 0);
-            assert!(
-                basis_ref.is_some(),
-                "slot must still be Some after origin flip"
-            );
-            assert_eq!(
-                source,
-                BasisSource::Backward,
-                "after backward write: tag must flip to Backward"
-            );
-            drop(slices);
-        }
-    }
-
     // ---------------------------------------------------------------------------
-    // T2 integration tests (backward write populates BasisStore) — extended with
-    // origin-tag assertions per T3 Testing Requirements.
+    // T2 integration tests (backward write populates BasisStore)
     // ---------------------------------------------------------------------------
 
     #[test]
@@ -5919,8 +5808,6 @@ mod tests {
         //
         // AD-2: write occurs only at omega=0 (this test has exactly 1 opening).
         // AD-7: infeasibility guard is not triggered (solver succeeds).
-        // T3 extension: origin tag must be BasisSource::Backward after the write.
-        use crate::solver_stats::BasisSource;
         use crate::workspace::BasisStore;
 
         let mut basis_store = BasisStore::new(1, 2);
@@ -5941,12 +5828,6 @@ mod tests {
         assert_eq!(
             workspaces[0].solver.call_count, 1,
             "solver must be called exactly once for a 1-opening backward pass"
-        );
-        // T3: origin sidecar must reflect the backward write.
-        assert_eq!(
-            basis_store.get_with_origin(0, 1).1,
-            BasisSource::Backward,
-            "origin tag must be Backward after backward-pass ω=0 capture"
         );
     }
 

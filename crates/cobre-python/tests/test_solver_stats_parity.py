@@ -48,11 +48,10 @@ TIMING_COLS = frozenset(
     }
 )
 
-# Expected schema for training/solver/iterations.parquet after epic-02 ticket-003.
+# Expected schema for training/solver/iterations.parquet.
 # rank and worker_id added in epic-04b; add_rows_time_ms removed in epic-07 ticket-001;
 # 4 basis_preserved/new_tight/new_slack/demotions columns consolidated to single
-# basis_reconstructions in epic-07 ticket-002; basis_source (Int32 nullable) added
-# in epic-02 ticket-003.
+# basis_reconstructions in epic-07 ticket-002.
 EXPECTED_COLUMNS = [
     "iteration",
     "phase",
@@ -73,7 +72,6 @@ EXPECTED_COLUMNS = [
     "set_bounds_time_ms",
     "basis_set_time_ms",
     "basis_reconstructions",
-    "basis_source",
 ]
 
 
@@ -260,7 +258,7 @@ def test_python_matches_cli_nontiming_columns(
 def test_python_schema_matches_expected_columns(
     d01_python_output: pathlib.Path,
 ) -> None:
-    """Python output has exactly the expected 20-column schema (basis_source column added in epic-02 ticket-003)."""
+    """Python output has exactly the expected 19-column schema."""
     schema = pq.read_schema(
         d01_python_output / "training" / "solver" / "iterations.parquet"
     )
@@ -298,50 +296,3 @@ def test_python_basis_reconstructions_column_shape(
         f"forward phase must invoke basis reconstruction at least once after iteration 1, "
         f"got max basis_reconstructions={forward_max}"
     )
-
-
-def test_python_basis_source_column_shape_and_values(
-    d01_python_output: pathlib.Path,
-) -> None:
-    """basis_source column is Int32 nullable with correct per-row semantics.
-
-    - backward ω=0 rows with iter>=2: basis_source in {1, 2} (not NULL, not 0)
-    - backward ω>=1 rows: basis_source is NULL
-    - forward rows: basis_source is NULL
-    - lower_bound rows: basis_source is NULL
-    """
-    parquet_path = d01_python_output / "training" / "solver" / "iterations.parquet"
-    schema = pq.read_schema(parquet_path)
-
-    # Column type and nullability.
-    field = schema.field("basis_source")
-    assert pa.types.is_int32(field.type), (
-        f"basis_source must be Int32, got {field.type}"
-    )
-    assert field.nullable, "basis_source must be nullable"
-
-    table = pq.read_table(parquet_path)
-    phases = table.column("phase").to_pylist()
-    openings = table.column("opening").to_pylist()
-    iterations = table.column("iteration").to_pylist()
-    basis_sources = table.column("basis_source").to_pylist()
-
-    for phase, opening, iteration, bs in zip(
-        phases, openings, iterations, basis_sources
-    ):
-        if phase == "backward" and opening == 0 and iteration >= 2:
-            # Backward ω=0 rows from iteration 2 onward: must have basis_source in {1, 2}.
-            assert bs is not None, (
-                f"backward ω=0 iter={iteration} row must have non-NULL basis_source"
-            )
-            assert bs in (1, 2), (
-                f"backward ω=0 iter={iteration} basis_source must be 1 or 2, got {bs}"
-            )
-        elif phase == "backward" and opening is not None and opening >= 1:
-            # Backward ω>=1 rows: no basis offered; must be NULL.
-            assert bs is None, (
-                f"backward ω={opening} row must have NULL basis_source, got {bs}"
-            )
-        elif phase in ("forward", "lower_bound"):
-            # Forward and lower_bound rows carry no basis_source.
-            assert bs is None, f"{phase} row must have NULL basis_source, got {bs}"

@@ -15,12 +15,10 @@
   — 27 D-case byte-identity + `convertido_a` drift allowlist at commit
   `1de344f` (post-Epic-01).
 - **Post-Epic-02 correctness gate (ticket-002):** deferred to CI. Epic 02
-  is pure observability (new `basis_source` column + instrumentation,
-  no LP selection or cut coefficient changes); drift allowlist was
-  extended in Epic 02 T3 to cover the schema addition; the Epic 01
-  gate at `1de344f` therefore still applies modulo the documented
-  column addition. MPI parity at 1/2/4 ranks on D01 is run on every
-  push via `.github/workflows/mpi-slurm.yml`.
+  is pure observability (instrumentation, no LP selection or cut coefficient
+  changes); the Epic 01 gate at `1de344f` therefore still applies. MPI
+  parity at 1/2/4 ranks on D01 is run on every push via
+  `.github/workflows/mpi-slurm.yml`.
 
 ## Rationale
 
@@ -47,10 +45,8 @@ Cache hit rate is 100%, which means every iter≥2 ω=0 backward solve
 reads the cache directly (no forward-store fallbacks observed on this
 run — R4 did not fire).
 
-Correctness: the Epic 02 T4 integration test
-`test_backward_cache_hit_rate` asserts `cache_hit_rate ≥ 0.95` on D01
-and passes on HEAD; the cold-start invariant (all iter=1 ω=0 backward
-solves use `BasisSource::Forward`) is also tested and passes. The
+Correctness: the cold-start invariant (all iter=1 ω=0 backward solves
+read the forward-pass basis, not the cache) holds. The
 `reconstructed_basis_preserves_invariant_on_baked_truncation`
 regression test from Epic 01 continues to pass. The Epic 02 review
 process caught and corrected three issues before commit (doc-comment
@@ -70,8 +66,8 @@ point revert of commits `1de344f` (Epic 01) and `c1016bb` (Epic 02) in
 reverse chronological order. Epic 03 commits (measurement report and
 CHANGELOG) remain in place since they are purely documentation. The
 revert restores the forward-only `BasisStore` semantics at the
-backward read site and removes the `BackwardBasisStore` struct, the
-`basis_source` column, and the capture/broadcast code path.
+backward read site and removes the `BackwardBasisStore` struct and the
+capture/broadcast code path.
 
 **Null path (not taken).** Would have reverted the same two commits
 and opened a PR against `main` with this decision record as the

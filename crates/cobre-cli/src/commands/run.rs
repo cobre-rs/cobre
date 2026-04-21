@@ -1483,22 +1483,6 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
     Ok((global_agg, global_scenario_stats))
 }
 
-/// Map a [`cobre_sddp::BasisSource`] discriminant to the `Option<i32>` parquet value.
-///
-/// - `BasisSource::None_` → `None` (NULL in parquet; row is not a backward ω=0 row)
-/// - `BasisSource::Backward` → `Some(1)` (read from the backward-pass basis cache)
-/// - `BasisSource::Forward` → `Some(2)` (read from `BasisStore` fallback)
-///
-/// Note: this function is duplicated in `cobre-python/src/run.rs` to avoid a cross-crate
-/// dependency between crates that are already isolated (cli and python are separate entry points).
-fn basis_source_to_opt(source: cobre_sddp::BasisSource) -> Option<i32> {
-    match source {
-        cobre_sddp::BasisSource::None_ => None,
-        cobre_sddp::BasisSource::Backward => Some(1),
-        cobre_sddp::BasisSource::Forward => Some(2),
-    }
-}
-
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
@@ -1537,7 +1521,6 @@ fn delta_to_stats_row(
         basis_set_time_ms: delta.basis_set_time_ms,
         basis_reconstructions: delta.basis_reconstructions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
-        basis_source: basis_source_to_opt(delta.basis_source),
     }
 }
 

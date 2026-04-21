@@ -52,8 +52,7 @@ EXPECTED_DRIFTS: list[tuple[str, str]] = [
         "`num_iters * num_stages`. "
         "ticket 07-001: deleted add_rows_time_ms column; column count drops from 23 to 22. "
         "ticket 07-002: consolidated basis_preserved/new_tight/new_slack/demotions into single "
-        "basis_reconstructions (UInt64); column count drops from 22 to 19. "
-        "epic-02 ticket-003: added basis_source column (Int32 nullable); column count grows from 19 to 20.",
+        "basis_reconstructions (UInt64); column count drops from 22 to 19.",
     ),
     (
         "**/simulation/solver/iterations.parquet",
@@ -63,8 +62,7 @@ EXPECTED_DRIFTS: list[tuple[str, str]] = [
         "Simulation has no opening dimension; column is always NULL. "
         "ticket 07-001: deleted add_rows_time_ms column; column count drops from 23 to 22. "
         "ticket 07-002: consolidated basis_preserved/new_tight/new_slack/demotions into single "
-        "basis_reconstructions (UInt64); column count drops from 22 to 19. "
-        "epic-02 ticket-003: added basis_source column (Int32 nullable); column count grows from 19 to 20.",
+        "basis_reconstructions (UInt64); column count drops from 22 to 19.",
     ),
     # Defensive: timing-bearing files are already excluded from the reference
     # map by the capture script, but added here so a partial capture does not

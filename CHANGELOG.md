@@ -227,16 +227,6 @@ removals (`clear_solver_count`, `clear_solver_failures`, `add_rows_count`,
   Ship decision:
   [`docs/assessments/backward-basis-cache-decision.md`](docs/assessments/backward-basis-cache-decision.md).
 
-- **`basis_source` observability column** on
-  `training/solver/iterations.parquet` (Int32 nullable): `1`=Backward
-  (cache hit), `2`=Forward (fallback), NULL for non-applicable rows
-  (forward / lower_bound / simulation / ω≥1 backward). CLI and
-  `cobre-python` writers in lock-step. Analyzer at
-  `scripts/analyze_basis_source.py` emits per-(iteration, stage)
-  cache-hit rate and a summary line. Integration test
-  `test_backward_cache_hit_rate` asserts `cache_hit_rate ≥ 0.95` on
-  D01 and pins the iter=1 cold-start Forward-fallback invariant.
-
 #### Per-Worker Observability
 
 - **`scripts/test_per_opening_mpi_parity.sh`** and

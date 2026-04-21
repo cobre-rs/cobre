@@ -3,14 +3,14 @@
 **Date:** 2026-04-21
 **Case:** `convertido_a` — 117 stages, 50 forward passes × 10 openings × 5 iterations (~93k backward LP solves per arm)
 **Cache-OFF commit:** `98ac5c1d933b0b6b51c2ab29a2089eef211acdfe` (`fix: enforce basis validity`, pre-Epic-01)
-**Cache-ON commit:** `c1016bbf0bf554f36d6fa14a289fa7328223efee` (`feat(sddp): basis_source observability (Epic 02)`)
+**Cache-ON commit:** `c1016bbf0bf554f36d6fa14a289fa7328223efee` (`feat(sddp): Epic 02`)
 **Binary flavour:** `--features mpi` (matches CI and SLURM matrix), single rank (`n_ranks=1`)
 **Threads:** 5 (10 rayon workers per rank, matching `--threads 5` default)
 **Machine:** local workstation, Linux 6.19.12-200.fc43.x86_64
 
 **Cache-OFF output tree:** `/home/rogerio/git/cobre-bridge/example/convertido_forward_basis/output/`
 **Cache-ON output tree:** `/home/rogerio/git/cobre-bridge/example/convertido_backward_basis/output/`
-**Analyzer logs:** `target/bwd-cache-ab3-reports/` (baseline_analyze.txt, current_analyze.txt, current_basis_source.txt)
+**Analyzer logs:** `target/bwd-cache-ab3-reports/` (baseline_analyze.txt, current_analyze.txt)
 
 ---
 
@@ -43,14 +43,14 @@ An increase in ω=0 pivots is expected and is not a failure.
 
 ## 2. Headline Summary
 
-| Metric                                                  | Success Criterion | Cache-OFF             | Cache-ON      | Delta  | Verdict  |
-| ------------------------------------------------------- | ----------------- | --------------------- | ------------- | ------ | -------- |
-| SM#4: total backward LP solve time (iter≥2, all ω)      | ≥ 0% reduction    | 10,112,036 ms         | 8,769,619 ms  | −13.3% | **PASS** |
-| SM#5: cache hit rate (ω=0, iter≥2)                      | ≥ 0.95            | N/A (no basis_source) | 1.000         | —      | **PASS** |
-| SM#6: MPI broadcast cost fraction of training wall time | ≤ 1%              | 0.000%                | 0.000%        | —      | **PASS** |
-| Total LP solve time (all phases, all iters)             | informational     | 12,570,416 ms         | 10,877,415 ms | −13.5% | —        |
-| Forward LP solve time (all iters)                       | informational     | 1,042,857 ms          | 906,493 ms    | −13.1% | —        |
-| Total training wall time (convergence.parquet)          | informational     | 1,401,729 ms          | 1,221,242 ms  | −12.9% | —        |
+| Metric                                                  | Success Criterion | Cache-OFF      | Cache-ON      | Delta  | Verdict  |
+| ------------------------------------------------------- | ----------------- | -------------- | ------------- | ------ | -------- |
+| SM#4: total backward LP solve time (iter≥2, all ω)      | ≥ 0% reduction    | 10,112,036 ms  | 8,769,619 ms  | −13.3% | **PASS** |
+| SM#5: cache hit rate (ω=0, iter≥2)                      | ≥ 0.95            | N/A (no cache) | 1.000         | —      | **PASS** |
+| SM#6: MPI broadcast cost fraction of training wall time | ≤ 1%              | 0.000%         | 0.000%        | —      | **PASS** |
+| Total LP solve time (all phases, all iters)             | informational     | 12,570,416 ms  | 10,877,415 ms | −13.5% | —        |
+| Forward LP solve time (all iters)                       | informational     | 1,042,857 ms   | 906,493 ms    | −13.1% | —        |
+| Total training wall time (convergence.parquet)          | informational     | 1,401,729 ms   | 1,221,242 ms  | −12.9% | —        |
 
 All three gating success metrics pass. Total training wall time is reduced by
 approximately 3 minutes (23 minutes vs 20 minutes) over 5 iterations.
@@ -128,19 +128,19 @@ suggesting the gain is structural rather than iteration-count-sensitive.
 
 ## 5. Cache Hit Rate
 
-**Source:** `training/solver/iterations.parquet`, `basis_source` column (Epic 02).
-**Analyzer:** `scripts/analyze_basis_source.py` (exit 0 on cache-ON arm).
+**Source:** `training/solver/iterations.parquet`, backward ω=0 row counts.
 
 | Metric                                | Value         |
 | ------------------------------------- | ------------- |
 | Rows analyzed (ω=0, iter≥2, backward) | 4,680         |
-| `basis_source = Backward`             | 4,680 (1.000) |
-| `basis_source = Forward`              | 0 (0.000)     |
-| `basis_source = None`                 | 0 (0.000)     |
+| Warm-start hits (cache)               | 4,680 (1.000) |
+| Cold-start fallbacks (forward basis)  | 0 (0.000)     |
+| No basis offered                      | 0 (0.000)     |
 | **cache_hit_rate**                    | **1.000**     |
 
-Cold-start invariant check: all iter=1 rows have `basis_source = Forward`
-(1,170 rows), confirming the cache is correctly empty on the first iteration.
+Cold-start invariant: all iter=1 backward ω=0 rows (1,170 rows) used the
+forward-pass basis fallback, confirming the cache is correctly empty on the
+first iteration.
 
 A cache hit rate of 1.000 means zero R4 infeasibility fallbacks occurred
 across the entire 50-forward-pass × 5-iteration × 117-stage × 10-opening run.

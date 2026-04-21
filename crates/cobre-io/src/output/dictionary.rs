@@ -685,13 +685,6 @@ fn description_for(file: &str, column: &str) -> &'static str {
              warm-start solve that applied a stored basis via slot reconciliation. \
              A non-zero value indicates basis reconstruction is active."
         }
-        ("solver_iterations", "basis_source") => {
-            "Warm-start basis provenance for backward-pass ω=0 rows. \
-             Some(1)=Backward (backward-pass basis cache hit); \
-             Some(2)=Forward (per-scenario forward basis cache fallback). \
-             NULL for forward, lower_bound, simulation, ω≥1 backward rows, \
-             and any ω=0 row where both caches missed."
-        }
         ("solver_iterations", "opening") => {
             "Opening (noise realization) index within the stage, for backward-pass \
              rows. NULL for forward, lower_bound, and simulation rows — these phases \
@@ -1461,8 +1454,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 197,
-            "variables.csv must have exactly 197 data rows (one per column across all schemas)"
+            row_count, 196,
+            "variables.csv must have exactly 196 data rows (one per column across all schemas)"
         );
     }
 

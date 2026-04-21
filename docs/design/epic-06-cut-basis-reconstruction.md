@@ -818,7 +818,6 @@ D-suite reconciliation and MPI parity runs.
   no dual hints accepted. Covered in §4.1 rationale and §10.5.
 - **Cross-MPI parity script**:
   `scripts/test_per_opening_mpi_parity.sh`.
-- **`basis_source` analyzer**: `scripts/analyze_basis_source.py`.
 - **Key source files referenced in §6**:
   - `crates/cobre-sddp/src/basis_reconstruct.rs` (the hot-path entry point;
     Epic 06 re-enables its slot-identity machinery).

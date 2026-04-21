@@ -52,7 +52,7 @@ Parameters exposed as config.
 
 - **Estimated effort:** 2–3 weeks.
 - **Expected benefit:** 25–40% backward-pass wall-time reduction.
-- **Integrates with:** Epic 02 `basis_source` observability; new
+- **Integrates with:** solver observability instrumentation; new
   metrics needed for inner-iteration counts.
 - **Breaks invariant:** declaration-order invariance. CEPEL's §3.5.1
   shows SC produces the same optimal value as TC but different

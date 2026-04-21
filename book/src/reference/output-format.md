@@ -351,32 +351,31 @@ Per-iteration, per-phase, per-stage, per-opening, per-worker LP solver
 statistics for diagnosing conditioning issues and retry behavior. One row per
 `(iteration, phase, stage, opening, rank, worker_id)` tuple on the backward
 phase (per-opening, per-worker); one row per `(iteration, phase, stage)` tuple
-on the forward, `lower_bound`, and `simulation` phases. 20 columns. Columns
-`opening`, `rank`, `worker_id`, and `basis_source` are nullable Int32; all
-other columns are non-nullable.
+on the forward, `lower_bound`, and `simulation` phases. 19 columns. Columns
+`opening`, `rank`, and `worker_id` are nullable Int32; all other columns are
+non-nullable.
 
-| Column                       | Type    | Nullable | Description                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iteration`                  | UInt32  | No       | Training iteration (1-based) or simulation scenario id (0-based).                                                                                                                                                                                                                                                                       |
-| `phase`                      | Utf8    | No       | `"forward"`, `"backward"`, `"lower_bound"`, or `"simulation"`.                                                                                                                                                                                                                                                                          |
-| `stage`                      | Int32   | No       | Stage index (0-based).                                                                                                                                                                                                                                                                                                                  |
-| `opening`                    | Int32   | Yes      | Opening (noise realization) index within the stage for backward rows. NULL for forward, `lower_bound`, `simulation`.                                                                                                                                                                                                                    |
-| `rank`                       | Int32   | Yes      | MPI rank that produced this row. NULL for rank-aggregated rows.                                                                                                                                                                                                                                                                         |
-| `worker_id`                  | Int32   | Yes      | Rayon worker index within the rank's pool. NULL for rows without a per-worker dimension.                                                                                                                                                                                                                                                |
-| `lp_solves`                  | UInt32  | No       | Number of LP solves in this row's bucket.                                                                                                                                                                                                                                                                                               |
-| `lp_successes`               | UInt32  | No       | Number of solves that returned optimal.                                                                                                                                                                                                                                                                                                 |
-| `lp_retries`                 | UInt32  | No       | Number of solves that required at least one retry.                                                                                                                                                                                                                                                                                      |
-| `lp_failures`                | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                                                                                                                                                                                                                                                                         |
-| `retry_attempts`             | UInt32  | No       | Total retry attempts across all LP solves in this bucket.                                                                                                                                                                                                                                                                               |
-| `basis_offered`              | UInt32  | No       | Number of `solve(Some(&basis))` calls (warm-start attempts).                                                                                                                                                                                                                                                                            |
-| `basis_consistency_failures` | UInt32  | No       | Number of warm-start calls in which the basis was rejected because `isBasisConsistent` returned false.                                                                                                                                                                                                                                  |
-| `simplex_iterations`         | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                                                                                                                                                                                                                                                                         |
-| `solve_time_ms`              | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                                                                                                                                                                                                                                                                    |
-| `load_model_time_ms`         | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                                                                                                                                                                                                                                                                           |
-| `set_bounds_time_ms`         | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds.                                                                                                                                                                                                                                                    |
-| `basis_set_time_ms`          | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.                                                                                                                                                                                                                                                                 |
-| `basis_reconstructions`      | UInt64  | No       | Number of `reconstruct_basis` invocations with a non-empty stored basis (slot-tracked warm-start applications).                                                                                                                                                                                                                         |
-| `basis_source`               | Int32   | Yes      | Warm-start basis provenance for backward-pass ω=0 rows (added in Epic 02). `1` = read from `BackwardBasisStore` (cache hit); `2` = read from `BasisStore` (forward fallback); NULL = not applicable (forward / `lower_bound` / simulation / backward ω≥1 / rare two-store miss). See [Basis Source Values](#basis-source-values) below. |
+| Column                       | Type    | Nullable | Description                                                                                                          |
+| ---------------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `iteration`                  | UInt32  | No       | Training iteration (1-based) or simulation scenario id (0-based).                                                    |
+| `phase`                      | Utf8    | No       | `"forward"`, `"backward"`, `"lower_bound"`, or `"simulation"`.                                                       |
+| `stage`                      | Int32   | No       | Stage index (0-based).                                                                                               |
+| `opening`                    | Int32   | Yes      | Opening (noise realization) index within the stage for backward rows. NULL for forward, `lower_bound`, `simulation`. |
+| `rank`                       | Int32   | Yes      | MPI rank that produced this row. NULL for rank-aggregated rows.                                                      |
+| `worker_id`                  | Int32   | Yes      | Rayon worker index within the rank's pool. NULL for rows without a per-worker dimension.                             |
+| `lp_solves`                  | UInt32  | No       | Number of LP solves in this row's bucket.                                                                            |
+| `lp_successes`               | UInt32  | No       | Number of solves that returned optimal.                                                                              |
+| `lp_retries`                 | UInt32  | No       | Number of solves that required at least one retry.                                                                   |
+| `lp_failures`                | UInt32  | No       | Number of solves that failed after exhausting all retry levels.                                                      |
+| `retry_attempts`             | UInt32  | No       | Total retry attempts across all LP solves in this bucket.                                                            |
+| `basis_offered`              | UInt32  | No       | Number of `solve(Some(&basis))` calls (warm-start attempts).                                                         |
+| `basis_consistency_failures` | UInt32  | No       | Number of warm-start calls in which the basis was rejected because `isBasisConsistent` returned false.               |
+| `simplex_iterations`         | UInt64  | No       | Total simplex iterations (or IPM iterations) across all solves.                                                      |
+| `solve_time_ms`              | Float64 | No       | Cumulative LP solve wall-clock time in milliseconds.                                                                 |
+| `load_model_time_ms`         | Float64 | No       | Cumulative time spent in `load_model` calls, in milliseconds.                                                        |
+| `set_bounds_time_ms`         | Float64 | No       | Cumulative time spent in `set_row_bounds` / `set_col_bounds` calls, in milliseconds.                                 |
+| `basis_set_time_ms`          | Float64 | No       | Cumulative time spent installing bases for warm-start, in milliseconds.                                              |
+| `basis_reconstructions`      | UInt64  | No       | Number of `reconstruct_basis` invocations with a non-empty stored basis (slot-tracked warm-start applications).      |
 
 ### `simulation/solver/iterations.parquet`
 
@@ -390,27 +389,6 @@ metadata was not delivered to non-root ranks; see
 `CapturedBasis::to_broadcast_payload` in
 `crates/cobre-sddp/src/workspace.rs` for the 4-broadcast wire format
 introduced in epic-06.
-
-#### Basis Source Values
-
-The `basis_source` column encodes a 3-valued enum that describes the
-provenance of the warm-start basis offered to the LP solver on each
-backward-pass ω=0 row. It is NULL for all other row types.
-
-| Value | Constant      | Meaning                                                                                                                                                                                                     |
-| ----- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `1`   | `Backward`    | Basis was read from `BackwardBasisStore` — the per-stage backward-basis cache introduced in Epic 01. This is a cache hit.                                                                                   |
-| `2`   | `Forward`     | Basis was read from `BasisStore` — the per-(scenario, stage) forward-pass cache. This is the cold-start fallback used on iteration 1 and on any cache miss where the backward store returned `None`.        |
-| NULL  | `None_` / N/A | No basis was offered (iteration 1 when the backward store is empty and the forward store also returned `None`), or the row is not a backward ω=0 row (forward / `lower_bound` / simulation / backward ω≥1). |
-
-The cache-hit rate for a run is `count(basis_source == 1) / count(basis_source IS NOT NULL)` over
-`(phase == "backward" AND opening == 0 AND iteration >= 2)` rows. Use
-`scripts/analyze_basis_source.py` to compute this metric from a case output
-directory.
-
-**Cold-start invariant:** All `iteration == 1` backward ω=0 rows carry
-`basis_source = 2` (Forward) or NULL. The backward cache is empty on the
-first iteration; no row can have `basis_source = 1` at iter 1.
 
 ### `training/solver/retry_histogram.parquet`
 

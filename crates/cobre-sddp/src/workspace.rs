@@ -6,6 +6,8 @@
 
 use cobre_solver::{Basis, SolverInterface};
 
+use crate::solver_stats::BasisSource;
+
 // ---------------------------------------------------------------------------
 // CapturedBasis
 // ---------------------------------------------------------------------------
@@ -731,13 +733,17 @@ impl<S: SolverInterface> WorkspacePool<S> {
 pub struct BasisStore {
     /// Flat storage: `bases[scenario * num_stages + stage]`.
     bases: Vec<Option<CapturedBasis>>,
+    /// Write-origin sidecar (Epic 05 AD-4): `origins[scenario * num_stages + stage]`
+    /// records which pass last wrote the corresponding `bases` slot.
+    /// Parallel array; same length and indexing as `bases`.
+    origins: Vec<BasisSource>,
     /// Number of stages per scenario.
     num_stages: usize,
 }
 
 impl BasisStore {
     /// Allocate a new store for `num_scenarios` scenarios and `num_stages`
-    /// stages, with every slot initialised to `None`.
+    /// stages, with every slot initialised to `None` / `BasisSource::None_`.
     ///
     /// # Examples
     ///
@@ -751,8 +757,10 @@ impl BasisStore {
     /// ```
     #[must_use]
     pub fn new(num_scenarios: usize, num_stages: usize) -> Self {
+        let len = num_scenarios * num_stages;
         Self {
-            bases: vec![None; num_scenarios * num_stages],
+            bases: vec![None; len],
+            origins: vec![BasisSource::None_; len],
             num_stages,
         }
     }
@@ -773,6 +781,14 @@ impl BasisStore {
         self.num_stages
     }
 
+    /// Return the flat write-origin sidecar slice.
+    ///
+    /// Indexed as `origins[scenario * num_stages + stage]`.
+    #[must_use]
+    pub fn origins(&self) -> &[BasisSource] {
+        &self.origins
+    }
+
     /// Get an immutable reference to the basis at `[scenario][stage]`.
     ///
     /// Returns `None` if the slot has not yet been populated.
@@ -784,6 +800,33 @@ impl BasisStore {
     /// Get a mutable reference to the basis slot at `[scenario][stage]`.
     pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<CapturedBasis> {
         &mut self.bases[scenario * self.num_stages + stage]
+    }
+
+    /// Get the basis and its write-origin tag at `[scenario][stage]`.
+    ///
+    /// Returns `(None, BasisSource::None_)` when the slot is empty.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Asserts `stage < num_stages` in debug builds.
+    #[must_use]
+    pub fn get_with_origin(
+        &self,
+        scenario: usize,
+        stage: usize,
+    ) -> (Option<&CapturedBasis>, BasisSource) {
+        debug_assert!(stage < self.num_stages, "stage index out of range");
+        let idx = scenario * self.num_stages + stage;
+        (self.bases[idx].as_ref(), self.origins[idx])
+    }
+
+    /// Set the write-origin tag for `[scenario][stage]`.
+    ///
+    /// Called directly by tests and by `BasisStoreSliceMut::set_origin` (which
+    /// maps absolute indices to the worker-local slice).
+    pub fn set_origin(&mut self, scenario: usize, stage: usize, origin: BasisSource) {
+        debug_assert!(stage < self.num_stages, "stage index out of range");
+        self.origins[scenario * self.num_stages + stage] = origin;
     }
 
     /// Split the store into `n_workers` disjoint mutable sub-views by scenario
@@ -804,18 +847,28 @@ impl BasisStore {
     #[must_use]
     pub fn split_workers_mut(&mut self, n_workers: usize) -> Vec<BasisStoreSliceMut<'_>> {
         debug_assert!(n_workers > 0, "n_workers must be > 0");
+        debug_assert_eq!(
+            self.bases.len(),
+            self.origins.len(),
+            "bases and origins must have equal length"
+        );
         let total_scenarios = self.num_scenarios();
         let mut slices = Vec::with_capacity(n_workers);
-        let mut remainder = self.bases.as_mut_slice();
+        let mut bases_rem = self.bases.as_mut_slice();
+        let mut origins_rem = self.origins.as_mut_slice();
         let mut offset = 0usize;
 
         for w in 0..n_workers {
             let (start, end) = crate::forward::partition(total_scenarios, n_workers, w);
             let count = end - start;
-            let (left, rest) = remainder.split_at_mut(count * self.num_stages);
-            remainder = rest;
+            let chunk = count * self.num_stages;
+            let (bases_left, bases_rest) = bases_rem.split_at_mut(chunk);
+            let (origins_left, origins_rest) = origins_rem.split_at_mut(chunk);
+            bases_rem = bases_rest;
+            origins_rem = origins_rest;
             slices.push(BasisStoreSliceMut {
-                bases: left,
+                bases: bases_left,
+                origins: origins_left,
                 scenario_offset: offset,
                 num_stages: self.num_stages,
             });
@@ -834,6 +887,9 @@ impl BasisStore {
 pub struct BasisStoreSliceMut<'a> {
     /// Sub-slice of the flat basis array for this worker's scenario range.
     bases: &'a mut [Option<CapturedBasis>],
+    /// Sub-slice of the write-origin sidecar for this worker's scenario range.
+    /// Parallel to `bases`; same length and indexing semantics.
+    origins: &'a mut [BasisSource],
     /// Absolute scenario index of the first scenario in this slice.
     scenario_offset: usize,
     /// Number of stages per scenario.
@@ -855,6 +911,25 @@ impl BasisStoreSliceMut<'_> {
         self.bases[local * self.num_stages + stage].as_ref()
     }
 
+    /// Get the basis and its write-origin tag at absolute scenario index
+    /// `scenario` and stage `stage`.
+    ///
+    /// Returns `(None, BasisSource::None_)` when the slot is empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
+    #[must_use]
+    pub fn get_with_origin(
+        &self,
+        scenario: usize,
+        stage: usize,
+    ) -> (Option<&CapturedBasis>, BasisSource) {
+        let local = scenario - self.scenario_offset;
+        let idx = local * self.num_stages + stage;
+        (self.bases[idx].as_ref(), self.origins[idx])
+    }
+
     /// Get a mutable reference to the basis slot at absolute scenario index
     /// `scenario` and stage `stage`.
     ///
@@ -864,6 +939,20 @@ impl BasisStoreSliceMut<'_> {
     pub fn get_mut(&mut self, scenario: usize, stage: usize) -> &mut Option<CapturedBasis> {
         let local = scenario - self.scenario_offset;
         &mut self.bases[local * self.num_stages + stage]
+    }
+
+    /// Record the write-origin tag for the slot at absolute scenario index
+    /// `scenario` and stage `stage`.
+    ///
+    /// Called immediately after every `CapturedBasis` write so the sidecar
+    /// stays in sync with the `bases` array.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `scenario < self.scenario_offset` (scenario not in this slice).
+    pub fn set_origin(&mut self, scenario: usize, stage: usize, origin: BasisSource) {
+        let local = scenario - self.scenario_offset;
+        self.origins[local * self.num_stages + stage] = origin;
     }
 }
 

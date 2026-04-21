@@ -8,13 +8,24 @@
 use cobre_solver::SolverStatistics;
 use thiserror::Error;
 
-/// Provenance of the warm-start basis offered to the solver on a single
-/// (iter, stage, opening) LP solve.
+/// Write-origin tag for a `BasisStore` slot, used to track which pass last
+/// wrote the basis at a given `(scenario, stage)` pair.
 ///
-/// Only meaningful for backward-pass `omega == 0` rows. Forward,
-/// `lower_bound`, simulation, and `omega >= 1` backward rows always carry
-/// `BasisSource::None_` (which maps to NULL at the parquet boundary in
-/// ticket-003).
+/// Under the unified-store design (Epic 05), `BasisStore` is the single source
+/// of truth. The tag records which pass performed the most recent write:
+///
+/// - `Backward` — last written by a backward-pass ω=0 capture; the common case
+///   for iteration ≥ 2. The slot holds the basis from the most recent backward
+///   solve at this `(m, s)`.
+/// - `Forward` — last written by a forward-pass capture; covers iteration-1
+///   backward reads (where no backward write has occurred yet) and any
+///   post-infeasibility recovery where the backward pass skipped the write.
+/// - `None_` — the slot is empty; returned by [`BasisStore::get_with_origin`]
+///   when no basis has been written to the slot.
+///
+/// The tag is meaningful only for backward-pass ω=0 rows. Forward-pass,
+/// `lower_bound`, simulation, and ω≥1 backward rows always carry
+/// `BasisSource::None_` (which maps to NULL at the parquet boundary).
 ///
 /// Discriminants are stable across releases; the parquet column writer
 /// in `cobre-io` and the MPI wire format both rely on
@@ -22,12 +33,13 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(i8)]
 pub enum BasisSource {
-    /// No basis was offered (iteration 1, or both stores returned `None`).
+    /// Slot is empty — no basis has been written (cold-start or pathological
+    /// infeasibility cascade).
     #[default]
     None_ = 0,
-    /// Basis read from the backward-pass basis cache (per-stage).
+    /// Slot was last written by a backward-pass ω=0 capture.
     Backward = 1,
-    /// Basis read from `BasisStore` (the per-(scenario, stage) forward cache).
+    /// Slot was last written by a forward-pass capture.
     Forward = 2,
 }
 

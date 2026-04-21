@@ -354,8 +354,8 @@ pub struct BackwardPassSpec<'a> {
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
 ///
 /// Groups the successor-specific arguments — including the stage index `t`,
-/// opening probabilities, pre-built cut batch, cut activity metadata, and the
-/// basis store — to keep per-function argument counts at or below seven.
+/// opening probabilities, pre-built cut batch, and cut activity metadata —
+/// to keep per-function argument counts at or below seven.
 struct SuccessorSpec<'a> {
     /// Stage index being cut (the stage whose cost-to-go we are computing).
     t: usize,
@@ -378,11 +378,6 @@ struct SuccessorSpec<'a> {
     baked_template: &'a cobre_solver::StageTemplate,
     /// Ordered slot indices of the active cuts at the successor stage.
     successor_active_slots: &'a [usize],
-    /// Read slice of the backward-pass basis cache for ω=0 warm-start lookup.
-    ///
-    /// Contains the bases captured during the previous iteration's rank-0 m=0
-    /// backward solve.
-    backward_store: &'a [Option<CapturedBasis>],
     /// Minimum dual multiplier for a cut to count as binding.
     cut_activity_tolerance: f64,
     /// Populated count of the successor's cut pool.
@@ -498,20 +493,24 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     }
 }
 
-/// Resolve the ω=0 warm-start basis from the backward store only, returning both
-/// the basis reference and the source indicator for observability.
+/// Resolve the ω=0 warm-start basis from the worker's `BasisStoreSliceMut`,
+/// returning the basis reference and the write-origin tag (Epic 05 AD-4).
 ///
-/// The forward-store fallback is inlined at the call site in
-/// `process_trial_point_backward` using the worker-owned `BasisStoreSliceMut`,
-/// so that the immutable borrow ends before the mutable write at ω=0.
+/// Under the unified-store design there is no separate backward store: a single
+/// `basis_slice.get_with_origin(m, s)` lookup returns whichever pass last
+/// wrote the slot.  The tag is `BasisSource::Backward` when the backward pass
+/// last wrote it (the common case for iteration ≥ 2), `BasisSource::Forward`
+/// when only the forward pass has written it (iteration 1), and
+/// `BasisSource::None_` when the slot is empty.
 ///
-/// Returns `(None, BasisSource::None_)` when the backward store misses.
+/// Returns `(None, BasisSource::None_)` when the slot is empty.
 #[inline]
-fn resolve_backward_basis(
-    backward_store: &[Option<CapturedBasis>],
+fn resolve_backward_basis<'a>(
+    basis_slice: &'a BasisStoreSliceMut<'_>,
+    m: usize,
     s: usize,
-) -> Option<&CapturedBasis> {
-    backward_store.get(s).and_then(|opt| opt.as_ref())
+) -> (Option<&'a CapturedBasis>, BasisSource) {
+    basis_slice.get_with_origin(m, s)
 }
 
 /// Process one trial point `m` in the backward pass, iterating over all openings.
@@ -579,19 +578,11 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         // Openings 1+: HiGHS retains internal factorization from the previous
         // solve — only bounds/RHS changed via `patch_opening_bounds`, so
         // `solve()` hot-starts without redundant refactorization (P3b).
-        // AD-3: at ω=0, prefer backward cache; fall back to forward BasisStore.
-        // The forward lookup uses basis_slice.get(m, s) — an immutable borrow of
-        // basis_slice. By NLL, this immutable borrow ends when `inputs` (which
-        // contains `stored_basis`) is dropped after run_stage_solve, before the
-        // mutable basis_slice.get_mut(m, s) write below.
+        // Epic 05 unified store: a single get_with_origin lookup returns the basis
+        // and write-origin tag. The tag reflects whichever pass last wrote the slot
+        // (Backward for iter≥2, Forward for iter=1, None_ when empty).
         let (stored_basis, omega_basis_source) = if omega == 0 {
-            if let Some(cached) = resolve_backward_basis(succ.backward_store, s) {
-                (Some(cached), BasisSource::Backward)
-            } else if let Some(fwd) = basis_slice.get(m, s) {
-                (Some(fwd), BasisSource::Forward)
-            } else {
-                (None, BasisSource::None_)
-            }
+            resolve_backward_basis(basis_slice, m, s)
         } else {
             (None, BasisSource::None_)
         };
@@ -776,6 +767,8 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
                 );
                 *basis_slice.get_mut(m, s) = Some(captured);
             }
+            // Epic 05 AD-4: tag this slot as last-written by the backward pass.
+            basis_slice.set_origin(m, s, BasisSource::Backward);
         }
     }
 
@@ -1109,10 +1102,6 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             template_num_rows,
             baked_template: baked_tmpl,
             successor_active_slots: spec.successor_active_slots_buf,
-            // T2: backward_store is kept as &[] placeholder (T3 removes the field).
-            // resolve_backward_basis returns None when backward_store is empty,
-            // falling through to basis_slice.get(m, s) for the forward warm-start.
-            backward_store: &[],
             cut_activity_tolerance: spec.cut_activity_tolerance,
             successor_populated_count: fcf.pools[successor].populated_count,
             successor_pool: &fcf.pools[successor],
@@ -5636,7 +5625,6 @@ mod tests {
     /// `ws.solver.warm_start_calls`.
     #[allow(clippy::too_many_lines)]
     fn run_one_trial_point_with_stores(
-        backward_store: &[Option<crate::workspace::CapturedBasis>],
         basis_store: &mut crate::workspace::BasisStore,
     ) -> Result<Vec<SolverWorkspace<MockSolver>>, crate::SddpError> {
         use crate::context::StageContext;
@@ -5761,7 +5749,6 @@ mod tests {
             template_num_rows: baked_template.num_rows,
             baked_template: &baked_template,
             successor_active_slots: &successor_active_slots,
-            backward_store,
             cut_activity_tolerance: 0.0,
             successor_populated_count: fcf.pools[1].populated_count,
             successor_pool: &fcf.pools[1],
@@ -5794,51 +5781,134 @@ mod tests {
         Ok(workspaces)
     }
 
-    #[test]
-    fn resolve_backward_basis_returns_some_when_cache_hits() {
-        // Given: backward_store has Some(CapturedBasis) at index 1.
-        // Then: helper returns Some(&_) for s=1.
-        use crate::workspace::CapturedBasis;
-
-        let b_back = CapturedBasis::new(2, 2, 0, 0, 0);
-        let backward_store: Vec<Option<CapturedBasis>> = vec![None, Some(b_back)];
-
-        let basis_ref = super::resolve_backward_basis(&backward_store, 1);
-
-        assert!(basis_ref.is_some(), "expected Some from backward store");
-    }
+    // ---------------------------------------------------------------------------
+    // resolve_backward_basis_* unit tests (T3 rewrite — single-store write-origin)
+    // ---------------------------------------------------------------------------
 
     #[test]
-    fn resolve_backward_basis_returns_none_when_cache_misses() {
-        // Given: backward_store all None.
-        // Then: helper returns None — forward-store fallback is the caller's responsibility.
-        use crate::workspace::CapturedBasis;
+    fn resolve_backward_basis_returns_backward_origin_when_slot_last_written_by_backward() {
+        // Given: BasisStore[0, 1] has Some(CapturedBasis) with origin Backward.
+        // Then: resolve_backward_basis returns (Some(_), BasisSource::Backward).
+        use crate::solver_stats::BasisSource;
+        use crate::workspace::{BasisStore, CapturedBasis};
 
-        let backward_store: Vec<Option<CapturedBasis>> = vec![None, None];
+        let b = CapturedBasis::new(2, 2, 0, 0, 0);
+        let mut store = BasisStore::new(1, 2);
+        *store.get_mut(0, 1) = Some(b);
+        store.set_origin(0, 1, BasisSource::Backward);
 
-        let basis_ref = super::resolve_backward_basis(&backward_store, 1);
+        let slices = store.split_workers_mut(1);
+        let slice = &slices[0];
+        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 1);
 
         assert!(
-            basis_ref.is_none(),
-            "expected None when backward store misses"
+            basis_ref.is_some(),
+            "expected Some when slot has a basis written by backward pass"
         );
+        assert_eq!(
+            source,
+            BasisSource::Backward,
+            "expected Backward origin tag"
+        );
+        drop(slices);
     }
 
     #[test]
-    fn resolve_backward_basis_returns_none_when_store_is_empty() {
-        // Given: backward_store is an empty slice (T2 placeholder, &[]).
-        // Then: helper returns None for any s.
-        use crate::workspace::CapturedBasis;
+    fn resolve_backward_basis_returns_forward_origin_when_slot_last_written_by_forward() {
+        // Given: BasisStore[0, 0] has Some(CapturedBasis) with origin Forward
+        //        (the iter-1 cold-start case: forward wrote, backward has not yet).
+        // Then: resolve_backward_basis returns (Some(_), BasisSource::Forward).
+        use crate::solver_stats::BasisSource;
+        use crate::workspace::{BasisStore, CapturedBasis};
 
-        let backward_store: Vec<Option<CapturedBasis>> = vec![];
+        let b = CapturedBasis::new(2, 2, 0, 0, 0);
+        let mut store = BasisStore::new(1, 2);
+        *store.get_mut(0, 0) = Some(b);
+        store.set_origin(0, 0, BasisSource::Forward);
 
-        let basis_ref = super::resolve_backward_basis(&backward_store, 0);
+        let slices = store.split_workers_mut(1);
+        let slice = &slices[0];
+        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 0);
 
         assert!(
-            basis_ref.is_none(),
-            "expected None when backward store is empty"
+            basis_ref.is_some(),
+            "expected Some when slot has a basis written by forward pass"
         );
+        assert_eq!(source, BasisSource::Forward, "expected Forward origin tag");
+        drop(slices);
     }
+
+    #[test]
+    fn resolve_backward_basis_returns_none_when_slot_is_empty() {
+        // Given: BasisStore[0, 1] is None (cold-start, slot never written).
+        // Then: resolve_backward_basis returns (None, BasisSource::None_).
+        use crate::solver_stats::BasisSource;
+        use crate::workspace::BasisStore;
+
+        let mut store = BasisStore::new(1, 2);
+        let slices = store.split_workers_mut(1);
+        let slice = &slices[0];
+        let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 1);
+
+        assert!(basis_ref.is_none(), "expected None for empty slot");
+        assert_eq!(
+            source,
+            BasisSource::None_,
+            "expected None_ origin for empty slot"
+        );
+        drop(slices);
+    }
+
+    #[test]
+    fn resolve_backward_basis_reports_latest_write_origin() {
+        // Given: BasisStore[0, 0] is first written with Forward origin (iter-1 forward
+        //        capture), then overwritten with Backward origin (iter-2 backward capture).
+        // Then: after the second write, resolve_backward_basis returns
+        //       (Some(_), BasisSource::Backward) — the tag reflects the latest write.
+        use crate::solver_stats::BasisSource;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let b_fwd = CapturedBasis::new(2, 2, 0, 0, 0);
+        let mut store = BasisStore::new(1, 2);
+
+        // First write: forward pass.
+        *store.get_mut(0, 0) = Some(b_fwd);
+        store.set_origin(0, 0, BasisSource::Forward);
+
+        // Verify intermediate state.
+        {
+            let slices = store.split_workers_mut(1);
+            let slice = &slices[0];
+            let (_, source) = super::resolve_backward_basis(slice, 0, 0);
+            assert_eq!(source, BasisSource::Forward, "after forward write: Forward");
+            drop(slices);
+        }
+
+        // Second write: backward pass overwrites the same slot.
+        store.set_origin(0, 0, BasisSource::Backward);
+
+        // Verify final state reflects the latest write.
+        {
+            let slices = store.split_workers_mut(1);
+            let slice = &slices[0];
+            let (basis_ref, source) = super::resolve_backward_basis(slice, 0, 0);
+            assert!(
+                basis_ref.is_some(),
+                "slot must still be Some after origin flip"
+            );
+            assert_eq!(
+                source,
+                BasisSource::Backward,
+                "after backward write: tag must flip to Backward"
+            );
+            drop(slices);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // T2 integration tests (backward write populates BasisStore) — extended with
+    // origin-tag assertions per T3 Testing Requirements.
+    // ---------------------------------------------------------------------------
 
     #[test]
     fn backward_write_populates_basis_store_at_omega_zero() {
@@ -5849,14 +5919,12 @@ mod tests {
         //
         // AD-2: write occurs only at omega=0 (this test has exactly 1 opening).
         // AD-7: infeasibility guard is not triggered (solver succeeds).
-        use crate::workspace::{BasisStore, CapturedBasis};
+        // T3 extension: origin tag must be BasisSource::Backward after the write.
+        use crate::solver_stats::BasisSource;
+        use crate::workspace::BasisStore;
 
         let mut basis_store = BasisStore::new(1, 2);
-
-        // Populate with backward_store = &[] (T2 placeholder → no backward-cache warm-start).
-        let backward_store: Vec<Option<CapturedBasis>> = vec![];
-        let workspaces =
-            run_one_trial_point_with_stores(&backward_store, &mut basis_store).unwrap();
+        let workspaces = run_one_trial_point_with_stores(&mut basis_store).unwrap();
 
         // Verify the BasisStore slot was written.
         assert!(
@@ -5873,6 +5941,12 @@ mod tests {
         assert_eq!(
             workspaces[0].solver.call_count, 1,
             "solver must be called exactly once for a 1-opening backward pass"
+        );
+        // T3: origin sidecar must reflect the backward write.
+        assert_eq!(
+            basis_store.get_with_origin(0, 1).1,
+            BasisSource::Backward,
+            "origin tag must be Backward after backward-pass ω=0 capture"
         );
     }
 
@@ -5919,8 +5993,7 @@ mod tests {
         // Here we test the complementary invariant: a *successful* solve at ω=0
         // with a pre-existing slot uses the reuse branch (get_basis into the
         // existing allocation) and leaves the slot Some (not None).
-        let backward_store: Vec<Option<CapturedBasis>> = vec![];
-        let result = run_one_trial_point_with_stores(&backward_store, &mut basis_store);
+        let result = run_one_trial_point_with_stores(&mut basis_store);
         assert!(result.is_ok(), "expected Ok for successful solve");
 
         // The slot must still be Some after the successful reuse-path write.

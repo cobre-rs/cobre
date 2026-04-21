@@ -49,16 +49,10 @@
 //! Within a rank, the outer per-stage loop remains sequential (stage `t`
 //! depends on cuts generated at stage `t+1`). The inner trial-point loop is
 //! parallelised across [`SolverWorkspace`] instances using rayon's
-//! `par_iter_mut`. Trial points are dynamically distributed via atomic counter
-//! work-stealing: each worker loops, claiming the next available trial-point
-//! index via `fetch_add(1, Relaxed)` on a shared `AtomicUsize` counter, and
-//! stops when the returned index reaches `local_work`.
-//!
-//! Each worker thread generates cuts into a thread-local `StagedCut` buffer
-//! rather than directly into the FCF. After the parallel region completes for
-//! a stage, the staged cuts are sorted by `trial_point_idx` and inserted into
-//! the FCF in that deterministic order. This ensures bit-for-bit identical
-//! results regardless of thread count or thread completion order.
+//! `par_iter_mut` with static scenario partitioning (matching the forward pass).
+//! Each worker generates cuts into a thread-local `StagedCut` buffer, sorted
+//! by `trial_point_idx` after the parallel region to ensure deterministic FCF
+//! insertion regardless of thread completion order.
 //!
 //! ## Hot-path allocation discipline
 //!
@@ -507,24 +501,10 @@ fn resolve_backward_basis<'a>(
 
 /// Process one trial point `m` in the backward pass, iterating over all openings.
 ///
-/// Called once per trial point inside the parallel worker closure of
-/// `process_stage_backward`. Uses `ws.backward_accum` as pre-allocated scratch
-/// storage. The caller must have grown the accumulator buffers to the required
-/// dimensions, zeroed `slot_increments[..pop]` before calling, and
-/// initialised `per_opening_stats` to `vec![Default::default(); n_openings]`
-/// once per stage before the first trial point.
-///
-/// Per-opening solver-statistics deltas are accumulated element-wise into
-/// `ws.backward_accum.per_opening_stats` across all trial points processed
-/// by this worker for the current stage.
-///
-/// Returns a single aggregated [`StagedCut`].
-///
-/// Each worker calls this for every trial point in its static scenario partition.
-/// At ω=0, after a successful solve, the post-solve basis is written into
-/// `basis_slice.get_mut(m, s)` for this (scenario, successor) pair. Infeasibility
-/// at ω=0 preserves the existing slot (AD-7). Writes at ω>0 are forbidden
-/// per AD-2 (Epic 04 null-result: +105% regression from retained-LU corruption).
+/// Solves at each (scenario, opening) and accumulates duals into `per_opening_stats`.
+/// At ω=0, writes the post-solve basis into `basis_slice`; writes at ω>0 are
+/// forbidden per AD-2 (retained-LU corruption risk). Infeasibility at ω=0
+/// leaves the slot unchanged (AD-7).
 #[allow(clippy::too_many_lines)]
 fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
@@ -551,25 +531,10 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
-        // Snapshot solver statistics before this opening's solve so we can
-        // compute the per-opening delta afterwards.
+        // Snapshot solver statistics before this opening's solve.
         let stats_before_omega = ws.solver.statistics();
 
-        // Opening 0: use forward-pass basis from BasisStore for warm start.
-        // Slot-tracked reconstruction: copy preserved cut-row statuses by slot
-        // identity and evaluate new cuts at `state_at_capture` (the state used
-        // when the basis was captured, not the current trial point `x_hat`).
-        // This avoids the inconsistency that caused the +6% backward-simplex
-        // regression: the stored rows were captured at `state_at_capture`, so
-        // evaluating new rows at `x_hat` mixed two different states.
-        //
-        // Baked path: reconcile only delta slots (offset = baked_cut_count).
-        //
-        // BasisStore is read-only; the scratch copy absorbs all mutation.
-        //
-        // Openings 1+: HiGHS retains internal factorization from the previous
-        // solve — only bounds/RHS changed via `patch_opening_bounds`, so
-        // `solve()` hot-starts without redundant refactorization (P3b).
+        // ω=0: resolve warm-start basis; ω>0: HiGHS hot-starts from retained factorization.
         let stored_basis = if omega == 0 {
             resolve_backward_basis(basis_slice, m, s)
         } else {
@@ -580,15 +545,6 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             indexer,
             pool: succ.successor_pool,
             current_state: x_hat,
-            // Opening 0: use forward-pass basis from BasisStore for slot-tracked
-            // reconstruction. Openings 1+: pass None so run_stage_solve takes the
-            // cold path (ws.solver.solve()), which hot-starts from HiGHS's retained
-            // internal factorization (P3b).
-            //
-            // AD-3: prefer the backward cache (populated by iter k-1 rank-0 m=0),
-            // fall back to the forward BasisStore when the cache slot is empty
-            // (iteration 1 always; or after a canonical capture failure).  Worst
-            // case at ω=0 is identical to the pre-plan behavior.
             stored_basis,
             baked_template: succ.baked_template,
             stage_index: s,
@@ -702,19 +658,9 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             }
         }
 
-        // AD-2: write BasisStore[m, s] at ω=0 only.  Writing at ω>0 would
-        // corrupt the slot with a retained-LU perturbation (Epic 04 null-result,
-        // +105% regression).  The write is placed inside the successful Ok(_)
-        // arm (the `?` above propagated any Infeasible error), so AD-7
-        // infeasibility preservation is satisfied implicitly: an Err exits the
-        // function before reaching this code path.
-        //
-        // Hot-path allocation discipline: reuse the existing CapturedBasis slot
-        // in-place (forward-capture mirror at forward.rs:1087).  After the first
-        // iteration every slot is Some(_), so the allocation arm is taken at most
-        // once per (m, s) pair across the entire training run.
+        // AD-2: write BasisStore[m, s] at ω=0 only (corruption risk at ω>0).
+        // Reuse existing slot in-place; first iteration allocates, subsequent reuse.
         if omega == 0 {
-            debug_assert!(omega == 0, "backward capture must only occur at omega=0");
             let num_cols = succ.baked_template.num_cols;
             let base_row_count = succ.template_num_rows;
             let cut_row_count = succ.num_cuts_at_successor;
@@ -767,10 +713,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     );
     #[allow(clippy::cast_possible_truncation)]
     let forward_pass_index = scenario as u32;
-    // Accumulate binding data into the per-worker workspace buffer instead of
-    // building a per-trial-point Vec<(usize, u64)>. The sequential merge phase
-    // will sum across workers after the parallel region. Addition is commutative
-    // and associative so per-worker accumulation produces identical totals.
+    // Accumulate binding counts into the metadata buffer for later merge.
     let pop = ws.backward_accum.slot_increments.len();
     for slot in 0..pop {
         let count = ws.backward_accum.slot_increments[slot];
@@ -788,22 +731,10 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
 
 /// Evaluate all trial points for a single backward stage, returning staged cuts.
 ///
-/// Runs the parallel trial-point loop over `0..local_work` for the successor of
-/// stage `t`. Trial points are statically partitioned across `workspaces` using
-/// the same `partition` function as `run_forward_pass`. Returns
-/// `Vec<StagedCut>` in completion order (unsorted); caller sorts by
-/// `trial_point_idx` before inserting into the FCF.
-///
-/// `load_model` is hoisted per-(worker, stage) before the trial-point loop.
-/// Per-trial-point deterministic reset is delivered internally by
-/// `HighsSolver::solve` (AD-4 contract, ticket-002).
-///
-/// Each worker processes its statically-assigned scenario range and writes its
-/// ω=0 backward basis into the disjoint `BasisStoreSliceMut` sub-view it owns.
-/// Static partition (mirroring `run_forward_pass`) is required because
-/// `BasisStoreSliceMut` is an exclusive mutable sub-view: disjoint ownership
-/// of scenario ranges ensures correctness without locking. The resulting
-/// `Vec<StagedCut>` is sorted by `trial_point_idx` before FCF insertion.
+/// Trials are statically partitioned (mirroring `run_forward_pass`) with each
+/// worker owning its scenario range and disjoint `BasisStoreSliceMut` sub-view
+/// for ω=0 basis writes. Staged cuts are returned unsorted; caller sorts by
+/// `trial_point_idx` before FCF insertion.
 #[allow(clippy::too_many_arguments)]
 fn process_stage_backward<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
@@ -824,13 +755,8 @@ fn process_stage_backward<S: SolverInterface + Send>(
         .zip(basis_slices.into_par_iter())
         .enumerate()
         .map(|(w, (ws, mut basis_slice))| {
-            // Per-worker, per-stage: hoist load_model unconditionally.
-            // Solve-to-solve independence is delivered by `HighsSolver::solve`
-            // internally via `Highs_clearSolver` (AD-4 contract, ticket-002).
+            // Load template and pre-allocate per-stage buffers.
             load_backward_lp(ws, succ);
-
-            // Grow outcomes buffer monotonically to cover this stage's n_openings.
-            // Never shrinks — excess capacity from earlier larger stages is reused.
             while ws.backward_accum.outcomes.len() < n_openings {
                 ws.backward_accum
                     .outcomes
@@ -840,26 +766,18 @@ fn process_stage_backward<S: SolverInterface + Send>(
                         objective_value: 0.0,
                     });
             }
-            // Grow slot_increments monotonically to cover this stage's pool.
             if ws.backward_accum.slot_increments.len() < pop {
                 ws.backward_accum.slot_increments.resize(pop, 0u64);
             }
-            // Grow agg_coefficients monotonically to n_state.
             if ws.backward_accum.agg_coefficients.len() < n_state {
                 ws.backward_accum.agg_coefficients.resize(n_state, 0.0_f64);
             }
-            // Grow and zero metadata_sync_contribution per stage.
             if ws.backward_accum.metadata_sync_contribution.len() < pop {
                 ws.backward_accum
                     .metadata_sync_contribution
                     .resize(pop, 0u64);
             }
             ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
-
-            // Initialise per_opening_stats to n_openings zero-valued deltas.
-            // Resized (never grows beyond the maximum n_openings seen) and
-            // zeroed once per stage — not per trial point — to bound the
-            // allocation cost to the stage boundary.
             ws.backward_accum
                 .per_opening_stats
                 .resize_with(n_openings, SolverStatsDelta::default);
@@ -867,23 +785,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
                 *slot = SolverStatsDelta::default();
             }
 
-            // Static partition: this worker owns scenarios [start_m, end_m).
-            // Matches the scenario range covered by `basis_slice`, which was
-            // produced by `BasisStore::split_workers_mut(n_workers)` using the
-            // same `partition` function.
+            // Static partition: assign scenarios to worker, matching basis_slice view.
             let (start_m, end_m) = partition(local_work, n_workers, w);
             let n_local = end_m - start_m;
-
-            // Pre-allocate staged buffer sized to this worker's exact scenario count.
             let mut staged: Vec<StagedCut> = Vec::with_capacity(n_local.max(1));
-
-            // Per-worker wall clock for this stage's contribution to backward_wall_ms
-            // (slot 1). Captured at the closure boundary, not inside the trial-point
-            // loop, to avoid inflating with loop overhead.
             let worker_stage_wall_start = Instant::now();
 
             for m in start_m..end_m {
-                // Zero only the live portion of slot_increments (length >= pop).
                 ws.backward_accum.slot_increments[..pop].fill(0);
                 staged.push(process_trial_point_backward(
                     ws,
@@ -908,16 +816,10 @@ fn process_stage_backward<S: SolverInterface + Send>(
 
 /// Execute the backward pass for one training iteration on this rank.
 ///
-/// Sweeps stages from `num_stages - 2` down to `0` (the last stage `T-1` has
-/// no successor stage and therefore produces no cuts). For each stage, the
-/// trial-point loop is parallelised across the provided [`SolverWorkspace`]
-/// instances using atomic counter work-stealing. Each worker generates cut
-/// data into a thread-local `StagedCut` buffer. After the parallel region,
-/// staged cuts are sorted by trial-point index and inserted into the FCF in
-/// deterministic order.
-///
-/// The outer per-stage loop remains sequential: stage `t` depends on cuts
-/// inserted at stage `t+1` in the previous iteration of the stage loop.
+/// Sweeps stages from `num_stages - 2` down to `0`. For each stage, trial-point
+/// loop is parallelised with static scenario partitioning. Each worker generates
+/// cuts into a thread-local buffer, sorted by trial-point index before FCF insertion.
+/// The outer per-stage loop remains sequential (stage `t` depends on cuts at `t+1`).
 ///
 /// ## Error handling
 ///
@@ -1084,11 +986,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             successor_pool: &fcf.pools[successor],
         };
 
-        // Split BasisStore into n_workers_local disjoint per-worker sub-views.
-        // Each worker processes scenarios in partition(local_work, n_workers, w)
-        // and writes its ω=0 backward basis into the corresponding slots.
-        // Consumed into process_stage_backward, which moves slices into the
-        // parallel closure. Dropping at function return releases the &mut borrow.
+        // Split BasisStore into disjoint per-worker sub-views for ω=0 writes.
         let basis_slices = basis_store.split_workers_mut(n_workers_local.max(1));
 
         let process_start = Instant::now();
@@ -1110,15 +1008,9 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         for worker_result in worker_staged {
             staged_cuts_buf.extend(worker_result?);
         }
-        // Static partition produces cuts in scenario order per worker but the
-        // worker order in the collected Vec is non-deterministic. Sort by
-        // trial_point_idx to ensure deterministic FCF insertion order.
+        // Sort by trial_point_idx for deterministic FCF insertion order.
         staged_cuts_buf.sort_by_key(|cut| cut.trial_point_idx);
-        debug_assert_eq!(
-            staged_cuts_buf.len(),
-            spec.local_work,
-            "static partition must produce exactly one cut per trial point"
-        );
+        debug_assert_eq!(staged_cuts_buf.len(), spec.local_work);
 
         for cut in &staged_cuts_buf {
             fcf.add_cut(

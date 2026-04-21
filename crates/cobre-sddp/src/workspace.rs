@@ -43,10 +43,8 @@ pub struct CapturedBasis {
     /// Number of template (non-cut) LP rows at capture time.
     pub base_row_count: usize,
     /// Cut pool slot for each cut row in `basis.row_status[base_row_count..]`.
-    /// Empty until ticket 003 populates it during forward capture.
     pub cut_row_slots: Vec<u32>,
     /// State vector `x_hat` at which this basis was captured.
-    /// Empty until ticket 003 populates it during forward capture.
     pub state_at_capture: Vec<f64>,
 }
 

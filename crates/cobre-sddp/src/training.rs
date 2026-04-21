@@ -673,6 +673,13 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Pre-allocated receive buffer for the allreduce(Sum) of binding
     // increment counts. Reused across stages to avoid per-stage allocation.
     let mut bwd_global_increments_buf: Vec<u64> = Vec::new();
+    // Pre-allocated send buffer for the per-iteration allreduce(BitwiseOr)
+    // of sliding-window binding-activity bitmaps (Epic 06 AD-1).
+    // Cleared at the start of each backward pass; resized per stage.
+    let mut bwd_metadata_sync_window_buf: Vec<u32> = Vec::new();
+    // Pre-allocated receive buffer for the allreduce(BitwiseOr).
+    // Holds globally OR-reduced window bitmaps after the reduction.
+    let mut bwd_global_window_increments_buf: Vec<u32> = Vec::new();
     // Pre-allocated buffer for packing real (non-padded) gathered state vectors
     // when archiving visited states for dominated cut selection (ticket-003).
     // Pre-sized to the true total forward passes to avoid first-iteration
@@ -814,6 +821,8 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             visited_archive: visited_archive.as_mut(),
             metadata_sync_buf: &mut bwd_metadata_sync_buf,
             global_increments_buf: &mut bwd_global_increments_buf,
+            metadata_sync_window_buf: &mut bwd_metadata_sync_window_buf,
+            global_window_increments_buf: &mut bwd_global_window_increments_buf,
             real_states_buf: &mut bwd_real_states_buf,
             stage_worker_stats_buf: &mut bwd_stage_worker_stats_buf,
             bwd_stats_send_buf: &mut bwd_stats_send_buf,
@@ -1043,6 +1052,17 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     per_stage,
                 },
             );
+        }
+
+        // Epic 06 AD-1: shift the sliding-window binding bitmap left by 1 on every
+        // populated cut slot. This ages the activity record so the next iteration's
+        // bit 0 starts clear and records fresh binding events. Placed AFTER cut
+        // selection (so deactivated cuts are already marked inactive) and BEFORE
+        // template baking (so the shifted bitmaps are in the pool when T2 consumes them).
+        for pool in &mut fcf.pools {
+            for m in pool.metadata.iter_mut().take(pool.populated_count) {
+                m.active_window <<= 1;
+            }
         }
 
         // Step 4c: Template baking.

@@ -155,6 +155,7 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
+            active_window: 0,
         };
 
         Self {
@@ -252,6 +253,7 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
+            active_window: 0,
         };
 
         if slot >= self.populated_count {
@@ -551,6 +553,7 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
+                active_window: 0,
             });
         }
 
@@ -612,6 +615,7 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
+            active_window: 0,
         };
 
         let mut coefficients = vec![0.0_f64; capacity * state_dimension];
@@ -643,6 +647,7 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
+                active_window: 0,
             };
         }
 

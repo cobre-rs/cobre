@@ -323,6 +323,20 @@ pub(crate) struct BackwardAccumulators {
     /// contributions across all workers into `metadata_sync_buf`, replacing
     /// the old per-`StagedCut` `binding_increments` Vec iteration.
     pub(crate) metadata_sync_contribution: Vec<u64>,
+    /// Per-worker sliding-window binding-activity contribution, indexed by cut pool slot.
+    ///
+    /// Each element is a `u32` bitmask where bit 0 indicates that the cut at
+    /// that slot was binding (dual > tolerance) during at least one trial point
+    /// processed by this worker in the current iteration. Grown monotonically
+    /// via `.resize(pop, 0)` when the pool grows (like `metadata_sync_contribution`),
+    /// but cleared once per iteration (not per stage) because the window
+    /// tracks iteration-level activity across all stages.
+    ///
+    /// After the parallel region the sequential merge phase ORs contributions
+    /// across all workers into `metadata_sync_window_buf` (`BackwardPassSpec`),
+    /// then an MPI `allreduce(BitwiseOr)` aggregates across ranks so any rank
+    /// observing a cut binding globally sets bit 0 in the cut's `active_window`.
+    pub(crate) metadata_sync_window_contribution: Vec<u32>,
     /// Per-opening solver-statistics accumulator for this worker.
     ///
     /// Length equals `n_openings` for the current stage. Re-initialised to
@@ -354,6 +368,7 @@ impl BackwardAccumulators {
             slot_increments: vec![0u64; initial_pool_capacity],
             agg_coefficients: vec![0.0_f64; n_state],
             metadata_sync_contribution: vec![0u64; initial_pool_capacity],
+            metadata_sync_window_contribution: vec![0u32; initial_pool_capacity],
             per_opening_stats: Vec::new(),
         }
     }

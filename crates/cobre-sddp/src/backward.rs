@@ -274,6 +274,24 @@ pub struct BackwardPassSpec<'a> {
     /// Resized to `pool_size` before each allreduce call.
     pub global_increments_buf: &'a mut Vec<u64>,
 
+    /// Pre-allocated send buffer for the per-iteration `allreduce(BitwiseOr)`
+    /// that aggregates sliding-window binding-activity bitmaps across MPI ranks.
+    ///
+    /// Length equals the current pool population at the time of the reduce call.
+    /// Each element is a `u32` bitmask; bit 0 is set if any worker on this rank
+    /// observed a binding event for that cut slot during the current iteration
+    /// (across all stages). Cleared once per iteration at the start of
+    /// `run_backward_pass`.
+    pub metadata_sync_window_buf: &'a mut Vec<u32>,
+
+    /// Pre-allocated receive buffer for the per-iteration `allreduce(BitwiseOr)`.
+    ///
+    /// Receives the globally OR-reduced window bitmaps after the allreduce.
+    /// Resized to `pool_size` before the allreduce call. After the allreduce,
+    /// each element is `OR`-ed into the corresponding `CutMetadata::active_window`
+    /// and both buffers are cleared for the next iteration.
+    pub global_window_increments_buf: &'a mut Vec<u32>,
+
     /// Pre-allocated buffer for packing real (non-padded) gathered state
     /// vectors when archiving visited states for dominated cut selection.
     ///
@@ -719,6 +737,8 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
         let count = ws.backward_accum.slot_increments[slot];
         if count > 0 {
             ws.backward_accum.metadata_sync_contribution[slot] += count;
+            // Set bit 0 to record iteration-level activity for the sliding window.
+            ws.backward_accum.metadata_sync_window_contribution[slot] |= 1u32;
         }
     }
     Ok(StagedCut {
@@ -778,6 +798,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
                     .resize(pop, 0u64);
             }
             ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
+            // Grow window contribution buffer monotonically (not cleared per-stage;
+            // cleared once per iteration at the start of run_backward_pass).
+            if ws.backward_accum.metadata_sync_window_contribution.len() < pop {
+                ws.backward_accum
+                    .metadata_sync_window_contribution
+                    .resize(pop, 0u32);
+            }
             ws.backward_accum
                 .per_opening_stats
                 .resize_with(n_openings, SolverStatsDelta::default);
@@ -908,6 +935,15 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     for ws in workspaces.iter_mut() {
         ws.worker_timing_buf.fill(0.0);
     }
+
+    // Clear iteration-scoped window contribution buffers. These buffers accumulate
+    // binding-activity across ALL stages of this iteration (not per-stage), so they
+    // must be zeroed once here, not inside the stage loop.
+    for ws in workspaces.iter_mut() {
+        ws.backward_accum.metadata_sync_window_contribution.fill(0);
+    }
+    spec.metadata_sync_window_buf.fill(0);
+    spec.global_window_increments_buf.fill(0);
 
     for t in (0..num_stages.saturating_sub(1)).rev() {
         // When the caller supplies forward-pass records, perform the per-stage
@@ -1076,6 +1112,47 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
                     fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
                 }
             }
+
+            // Allreduce(BitwiseOr): aggregate sliding-window binding activity
+            // across ranks so that any rank observing a cut binding this stage
+            // globally sets bit 0 in that cut's active_window.
+            //
+            // Build the local OR buffer by OR-ing per-worker contributions.
+            spec.metadata_sync_window_buf.resize(pool_size, 0u32);
+            for ws in workspaces.iter() {
+                for (slot, &bit) in ws
+                    .backward_accum
+                    .metadata_sync_window_contribution
+                    .iter()
+                    .enumerate()
+                    .take(pool_size)
+                {
+                    spec.metadata_sync_window_buf[slot] |= bit;
+                }
+            }
+
+            // Allreduce(BitwiseOr): OR-reduce across ranks. For a single rank
+            // (LocalBackend) this is an identity copy — no behavior change.
+            spec.global_window_increments_buf.resize(pool_size, 0u32);
+            comm.allreduce(
+                spec.metadata_sync_window_buf,
+                spec.global_window_increments_buf,
+                ReduceOp::BitwiseOr,
+            )
+            .map_err(SddpError::from)?;
+
+            // Apply global window bits: any slot where bit 0 is set globally
+            // gets bit 0 ORed into its active_window. This records "this cut
+            // was binding on at least one rank during this iteration".
+            for (slot, &bits) in spec.global_window_increments_buf.iter().enumerate() {
+                if bits & 1 != 0 {
+                    fcf.pools[successor].metadata[slot].active_window |= 1u32;
+                }
+            }
+
+            // Clear the window buffers for the next stage's accumulation.
+            spec.metadata_sync_window_buf.fill(0);
+            spec.global_window_increments_buf.fill(0);
         }
 
         // Collect per-worker statistics snapshots after this stage's solves.
@@ -1225,6 +1302,13 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         }
 
         stage_stats.push((successor, stage_entries));
+    }
+
+    // Clear per-worker window contribution buffers after all stages are done.
+    // These accumulate across stages per iteration; they were consumed by the
+    // per-stage allreduce(BitwiseOr) above and must be zeroed for next iteration.
+    for ws in workspaces.iter_mut() {
+        ws.backward_accum.metadata_sync_window_contribution.fill(0);
     }
 
     // Emit one WorkerTiming { phase: Backward } event per worker, carrying the
@@ -1912,6 +1996,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2017,6 +2103,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2122,6 +2210,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2223,6 +2313,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2324,6 +2416,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2423,6 +2517,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2566,6 +2662,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2596,6 +2694,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_gradient_sign_physically_correct() {
         // Regression test for the Benders cut sign bug.
         //
@@ -2687,6 +2786,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2720,6 +2821,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_is_tight_at_trial_point() {
         // Regression test: a Benders cut must be tight (exact) at the trial
         // point x̂ where it was generated. That is:
@@ -2813,6 +2915,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -2926,6 +3030,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3049,6 +3155,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3167,6 +3275,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3278,6 +3388,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3397,6 +3509,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3554,6 +3668,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -3646,6 +3762,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4031,6 +4149,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4201,6 +4321,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4376,6 +4498,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4505,6 +4629,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4643,6 +4769,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
                 bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
@@ -4684,9 +4812,336 @@ mod tests {
             );
         }
 
+        // active_window bit 0 must be set for binding slots (Epic 06 T1).
+        // The BitwiseOr allreduce populates active_window |= 1 for any slot
+        // where at least one rank observed a binding event this iteration.
+        for slot in 3..6 {
+            assert_eq!(
+                fcf.pools[1].metadata[slot].active_window & 1,
+                1,
+                "slot {slot} active_window bit 0 should be set (cut was binding this iteration)"
+            );
+        }
+
+        // Non-binding slots (0..3 in pool[1]) should have active_window == 0.
+        for slot in 0..3 {
+            assert_eq!(
+                fcf.pools[1].metadata[slot].active_window, 0,
+                "slot {slot} active_window should be 0 (cut was not binding)"
+            );
+        }
+
         // Pool[2] (terminal successor) received no cuts and no binding
         // was checked against it — metadata should be at defaults.
         assert_eq!(fcf.pools[2].populated_count, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 06 T1: active_window unit tests
+    // -----------------------------------------------------------------------
+
+    /// A freshly created `CutMetadata` must have `active_window == 0`.
+    ///
+    /// This checks that `CutPool::add_cut` (the production path) initialises
+    /// the bitmap field to zero, so bit 0 does not spuriously appear set before
+    /// any backward pass has run.
+    #[test]
+    fn active_window_initialised_to_zero() {
+        use crate::cut::CutPool;
+
+        let n_state = 1;
+        let capacity = 8;
+        let pool = CutPool::new(capacity, n_state, 3, 0);
+        // A new pool has no populated slots; verify the pre-allocated metadata
+        // rows all start with active_window == 0.
+        for m in &pool.metadata {
+            assert_eq!(
+                m.active_window, 0,
+                "newly allocated CutMetadata must have active_window == 0"
+            );
+        }
+
+        // add_cut also initialises active_window to 0.
+        let mut pool2 = CutPool::new(capacity, n_state, 3, 0);
+        pool2.add_cut(
+            /*iteration=*/ 1,
+            /*forward_pass_index=*/ 0,
+            /*intercept=*/ 0.5,
+            /*coefficients=*/ &[1.0_f64],
+        );
+        assert_eq!(
+            pool2.metadata[pool2.populated_count - 1].active_window,
+            0,
+            "add_cut must initialise active_window to 0"
+        );
+    }
+
+    /// After a full backward pass where cuts are non-binding, `active_window` stays 0.
+    /// After the end-of-iteration shift (`<<= 1`), bit 0 remains 0 (shift of 0 is 0).
+    #[test]
+    fn active_window_shift_clears_bit_zero() {
+        // Bit 0 set → after shift, bit 0 is 0 and bit 1 is 1.
+        let mut window: u32 = 1; // bit 0 set
+        window <<= 1;
+        assert_eq!(window & 1, 0, "shift must clear bit 0");
+        assert_eq!(window & 2, 2, "shift must move bit 0 to bit 1");
+
+        // After 32 shifts, a u32 with bit 0 set overflows to 0 (shift by width).
+        let mut w: u32 = 0xFFFF_FFFF;
+        for _ in 0..32 {
+            w <<= 1;
+        }
+        assert_eq!(w, 0, "32 left-shifts of u32 must overflow to 0");
+
+        // All-zeros stays zero.
+        let mut w2: u32 = 0;
+        w2 <<= 1;
+        assert_eq!(w2, 0, "shift of 0 must remain 0");
+    }
+
+    /// The `allreduce(BitwiseOr)` via `LocalBackend` must propagate bit 0 from
+    /// a worker's `metadata_sync_window_contribution` into `active_window` for
+    /// binding slots, and leave non-binding slots at 0.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn active_window_or_reduction_round_trip_local() {
+        use cobre_comm::LocalBackend;
+
+        // 3-stage system; 1 opening; 3 trial points.
+        // The backward loop visits t=1 (cuts into pool[1]) then t=0 (cuts into
+        // pool[0], binding checked against pool[1]). Mock solver returns positive
+        // duals → cuts in pool[1] appear binding at t=0. active_window bit 0
+        // must be set after the OR reduction.
+        let n_stages = 3_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        // Solver returns positive duals → cuts appear binding.
+        let solution = solution_1_0(100.0, -5.0);
+        let local_count = exchange.local_count();
+        let solver = MockSolver::always_ok_with_binding_cuts(solution);
+        let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let mut basis_store = empty_basis_store(local_count, n_stages);
+        // max_cuts_per_rank must match exchange.local_count(), not forward_passes,
+        // because the exchange has 3 trial points but forward_passes=1.
+        let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &mut basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &templates,
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 1,
+                local_work: local_count,
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
+            },
+            &comm,
+        )
+        .unwrap();
+
+        // The cuts in pool[1] were generated at t=1, then evaluated as binding
+        // at t=0. Bit 0 of active_window must be set for every ACTIVE slot.
+        // This exercises the full OR reduction path: worker contribution →
+        // spec.metadata_sync_window_buf → allreduce(BitwiseOr) → active_window.
+        //
+        // Slot 0 is the warm-start sentinel (never populated); active cuts land
+        // at slots 1..4 (slot = 0 + iter*forward_passes + fpi = 1 + fpi).
+        let active_slots: Vec<usize> = fcf.pools[1]
+            .active_cuts()
+            .map(|(slot, _, _)| slot)
+            .collect();
+        assert!(
+            !active_slots.is_empty(),
+            "pool[1] must have at least one active cut"
+        );
+        for slot in active_slots {
+            let window = fcf.pools[1].metadata[slot].active_window;
+            assert_eq!(
+                window & 1,
+                1,
+                "slot {slot} active_window bit 0 must be set after a binding backward pass \
+                 (got {window:#010x})"
+            );
+        }
+    }
+
+    /// After `run_backward_pass` returns, all per-worker
+    /// `metadata_sync_window_contribution` buffers must be cleared to 0.
+    /// This guarantees the next iteration starts with a clean accumulator.
+    #[test]
+    fn active_window_cleared_at_iteration_start() {
+        use cobre_comm::LocalBackend;
+
+        // 3-stage system so the backward loop processes multiple stages and
+        // the window contribution buffers actually get populated.
+        let n_stages = 3_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let solution = solution_1_0(100.0, -5.0);
+        let local_count = exchange.local_count();
+        let solver = MockSolver::always_ok_with_binding_cuts(solution);
+        let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let mut basis_store = empty_basis_store(local_count, n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
+
+        let _ = run_backward_pass(
+            &mut workspaces,
+            &mut basis_store,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &templates,
+            &mut fcf,
+            &mut empty_cut_batches(templates.len()),
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &mut BackwardPassSpec {
+                records: &[],
+                iteration: 1,
+                local_work: local_count,
+                fwd_offset: 0,
+                risk_measures: &risk_measures,
+                exchange: &mut exchange,
+                cut_activity_tolerance: 0.0,
+                cut_sync_bufs: &mut csb,
+                probabilities_buf: &mut Vec::new(),
+                successor_active_slots_buf: &mut Vec::new(),
+                visited_archive: None,
+                metadata_sync_buf: &mut Vec::new(),
+                global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
+                real_states_buf: &mut Vec::new(),
+                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
+                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
+                bwd_stats_displs: &[0],
+                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
+                event_sender: None,
+            },
+            &comm,
+        )
+        .unwrap();
+
+        // After run_backward_pass returns, all per-worker window contribution
+        // buffers must be zeroed. This ensures the next iteration begins clean.
+        for ws in &workspaces {
+            for &v in &ws.backward_accum.metadata_sync_window_contribution {
+                assert_eq!(
+                    v, 0,
+                    "metadata_sync_window_contribution must be cleared after backward pass"
+                );
+            }
+        }
     }
 
     /// Build N identical `SolverWorkspace<MockSolver>` instances and run a
@@ -4829,6 +5284,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
                 bwd_stats_send_buf: &mut vec![
@@ -5208,6 +5665,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
                 bwd_stats_send_buf: &mut vec![0.0; send_sz],
@@ -5443,6 +5902,8 @@ mod tests {
                 visited_archive: None,
                 metadata_sync_buf: &mut Vec::new(),
                 global_increments_buf: &mut Vec::new(),
+                metadata_sync_window_buf: &mut Vec::new(),
+                global_window_increments_buf: &mut Vec::new(),
                 real_states_buf: &mut Vec::new(),
                 stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
                 bwd_stats_send_buf: &mut vec![0.0; send_sz],
@@ -5572,6 +6033,8 @@ mod tests {
         let mut csb = CutSyncBuffers::new(1, 64, 1);
         let mut metadata_sync_buf = Vec::new();
         let mut global_increments_buf = Vec::new();
+        let mut metadata_sync_window_buf = Vec::new();
+        let mut global_window_increments_buf = Vec::new();
         let mut real_states_buf = Vec::new();
         let bwd_stride = WORKER_STATS_ENTRY_STRIDE;
         let spec = BackwardPassSpec {
@@ -5588,6 +6051,8 @@ mod tests {
             visited_archive: None,
             metadata_sync_buf: &mut metadata_sync_buf,
             global_increments_buf: &mut global_increments_buf,
+            metadata_sync_window_buf: &mut metadata_sync_window_buf,
+            global_window_increments_buf: &mut global_window_increments_buf,
             real_states_buf: &mut real_states_buf,
             stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(1, n_openings),
             bwd_stats_send_buf: &mut vec![0.0; n_openings * bwd_stride],

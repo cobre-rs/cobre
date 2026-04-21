@@ -36,6 +36,21 @@ pub enum ReduceOp {
     /// Reserved for future use, for example maximum per-rank solve time for
     /// load balance diagnostics.
     Max,
+
+    /// Element-wise bitwise OR.
+    ///
+    /// Used for bitmap reductions where any rank observing a condition should
+    /// set the corresponding bit in the global result. Semantically equivalent
+    /// to `MPI_BOR`. OR is commutative and associative, so the result is
+    /// deterministic under any rank count and message-ordering.
+    ///
+    /// In the MPI backend this is implemented via `allgatherv` followed by a
+    /// local fold, because ferrompi v0.3 does not yet expose `MPI_BOR`.
+    /// In the local backend (single rank) the identity copy is correct.
+    ///
+    /// Used in Epic 06 for the per-cut `active_window` sliding-window bitmap
+    /// reduction across ranks.
+    BitwiseOr,
 }
 
 /// Errors that can occur during collective communication or shared memory operations.
@@ -176,6 +191,7 @@ mod tests {
         assert_eq!(format!("{:?}", ReduceOp::Sum), "Sum");
         assert_eq!(format!("{:?}", ReduceOp::Min), "Min");
         assert_eq!(format!("{:?}", ReduceOp::Max), "Max");
+        assert_eq!(format!("{:?}", ReduceOp::BitwiseOr), "BitwiseOr");
     }
 
     #[test]
@@ -188,6 +204,8 @@ mod tests {
         assert_ne!(ReduceOp::Sum, ReduceOp::Min);
         assert_ne!(ReduceOp::Min, ReduceOp::Max);
         assert_ne!(ReduceOp::Sum, ReduceOp::Max);
+        assert_ne!(ReduceOp::Sum, ReduceOp::BitwiseOr);
+        assert_ne!(ReduceOp::BitwiseOr, ReduceOp::Max);
     }
 
     #[test]

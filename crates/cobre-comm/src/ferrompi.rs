@@ -424,12 +424,18 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> crate::Co
 
 /// Map a `cobre_comm::ReduceOp` to the corresponding `ferrompi::ReduceOp`.
 ///
-/// The mapping is one-to-one for the three variants that Cobre currently uses.
+/// `BitwiseOr` is handled in `allreduce` before this function is called and
+/// never reaches the match arm below; the arm is present only to satisfy the
+/// exhaustive-match requirement.
+///
 /// `ferrompi::ReduceOp::Prod` is not exposed in the Cobre trait.
 #[cfg(feature = "mpi")]
 fn map_reduce_op(op: crate::ReduceOp) -> ferrompi::ReduceOp {
     match op {
-        crate::ReduceOp::Sum => ferrompi::ReduceOp::Sum,
+        // BitwiseOr is intercepted before reaching this function (allgatherv
+        // fallback path). This arm is unreachable in correct usage but required
+        // by Rust's exhaustive match; mapped to Sum as a safe placeholder.
+        crate::ReduceOp::Sum | crate::ReduceOp::BitwiseOr => ferrompi::ReduceOp::Sum,
         crate::ReduceOp::Min => ferrompi::ReduceOp::Min,
         crate::ReduceOp::Max => ferrompi::ReduceOp::Max,
     }
@@ -456,6 +462,74 @@ fn to_i32_vec(values: &[usize], operation: &'static str) -> Result<Vec<i32>, cra
             })
         })
         .collect()
+}
+
+/// Bitwise-OR allreduce via allgatherv + local fold.
+///
+/// ferrompi v0.3 does not expose `MPI_BOR`. This helper gathers all rank
+/// contributions and folds them element-wise using byte-level OR, which is
+/// correct because bitwise OR on integers is equivalent to byte-wise OR.
+///
+/// The allocation inside this function is a temporary gather buffer of
+/// `send.len() * size` elements. It is called only for the small `u32`
+/// `active_window` buffers (`pool_size` entries) on the backward-pass MPI sync
+/// path; the overhead is acceptable until ferrompi gains a native `Bor` op.
+#[cfg(feature = "mpi")]
+impl FerrompiBackend {
+    fn allreduce_bor<T: crate::CommData>(
+        &self,
+        send: &[T],
+        recv: &mut [T],
+    ) -> Result<(), crate::CommError> {
+        let n = send.len();
+        let size = self.size;
+
+        // Gather all ranks' send buffers into a flat Vec<T> of length n * size.
+        let counts: Vec<usize> = vec![n; size];
+        let displs: Vec<usize> = (0..size).map(|r| r * n).collect();
+        let mut gathered: Vec<T> = vec![T::default(); n * size];
+        let i32_counts = to_i32_vec(&counts, "allreduce[BitwiseOr]")?;
+        let i32_displs = to_i32_vec(&displs, "allreduce[BitwiseOr]")?;
+        self.world
+            .allgatherv(send, &mut gathered, &i32_counts, &i32_displs)
+            .map_err(|e| map_ferrompi_error(&e, "allreduce[BitwiseOr]"))?;
+
+        // Fold all rank contributions element-wise via byte-level OR.
+        //
+        // SAFETY: T: Copy guarantees stable layout. `size_of::<T>()` bytes are
+        // read from each element; bitwise OR on those bytes produces the same
+        // result as OR on the integer value because OR has no carry propagation.
+        // Initialise recv from the local send (first rank slice = displs[0..n]).
+        recv.copy_from_slice(send);
+        // OR in the contribution from each other rank.
+        for r in 0..size {
+            if r == self.rank {
+                continue; // already included via copy_from_slice above
+            }
+            let rank_slice = &gathered[r * n..(r + 1) * n];
+            // SAFETY: `recv` contains `n` valid T values.
+            // `rank_slice` contains `n` valid T values gathered from rank `r`.
+            // We reinterpret both as byte slices and OR element-wise; the result
+            // is valid for any integer T because OR on bytes is equivalent to OR
+            // on the integer representation for all two's-complement integers.
+            let recv_bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    recv.as_mut_ptr().cast::<u8>(),
+                    std::mem::size_of_val(recv),
+                )
+            };
+            let src_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    rank_slice.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(rank_slice),
+                )
+            };
+            for (rb, sb) in recv_bytes.iter_mut().zip(src_bytes) {
+                *rb |= sb;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "mpi")]
@@ -530,6 +604,20 @@ impl crate::Communicator for FerrompiBackend {
                 actual: 0,
             });
         }
+
+        // BitwiseOr is not natively supported by ferrompi v0.3. Implement via
+        // allgatherv (gather all contributions) + local byte-level OR fold.
+        //
+        // Correctness: OR on an integer value is equivalent to OR on its raw
+        // bytes, because each byte of the OR result depends only on the
+        // corresponding bytes of the inputs. T: Copy guarantees stable layout.
+        //
+        // This branch is only taken for the small u32 active_window buffers
+        // (pool_size elements); bandwidth overhead is pool_size * size * 4B.
+        if op == crate::ReduceOp::BitwiseOr {
+            return self.allreduce_bor(send, recv);
+        }
+
         let mpi_op = map_reduce_op(op);
         self.world
             .allreduce(send, recv, mpi_op)
@@ -656,6 +744,13 @@ mod tests {
             assert!(matches!(
                 map_reduce_op(ReduceOp::Max),
                 ferrompi::ReduceOp::Max
+            ));
+            // BitwiseOr is intercepted before map_reduce_op; the arm maps to
+            // Sum as a compile-time placeholder — this just confirms the match
+            // is exhaustive and the arm does not panic.
+            assert!(matches!(
+                map_reduce_op(ReduceOp::BitwiseOr),
+                ferrompi::ReduceOp::Sum
             ));
         }
 

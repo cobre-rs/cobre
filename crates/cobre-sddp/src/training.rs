@@ -826,7 +826,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         let backward_result = match run_backward_pass(
             &mut fwd_pool.workspaces,
-            &basis_store,
+            &mut basis_store,
             stage_ctx,
             &baked_templates,
             fcf,

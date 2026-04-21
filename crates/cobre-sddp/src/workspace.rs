@@ -335,16 +335,6 @@ pub(crate) struct BackwardAccumulators {
     /// contributions across all workers to produce the per-stage
     /// `Vec<SolverStatsDelta>` stored in `BackwardResult::stage_stats`.
     pub(crate) per_opening_stats: Vec<crate::solver_stats::SolverStatsDelta>,
-    /// Captured ω=0 basis produced by this worker during the current stage.
-    ///
-    /// Populated only when the worker claimed the canonical trial point
-    /// (`(my_rank == 0) && (m == 0) && (omega == 0)`).  `None` on every
-    /// other worker and every non-canonical stage.  After the parallel
-    /// region closes, `process_stage_backward` scans every workspace's
-    /// `backward_accum.captured_basis` and moves the lone `Some(_)` into
-    /// the backward-pass basis cache.  Mirrors the
-    /// `slot_increments` → `metadata_sync_contribution` merge pattern.
-    pub(crate) captured_basis: Option<CapturedBasis>,
 }
 
 impl BackwardAccumulators {
@@ -367,7 +357,6 @@ impl BackwardAccumulators {
             agg_coefficients: vec![0.0_f64; n_state],
             metadata_sync_contribution: vec![0u64; initial_pool_capacity],
             per_opening_stats: Vec::new(),
-            captured_basis: None,
         }
     }
 }

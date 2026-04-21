@@ -810,7 +810,7 @@ struct StageKey<'a> {
 /// is a no-op (e.g. test mocks).  For real solvers this is a no-op since they
 /// write the correct length.
 #[allow(clippy::cast_possible_truncation)]
-fn write_capture_metadata(
+pub(crate) fn write_capture_metadata(
     captured: &mut CapturedBasis,
     pool: &CutPool,
     base_row_count: usize,

@@ -87,12 +87,13 @@ use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
 use cobre_core::{
-    TrainingEvent, WorkerTimingPhase, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL,
+    TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WorkerTimingPhase,
 };
 use cobre_solver::{RowBatch, SolverInterface, SolverStatistics, StageTemplate};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction, SddpError, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     cut_sync::CutSyncBuffers,
@@ -100,12 +101,11 @@ use crate::{
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
     solver_stats::{
-        pack_worker_opening_stats, unpack_worker_opening_stats, BasisSource, SolverStatsDelta,
-        StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        BasisSource, SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        pack_worker_opening_stats, unpack_worker_opening_stats,
     },
     state_exchange::ExchangeBuffers,
-    workspace::{BackwardBasisStore, BasisStore, CapturedBasis, SolverWorkspace},
-    FutureCostFunction, SddpError, TrajectoryRecord,
+    workspace::{BasisStore, CapturedBasis, SolverWorkspace},
 };
 
 /// Per-`(rank, worker_id, opening)` solver delta collected during a single
@@ -348,15 +348,6 @@ pub struct BackwardPassSpec<'a> {
     /// (receiver dropped) are silently ignored, matching the existing `emit`
     /// helper semantics.
     pub event_sender: Option<&'a Sender<TrainingEvent>>,
-
-    /// Backward-pass ω=0 basis cache, mutably borrowed for the whole iteration.
-    ///
-    /// `run_backward_pass` reads the read buffer per stage via
-    /// `BackwardBasisStore::read_buf()` to build `SuccessorSpec.backward_store`
-    /// for ω=0 warm-starts, and writes the per-worker capture into the write
-    /// buffer after the parallel region via `write_slot_mut`.  `training.rs`
-    /// broadcasts and swaps the buffers at end-of-iteration.
-    pub backward_basis_store: &'a mut BackwardBasisStore,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -388,10 +379,10 @@ struct SuccessorSpec<'a> {
     successor_active_slots: &'a [usize],
     /// Basis store for warm-starting each worker's first opening solve.
     basis_store: &'a BasisStore,
-    /// Read slice of the backward basis store for ω=0 warm-start lookup.
+    /// Read slice of the backward-pass basis cache for ω=0 warm-start lookup.
     ///
-    /// Points to `BackwardBasisStore::read_buf()` — the bases captured during
-    /// the previous iteration's rank-0 m=0 backward solve.
+    /// Contains the bases captured during the previous iteration's rank-0 m=0
+    /// backward solve.
     backward_store: &'a [Option<CapturedBasis>],
     /// Minimum dual multiplier for a cut to count as binding.
     cut_activity_tolerance: f64,
@@ -508,12 +499,12 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     }
 }
 
-/// Capture the post-solve basis into a backward-basis store slot.
+/// Capture the post-solve basis into the backward-pass basis cache.
 ///
 /// Called at most once per (iteration, stage) — only when
 /// `omega == 0 && succ.my_rank == 0 && m == 0`.  Mirrors the forward-pass
 /// capture in `write_capture_metadata` (forward.rs) but targets the
-/// [`BackwardBasisStore`] write buffer rather than the [`BasisStore`].
+/// backward-pass basis cache rather than the [`BasisStore`].
 ///
 /// # Allocation discipline
 ///
@@ -656,8 +647,8 @@ fn resolve_backward_basis<'a>(
 /// accumulator field).  The caller sets this to `succ.my_rank == 0 && m == 0`
 /// so that exactly one worker across the whole parallel region captures the
 /// canonical basis.  After the parallel region, `process_stage_backward` scans
-/// all workspaces and moves the lone `Some(_)` into
-/// `BackwardBasisStore::write_slot_mut(s)`.
+/// all workspaces and moves the lone `Some(_)` into the backward-pass basis
+/// cache.
 ///
 /// The borrow pattern is sound because `ws.backward_accum.captured_basis` is a
 /// disjoint field from `ws.solver`, so Rust's disjoint-field borrow rule allows
@@ -917,7 +908,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
 /// counter (on `my_rank == 0`) writes the ω=0 basis into its
 /// `ws.backward_accum.captured_basis` field.  After this function returns,
 /// the caller (`run_backward_pass`) scans all workspaces and drains the lone
-/// `Some(_)` into `BackwardBasisStore::write_slot_mut(s)`.  This mirrors the
+/// `Some(_)` into the backward-pass basis cache.  This mirrors the
 /// `slot_increments` → `metadata_sync_contribution` merge pattern and
 /// eliminates the previous sequential m=0 pre-step entirely.
 #[allow(clippy::too_many_arguments)]
@@ -936,7 +927,7 @@ fn process_stage_backward<S: SolverInterface + Send>(
     // All trial points run in the parallel work-stealing region from m=0
     // onward.  The worker that draws m=0 (on rank 0) sets `capture_enabled`
     // and writes the ω=0 basis into its `backward_accum.captured_basis` field.
-    // The caller merges it into the BackwardBasisStore after this call returns.
+    // The caller merges it into the backward-pass basis cache after this call returns.
     let next_trial = AtomicUsize::new(0);
 
     workspaces
@@ -1128,10 +1119,6 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     let mut worker_deltas: Vec<SolverStatsDelta> = Vec::with_capacity(workspaces.len());
     let mut worker_totals: Vec<f64> = Vec::with_capacity(workspaces.len());
 
-    // The backward basis store is supplied by the caller via `spec.backward_basis_store`.
-    // Its read buffer (from the previous iteration's swap) feeds `SuccessorSpec.backward_store`
-    // for ω=0 warm-starts; its write buffer receives rank-0 m=0 captures this iteration.
-
     // Reset per-worker timing buffers to zero at the iteration boundary so that
     // the accumulation across stages starts clean. Slots are zeroed individually;
     // the whole [f64; 16] is stack-resident Copy, so fill(0.0) is a write of 128 bytes.
@@ -1201,11 +1188,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
 
         let local_work = spec.local_work;
 
-        // Build succ_spec from spec's read buffer (previous iteration's captures
-        // for ω=0 warm-starts).  The write buffer is accessed separately after
-        // process_stage_backward returns, so no split accessor is needed.
-        let bwd_read_slice = spec.backward_basis_store.read_buf();
-
+        // TODO: T2 replaces this with disjoint `BasisStoreSliceMut` threading.
         let succ_spec = SuccessorSpec {
             t,
             successor,
@@ -1217,7 +1200,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             baked_template: baked_tmpl,
             successor_active_slots: spec.successor_active_slots_buf,
             basis_store,
-            backward_store: bwd_read_slice,
+            // TODO: T2 replaces this with disjoint `BasisStoreSliceMut` threading.
+            backward_store: &[],
             cut_activity_tolerance: spec.cut_activity_tolerance,
             successor_populated_count: fcf.pools[successor].populated_count,
             successor_pool: &fcf.pools[successor],
@@ -1231,30 +1215,8 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_possible_truncation)]
         let parallel_wall_ms = process_start.elapsed().as_millis() as u64;
 
-        // Per-worker capture merge (option b from ticket-006 Requirement 8).
-        //
-        // Exactly one workspace holds Some(_) when my_rank == 0 (the worker
-        // that drew m=0 from the atomic counter); all workspaces hold None on
-        // non-root ranks.  The &mut borrow of spec.backward_basis_store reopens
-        // here because process_stage_backward holds only &BackwardPassSpec (not
-        // &mut), so there is no live conflicting borrow at this point.
-        if my_rank == 0 {
-            let write_slot = spec.backward_basis_store.write_slot_mut(successor);
-            for ws in workspaces.iter_mut() {
-                if let Some(captured) = ws.backward_accum.captured_basis.take() {
-                    *write_slot = Some(captured);
-                    break;
-                }
-            }
-            debug_assert!(
-                workspaces
-                    .iter()
-                    .filter(|ws| ws.backward_accum.captured_basis.is_some())
-                    .count()
-                    == 0,
-                "exactly one workspace must hold the canonical capture; extra Some(_) survives merge"
-            );
-        }
+        // TODO: T2 writes per-worker into `BasisStore[m, t]` in
+        // `process_trial_point_backward` itself; no merge needed.
 
         staged_cuts_buf.clear();
         for worker_result in worker_staged {
@@ -1536,14 +1498,14 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{run_backward_pass, BackwardPassSpec, BackwardResult};
+    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
     use crate::{
+        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
+        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
         solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE},
-        workspace::{BackwardAccumulators, BackwardBasisStore, BasisStore, SolverWorkspace},
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
+        workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -1860,6 +1822,7 @@ mod tests {
         use chrono::NaiveDate;
         use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
         use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
             scenario::{
                 CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
                 InflowModel,
@@ -1868,10 +1831,9 @@ mod tests {
                 Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
                 StageStateConfig,
             },
-            Bus, DeficitSegment, EntityId, SystemBuilder,
         };
         use cobre_stochastic::context::{
-            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
         };
         use std::collections::BTreeMap;
 
@@ -2178,7 +2140,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(1),
                 event_sender: None,
             },
             &comm,
@@ -2284,7 +2245,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -2390,7 +2350,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -2492,7 +2451,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(5),
                 event_sender: None,
             },
             &comm,
@@ -2594,7 +2552,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -2694,7 +2651,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -2838,7 +2794,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -2960,7 +2915,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3087,7 +3041,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3201,7 +3154,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(3),
                 event_sender: None,
             },
             &comm,
@@ -3325,7 +3277,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3443,7 +3394,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3555,7 +3505,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3674,7 +3623,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -3832,7 +3780,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(3),
                 event_sender: None,
             },
             &comm,
@@ -3925,7 +3872,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(3),
                 event_sender: None,
             },
             &comm,
@@ -3998,7 +3944,7 @@ mod tests {
         };
         use cobre_core::{Bus, DeficitSegment, EntityId, SystemBuilder};
         use cobre_stochastic::context::{
-            build_stochastic_context, ClassSchemes, OpeningTreeInputs,
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
         };
 
         let bus0 = Bus {
@@ -4311,7 +4257,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -4482,7 +4427,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -4658,7 +4602,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -4788,7 +4731,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(4),
                 event_sender: None,
             },
             &comm,
@@ -4927,7 +4869,6 @@ mod tests {
                 bwd_stats_counts: &[8 * 32 * 16],
                 bwd_stats_displs: &[0],
                 bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                backward_basis_store: &mut BackwardBasisStore::new(3),
                 event_sender: None,
             },
             &comm,
@@ -5123,7 +5064,6 @@ mod tests {
                     SolverStatsDelta::default();
                     n_workers * n_openings
                 ],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &comm,
@@ -5498,7 +5438,6 @@ mod tests {
                     SolverStatsDelta::default();
                     n_workers * n_openings
                 ],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &StubComm,
@@ -5734,7 +5673,6 @@ mod tests {
                     SolverStatsDelta::default();
                     n_ranks * n_workers * n_openings
                 ],
-                backward_basis_store: &mut BackwardBasisStore::new(2),
                 event_sender: None,
             },
             &DualRankStubComm,
@@ -5769,10 +5707,8 @@ mod tests {
     /// directly for stage 1 (successor=1) in a 2-stage, 1-hydro, 1-opening
     /// study.
     ///
-    /// Returns `(workspaces, ctx, training_ctx, spec, succ_spec, exchange)`.
-    /// The exchange is pre-populated with `x_hat = [5.0]` for scenario 0 on
-    /// rank 0.  The `BackwardBasisStore` allocated inside is returned so the
-    /// caller can inspect write slots.
+    /// Returns `(workspaces, ctx, basis_store)`.
+    /// The workspaces are pre-configured for the given `my_rank`.
     ///
     /// Callers must:
     /// 1. Call `super::load_backward_lp(&mut ws, &succ)` before the test.
@@ -5784,11 +5720,8 @@ mod tests {
     ) -> (
         Vec<SolverWorkspace<MockSolver>>,
         crate::context::StageContext<'static>,
-        crate::workspace::BackwardBasisStore,
         crate::workspace::BasisStore,
     ) {
-        use crate::workspace::BackwardBasisStore;
-
         let n_state = 1_usize;
         let solver = MockSolver::always_ok(solution_1_0(100.0, -5.0));
         let mut workspaces = single_workspace(solver, n_state);
@@ -5809,7 +5742,6 @@ mod tests {
 
         // Empty forward BasisStore (no warm-start for this test).
         let basis_store = empty_basis_store(1, 2);
-        let backward_store = BackwardBasisStore::new(2);
 
         let ctx = crate::context::StageContext {
             templates: Box::leak(Box::new(vec![
@@ -5831,7 +5763,7 @@ mod tests {
             downstream_par_order: 0,
         };
 
-        (workspaces, ctx, backward_store, basis_store)
+        (workspaces, ctx, basis_store)
     }
 
     /// Invoke `process_trial_point_backward` for stage 0 → successor 1 with a
@@ -5850,8 +5782,7 @@ mod tests {
         let stochastic = make_stochastic_context(n_stages, n_openings);
         let indexer = StageIndexer::new(1, 0);
 
-        let (mut workspaces, ctx, _backward_store_owned, basis_store) =
-            make_capture_test_fixture(my_rank);
+        let (mut workspaces, ctx, basis_store) = make_capture_test_fixture(my_rank);
 
         let mut exchange = exchange_with_states(1, vec![vec![5.0]]);
 
@@ -5909,13 +5840,11 @@ mod tests {
             bwd_stats_counts: &[n_openings * bwd_stride],
             bwd_stats_displs: &[0],
             bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); n_openings],
-            backward_basis_store: &mut BackwardBasisStore::new(2),
             event_sender: None,
         };
 
         // Use a 0-cut pool for the successor stage.
         let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0u32; n_stages]);
-        let succ_backward_store = BackwardBasisStore::new(n_stages);
         let empty_cut_batch = RowBatch {
             num_rows: 0,
             row_starts: Vec::new(),
@@ -5936,7 +5865,8 @@ mod tests {
             baked_template: &baked_template,
             successor_active_slots: &successor_active_slots,
             basis_store: &basis_store,
-            backward_store: succ_backward_store.read_buf(),
+            // TODO: T2 replaces this with disjoint `BasisStoreSliceMut` threading.
+            backward_store: &[],
             cut_activity_tolerance: 0.0,
             successor_populated_count: fcf.pools[1].populated_count,
             successor_pool: &fcf.pools[1],
@@ -6015,7 +5945,7 @@ mod tests {
     /// `ws.solver.warm_start_calls`.
     #[allow(clippy::too_many_lines)]
     fn run_one_trial_point_with_stores(
-        backward_store: &crate::workspace::BackwardBasisStore,
+        backward_store: &[Option<crate::workspace::CapturedBasis>],
         basis_store: &crate::workspace::BasisStore,
     ) -> Result<Vec<SolverWorkspace<MockSolver>>, crate::SddpError> {
         use crate::context::StageContext;
@@ -6117,7 +6047,6 @@ mod tests {
             bwd_stats_counts: &[n_openings * bwd_stride],
             bwd_stats_displs: &[0],
             bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); n_openings],
-            backward_basis_store: &mut BackwardBasisStore::new(2),
             event_sender: None,
         };
 
@@ -6142,7 +6071,7 @@ mod tests {
             baked_template: &baked_template,
             successor_active_slots: &successor_active_slots,
             basis_store,
-            backward_store: backward_store.read_buf(),
+            backward_store,
             cut_activity_tolerance: 0.0,
             successor_populated_count: fcf.pools[1].populated_count,
             successor_pool: &fcf.pools[1],
@@ -6161,82 +6090,6 @@ mod tests {
 
         super::process_trial_point_backward(ws, &ctx, &training_ctx, &spec, &succ_spec, 0, false)?;
         Ok(workspaces)
-    }
-
-    #[test]
-    fn read_site_prefers_backward_store_over_basis_store() {
-        // Given: backward_store has a CapturedBasis in its write slot for stage 1;
-        //        basis_store is empty (no forward warm-start available).
-        // After swap_buffers, backward_store.get(1) returns Some(&B_back).
-        // When: process_trial_point_backward runs (omega=0 path).
-        // Then: the solver is warm-started (warm_start_calls == 1), confirming
-        //       that the backward cache — not the empty forward store — was used.
-        //       The per-opening basis_source must record BasisSource::Backward.
-        use crate::solver_stats::BasisSource;
-        use crate::workspace::{BackwardBasisStore, BasisStore, CapturedBasis};
-
-        let mut backward_store = BackwardBasisStore::new(2);
-        // Write a valid CapturedBasis into the write slot for successor=1.
-        // Template has num_cols=3, num_rows=1; base_row_count=1, no cuts.
-        let b_back = CapturedBasis::new(3, 1, 1, 0, 0);
-        *backward_store.write_slot_mut(1) = Some(b_back);
-        backward_store.swap_buffers();
-        // After swap: read_buf[1] is Some (B_back), write_buf[1] is None.
-
-        let basis_store = BasisStore::new(1, 2); // entirely empty
-
-        let workspaces = run_one_trial_point_with_stores(&backward_store, &basis_store)
-            .expect("run must succeed when backward store is populated");
-
-        assert_eq!(
-            workspaces[0].solver.warm_start_calls, 1,
-            "backward cache must produce a warm-start when backward_store.get(s) is Some"
-        );
-        assert_eq!(
-            workspaces[0].backward_accum.per_opening_stats[0].basis_source,
-            BasisSource::Backward,
-            "per-opening basis_source must be Backward when backward cache fires"
-        );
-    }
-
-    #[test]
-    fn read_site_falls_back_to_basis_store_when_backward_empty() {
-        // Given: backward_store is entirely empty (all slots None after new);
-        //        basis_store has a CapturedBasis at scenario=0 stage=1 (B_fwd).
-        // After swap_buffers (or without it since the read_buf starts empty too),
-        // backward_store.get(1) returns None → or_else fires → basis_store is used.
-        // When: process_trial_point_backward runs (omega=0 path).
-        // Then: the solver is warm-started (warm_start_calls == 1), confirming
-        //       the fallback to the forward BasisStore was exercised.
-        //       The per-opening basis_source must record BasisSource::Forward.
-        use crate::solver_stats::BasisSource;
-        use crate::workspace::{BackwardBasisStore, CapturedBasis};
-        use cobre_solver::Basis;
-
-        let backward_store = BackwardBasisStore::new(2); // all slots None
-
-        // Populate forward store at scenario=0, stage=1 with a valid CapturedBasis.
-        let b_fwd = CapturedBasis {
-            basis: Basis::new(3, 1),
-            base_row_count: 1,
-            cut_row_slots: Vec::new(),
-            state_at_capture: Vec::new(),
-        };
-        let mut basis_store = crate::workspace::BasisStore::new(1, 2);
-        *basis_store.get_mut(0, 1) = Some(b_fwd);
-
-        let workspaces = run_one_trial_point_with_stores(&backward_store, &basis_store)
-            .expect("run must succeed when basis_store has a valid basis");
-
-        assert_eq!(
-            workspaces[0].solver.warm_start_calls, 1,
-            "forward store fallback must produce a warm-start when backward_store.get(s) is None"
-        );
-        assert_eq!(
-            workspaces[0].backward_accum.per_opening_stats[0].basis_source,
-            BasisSource::Forward,
-            "per-opening basis_source must be Forward when backward cache misses but forward store fires"
-        );
     }
 
     #[test]

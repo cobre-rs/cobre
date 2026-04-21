@@ -224,7 +224,7 @@ fn export_stochastic_artifacts_py(
 /// Map a [`BasisSource`] discriminant to the `Option<i32>` parquet value.
 ///
 /// - `BasisSource::None_` → `None` (NULL in parquet; row is not a backward ω=0 row)
-/// - `BasisSource::Backward` → `Some(1)` (read from `BackwardBasisStore`)
+/// - `BasisSource::Backward` → `Some(1)` (read from the backward-pass basis cache)
 /// - `BasisSource::Forward` → `Some(2)` (read from `BasisStore` fallback)
 ///
 /// Note: this function is duplicated in `cobre-cli/src/commands/run.rs` to avoid a cross-crate

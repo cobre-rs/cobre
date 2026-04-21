@@ -25,7 +25,7 @@ pub enum BasisSource {
     /// No basis was offered (iteration 1, or both stores returned `None`).
     #[default]
     None_ = 0,
-    /// Basis read from `BackwardBasisStore` (the per-stage cache).
+    /// Basis read from the backward-pass basis cache (per-stage).
     Backward = 1,
     /// Basis read from `BasisStore` (the per-(scenario, stage) forward cache).
     Forward = 2,

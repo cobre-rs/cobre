@@ -161,13 +161,13 @@ fn d03_case_dir() -> std::path::PathBuf {
 ///
 /// 1. Check that `solver_stats_log` contains backward entries with
 ///    `opening == 0` for D03's single opening.
-/// 2. Confirm `BackwardBasisStore::read_buf()` returns `Some(...)` from
+/// 2. Confirm the stored backward basis returns `Some(...)` from
 ///    iteration 2 onward by adding a debug log or running under `RUST_LOG=debug`.
-/// 3. Verify that `ticket-003`'s read site in `process_trial_point_backward`
+/// 3. Verify that the read site in `process_trial_point_backward`
 ///    prefers `succ.backward_store[stage]` over `succ.basis_store.get(m, s)`
-///    when the backward store entry is `Some`.
-/// 4. Confirm that `broadcast_backward_store` fired after iteration 1 and
-///    `swap_buffers` was called before iteration 2's backward pass begins.
+///    when the stored backward basis entry is `Some`.
+/// 4. Confirm that the backward-pass basis cache was populated after iteration 1
+///    and the updated cache is visible before iteration 2's backward pass begins.
 #[test]
 fn test_backward_cache_reduces_pivots() {
     let case_dir = d03_case_dir();
@@ -261,9 +261,9 @@ fn test_backward_cache_reduces_pivots() {
          This indicates a catastrophic failure in the backward-basis cache \
          pipeline.\n\
          Triage: (1) confirm backward log entries have opening==0; \
-         (2) verify BackwardBasisStore::read_buf() is Some from iter 2; \
-         (3) check that ticket-003 read site correctly constructs stored_basis; \
-         (4) verify broadcast + swap fire at end of each iteration; \
+         (2) verify stored backward basis is Some from iter 2; \
+         (3) check that the backward-pass read site correctly constructs stored_basis; \
+         (4) verify the backward-pass basis cache is updated at end of each iteration; \
          (5) inspect basis_consistency_failures counter in solver_iterations.parquet."
     );
 }

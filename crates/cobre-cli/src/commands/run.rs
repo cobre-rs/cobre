@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
+    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
+    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
-    OpeningTreeInputs,
+    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
+    provenance::ComponentProvenance,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
-    BroadcastOpeningTree,
+    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
+    stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -1486,7 +1486,7 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
 /// Map a [`cobre_sddp::BasisSource`] discriminant to the `Option<i32>` parquet value.
 ///
 /// - `BasisSource::None_` → `None` (NULL in parquet; row is not a backward ω=0 row)
-/// - `BasisSource::Backward` → `Some(1)` (read from `BackwardBasisStore`)
+/// - `BasisSource::Backward` → `Some(1)` (read from the backward-pass basis cache)
 /// - `BasisSource::Forward` → `Some(2)` (read from `BasisStore` fallback)
 ///
 /// Note: this function is duplicated in `cobre-python/src/run.rs` to avoid a cross-crate

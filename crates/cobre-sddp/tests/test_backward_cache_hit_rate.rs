@@ -32,19 +32,19 @@
 //! 1. Check that `solver_stats_log` contains backward entries with `opening ==
 //!    0` for D01's single opening — if the filter returns zero rows the
 //!    cache-hit assertion will panic with a clear message.
-//! 2. Confirm `BackwardBasisStore::read_buf()` returns `Some(...)` from
+//! 2. Confirm the stored backward basis returns `Some(...)` from
 //!    iteration 2 onwards (add `RUST_LOG=debug` to training).
 //! 3. Verify that the backward read site in `process_trial_point_backward`
 //!    sets `delta.basis_source = BasisSource::Backward` when reading from the
-//!    backward store.
-//! 4. Confirm that `broadcast_backward_store` fired after iteration 1 and
-//!    `swap_buffers` was called before iteration 2's backward pass begins.
+//!    backward-pass basis cache.
+//! 4. Confirm that the backward-pass basis cache was populated after iteration 1
+//!    and the updated cache is visible before iteration 2's backward pass begins.
 //!
 //! If the cold-start assertion fires (`iter == 1` row has non-Forward source):
 //!
-//! 1. Verify that the backward store is empty before the first backward pass.
-//! 2. Check that `BackwardBasisStore::read_buf()` returns `None` when the
-//!    store is freshly initialised.
+//! 1. Verify that the backward-pass basis cache is empty before the first backward pass.
+//! 2. Check that the stored backward basis returns `None` when the
+//!    cache is freshly initialised.
 
 #![allow(
     clippy::unwrap_used,
@@ -63,8 +63,8 @@ use std::sync::mpsc;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    hydro_models::prepare_hydro_models, setup::prepare_stochastic, solver_stats::BasisSource,
-    StudySetup,
+    StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    solver_stats::BasisSource,
 };
 use cobre_solver::highs::HighsSolver;
 
@@ -291,9 +291,9 @@ fn test_backward_cache_hit_rate() {
          \n\
          Triage:\n\
            (1) Confirm backward log entries have opening == 0 for D01's single opening.\n\
-           (2) Verify BackwardBasisStore::read_buf() returns Some from iter 2 onwards.\n\
+           (2) Verify the stored backward basis returns Some from iter 2 onwards.\n\
            (3) Check that the backward read site sets delta.basis_source = Backward.\n\
-           (4) Verify broadcast_backward_store and swap_buffers fire at end of iter 1."
+           (4) Verify the backward-pass basis cache is updated at end of iter 1."
     );
 
     // ------------------------------------------------------------------

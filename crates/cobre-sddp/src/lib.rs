@@ -144,6 +144,5 @@ pub use training_output::build_training_output;
 pub use trajectory::TrajectoryRecord;
 pub use visited_states::VisitedStatesArchive;
 pub use workspace::{
-    BackwardBasisStore, BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace,
-    WorkspacePool, WorkspaceSizing,
+    BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace, WorkspacePool, WorkspaceSizing,
 };

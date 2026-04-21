@@ -57,7 +57,7 @@ use crate::{
     },
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
-    workspace::{BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
+    workspace::{BackwardBasisStore, BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
 };
 
 // ---------------------------------------------------------------------------
@@ -315,6 +315,101 @@ fn broadcast_basis_cache<C: Communicator>(
     Ok(cache)
 }
 
+/// Broadcast the backward-pass basis cache from rank 0 to all other ranks.
+///
+/// After each iteration's backward pass, rank 0 has captured up to one
+/// [`CapturedBasis`] per stage in its `write_buf`.  This function replicates
+/// that buffer to every non-root rank so that all ranks warm-start the *next*
+/// iteration's backward solve from identical bases.
+///
+/// ## Wire format
+///
+/// Uses the same four-broadcast layout as [`broadcast_basis_cache`]:
+///
+/// 1. `i32` length of the integer payload (1 element).
+/// 2. `i32` payload — one entry per stage: `0` for `None`, or the serialised
+///    integer fields from [`CapturedBasis::to_broadcast_payload`].
+/// 3. `i32` length of the `f64` payload (1 element).
+/// 4. `f64` payload — concatenated `state_at_capture` slices for `Some`
+///    entries.
+///
+/// ## Single-rank fast path
+///
+/// When `comm.size() == 1` the function returns `Ok(())` immediately;
+/// rank 0's write buffer already holds the correct data.
+///
+/// # Errors
+///
+/// Returns `Err(SddpError::Communication(_))` when any collective operation
+/// fails.
+// The usize→i32 casts are bounded by LP column/row counts (same rationale as
+// broadcast_basis_cache above); the i32→usize casts on the receive side are
+// lossless because the values were usize on the sending side.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+fn broadcast_backward_store<C: Communicator>(
+    store: &mut BackwardBasisStore,
+    comm: &C,
+) -> Result<(), SddpError> {
+    if comm.size() == 1 {
+        return Ok(());
+    }
+
+    let num_stages = store.num_stages();
+    let mut buf: Vec<i32> = Vec::new();
+    let mut f64_buf: Vec<f64> = Vec::new();
+    if comm.rank() == 0 {
+        for entry in store.write_buf() {
+            match entry {
+                None => buf.push(0_i32),
+                Some(captured) => captured.to_broadcast_payload(&mut buf, &mut f64_buf),
+            }
+        }
+    }
+
+    // Step 1: broadcast the i32 buffer length.
+    let mut len_buf = [buf.len() as i32];
+    comm.broadcast(&mut len_buf, 0).map_err(SddpError::from)?;
+    let total_len = len_buf[0] as usize;
+
+    // Step 2: broadcast the i32 payload.
+    buf.resize(total_len, 0_i32);
+    comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
+
+    // Step 3: broadcast the f64 buffer length.
+    let mut f64_len_buf = [f64_buf.len() as i32];
+    comm.broadcast(&mut f64_len_buf, 0)
+        .map_err(SddpError::from)?;
+    let f64_total_len = f64_len_buf[0] as usize;
+
+    // Step 4: broadcast the f64 payload.
+    f64_buf.resize(f64_total_len, 0.0_f64);
+    comm.broadcast(&mut f64_buf, 0).map_err(SddpError::from)?;
+
+    // Step 5: non-root ranks deserialise and replace their write buffer.
+    if comm.rank() != 0 {
+        let mut new_buf: Vec<Option<CapturedBasis>> = Vec::with_capacity(num_stages);
+        let mut pos = 0_usize;
+        let mut f64_pos = 0_usize;
+        for stage in 0..num_stages {
+            let captured = CapturedBasis::try_from_broadcast_payload(
+                stage,
+                &buf,
+                &mut pos,
+                &f64_buf,
+                &mut f64_pos,
+            )?;
+            new_buf.push(captured);
+        }
+        store.replace_write_buf(new_buf);
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // train
 // ---------------------------------------------------------------------------
@@ -476,6 +571,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // is allocated once and reused: the forward pass overwrites entries each
     // iteration, and the backward pass reads from them read-only.
     let mut basis_store = BasisStore::new(max_local_fwd, num_stages);
+
+    // Per-stage backward-pass basis cache. Rank 0 captures the m=0 trial-point
+    // basis at the end of each backward stage and broadcasts it to all ranks at
+    // the end of the iteration so every rank can warm-start the next iteration's
+    // backward pass from the same stored basis.
+    let mut backward_basis_store = BackwardBasisStore::new(num_stages);
 
     // Standalone patch buffer for the lower bound evaluation which uses the
     // single `solver` argument directly. The backward pass uses the workspace
@@ -821,6 +922,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             bwd_stats_counts: &bwd_stats_counts,
             bwd_stats_displs: &bwd_stats_displs,
             bwd_stats_unpack_buf: &mut bwd_stats_unpack_buf,
+            backward_basis_store: &mut backward_basis_store,
             event_sender: event_sender.as_ref(),
         };
 
@@ -1179,6 +1281,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 fwd_scheduling_overhead_ms: forward_result.scheduling_overhead_ms,
             },
         );
+
+        // Step 5: broadcast the backward basis cache from rank 0 to all ranks,
+        // then advance the double-buffer (write → read, clear write) so the
+        // next iteration's backward pass can warm-start from the stored bases.
+        match broadcast_backward_store(&mut backward_basis_store, comm) {
+            Ok(()) => {}
+            Err(e) => on_error!(e),
+        }
+        backward_basis_store.swap_buffers();
 
         completed_iterations = iteration;
 
@@ -3847,6 +3958,143 @@ mod tests {
                 );
             }
             other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    // ── broadcast_backward_store unit tests ──────────────────────────────────
+
+    /// AC: single-rank path is a no-op — write buffer is unchanged.
+    ///
+    /// When `comm.size() == 1`, `broadcast_backward_store` must return `Ok(())`
+    /// immediately and leave the write buffer exactly as it was populated by the
+    /// backward pass (no serialisation, no overwrite).
+    #[test]
+    fn broadcast_backward_store_single_rank_is_identity() {
+        use super::broadcast_backward_store;
+        use crate::workspace::{BackwardBasisStore, CapturedBasis};
+
+        let num_stages = 2;
+        let mut store = BackwardBasisStore::new(num_stages);
+
+        // Populate write slot 1 with a recognisable basis.
+        let b = CapturedBasis {
+            basis: Basis {
+                col_status: vec![7_i32, 8_i32],
+                row_status: vec![9_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![42.0_f64],
+        };
+        *store.write_slot_mut(1) = Some(b.clone());
+
+        let comm = StubComm; // size=1 → fast path
+        broadcast_backward_store(&mut store, &comm).unwrap();
+
+        // write_buf must be unchanged.
+        assert!(
+            store.write_buf()[0].is_none(),
+            "slot 0 must remain None after single-rank broadcast"
+        );
+        let slot1 = store.write_buf()[1]
+            .as_ref()
+            .expect("slot 1 must remain Some after single-rank broadcast");
+        assert_eq!(
+            slot1.state_at_capture,
+            vec![42.0_f64],
+            "state_at_capture must survive single-rank broadcast unchanged"
+        );
+        assert_eq!(
+            slot1.basis.col_status, b.basis.col_status,
+            "col_status must survive single-rank broadcast unchanged"
+        );
+    }
+
+    /// AC: multi-rank path replicates rank-0 write buffer to all ranks.
+    ///
+    /// Simulates a 2-rank run: rank 0 populates a write slot, broadcasts, then
+    /// a rank-1 peer replays the recorded payloads and verifies its write buffer
+    /// holds an identical copy of the rank-0 capture.
+    #[test]
+    fn broadcast_backward_store_multi_rank_publishes_to_all_ranks() {
+        use super::broadcast_backward_store;
+        use crate::workspace::{BackwardBasisStore, CapturedBasis};
+
+        let num_stages = 2;
+
+        // Rank 0 side: populate write slot 1 and broadcast.
+        let mut root_store = BackwardBasisStore::new(num_stages);
+        *root_store.write_slot_mut(1) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2_i32],
+                row_status: vec![3_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![0_u32, 1_u32],
+            state_at_capture: vec![5.0_f64, 6.0_f64],
+        });
+        let root_comm = MultiRankMockComm::new_root();
+        broadcast_backward_store(&mut root_store, &root_comm).unwrap();
+
+        // Rank 1 side: replay root's recorded payloads.
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        let mut peer_store = BackwardBasisStore::new(num_stages);
+        broadcast_backward_store(&mut peer_store, &peer_comm).unwrap();
+
+        // write_buf[0] must be None on both sides.
+        assert!(
+            peer_store.write_buf()[0].is_none(),
+            "peer slot 0 must be None after broadcast"
+        );
+
+        // write_buf[1] must be an identical copy of root's capture.
+        let root_slot = root_store.write_buf()[1]
+            .as_ref()
+            .expect("root slot 1 must be Some");
+        let peer_slot = peer_store.write_buf()[1]
+            .as_ref()
+            .expect("peer slot 1 must be Some after broadcast");
+        assert_eq!(
+            peer_slot.state_at_capture, root_slot.state_at_capture,
+            "peer state_at_capture must match root after broadcast"
+        );
+        assert_eq!(
+            peer_slot.basis.col_status, root_slot.basis.col_status,
+            "peer col_status must match root after broadcast"
+        );
+        assert_eq!(
+            peer_slot.cut_row_slots, root_slot.cut_row_slots,
+            "peer cut_row_slots must match root after broadcast"
+        );
+    }
+
+    /// AC: `None` slots are preserved across the broadcast round-trip.
+    ///
+    /// When the entire write buffer is all-`None` (no bases were captured this
+    /// iteration), the broadcast must propagate that `None`-only buffer to all
+    /// peers without error.
+    #[test]
+    fn broadcast_backward_store_handles_none_slots() {
+        use super::broadcast_backward_store;
+        use crate::workspace::BackwardBasisStore;
+
+        let num_stages = 3;
+
+        // Rank 0: write buffer is entirely None (no captures this iteration).
+        let mut root_store = BackwardBasisStore::new(num_stages);
+        let root_comm = MultiRankMockComm::new_root();
+        broadcast_backward_store(&mut root_store, &root_comm).unwrap();
+
+        // Rank 1: replay payloads — should receive all-None buffer.
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        let mut peer_store = BackwardBasisStore::new(num_stages);
+        broadcast_backward_store(&mut peer_store, &peer_comm).unwrap();
+
+        for (t, slot) in peer_store.write_buf().iter().enumerate() {
+            assert!(
+                slot.is_none(),
+                "peer write_buf[{t}] must be None when root had no captures"
+            );
         }
     }
 

@@ -79,6 +79,35 @@ EXPECTED_DRIFTS: list[tuple[str, str]] = [
         "**/metadata.json",
         "embeds completed_at timestamp and hostname, changes on every run",
     ),
+    # ---------------------------------------------------------------------------
+    # Epic 01 (backward-basis-cache) — convertido_a only
+    #
+    # The two entries below are intentionally scoped to the exact relative paths
+    # inside convertido_a.  The D-suite equivalents are byte-identical and must
+    # NOT be added here.
+    #
+    # Root cause: the warm-start basis introduced by Epic 01 changes the LP dual
+    # choice at LP-degenerate vertices.  This produces a different sequence of
+    # cut deactivations without changing cut coefficients, cut intercepts, the
+    # training lower bound, or the final policy.  Detailed analysis in
+    # plans/backward-basis-cache/known-concerns.md (items R1/R2).
+    # ---------------------------------------------------------------------------
+    (
+        "convertido_a/training/cut_selection/iterations.parquet",
+        "Cut activity trajectory drift under backward-basis-cache (Epic 01). "
+        "The warm-start basis changes LP dual choice at LP-degenerate vertices, "
+        "producing a different sequence of cut deactivations without changing cut "
+        "coefficients or the lower bound. "
+        "Documented in plans/backward-basis-cache/known-concerns.md R1/R2.",
+    ),
+    (
+        "convertido_a/training/solver/retry_histogram.parquet",
+        "Single extra retry event (iter=8, forward, stage=2, retry_level=0) under "
+        "backward-basis-cache. Cascade from cut-activity drift above — different "
+        "cut-deactivation trajectory occasionally triggers a retry-level-0 event "
+        "that succeeds immediately, unchanged cuts. "
+        "Documented in plans/backward-basis-cache/known-concerns.md R1/R2.",
+    ),
 ]
 
 

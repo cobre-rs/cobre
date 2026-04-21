@@ -66,6 +66,13 @@ pub struct SolverStatsRow {
     /// Per-level retry success counts. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`).
     pub retry_level_histogram: Vec<u64>,
+    /// Warm-start basis source for backward-pass ω=0 rows.
+    ///
+    /// `Some(1)` = `Backward` (read from the backward-pass basis cache),
+    /// `Some(2)` = `Forward` (read from the per-scenario forward basis cache).
+    /// `None` = the row is not a backward-pass ω=0 row (forward / LB /
+    /// simulation / ω≥1 backward); the column is NULL in parquet.
+    pub basis_source: Option<i32>,
 }
 
 /// Write training solver statistics to `training/solver/iterations.parquet`.
@@ -151,6 +158,11 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
             .map(|r| r.basis_reconstructions)
             .collect::<Vec<_>>(),
     );
+    let basis_source_arr = Int32Array::from(
+        rows.iter()
+            .map(|r| r.basis_source)
+            .collect::<Vec<Option<i32>>>(),
+    );
 
     vec![
         Arc::new(iteration_arr),
@@ -172,6 +184,7 @@ fn build_iterations_columns(rows: &[SolverStatsRow]) -> Vec<Arc<dyn arrow::array
         Arc::new(set_bounds_time_arr),
         Arc::new(basis_set_time_arr),
         Arc::new(basis_reconstructions_arr),
+        Arc::new(basis_source_arr),
     ]
 }
 
@@ -294,6 +307,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: None,
             },
             SolverStatsRow {
                 iteration: 1,
@@ -316,6 +330,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: Some(1),
             },
         ]
     }
@@ -340,7 +355,7 @@ mod tests {
         let batch = read_parquet(&iter_path);
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 19);
+        assert_eq!(batch.num_columns(), 20);
 
         let iteration_col = batch
             .column(0)
@@ -353,7 +368,7 @@ mod tests {
         // Column indices (after adding opening at index 3, rank at 4, worker_id at 5):
         // 0 = iteration, 1 = phase, 2 = stage, 3 = opening, 4 = rank, 5 = worker_id,
         // 6 = lp_solves, ..., 12 = basis_consistency_failures,
-        // 13 = simplex_iterations, 14 = solve_time_ms
+        // 13 = simplex_iterations, 14 = solve_time_ms, ..., 19 = basis_source
         let solve_time_col = batch
             .column(14)
             .as_any()
@@ -368,6 +383,27 @@ mod tests {
             .downcast_ref::<UInt64Array>()
             .unwrap();
         assert_eq!(simplex_col.value(0), 5000);
+
+        // basis_source column is at index 19 (last column, Int32 nullable).
+        // Row 0 is forward (basis_source=None → NULL); row 1 is backward (basis_source=Some(1)).
+        let basis_source_col = batch
+            .column(19)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(
+            basis_source_col.is_null(0),
+            "forward row must have NULL basis_source"
+        );
+        assert!(
+            !basis_source_col.is_null(1),
+            "backward row must have non-NULL basis_source"
+        );
+        assert_eq!(
+            basis_source_col.value(1),
+            1,
+            "backward row basis_source must be 1 (Backward)"
+        );
 
         // retry_histogram.parquet — empty (make_rows has all-zero histograms)
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
@@ -393,7 +429,7 @@ mod tests {
         assert!(iter_path.exists());
         let file = std::fs::File::open(&iter_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 19);
+        assert_eq!(builder.schema().fields().len(), 20);
 
         let hist_path = dir.path().join("training/solver/retry_histogram.parquet");
         assert!(hist_path.exists());
@@ -428,6 +464,7 @@ mod tests {
                 basis_reconstructions: 0,
                 // Level 0: 5 recoveries, level 2: 1 recovery
                 retry_level_histogram: vec![5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                basis_source: None,
             },
             SolverStatsRow {
                 iteration: 1,
@@ -450,6 +487,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: Some(1),
             },
         ];
 
@@ -504,6 +542,7 @@ mod tests {
             basis_set_time_ms: 0.0,
             basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
+            basis_source: None,
         }];
 
         write_solver_stats(dir.path(), &rows).unwrap();
@@ -519,6 +558,17 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert!(opening_col.is_null(0), "forward row must have NULL opening");
+
+        // basis_source column is at index 19, must be NULL for forward rows.
+        let basis_source_col = batch
+            .column(19)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(
+            basis_source_col.is_null(0),
+            "forward row must have NULL basis_source"
+        );
     }
 
     #[test]
@@ -549,6 +599,7 @@ mod tests {
             basis_set_time_ms: 0.0,
             basis_reconstructions: 0,
             retry_level_histogram: vec![0; 12],
+            basis_source: Some(1),
         }];
 
         write_solver_stats(dir.path(), &rows).unwrap();
@@ -556,8 +607,8 @@ mod tests {
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         let batch = read_parquet(&iter_path);
 
-        // Schema must have exactly 19 columns after epic-07 ticket-002.
-        assert_eq!(batch.num_columns(), 19);
+        // Schema must have exactly 20 columns after epic-02 ticket-003.
+        assert_eq!(batch.num_columns(), 20);
 
         // rank column is at index 4, must be NULL.
         let rank_col = batch.column_by_name("rank").unwrap();
@@ -583,6 +634,22 @@ mod tests {
             .unwrap();
         assert!(!opening_col.is_null(0), "opening must be non-NULL");
         assert_eq!(opening_col.value(0), 3, "opening value must be 3");
+
+        // basis_source must be Some(1) → value 1, non-NULL.
+        let basis_source_col = batch
+            .column(19)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(
+            !basis_source_col.is_null(0),
+            "backward row must have non-NULL basis_source"
+        );
+        assert_eq!(
+            basis_source_col.value(0),
+            1,
+            "basis_source must be 1 (Backward)"
+        );
     }
 
     #[allow(clippy::too_many_lines)]
@@ -618,6 +685,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: None,
             },
             // Backward rows (opening=Some(0..2)): 10, 20, 30 lp_solves → sum=60
             SolverStatsRow {
@@ -641,6 +709,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: Some(1),
             },
             SolverStatsRow {
                 iteration: 1,
@@ -663,6 +732,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: None,
             },
             SolverStatsRow {
                 iteration: 1,
@@ -685,6 +755,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: None,
             },
         ];
 
@@ -766,6 +837,7 @@ mod tests {
                 basis_set_time_ms: 0.0,
                 basis_reconstructions: 0,
                 retry_level_histogram: vec![0; 12],
+                basis_source: None,
             }
         }
 

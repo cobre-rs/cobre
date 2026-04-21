@@ -31,9 +31,9 @@ use cobre_io::output::simulation_writer::{ScenarioWritePayload, SimulationParque
 use cobre_io::{ParquetWriterConfig, SolverStatsRow};
 use cobre_sddp::{
     build_hydro_model_summary, build_provenance_report, build_stochastic_summary,
-    prepare_hydro_models, prepare_stochastic, ArOrderSummary, EstimationReport, FutureCostFunction,
-    HydroModelSummary, ModelProvenanceReport, SolverStatsDelta, StochasticSource,
-    StochasticSummary, StudySetup, DEFAULT_SEED,
+    prepare_hydro_models, prepare_stochastic, ArOrderSummary, BasisSource, EstimationReport,
+    FutureCostFunction, HydroModelSummary, ModelProvenanceReport, SolverStatsDelta,
+    StochasticSource, StochasticSummary, StudySetup, DEFAULT_SEED,
 };
 use cobre_solver::HighsSolver;
 
@@ -221,13 +221,29 @@ fn export_stochastic_artifacts_py(
     }
 }
 
+/// Map a [`BasisSource`] discriminant to the `Option<i32>` parquet value.
+///
+/// - `BasisSource::None_` → `None` (NULL in parquet; row is not a backward ω=0 row)
+/// - `BasisSource::Backward` → `Some(1)` (read from `BackwardBasisStore`)
+/// - `BasisSource::Forward` → `Some(2)` (read from `BasisStore` fallback)
+///
+/// Note: this function is duplicated in `cobre-cli/src/commands/run.rs` to avoid a cross-crate
+/// dependency between crates that are already isolated (cli and python are separate entry points).
+fn basis_source_to_opt(source: BasisSource) -> Option<i32> {
+    match source {
+        BasisSource::None_ => None,
+        BasisSource::Backward => Some(1),
+        BasisSource::Forward => Some(2),
+    }
+}
+
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
 /// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
 /// and `None` for forward, `lower_bound`, and simulation rows. `rank` and `worker_id`
 /// are `Some` for backward rows (from allgatherv unpack) and `None` for forward,
-/// lower_bound, and simulation rows (no per-worker dimension yet).
+/// `lower_bound`, and simulation rows (no per-worker dimension yet).
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
@@ -259,6 +275,7 @@ fn delta_to_stats_row(
         basis_set_time_ms: delta.basis_set_time_ms,
         basis_reconstructions: delta.basis_reconstructions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
+        basis_source: basis_source_to_opt(delta.basis_source),
     }
 }
 

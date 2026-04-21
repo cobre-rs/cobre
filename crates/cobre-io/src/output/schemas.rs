@@ -293,12 +293,15 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 19 columns. One row per (iteration, phase, stage, opening) tuple for
+/// 20 columns. One row per (iteration, phase, stage, opening) tuple for
 /// backward rows; forward, `lower_bound`, and simulation rows carry
 /// `opening = NULL`. The `rank` and `worker_id` columns (positions 5 and 6,
 /// 0-indexed) are `Int32 nullable`; they are `NULL` for rank-aggregated rows
 /// and will carry real values once T005 (MPI allgatherv) is wired. Includes
-/// one basis reconstruction column: `basis_reconstructions`.
+/// one basis reconstruction column: `basis_reconstructions`, and one
+/// basis-source column: `basis_source` (`Int32` nullable, populated for
+/// backward-pass ω=0 rows only; NULL for forward, `lower_bound`, simulation,
+/// and ω≥1 backward rows).
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
@@ -320,6 +323,7 @@ pub(crate) fn solver_iterations_schema() -> Schema {
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
         Field::new("basis_reconstructions", DataType::UInt64, false),
+        Field::new("basis_source", DataType::Int32, true),
     ])
 }
 
@@ -822,8 +826,8 @@ mod tests {
         let schema = solver_iterations_schema();
         assert_eq!(
             schema.fields().len(),
-            19,
-            "solver_iterations schema must have 19 fields after epic-07"
+            20,
+            "solver_iterations schema must have 20 fields after epic-02 ticket-003"
         );
         let expected: &[(&str, DataType, bool)] = &[
             ("iteration", DataType::UInt32, false),
@@ -845,6 +849,7 @@ mod tests {
             ("set_bounds_time_ms", DataType::Float64, false),
             ("basis_set_time_ms", DataType::Float64, false),
             ("basis_reconstructions", DataType::UInt64, false),
+            ("basis_source", DataType::Int32, true),
         ];
         for (i, (name, dtype, nullable)) in expected.iter().enumerate() {
             let field = &schema.fields()[i];
@@ -933,7 +938,7 @@ mod tests {
             ("iteration_timing", 18),
             ("rank_timing", 8),
             ("cut_selection", 9),
-            ("solver_iterations", 19),
+            ("solver_iterations", 20),
             ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {

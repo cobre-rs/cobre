@@ -27,13 +27,6 @@ before upgrading.
 
 ### Breaking Changes
 
-**Config schema** — remove from `config.json`:
-
-- `training.solver.warm_start_basis_mode` (rejected at parse time)
-- `training.solver.canonical_state` (silently ignored with stderr warning)
-- `training.cut_selection.angular_pruning` (rejected at parse time)
-- `training.cut_selection.basis_padding` (soft-deprecated with stderr warning)
-
 **Public Rust API**:
 
 - `TrainingResult` is `#[non_exhaustive]`; use `TrainingResult::new(...)`.

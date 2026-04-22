@@ -202,10 +202,24 @@ pub struct PaddingContext<'a> {
 #[derive(Debug, Default)]
 pub struct PromotionScratch {
     /// Preserved-LOWER cut rows that are candidates for Scheme 1 symmetric
-    /// promotion (LOWER → BASIC).  Each entry is `(out_row_index, popcount)`.
-    /// Sorted by popcount ascending after the consumer loop so the least-active
-    /// candidates are promoted first (safest to move into the basis as BASIC).
-    pub candidates: Vec<(usize, u32)>,
+    /// promotion (LOWER → BASIC). Each entry is
+    /// `(out_row_index, popcount, last_active_iter, insertion_idx)`:
+    ///
+    /// - `out_row_index`: destination row in the target basis (payload).
+    /// - `popcount`: `(active_window & RECENT_WINDOW_BITS).count_ones()`,
+    ///   range 0..=5. Primary sort key.
+    /// - `last_active_iter`: from `CutMetadata`. Secondary sort key. Older
+    ///   last-activity → more stale → promoted first.
+    /// - `insertion_idx`: position in the vec at push time, strictly
+    ///   increasing per reconstruction. Tertiary sort key, guarantees no key
+    ///   ties so the `select_nth_unstable_by_key` partial sort is deterministic.
+    ///
+    /// Partially sorted by `select_nth_unstable_by_key` in the consumer so only
+    /// the smallest `scheme1_count` entries are positioned at the front; the
+    /// rest remain unsorted. This is O(n) average vs O(n log n) for a full
+    /// sort — relevant at production scale (thousands of candidates per
+    /// reconstruction, millions of reconstructions per run).
+    pub candidates: Vec<(usize, u32, u64, u32)>,
     /// Output row indices of new cuts classified as LOWER by the activity-
     /// driven classifier (Epic 06 AD-2).  Used by the Scheme 2 tail fallback
     /// to override the most-recently-classified LOWER cuts back to BASIC when
@@ -420,12 +434,23 @@ where
             if stored_status == HIGHS_BASIS_STATUS_LOWER {
                 // Candidate for Scheme 1 symmetric promotion (preserved-LOWER → BASIC).
                 // See docs/design/epic-06-classifier-refinement-gaps.md.
-                let popcount = cut_metadata
+                let (popcount, last_active) = cut_metadata
                     .get(target_slot)
                     // Epic 06 G2: mask by RECENT_WINDOW_BITS so the sort key uses the
                     // same window as the classifier (AD-9 / ticket-005).
-                    .map_or(0, |m| (m.active_window & RECENT_WINDOW_BITS).count_ones());
-                promotion_scratch.candidates.push((out_row_index, popcount));
+                    // Epic 06 G3: capture last_active_iter as secondary sort key so
+                    // equal-popcount ties break by staleness (older → promoted first).
+                    .map_or((0u32, 0u64), |m| {
+                        (
+                            (m.active_window & RECENT_WINDOW_BITS).count_ones(),
+                            m.last_active_iter,
+                        )
+                    });
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = promotion_scratch.candidates.len() as u32;
+                promotion_scratch
+                    .candidates
+                    .push((out_row_index, popcount, last_active, idx));
             }
             stored_status
         } else {
@@ -454,22 +479,39 @@ where
     //
     // Each LOWER-classified new cut reduced total_basic by 1 relative to
     // the BASIC-default HiGHS dimension extension. Offset by promoting
-    // the preserved-LOWER candidate with the lowest activity popcount
-    // (least likely to still be binding → safest to move into the basis
-    // as BASIC). Net change to total_basic: zero.
+    // the preserved-LOWER candidate with the lowest recency-aware lex key
+    // (popcount, last_active_iter, insertion_idx) — least-active and most-stale
+    // first → safest to move into the basis as BASIC. Net change to
+    // total_basic: zero.
     if lower_deficit > 0 {
-        // Stable sort: equal-popcount ties preserve insertion order
-        // (declaration-order invariance). Do NOT use sort_unstable_by_key.
-        promotion_scratch
-            .candidates
-            .sort_by_key(|&(_, popcount)| popcount);
-
         let available_candidates = promotion_scratch.candidates.len();
         let scheme1_count = lower_deficit.min(available_candidates);
 
-        // Apply Scheme 1: promote the `scheme1_count` preserved-LOWER
-        // candidates with the lowest popcounts to BASIC.
-        for &(row_idx, _) in promotion_scratch.candidates.iter().take(scheme1_count) {
+        // Partial selection: we only need the `scheme1_count` smallest by the
+        // lex key (popcount, last_active_iter, insertion_idx). The tertiary
+        // `insertion_idx` is unique per candidate, so no key ties exist and the
+        // unstable algorithm is deterministic by construction.
+        //
+        // `select_nth_unstable_by_key` is O(n) average vs O(n log n) for a full
+        // sort — material at production scale (thousands of candidates,
+        // millions of reconstructions). At convertido scale it is a no-op on
+        // wall-time (~24 ms total across the run).
+        //
+        // Guard: skip when `scheme1_count == available_candidates` (all
+        // candidates will be promoted — no selection needed) or `scheme1_count
+        // == 0` (defensive; the outer `if lower_deficit > 0` already ensures
+        // scheme1_count ≥ 1 when available_candidates > 0).
+        if scheme1_count > 0 && scheme1_count < available_candidates {
+            promotion_scratch.candidates.select_nth_unstable_by_key(
+                scheme1_count - 1,
+                |&(_, popcount, last_active, idx)| (popcount, last_active, idx),
+            );
+        }
+
+        // The first `scheme1_count` entries now hold the smallest `scheme1_count`
+        // candidates by lex key (unordered internally — the SET is deterministic,
+        // which is all we need: promotion writes BASIC to distinct row indices).
+        for &(row_idx, _, _, _) in promotion_scratch.candidates.iter().take(scheme1_count) {
             debug_assert!(
                 row_idx >= target.base_row_count,
                 "Scheme 1 promotion target row_idx {row_idx} must be >= base_row_count {}",
@@ -616,7 +658,7 @@ mod tests {
     use super::{
         HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
         PromotionScratch, RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats,
-        ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
+        ReconstructionTarget, SEED_BIT, enforce_basic_count_invariant, reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -2816,5 +2858,332 @@ mod tests {
         // Scheme 1 kept the invariant, so the enforcer is a no-op.
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(demoted, 0, "Scheme 1 promotion makes enforcer a no-op");
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 06 T5a: recency-aware sort key (Gap G3) and partial selection tests
+    // -----------------------------------------------------------------------
+
+    /// Build the shared metadata fixture for the `last_active_iter` tie-break tests.
+    ///
+    /// Returns a 41-entry metadata slice where slots 10/20/30 each have
+    /// `popcount = 1` (bit 0 in the recent window) and the supplied
+    /// `last_active_iter` values, and slot 40 has SEED_BIT set.
+    fn meta_for_tie_break(lai_10: u64, lai_20: u64, lai_30: u64) -> Vec<CutMetadata> {
+        let mut meta = vec![meta_with_window(0); 41];
+        meta[10] = CutMetadata {
+            active_window: 0b0000_0001,
+            last_active_iter: lai_10,
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+        };
+        meta[20] = CutMetadata {
+            active_window: 0b0000_0001,
+            last_active_iter: lai_20,
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+        };
+        meta[30] = CutMetadata {
+            active_window: 0b0000_0001,
+            last_active_iter: lai_30,
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+        };
+        meta[40] = CutMetadata {
+            active_window: SEED_BIT,
+            last_active_iter: 0,
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+        };
+        meta
+    }
+
+    /// Epic 06 T5a AC5a: `last_active_iter` as secondary sort key breaks
+    /// popcount ties — slot with the smallest `last_active_iter` is promoted.
+    ///
+    /// Fixture: 3 preserved-LOWER cuts at slots 10, 20, 30, all popcount=1,
+    /// with last_active_iter = 1, 5, 9. Slot 10 is most-stale → promoted.
+    ///
+    /// Invariant: num_row=5, col_basic(3)+row_basic(2)=5. ✓
+    #[test]
+    fn promotion_sort_breaks_popcount_ties_by_last_active_iter() {
+        let base_rows = 1usize;
+        // num_cols=3: col_basic(3) + row_basic(2: template + 1 promoted) = 5 = num_row.
+        let num_cols = 3usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[10, 20, 30], &[L, L, L], &[1.0]);
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (20, 0.0, vec![0.0]),
+            (30, 0.0, vec![0.0]),
+            (40, 0.0, vec![0.0]), // new, tight via SEED_BIT → LOWER
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+4=5
+
+        // Slot 10 most-stale (lai=1) → should be promoted.
+        let meta = meta_for_tie_break(/*lai_10=*/ 1, /*lai_20=*/ 5, /*lai_30=*/ 9);
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 48];
+        let stats = reconstruct_basis(
+            &stored,
+            ReconstructionSource {
+                target: ReconstructionTarget {
+                    base_row_count: base_rows,
+                    num_cols,
+                },
+                cut_metadata: &meta,
+            },
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut PromotionScratch::default(),
+        );
+        assert_eq!(stats.preserved, 3, "slots 10, 20, 30 preserved");
+        assert_eq!(stats.new_tight, 1, "slot 40 classified LOWER via SEED_BIT");
+        assert_eq!(stats.new_slack, 0);
+        // Row layout: [template(B), slot10(B-promoted), slot20(L), slot30(L), slot40(L)]
+        assert_eq!(out.row_status[0], B, "template row");
+        assert_eq!(
+            out.row_status[1], B,
+            "T5a G3: slot 10 (last_active_iter=1) promoted — most-stale wins tie"
+        );
+        assert_eq!(out.row_status[2], L, "slot 20 stays LOWER");
+        assert_eq!(out.row_status[3], L, "slot 30 stays LOWER");
+        assert_eq!(out.row_status[4], L, "slot 40 new LOWER");
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(col_basic + row_basic, num_row, "HiGHS invariant");
+    }
+
+    /// Epic 06 T5a AC5b: `last_active_iter` tie-break — promotion victim changes
+    /// when the stalest slot changes.
+    ///
+    /// Same fixture as AC5a but `last_active_iter` reversed: slot 30 is now
+    /// oldest (lai=1) → slot 30 is promoted instead of slot 10.
+    #[test]
+    fn promotion_sort_breaks_popcount_ties_by_last_active_iter_reversed() {
+        let base_rows = 1usize;
+        let num_cols = 3usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[10, 20, 30], &[L, L, L], &[1.0]);
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (20, 0.0, vec![0.0]),
+            (30, 0.0, vec![0.0]),
+            (40, 0.0, vec![0.0]),
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+4=5
+
+        // Slot 30 most-stale (lai=1) → should be promoted.
+        let meta = meta_for_tie_break(/*lai_10=*/ 9, /*lai_20=*/ 5, /*lai_30=*/ 1);
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 48];
+        let stats = reconstruct_basis(
+            &stored,
+            ReconstructionSource {
+                target: ReconstructionTarget {
+                    base_row_count: base_rows,
+                    num_cols,
+                },
+                cut_metadata: &meta,
+            },
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut PromotionScratch::default(),
+        );
+        assert_eq!(stats.preserved, 3);
+        assert_eq!(stats.new_tight, 1);
+        assert_eq!(out.row_status[1], L, "slot 10 stays LOWER (not most-stale)");
+        assert_eq!(out.row_status[2], L, "slot 20 stays LOWER");
+        assert_eq!(
+            out.row_status[3], B,
+            "T5a G3: slot 30 (last_active_iter=1) promoted when it is most-stale"
+        );
+        assert_eq!(out.row_status[4], L, "slot 40 new LOWER");
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(col_basic + row_basic, num_row, "HiGHS invariant (reversed)");
+    }
+
+    /// Epic 06 T5a AC6: `select_nth_unstable_by_key` produces a deterministic
+    /// promotion SET across two identical calls on n=200 candidates.
+    ///
+    /// Synthesize 200 preserved-LOWER candidates with a deterministic mix of
+    /// popcounts (0..=5 uniform) and `last_active_iter` values. Run
+    /// reconstruction twice with the same input; assert the two sets of
+    /// promoted slots are equal.
+    ///
+    /// The tertiary `insertion_idx` component is strictly increasing per
+    /// reconstruction, so `select_nth_unstable_by_key` has no key ties and
+    /// is guaranteed to produce the same partition for identical data.
+    ///
+    /// Fixture sizing: 200 preserved-LOWER cuts + 50 new-LOWER cuts →
+    /// lower_deficit = 50, scheme1_count = 50 < 200 = available_candidates
+    /// → the `select_nth` guard fires and partial selection is exercised.
+    ///
+    /// num_cols = 250 (col_basic) + 1 (template row_basic) = 251 = num_row. ✓
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn promotion_select_nth_produces_deterministic_promotion_set_at_n_200() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        let base_rows = 1usize;
+        // base_row_count = 1, n_preserved = 200, n_new_lower = 50
+        // num_row = 1 + 200 + 50 = 251
+        // After Scheme 1: row_basic = 1(template) + 50(promoted) = 51
+        // col_basic must = 200 for invariant: 200 + 51 = 251 = num_row. ✓
+        let num_cols = 200usize;
+
+        // Build 200 slot numbers for the preserved cuts: slots 0..199.
+        let preserved_slots: Vec<u32> = (0u32..200).collect();
+        let stored =
+            make_stored_basis(base_rows, num_cols, &preserved_slots, &vec![L; 200], &[1.0]);
+
+        // 50 new-LOWER cuts at slots 200..249 (SEED_BIT fires classifier).
+        let mut delta_cuts: Vec<(usize, f64, Vec<f64>)> = preserved_slots
+            .iter()
+            .map(|&s| (s as usize, 0.0f64, vec![0.0f64]))
+            .collect();
+        for s in 200usize..250 {
+            delta_cuts.push((s, 0.0, vec![0.0]));
+        }
+
+        // Build metadata with a seeded RNG for deterministic fixture.
+        // Each preserved slot gets a popcount derived from (slot % 6) to give a
+        // deterministic mix over [0, 5], and a random last_active_iter in 0..100.
+        // New slots get SEED_BIT.
+        let mut rng = StdRng::seed_from_u64(0xCAFE_BABE_DEAD_BEEF);
+        let mut meta = vec![meta_with_window(0); 260];
+        // Fill preserved slots 0..200 with a deterministic mix of popcounts and
+        // seeded-random last_active_iter values.
+        for (s, slot_meta) in meta.iter_mut().enumerate().take(200) {
+            // Deterministic popcount: cycle through 0..=5.
+            #[allow(clippy::cast_possible_truncation)]
+            let pc = (s % 6) as u32;
+            // Generate an active_window mask with exactly `pc` low bits set.
+            let aw = if pc == 0 { 0u32 } else { (1u32 << pc) - 1 };
+            // last_active_iter: seeded random in 0..100.
+            let lai: u64 = rng.random_range(0u64..100);
+            *slot_meta = CutMetadata {
+                active_window: aw,
+                last_active_iter: lai,
+                iteration_generated: 0,
+                forward_pass_index: 0,
+                active_count: 0,
+            };
+        }
+        // Fill new-LOWER slots 200..250 with SEED_BIT.
+        for slot_meta in meta.iter_mut().take(250).skip(200) {
+            *slot_meta = CutMetadata {
+                active_window: crate::basis_reconstruct::SEED_BIT,
+                last_active_iter: 0,
+                iteration_generated: 0,
+                forward_pass_index: 0,
+                active_count: 0,
+            };
+        }
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        // ── Run 1 ──────────────────────────────────────────────────────────
+        let mut out1 = Basis::new(0, 0);
+        let mut lookup1: Vec<Option<u32>> = vec![None; 260];
+        let mut scratch1 = PromotionScratch::default();
+
+        let stats1 = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out1,
+            &mut lookup1,
+            &mut scratch1,
+        );
+
+        assert_eq!(stats1.preserved, 200, "200 preserved");
+        assert_eq!(stats1.new_tight, 50, "50 new LOWER (scheme1 absorbed all)");
+        assert_eq!(stats1.new_slack, 0);
+
+        // Collect the set of promoted slot indices: the 50 preserved rows that
+        // flipped to BASIC. Preserved rows occupy output indices base_rows..base_rows+200.
+        let promoted_set_1: std::collections::BTreeSet<usize> = (0..200)
+            .filter(|&i| out1.row_status[base_rows + i] == B)
+            .collect();
+        assert_eq!(promoted_set_1.len(), 50, "exactly 50 promoted in run 1");
+
+        // ── Run 2: same input, fresh scratch ──────────────────────────────
+        let stored2 =
+            make_stored_basis(base_rows, num_cols, &preserved_slots, &vec![L; 200], &[1.0]);
+        let mut out2 = Basis::new(0, 0);
+        let mut lookup2: Vec<Option<u32>> = vec![None; 260];
+        let mut scratch2 = PromotionScratch::default();
+
+        let source2 = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        reconstruct_basis(
+            &stored2,
+            source2,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out2,
+            &mut lookup2,
+            &mut scratch2,
+        );
+
+        let promoted_set_2: std::collections::BTreeSet<usize> = (0..200)
+            .filter(|&i| out2.row_status[base_rows + i] == B)
+            .collect();
+        assert_eq!(promoted_set_2.len(), 50, "exactly 50 promoted in run 2");
+
+        assert_eq!(
+            promoted_set_1, promoted_set_2,
+            "T5a AC6: select_nth_unstable_by_key must produce identical promotion \
+             sets across two calls on identical input data"
+        );
+
+        // HiGHS invariant for run 1.
+        let num_row = base_rows + 250; // 1 + 200 + 50
+        let col_basic = out1.col_status.iter().filter(|&&s| s == B).count();
+        let row_basic = out1.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "HiGHS invariant: col_basic({col_basic}) + row_basic({row_basic}) \
+             == num_row({num_row})"
+        );
     }
 }

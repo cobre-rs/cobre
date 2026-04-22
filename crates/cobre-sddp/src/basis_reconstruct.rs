@@ -408,7 +408,9 @@ where
                 // See docs/design/epic-06-classifier-refinement-gaps.md.
                 let popcount = cut_metadata
                     .get(target_slot)
-                    .map_or(0, |m| m.active_window.count_ones());
+                    // Epic 06 G2: mask by RECENT_WINDOW_BITS so the sort key uses the
+                    // same window as the classifier (AD-9 / ticket-005).
+                    .map_or(0, |m| (m.active_window & RECENT_WINDOW_BITS).count_ones());
                 promotion_scratch.candidates.push((out_row_index, popcount));
             }
             stored_status
@@ -1988,6 +1990,105 @@ mod tests {
         // the safety-net enforcer is a no-op.
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(demoted, 0, "Scheme 1 promotion makes enforcer a no-op");
+    }
+
+    /// Epic 06 G2 regression — §5.1 worked example (ticket-005).
+    ///
+    /// Demonstrates that the promotion sort key uses `active_window &
+    /// RECENT_WINDOW_BITS` (low 5 bits only), NOT the full 32-bit popcount.
+    ///
+    /// Fixture:
+    ///   Cut A (slot 10): active_window = 0b1111_1111_1111_0000_0000_0000_0000_0000
+    ///     Full popcount = 12; masked popcount = 0 (all bind events outside window).
+    ///   Cut B (slot 11): active_window = 0b0000_0000_0000_0000_0000_0000_0000_0010
+    ///     Full popcount = 1;  masked popcount = 1 (bit 1 is inside the window).
+    ///   New cut (slot 20): bit 0 set → classifier fires LOWER → lower_deficit=1.
+    ///
+    /// Expected: A (masked popcount 0) is promoted to BASIC ahead of B (masked
+    /// popcount 1). Under the pre-T5 code, B (full popcount 1) would have been
+    /// promoted instead — demonstrating G2's effect.
+    ///
+    /// num_cols=2: col_basic(2) + row_basic(2) = 4 = num_row. ✓
+    #[test]
+    fn promotion_sort_ignores_bits_outside_recent_window() {
+        let base_rows = 1usize;
+        // num_cols=2: col_basic(2) + row_basic(2: template + slot10 promoted) = 4 = num_row.
+        let num_cols = 2usize;
+        // Stored basis: two preserved LOWER cuts at slots 10 (A) and 11 (B),
+        // plus the base template row.
+        let stored = make_stored_basis(base_rows, num_cols, &[10, 11], &[L, L], &[1.0]);
+
+        // Current iteration's active cuts: same slots 10 and 11 preserved,
+        // plus one new activity-driven LOWER cut at slot 20.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (11, 0.0, vec![0.0]),
+            (20, 0.0, vec![0.0]),
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+3=4
+
+        // Slot 10 (A): 12 binds, all in bits 20..31 — masked popcount = 0.
+        // Slot 11 (B): 1 bind in bit 1 — masked popcount = 1.
+        // Slot 20 (new): bit 0 set — classifier fires LOWER.
+        let mut meta = vec![meta_with_window(0); 22];
+        meta[10] = meta_with_window(0b1111_1111_1111_0000_0000_0000_0000_0000);
+        meta[11] = meta_with_window(0b0000_0000_0000_0000_0000_0000_0000_0010);
+        meta[20] = meta_with_window(0b0000_0000_0000_0000_0000_0000_0000_0001);
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 32];
+        let mut promotion_scratch = PromotionScratch::default();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut promotion_scratch,
+        );
+
+        // Preserved 2 (slots 10, 11); new_tight 1 (slot 20); new_slack 0.
+        // lower_deficit = 1 → Scheme 1 promotes ONE preserved-LOWER.
+        assert_eq!(stats.preserved, 2);
+        assert_eq!(stats.new_tight, 1);
+        assert_eq!(stats.new_slack, 0);
+
+        // Row layout: [template(B), slot10(B-promoted), slot11(L), slot20(L-new)]
+        assert_eq!(out.row_status[0], B, "template unchanged");
+        assert_eq!(
+            out.row_status[1], B,
+            "Epic 06 G2: slot 10 (masked popcount 0) promoted to BASIC ahead of slot 11 \
+             (masked popcount 1). Pre-G2, full popcount 12 > 1 would have kept \
+             slot 10 LOWER and promoted slot 11 instead."
+        );
+        assert_eq!(
+            out.row_status[2], L,
+            "Epic 06 G2: slot 11 preserved LOWER under masked sort."
+        );
+        assert_eq!(out.row_status[3], L, "new cut at slot 20 classified LOWER");
+
+        // HiGHS invariant (Epic 06 AD-3 via T3a): col_basic + row_basic == num_row.
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "HiGHS invariant must hold after G2 fix"
+        );
     }
 
     /// Scheme 2 fallback (T3a updated fixture):

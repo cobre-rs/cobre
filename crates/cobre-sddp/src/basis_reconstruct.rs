@@ -674,10 +674,10 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, PromotionScratch,
-        ReconstructionSource, ReconstructionStats, ReconstructionTarget,
         DEFAULT_BASIS_ACTIVITY_WINDOW, HIGHS_BASIS_STATUS_BASIC as B,
-        HIGHS_BASIS_STATUS_LOWER as L, SEED_BIT,
+        HIGHS_BASIS_STATUS_LOWER as L, PaddingContext, PromotionScratch, ReconstructionSource,
+        ReconstructionStats, ReconstructionTarget, SEED_BIT, enforce_basic_count_invariant,
+        reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -1873,7 +1873,7 @@ mod tests {
         ];
         let mut meta = vec![meta_with_window(0); 6];
         meta[0] = meta_with_window(0b0000_0001); // new cut — recent bit
-                                                 // meta[5] left at 0 → popcount=0, will be picked for promotion.
+        // meta[5] left at 0 → popcount=0, will be picked for promotion.
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];

@@ -62,11 +62,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use cobre_core::EntityId;
 use cobre_core::scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
     CorrelationScheduleEntry,
 };
-use cobre_core::EntityId;
 use serde::Deserialize;
 
 use crate::LoadError;

@@ -1892,33 +1892,44 @@ mod tests {
         assert_eq!(row_basic, 3);
         assert_eq!(row_lower, 4);
         assert_eq!(row_basic + row_lower, num_row);
+
+        // Scheme 1 maintains total_basic <= num_row, so the enforcer is a no-op.
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(demoted, 0, "Scheme 1 makes enforcer a no-op");
     }
 
-    /// Scheme 2: when there are more LOWER guesses than preserved-BASIC
-    /// candidates, the excess is overridden back to BASIC.
+    /// Scheme 2: when the LOWER-classified new cuts exceed the preserved-BASIC
+    /// candidates, the excess LOWERs are overridden back to BASIC.
     ///
-    /// Fixture:
+    /// Fixture (matches ticket AC math):
     ///   base_rows=1 (col [B], row 0 = B).
-    ///   stored: no cuts.
-    ///   Target: 3 new cuts, all classified LOWER (all have recent bits).
-    ///   No preserved rows → demotion_candidates is empty → deficit=3.
-    ///   Scheme 2 overrides all 3 back to BASIC → total basic remains num_row.
+    ///   stored: 2 preserved BASIC cuts at slots 5 and 6 (low popcounts).
+    ///   Target: 2 preserved + 3 new (all with recent activity).
+    ///   Classifier: 3 LOWER guesses (lower_deficit=3).
+    ///   Scheme 1: demotes both preserved BASICs → scheme1_count=2.
+    ///   Scheme 2: remaining_deficit=1 → overrides the latest new LOWER back
+    ///     to BASIC. Final: 2 LOWER from demotion + 2 LOWER from new + 1 BASIC
+    ///     from overridden new → new_tight=2, new_slack=1.
     #[test]
     fn scheme_2_fallback_when_deficit_exceeds_candidates() {
         let base_rows = 1usize;
         let num_cols = 1usize;
-        let stored = make_stored_basis(base_rows, num_cols, &[], &[], &[1.0]);
+        // 2 preserved BASIC cuts so Scheme 1 absorbs 2 of the 3-deficit.
+        let stored = make_stored_basis(base_rows, num_cols, &[5, 6], &[B, B], &[1.0]);
 
-        // 3 new tight cuts; no stored cuts → no preserved-BASIC candidates.
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
-            (20, 0.0, vec![0.0]),
-            (21, 0.0, vec![0.0]),
-            (22, 0.0, vec![0.0]),
+            (5, 0.0, vec![0.0]),  // preserved (BASIC)
+            (6, 0.0, vec![0.0]),  // preserved (BASIC)
+            (20, 0.0, vec![0.0]), // new, tight
+            (21, 0.0, vec![0.0]), // new, tight
+            (22, 0.0, vec![0.0]), // new, tight — this one will be overridden by Scheme 2
         ];
-        let num_row = base_rows + delta_cuts.len(); // 1+3=4
+        let num_row = base_rows + delta_cuts.len(); // 1+5=6
 
-        // meta indexed by cut-pool slot; size=23 so slots 20..22 are in bounds.
+        // meta indexed by pool slot; size=23 covers slots 20..22.
         let mut meta = vec![meta_with_window(0); 23];
+        meta[5] = meta_with_window(0b0000_0001); // popcount=1 — picked first
+        meta[6] = meta_with_window(0b0000_0011); // popcount=2 — picked second
         meta[20] = meta_with_window(0b0000_0001);
         meta[21] = meta_with_window(0b0000_0001);
         meta[22] = meta_with_window(0b0000_0001);
@@ -1949,21 +1960,33 @@ mod tests {
             &mut demotions,
         );
 
-        assert_eq!(stats.preserved, 0);
-        // Scheme 2 overrides all 3 back to BASIC because there are no
-        // preserved-BASIC candidates to absorb the LOWER guesses.
+        assert_eq!(stats.preserved, 2, "2 slots preserved");
         assert_eq!(
-            stats.new_slack, 3,
-            "all 3 overridden back to BASIC by Scheme 2"
+            stats.new_tight, 2,
+            "3 LOWER guesses − 1 Scheme 2 override = 2 net new_tight"
         );
-        assert_eq!(stats.new_tight, 0, "no net LOWER after Scheme 2 override");
+        assert_eq!(
+            stats.new_slack, 1,
+            "1 LOWER overridden to BASIC by Scheme 2 tail"
+        );
 
-        // Verify each new cut's final status: all 3 flipped back to BASIC.
-        // Row layout: [template(B), slot20, slot21, slot22]
+        // Verify final row statuses. Row layout:
+        // [template(B), slot5(L demoted), slot6(L demoted),
+        //  slot20(L), slot21(L), slot22(B overridden)]
         assert_eq!(out.row_status[0], B, "template row unchanged");
-        assert_eq!(out.row_status[1], B, "slot 20 overridden to BASIC");
-        assert_eq!(out.row_status[2], B, "slot 21 overridden to BASIC");
-        assert_eq!(out.row_status[3], B, "slot 22 overridden to BASIC");
+        assert_eq!(out.row_status[1], L, "slot 5 demoted by Scheme 1");
+        assert_eq!(out.row_status[2], L, "slot 6 demoted by Scheme 1");
+        assert_eq!(out.row_status[3], L, "slot 20 classified LOWER (tight)");
+        assert_eq!(out.row_status[4], L, "slot 21 classified LOWER (tight)");
+        assert_eq!(
+            out.row_status[5], B,
+            "slot 22 overridden to BASIC by Scheme 2"
+        );
         assert_eq!(out.row_status.len(), num_row);
+
+        // Scheme 1 + Scheme 2 keep total_basic <= num_row, so the enforcer is
+        // a no-op under this fixture.
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(demoted, 0, "Scheme 2 makes enforcer a no-op");
     }
 }

@@ -416,6 +416,14 @@ pub(crate) struct ScratchBuffers {
     /// When `initial_pool_capacity == 0` (simulation-only workspaces), this
     /// vec starts empty; tickets 003/004 grow it in-place if needed.
     pub(crate) recon_slot_lookup: Vec<Option<u32>>,
+    /// Scratch buffer for Scheme 1 symmetric demotion in `reconstruct_basis`
+    /// (Epic 06 T2).
+    ///
+    /// Accumulates `(out_row_index, popcount)` pairs for preserved-BASIC rows
+    /// during the reconstruction loop.  Sorted by popcount after the loop so
+    /// the `lower_deficit` weakest candidates can be demoted without extra
+    /// allocation.  Cleared at the start of each `reconstruct_basis` call.
+    pub(crate) demotion_candidates: Vec<(usize, u32)>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -567,6 +575,7 @@ impl ScratchBuffers {
             },
             downstream_n_completed: 0,
             recon_slot_lookup: vec![None; initial_pool_capacity],
+            demotion_candidates: Vec::with_capacity(initial_pool_capacity),
         }
     }
 }

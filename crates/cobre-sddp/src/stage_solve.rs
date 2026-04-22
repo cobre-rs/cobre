@@ -167,16 +167,21 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         // All solves now use the baked path: cuts are structural rows in the
         // baked template; the delta-cut iterator is always empty (AD-3).
         let baked = inputs.baked_template;
-        let recon_stats = reconstruct_basis(
-            captured,
-            ReconstructionTarget {
+        let source = crate::basis_reconstruct::ReconstructionSource {
+            target: ReconstructionTarget {
                 base_row_count: baked.num_rows,
                 num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
             },
+            cut_metadata: &inputs.pool.metadata,
+        };
+        let recon_stats = reconstruct_basis(
+            captured,
+            source,
             std::iter::empty(),
             padding,
             &mut ws.scratch_basis,
             &mut ws.scratch.recon_slot_lookup,
+            &mut ws.scratch.demotion_candidates,
         );
         // base_row_for_invariant = n_state bounds demotion to the non-state-
         // fixing rows [n_state, num_row). Cut-selection between iterations can

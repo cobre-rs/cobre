@@ -575,6 +575,7 @@ mod tests {
             downstream_completed_lags: Vec::new(),
             downstream_n_completed: 0,
             recon_slot_lookup: Vec::new(),
+            demotion_candidates: Vec::new(),
         }
     }
 

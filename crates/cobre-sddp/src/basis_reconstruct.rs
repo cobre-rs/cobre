@@ -41,24 +41,30 @@
 //!
 //! ```rust
 //! use cobre_sddp::basis_reconstruct::{
-//!     PaddingContext, ReconstructionStats, ReconstructionTarget, reconstruct_basis,
+//!     PaddingContext, ReconstructionSource, ReconstructionStats, ReconstructionTarget,
+//!     reconstruct_basis,
 //! };
 //! use cobre_sddp::workspace::CapturedBasis;
 //! use cobre_solver::Basis;
 //!
 //! let stored = CapturedBasis::new(4, 3, 3, 0, 0); // empty — shim state
-//! let target = ReconstructionTarget { base_row_count: 3, num_cols: 4 };
+//! let source = ReconstructionSource {
+//!     target: ReconstructionTarget { base_row_count: 3, num_cols: 4 },
+//!     cut_metadata: &[],
+//! };
 //! let mut out = Basis::new(0, 0);
 //! let mut lookup: Vec<Option<u32>> = vec![None; 16];
+//! let mut demotion_candidates: Vec<(usize, u32)> = Vec::new();
 //! let cuts: Vec<(usize, f64, Vec<f64>)> = vec![];
 //! let padding = PaddingContext { state: &[], theta: 0.0, tolerance: 1e-7 };
 //! let stats = reconstruct_basis(
 //!     &stored,
-//!     target,
+//!     source,
 //!     cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
 //!     padding,
 //!     &mut out,
 //!     &mut lookup,
+//!     &mut demotion_candidates,
 //! );
 //! assert_eq!(stats, ReconstructionStats::default());
 //! ```
@@ -67,7 +73,26 @@ pub use cobre_solver::ffi::{HIGHS_BASIS_STATUS_BASIC, HIGHS_BASIS_STATUS_LOWER};
 
 use cobre_solver::Basis;
 
+use crate::cut_selection::CutMetadata;
 use crate::workspace::CapturedBasis;
+
+// ---------------------------------------------------------------------------
+// Activity-classifier constants (Epic 06 AD-2)
+// ---------------------------------------------------------------------------
+
+/// Window size for the activity-driven new-cut classifier (Epic 06 AD-7).
+///
+/// The classifier looks at the low `RECENT_WINDOW_K` bits of
+/// `CutMetadata::active_window`. A cut that was binding in any of the last
+/// `RECENT_WINDOW_K` iterations has `active_window & RECENT_WINDOW_BITS != 0`
+/// and is classified LOWER (tight guess). Cuts with a zero mask are classified
+/// BASIC (slack guess, the safe default).
+pub const RECENT_WINDOW_K: u32 = 5;
+
+/// Mask for the low [`RECENT_WINDOW_K`] bits (Epic 06 AD-2).
+///
+/// Derived from [`RECENT_WINDOW_K`]: `(1 << RECENT_WINDOW_K) - 1 = 0b11111`.
+pub const RECENT_WINDOW_BITS: u32 = (1u32 << RECENT_WINDOW_K) - 1;
 
 // ---------------------------------------------------------------------------
 // Target LP shape (absorbs two scalar parameters to stay within clippy budget)
@@ -84,6 +109,31 @@ pub struct ReconstructionTarget {
     pub base_row_count: usize,
     /// Total column count of the target LP.
     pub num_cols: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Source (target + cut metadata grouped to stay within clippy arg budget)
+// ---------------------------------------------------------------------------
+
+/// Target LP dimensions plus the cut-activity metadata slice.
+///
+/// Grouping [`ReconstructionTarget`] and the `CutMetadata` slice into a single
+/// struct keeps [`reconstruct_basis`] within the `clippy::too_many_arguments`
+/// threshold (workspace-level `deny`) while making the relationship between the
+/// LP shape and the per-cut activity data explicit at call sites.
+///
+/// The `cut_metadata` slice is indexed by **cut pool slot**. It is safe to pass
+/// `&[]` when no activity metadata is available; the classifier falls back to
+/// `active_window = 0` (BASIC) for every slot beyond the slice bounds.
+#[derive(Clone, Copy, Debug)]
+pub struct ReconstructionSource<'a> {
+    /// Dimensions of the target LP.
+    pub target: ReconstructionTarget,
+    /// Per-slot activity metadata for the activity-driven classifier.
+    ///
+    /// Indexed by cut pool slot. Use `&[]` when the caller does not have
+    /// activity data (e.g. simulation, or tests with empty pools).
+    pub cut_metadata: &'a [CutMetadata],
 }
 
 // ---------------------------------------------------------------------------
@@ -122,8 +172,14 @@ pub struct ReconstructionStats {
     /// Cut rows whose slot was found in the stored basis and whose status was
     /// copied directly.
     pub preserved: u32,
-    /// New cut rows (slot not in stored basis) evaluated as tight or violated
-    /// at `padding_state` (`theta - cut_value <= tolerance`).
+    /// Cut rows classified as LOWER because their
+    /// `active_window & RECENT_WINDOW_BITS != 0` (Epic 06 AD-2).
+    ///
+    /// These are new cuts (slot not in stored basis) for which the sliding
+    /// activity bitmap shows binding in at least one of the last
+    /// [`RECENT_WINDOW_K`] iterations. The simplex may pivot them back to BASIC
+    /// if the guess was wrong; a post-solve telemetry delta (`basis_offered` vs
+    /// `basis_consistency_failures`) surfaces this.
     pub new_tight: u32,
     /// New cut rows evaluated as slack at `padding_state`
     /// (`theta - cut_value > tolerance`).
@@ -139,7 +195,9 @@ pub struct ReconstructionStats {
 /// ## Parameters
 ///
 /// - `stored` — read-only stored metadata from the previous iteration.
-/// - `target` — template row count and column count of the target LP.
+/// - `source` — target LP dimensions and per-slot activity metadata.
+///   Pass `cut_metadata: &[]` when no activity data is available; the
+///   classifier falls back to `active_window = 0` (BASIC) for all slots.
 /// - `current_cut_rows` — iterator of `(slot, intercept, coefficients)` in
 ///   target LP row order.  The state dimension is inferred from
 ///   `padding.state.len()`.
@@ -152,6 +210,10 @@ pub struct ReconstructionStats {
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
 ///   at least `max_slot + 1`.  Grown in place if undersized (hot path should
 ///   avoid this via `ScratchBuffers::recon_slot_lookup`).
+/// - `demotion_candidates` — scratch `Vec<(usize, u32)>` for Scheme 1
+///   symmetric demotion. Cleared at function entry; holds `(out_row_index,
+///   popcount)` pairs for preserved BASIC cut-rows. Pre-sized by the caller
+///   via `ScratchBuffers::demotion_candidates`.
 ///
 /// ## Returns
 ///
@@ -160,20 +222,31 @@ pub struct ReconstructionStats {
 ///
 /// ## Allocation contract
 ///
-/// Allocation-free on the hot path when `slot_lookup.len() >= max_slot + 1`.
+/// Allocation-free on the hot path when `slot_lookup.len() >= max_slot + 1`
+/// and `demotion_candidates` has sufficient capacity.
 /// The growth path triggers a `debug_assert!(false)` to surface caller
 /// under-sizing, but does not panic in release.
+#[allow(clippy::too_many_lines)]
 pub fn reconstruct_basis<'a, I>(
     stored: &CapturedBasis,
-    target: ReconstructionTarget,
+    source: ReconstructionSource<'_>,
     current_cut_rows: I,
     padding: PaddingContext<'_>,
     out: &mut Basis,
     slot_lookup: &mut Vec<Option<u32>>,
+    demotion_candidates: &mut Vec<(usize, u32)>,
 ) -> ReconstructionStats
 where
     I: Iterator<Item = (usize, f64, &'a [f64])>,
 {
+    let target = source.target;
+    let cut_metadata = source.cut_metadata;
+
+    // Clear the demotion-candidates scratch at function entry.
+    // CRITICAL: this vec is reused across stages; a stale list from a
+    // previous stage would contaminate the current stage's demotion.
+    demotion_candidates.clear();
+
     debug_assert!(
         padding.state.len() == stored.state_at_capture.len() || stored.state_at_capture.is_empty(),
         "padding.state.len() {} != stored.state_at_capture.len() {}",
@@ -243,28 +316,116 @@ where
     }
 
     // (d) Walk current cut rows and assign statuses.
+    //
+    // Activity-driven classifier (Epic 06 AD-2):
+    // - Preserved slots: copy stored status. If BASIC, push onto demotion
+    //   candidates for potential Scheme 1 symmetric demotion.
+    // - New slots: consult active_window bitmap. If any of the last
+    //   RECENT_WINDOW_K bits are set → LOWER (tight guess, count new_tight).
+    //   Otherwise → BASIC (slack default, count new_slack).
+    //
+    // Scheme 1 symmetric demotion (after loop): for each LOWER-guessed new
+    // cut, demote one preserved-BASIC candidate (lowest popcount first) to
+    // LOWER to maintain basic_count == num_row. If the preserved-BASIC pool
+    // is exhausted (Scheme 2 tail), flip the latest activity-driven LOWER
+    // guesses back to BASIC instead.
     let mut stats = ReconstructionStats::default();
+    let mut lower_deficit: usize = 0;
+
+    // Track the output row indices of new cuts classified as LOWER, in
+    // reverse-appended order, for Scheme 2 tail fallback.
+    let mut new_lower_indices: Vec<usize> = Vec::new();
+
     for (target_slot, intercept, coefficients) in current_cut_rows {
+        // Capture the output row index BEFORE the push.
+        let out_row_index = out.row_status.len();
+        debug_assert!(
+            out_row_index >= target.base_row_count,
+            "cut row index {out_row_index} must be >= base_row_count {}",
+            target.base_row_count,
+        );
+
         let row_status_byte = if let Some(pos) = slot_lookup.get(target_slot).and_then(|o| *o) {
             // Slot was in the stored basis — copy its row status.
             // The stored row index is `stored.base_row_count + position`.
             let stored_row_idx = stored.base_row_count + pos as usize;
+            let stored_status = stored.basis.row_status[stored_row_idx];
             stats.preserved += 1;
-            stored.basis.row_status[stored_row_idx]
+            if stored_status == HIGHS_BASIS_STATUS_BASIC {
+                // Candidate for Scheme 1 symmetric demotion.
+                let popcount = cut_metadata
+                    .get(target_slot)
+                    .map_or(0, |m| m.active_window.count_ones());
+                demotion_candidates.push((out_row_index, popcount));
+            }
+            stored_status
         } else {
-            // New cut — classify as BASIC (slack) unconditionally to preserve
-            // basic_count == num_row. Each appended cut grows num_row by 1, so
-            // marking it BASIC grows basic_count by 1 and keeps the invariant
-            // exact. The simplex discovers tight cuts via pivots during the solve.
-            //
-            // NOTE: `new_tight` is always 0 after ticket-008 (backward path no
-            // longer uses cut-value evaluation for new cuts). Scheduled for
-            // removal in a follow-up cleanup ticket.
+            // New cut — consult the activity window (Epic 06 AD-2).
+            let active_window = cut_metadata.get(target_slot).map_or(0, |m| m.active_window);
             let _ = (intercept, coefficients); // suppress unused-variable warnings
-            stats.new_slack += 1;
-            HIGHS_BASIS_STATUS_BASIC
+            if active_window & RECENT_WINDOW_BITS != 0 {
+                // Activity-guided tight guess: classify LOWER.
+                stats.new_tight += 1;
+                lower_deficit += 1;
+                new_lower_indices.push(out_row_index);
+                HIGHS_BASIS_STATUS_LOWER
+            } else {
+                // No recent activity: classify BASIC (safe default).
+                stats.new_slack += 1;
+                HIGHS_BASIS_STATUS_BASIC
+            }
         };
         out.row_status.push(row_status_byte);
+    }
+
+    // (e) Scheme 1 symmetric demotion: restore basic_count == num_row.
+    //
+    // Each LOWER-guessed new cut reduced total_basic by 1 (relative to the
+    // unconditional-BASIC default). Offset by demoting the preserved-BASIC
+    // candidate with the lowest activity popcount (least likely to need
+    // BASIC status at the next solve).
+    if lower_deficit > 0 {
+        // Stable sort: equal-popcount ties preserve insertion order
+        // (declaration-order invariance). Do NOT use sort_unstable_by_key.
+        demotion_candidates.sort_by_key(|&(_, popcount)| popcount);
+
+        let available_candidates = demotion_candidates.len();
+        let scheme1_count = lower_deficit.min(available_candidates);
+
+        // Apply Scheme 1: demote the `scheme1_count` preserved-BASIC
+        // candidates with the lowest popcounts.
+        for &(row_idx, _) in demotion_candidates.iter().take(scheme1_count) {
+            debug_assert!(
+                row_idx >= target.base_row_count,
+                "Scheme 1 demotion target row_idx {row_idx} must be >= base_row_count {}",
+                target.base_row_count,
+            );
+            debug_assert_eq!(
+                out.row_status[row_idx], HIGHS_BASIS_STATUS_BASIC,
+                "Scheme 1 demotion target must be BASIC",
+            );
+            out.row_status[row_idx] = HIGHS_BASIS_STATUS_LOWER;
+        }
+
+        // Scheme 2 tail fallback: if more LOWER guesses than preserved-BASIC
+        // candidates, override the most-recently-classified new LOWER cuts
+        // back to BASIC. This keeps the invariant under adversarial inputs.
+        let remaining_deficit = lower_deficit - scheme1_count;
+        if remaining_deficit > 0 {
+            // Walk the new-LOWER indices from latest to earliest.
+            for &row_idx in new_lower_indices.iter().rev().take(remaining_deficit) {
+                debug_assert_eq!(
+                    out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
+                    "Scheme 2 override target must be LOWER",
+                );
+                out.row_status[row_idx] = HIGHS_BASIS_STATUS_BASIC;
+            }
+            // Adjust telemetry to reflect the actual classifier outcome.
+            #[allow(clippy::cast_possible_truncation)]
+            let n = remaining_deficit as u32;
+            stats.new_tight -= n;
+            stats.new_slack += n;
+        }
     }
 
     stats
@@ -368,15 +529,17 @@ pub fn enforce_basic_count_invariant(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::doc_markdown)]
 mod tests {
     use cobre_solver::Basis;
 
     use super::{
         HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
-        ReconstructionStats, ReconstructionTarget, enforce_basic_count_invariant,
-        reconstruct_basis,
+        RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats, ReconstructionTarget,
+        enforce_basic_count_invariant, reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
+    use crate::cut_selection::CutMetadata;
     use crate::workspace::CapturedBasis;
 
     // -----------------------------------------------------------------------
@@ -421,10 +584,30 @@ mod tests {
         cb
     }
 
-    fn target(base_row_count: usize, num_cols: usize) -> ReconstructionTarget {
-        ReconstructionTarget {
-            base_row_count,
-            num_cols,
+    /// Convenience: build a `ReconstructionSource` with no activity metadata.
+    ///
+    /// Used by tests that exercise the preserved/slack paths only; the
+    /// classifier falls back to `active_window = 0` (BASIC) for all slots.
+    fn source_no_metadata(base_row_count: usize, num_cols: usize) -> ReconstructionSource<'static> {
+        ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count,
+                num_cols,
+            },
+            cut_metadata: &[],
+        }
+    }
+
+    /// Build a minimal `CutMetadata` with only `active_window` set.
+    ///
+    /// All other fields default to zero / `iteration_generated = 0`.
+    fn meta_with_window(active_window: u32) -> CutMetadata {
+        CutMetadata {
+            iteration_generated: 0,
+            forward_pass_index: 0,
+            active_count: 0,
+            last_active_iter: 0,
+            active_window,
         }
     }
 
@@ -455,7 +638,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(2, 3),
+            source_no_metadata(2, 3),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -464,6 +647,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -500,7 +684,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -509,6 +693,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -537,7 +722,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -546,6 +731,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -581,7 +767,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -590,6 +776,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -646,7 +833,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -655,6 +842,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -667,10 +855,10 @@ mod tests {
         );
         // Template rows 0..3; out[3..5] = stored[3..5] = [L, B] (preserved).
         assert_eq!(&out.row_status[3..5], &stored.basis.row_status[3..5]);
-        // New cuts are unconditionally BASIC.
+        // New cuts are unconditionally BASIC (no activity metadata, active_window=0).
         assert_eq!(
             out.row_status[5], B,
-            "slot 12 -> BASIC (tight by value, BASIC by invariant)"
+            "slot 12 -> BASIC (no metadata, active_window=0)"
         );
         assert_eq!(out.row_status[6], B, "slot 13 -> BASIC");
     }
@@ -689,7 +877,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -698,6 +886,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -726,7 +915,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 4),
+            source_no_metadata(3, 4),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0],
@@ -735,6 +924,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(stats, ReconstructionStats::default());
@@ -763,7 +953,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(3, 3),
+            source_no_metadata(3, 3),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[],
@@ -772,6 +962,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         // Growth path: lookup must have grown to >= max_stored_slot + 1 = 1000.
@@ -825,7 +1016,7 @@ mod tests {
         let mut lookup: Vec<Option<u32>> = vec![None; 16];
         let stats = reconstruct_basis(
             &stored,
-            target(2, 3),
+            source_no_metadata(2, 3),
             active_after_churn
                 .iter()
                 .map(|(s, i, c)| (*s, *i, c.as_slice())),
@@ -836,6 +1027,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         // Both surviving cuts (slots 0 and 2) should be preserved, no new cuts.
@@ -880,7 +1072,7 @@ mod tests {
         let mut lookup: Vec<Option<u32>> = vec![None; 32];
         let stats = reconstruct_basis(
             &stored,
-            target(2, 3),
+            source_no_metadata(2, 3),
             cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0],
@@ -889,6 +1081,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(
@@ -1016,7 +1209,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(baked_base_rows, num_cols),
+            source_no_metadata(baked_base_rows, num_cols),
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0, 3.0],
@@ -1025,10 +1218,14 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(stats.preserved, 3, "all delta cuts preserved");
-        assert_eq!(stats.new_tight, 0, "new_tight is always 0 post ticket-008");
+        assert_eq!(
+            stats.new_tight, 0,
+            "no activity metadata — all new cuts fall back to BASIC"
+        );
         assert_eq!(stats.new_slack, 0, "no new cuts");
 
         let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
@@ -1067,7 +1264,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(baked_base_rows, num_cols),
+            source_no_metadata(baked_base_rows, num_cols),
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0, 2.0, 3.0],
@@ -1076,11 +1273,18 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
 
         assert_eq!(stats.preserved, 3, "three preserved delta cuts");
-        assert_eq!(stats.new_tight, 0, "new_tight is always 0 post ticket-008");
-        assert_eq!(stats.new_slack, 2, "two new cuts classified BASIC");
+        assert_eq!(
+            stats.new_tight, 0,
+            "no activity metadata — new cuts fall back to BASIC"
+        );
+        assert_eq!(
+            stats.new_slack, 2,
+            "two new cuts classified BASIC (no metadata)"
+        );
 
         let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
         assert_eq!(
@@ -1170,7 +1374,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(base_rows, num_cols),
+            source_no_metadata(base_rows, num_cols),
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0],
@@ -1179,6 +1383,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
         assert_eq!(stats.preserved, 3, "all 3 cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1251,7 +1456,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(base_rows, num_cols),
+            source_no_metadata(base_rows, num_cols),
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0],
@@ -1260,6 +1465,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
         assert_eq!(stats.preserved, 2, "both surviving cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1324,7 +1530,7 @@ mod tests {
         // Baked path: empty cut iterator — all cuts live in the baked template.
         let stats = reconstruct_basis(
             &stored,
-            target(l_new, num_cols),
+            source_no_metadata(l_new, num_cols),
             std::iter::empty::<(usize, f64, &[f64])>(),
             PaddingContext {
                 state: &[1.0],
@@ -1333,6 +1539,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
         assert_eq!(stats, ReconstructionStats::default());
         assert_eq!(out.row_status.len(), l_new);
@@ -1416,7 +1623,7 @@ mod tests {
 
         let stats = reconstruct_basis(
             &stored,
-            target(base_rows, num_cols),
+            source_no_metadata(base_rows, num_cols),
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
                 state: &[1.0],
@@ -1425,6 +1632,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
+            &mut Vec::new(),
         );
         assert_eq!(stats.preserved, 2, "slots 10,11 preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1453,5 +1661,309 @@ mod tests {
             "invariant restored: col_basic({col_basic}) + row_basic({row_basic_after}) \
              == num_row({num_row})",
         );
+    }
+
+    // ── Activity-driven classifier tests (Epic 06 T2) ─────────────────────────
+
+    /// A new cut whose `active_window` is all-zero (never seen as binding) gets
+    /// classified BASIC (new_slack += 1).
+    #[test]
+    fn classifier_returns_basic_when_active_window_is_zero() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[], &[], &[1.0]);
+
+        // One new cut, slot 99, active_window = 0 (never tight).
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![(99, 0.0, vec![0.0])];
+        let meta = vec![meta_with_window(0)];
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 128];
+        let mut demotions: Vec<(usize, u32)> = Vec::new();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut demotions,
+        );
+        assert_eq!(stats.new_tight, 0, "window=0 → BASIC (new_slack)");
+        assert_eq!(stats.new_slack, 1);
+    }
+
+    /// A new cut whose `active_window` has bit 0 set (tight in the most recent
+    /// iteration) gets classified LOWER (new_tight += 1).
+    ///
+    /// Includes one preserved-BASIC cut (slot 5) so Scheme 1 demotion can
+    /// absorb the LOWER guess — otherwise Scheme 2 would override it back to
+    /// BASIC and the new_tight increment would be cancelled.
+    #[test]
+    fn classifier_returns_lower_when_active_window_has_recent_bit() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        // stored has slot 5 = BASIC so Scheme 1 has a demotion candidate.
+        let stored = make_stored_basis(base_rows, num_cols, &[5], &[B], &[1.0]);
+
+        // Preserved cut at slot 5, new cut at slot 0 with recent-bit activity.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (5, 0.0, vec![0.0]), // preserved
+            (0, 0.0, vec![0.0]), // new, tight
+        ];
+        let mut meta = vec![meta_with_window(0); 6];
+        meta[0] = meta_with_window(0b0000_0001); // new cut — recent bit
+        // meta[5] left at 0 → popcount=0, will be picked for demotion.
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 128];
+        let mut demotions: Vec<(usize, u32)> = Vec::new();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut demotions,
+        );
+        assert_eq!(stats.preserved, 1, "slot 5 preserved");
+        assert_eq!(stats.new_tight, 1, "window bit 0 set → LOWER (new_tight)");
+        assert_eq!(stats.new_slack, 0);
+    }
+
+    /// A new cut whose `active_window` has only bits outside the recent window
+    /// (bits 5+) set is treated as dormant — classified BASIC.
+    #[test]
+    fn classifier_ignores_active_window_outside_recent_window() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[], &[], &[1.0]);
+
+        // Bit 5 set → outside RECENT_WINDOW_K=5, so masked away → BASIC.
+        // cut_metadata indexed by pool slot; use slot 0 to align with meta[0].
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![(0, 0.0, vec![0.0])];
+        let meta = vec![meta_with_window(1u32 << RECENT_WINDOW_K)];
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 128];
+        let mut demotions: Vec<(usize, u32)> = Vec::new();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut demotions,
+        );
+        assert_eq!(stats.new_tight, 0, "bits outside window → BASIC");
+        assert_eq!(stats.new_slack, 1);
+    }
+
+    /// Scheme 1: when 2 new cuts are classified LOWER (both have recent bits),
+    /// the 2 preserved-BASIC candidates with the lowest popcounts are demoted
+    /// to LOWER, keeping total basic == num_row.
+    ///
+    /// Fixture:
+    ///   base_rows=1 (col [B], row 0 = B).
+    ///   stored cuts: slots [10, 11, 12, 13] — all BASIC.
+    ///   Target: all 4 preserved + 2 new (slots 20, 21), both with recent activity.
+    ///   meta for preserved 10..13 has monotonic popcounts 1, 3, 5, 7 so the
+    ///   symmetric demotion picks slots 10 and 11 (the two lowest).
+    #[test]
+    fn scheme_1_symmetric_demotion_preserves_total_basic() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let stored = make_stored_basis(
+            base_rows,
+            num_cols,
+            &[10, 11, 12, 13],
+            &[B, B, B, B],
+            &[1.0],
+        );
+
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (10, 0.0, vec![0.0]),
+            (11, 0.0, vec![0.0]),
+            (12, 0.0, vec![0.0]),
+            (13, 0.0, vec![0.0]),
+            (20, 0.0, vec![0.0]), // new, tight
+            (21, 0.0, vec![0.0]), // new, tight
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+6=7
+
+        // meta indexed by cut-pool slot. Size=22 so slots 20/21 are in bounds.
+        // Preserved slot popcounts: 1, 3, 5, 7 (monotonic); stable sort picks
+        // the two lowest (10 and 11) for demotion.
+        let mut meta = vec![meta_with_window(0); 22];
+        meta[10] = meta_with_window(0b0000_0001); // popcount=1
+        meta[11] = meta_with_window(0b0000_0111); // popcount=3
+        meta[12] = meta_with_window(0b0001_1111); // popcount=5
+        meta[13] = meta_with_window(0b0111_1111); // popcount=7
+        meta[20] = meta_with_window(0b0000_0001); // new, recent
+        meta[21] = meta_with_window(0b0000_0001); // new, recent
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 32];
+        let mut demotions: Vec<(usize, u32)> = Vec::new();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut demotions,
+        );
+
+        assert_eq!(stats.preserved, 4, "4 slots preserved");
+        assert_eq!(stats.new_tight, 2, "2 new LOWER cuts");
+        assert_eq!(stats.new_slack, 0);
+
+        // Verify that the 2 preserved slots with the LOWEST popcounts (10, 11)
+        // were demoted from BASIC to LOWER. Preserved slots 12 and 13 remain
+        // BASIC because they had higher popcounts.
+        // Row layout: [template(B), slot10, slot11, slot12, slot13, slot20(L), slot21(L)]
+        assert_eq!(out.row_status[0], B, "template row unchanged");
+        assert_eq!(out.row_status[1], L, "slot 10 (popcount=1) demoted");
+        assert_eq!(out.row_status[2], L, "slot 11 (popcount=3) demoted");
+        assert_eq!(out.row_status[3], B, "slot 12 (popcount=5) remains BASIC");
+        assert_eq!(out.row_status[4], B, "slot 13 (popcount=7) remains BASIC");
+        assert_eq!(out.row_status[5], L, "new slot 20 classified LOWER");
+        assert_eq!(out.row_status[6], L, "new slot 21 classified LOWER");
+
+        // Sanity: 2 preserved demoted + 2 new LOWER = 4 LOWER total; 2 preserved
+        // still BASIC + 1 template BASIC = 3 BASIC. num_row = 7.
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let row_lower = out.row_status.iter().filter(|&&s| s == L).count();
+        assert_eq!(row_basic, 3);
+        assert_eq!(row_lower, 4);
+        assert_eq!(row_basic + row_lower, num_row);
+    }
+
+    /// Scheme 2: when there are more LOWER guesses than preserved-BASIC
+    /// candidates, the excess is overridden back to BASIC.
+    ///
+    /// Fixture:
+    ///   base_rows=1 (col [B], row 0 = B).
+    ///   stored: no cuts.
+    ///   Target: 3 new cuts, all classified LOWER (all have recent bits).
+    ///   No preserved rows → demotion_candidates is empty → deficit=3.
+    ///   Scheme 2 overrides all 3 back to BASIC → total basic remains num_row.
+    #[test]
+    fn scheme_2_fallback_when_deficit_exceeds_candidates() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[], &[], &[1.0]);
+
+        // 3 new tight cuts; no stored cuts → no preserved-BASIC candidates.
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (20, 0.0, vec![0.0]),
+            (21, 0.0, vec![0.0]),
+            (22, 0.0, vec![0.0]),
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+3=4
+
+        // meta indexed by cut-pool slot; size=23 so slots 20..22 are in bounds.
+        let mut meta = vec![meta_with_window(0); 23];
+        meta[20] = meta_with_window(0b0000_0001);
+        meta[21] = meta_with_window(0b0000_0001);
+        meta[22] = meta_with_window(0b0000_0001);
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 32];
+        let mut demotions: Vec<(usize, u32)> = Vec::new();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut demotions,
+        );
+
+        assert_eq!(stats.preserved, 0);
+        // Scheme 2 overrides all 3 back to BASIC because there are no
+        // preserved-BASIC candidates to absorb the LOWER guesses.
+        assert_eq!(
+            stats.new_slack, 3,
+            "all 3 overridden back to BASIC by Scheme 2"
+        );
+        assert_eq!(stats.new_tight, 0, "no net LOWER after Scheme 2 override");
+
+        // Verify each new cut's final status: all 3 flipped back to BASIC.
+        // Row layout: [template(B), slot20, slot21, slot22]
+        assert_eq!(out.row_status[0], B, "template row unchanged");
+        assert_eq!(out.row_status[1], B, "slot 20 overridden to BASIC");
+        assert_eq!(out.row_status[2], B, "slot 21 overridden to BASIC");
+        assert_eq!(out.row_status[3], B, "slot 22 overridden to BASIC");
+        assert_eq!(out.row_status.len(), num_row);
     }
 }

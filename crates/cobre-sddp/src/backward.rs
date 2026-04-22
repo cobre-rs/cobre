@@ -230,6 +230,11 @@ pub struct BackwardPassSpec<'a> {
     /// numerical noise from near-zero positive duals.
     pub cut_activity_tolerance: f64,
 
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    ///
+    /// Forwarded verbatim from [`crate::config::CutManagementConfig::basis_activity_window`].
+    pub basis_activity_window: u32,
+
     /// Pre-allocated cut synchronization buffers for per-stage `allgatherv`.
     ///
     /// After local cuts are inserted into the FCF at each stage, `sync_cuts`
@@ -392,6 +397,8 @@ struct SuccessorSpec<'a> {
     successor_active_slots: &'a [usize],
     /// Minimum dual multiplier for a cut to count as binding.
     cut_activity_tolerance: f64,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    basis_activity_window: u32,
     /// Populated count of the successor's cut pool.
     successor_populated_count: usize,
     /// Cut pool at the successor stage for binding-activity tracking.
@@ -570,6 +577,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             iteration: Some(spec.iteration),
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
+            basis_activity_window: succ.basis_activity_window,
         };
 
         let outcome =
@@ -1018,6 +1026,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
             baked_template: baked_tmpl,
             successor_active_slots: spec.successor_active_slots_buf,
             cut_activity_tolerance: spec.cut_activity_tolerance,
+            basis_activity_window: spec.basis_activity_window,
             successor_populated_count: fcf.pools[successor].populated_count,
             successor_pool: &fcf.pools[successor],
         };
@@ -1991,6 +2000,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2098,6 +2108,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2205,6 +2216,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2308,6 +2320,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2411,6 +2424,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2512,6 +2526,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2572,6 +2587,7 @@ mod tests {
     // ── Integration tests ─────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
         // Integration test: verify that the backward pass uses the correct
         // dual extraction formula by checking cuts in the FCF.
@@ -2657,6 +2673,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2781,6 +2798,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -2910,6 +2928,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3025,6 +3044,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3150,6 +3170,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3270,6 +3291,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3383,6 +3405,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3504,6 +3527,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3664,6 +3688,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -3759,6 +3784,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4147,6 +4173,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4320,6 +4347,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4498,6 +4526,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4629,6 +4658,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4769,6 +4799,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -4881,7 +4912,7 @@ mod tests {
     /// not carry into iter i+1's classifier decisions (transient semantics).
     #[test]
     fn add_cut_seeds_active_window_with_seed_bit() {
-        use crate::basis_reconstruct::{RECENT_WINDOW_BITS, SEED_BIT};
+        use crate::basis_reconstruct::{DEFAULT_RECENT_WINDOW_BITS, SEED_BIT};
         use crate::cut::CutPool;
         // CutPool::new(capacity=8, state_dim=1, forward_passes=3, warm_start=0).
         // add_cut(iteration=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
@@ -4898,19 +4929,19 @@ mod tests {
             "Epic 06 G1 (transient): add_cut must seed active_window = SEED_BIT \
              so the classifier treats the generating event as a bind signal."
         );
-        // The classifier predicate is `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`;
+        // The classifier predicate is `(aw & (DEFAULT_RECENT_WINDOW_BITS | SEED_BIT)) != 0`;
         // SEED_BIT alone (with bits 0..4 clear) must satisfy it.
         assert_ne!(
-            pool.metadata[3].active_window & (RECENT_WINDOW_BITS | SEED_BIT),
+            pool.metadata[3].active_window & (DEFAULT_RECENT_WINDOW_BITS | SEED_BIT),
             0,
             "the seed must fire the classifier's new-cut LOWER branch"
         );
-        // SEED_BIT must live outside RECENT_WINDOW_BITS so it is not counted by
+        // SEED_BIT must live outside DEFAULT_RECENT_WINDOW_BITS so it is not counted by
         // the Scheme 1 popcount sort key.
         assert_eq!(
-            SEED_BIT & RECENT_WINDOW_BITS,
+            SEED_BIT & DEFAULT_RECENT_WINDOW_BITS,
             0,
-            "SEED_BIT must not overlap RECENT_WINDOW_BITS"
+            "SEED_BIT must not overlap DEFAULT_RECENT_WINDOW_BITS"
         );
     }
 
@@ -4919,7 +4950,7 @@ mod tests {
     /// observations (bit 0) must survive as bit 1.
     #[test]
     fn seed_bit_cleared_by_end_of_iter_shift() {
-        use crate::basis_reconstruct::{RECENT_WINDOW_BITS, SEED_BIT};
+        use crate::basis_reconstruct::{DEFAULT_RECENT_WINDOW_BITS, SEED_BIT};
 
         // Scenario A: freshly seeded cut with no binding observation.
         let mut aw: u32 = SEED_BIT;
@@ -4938,7 +4969,7 @@ mod tests {
              seed bit must be cleared"
         );
         assert_ne!(
-            aw & RECENT_WINDOW_BITS,
+            aw & DEFAULT_RECENT_WINDOW_BITS,
             0,
             "surviving bit 1 still fires the classifier in iter i+1 (real activity)"
         );
@@ -5053,6 +5084,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -5179,6 +5211,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -5347,6 +5380,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -5729,6 +5763,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -5967,6 +6002,7 @@ mod tests {
                 risk_measures: &risk_measures,
                 exchange: &mut exchange,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 cut_sync_bufs: &mut csb,
                 probabilities_buf: &mut Vec::new(),
                 successor_active_slots_buf: &mut Vec::new(),
@@ -6116,6 +6152,7 @@ mod tests {
             risk_measures: &risk_measures,
             exchange: &mut exchange,
             cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             cut_sync_bufs: &mut csb,
             probabilities_buf: &mut probabilities_buf,
             successor_active_slots_buf: &mut Vec::new(),
@@ -6155,6 +6192,7 @@ mod tests {
             baked_template: &baked_template,
             successor_active_slots: &successor_active_slots,
             cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             successor_populated_count: fcf.pools[1].populated_count,
             successor_pool: &fcf.pools[1],
         };

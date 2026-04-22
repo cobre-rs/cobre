@@ -730,6 +730,11 @@ pub struct ForwardPassBatch<'a> {
     /// the forward phase. When `None` (the default for tests), no events are
     /// emitted.
     pub event_sender: Option<&'a Sender<TrainingEvent>>,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    ///
+    /// Forwarded verbatim from [`crate::config::CutManagementConfig::basis_activity_window`]
+    /// and threaded through [`StageKey`] into [`crate::stage_solve::StageInputs`].
+    pub basis_activity_window: u32,
 }
 
 /// Compute the scenario range `[start, end)` for worker `worker_id` when
@@ -796,6 +801,8 @@ struct StageKey<'a> {
     /// contains all active cuts as structural rows; `run_stage_solve` uses the
     /// empty-iterator reconstruction path.
     baked_template: &'a StageTemplate,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    basis_activity_window: u32,
 }
 
 /// Populate `CapturedBasis` metadata after a forward solve.
@@ -864,6 +871,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         terminal_has_boundary_cuts,
         pool,
         baked_template,
+        basis_activity_window,
     } = *key;
     let n_hydros = ctx.n_hydros;
     let n_load_buses = ctx.n_load_buses;
@@ -981,6 +989,7 @@ fn run_forward_stage<S: SolverInterface + Send>(
         iteration: Some(iteration),
         horizon_is_terminal: horizon.is_terminal(t + 1),
         terminal_has_boundary_cuts,
+        basis_activity_window,
     };
 
     let outcome =
@@ -1242,6 +1251,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
         iteration,
         fwd_offset,
         event_sender,
+        basis_activity_window,
     } = batch;
     let (num_stages, forward_passes) = (horizon.num_stages(), *local_forward_passes);
 
@@ -1427,6 +1437,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
                             terminal_has_boundary_cuts,
                             pool: &fcf.pools[t],
                             baked_template: &baked[t],
+                            basis_activity_window: *basis_activity_window,
                         };
                         // Snapshot solver statistics before the stage solve so the
                         // per-stage delta can be accumulated without hot-path allocation.
@@ -2297,6 +2308,7 @@ mod tests {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
             },
@@ -2369,6 +2381,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -2419,6 +2432,7 @@ mod tests {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
             },
@@ -2491,6 +2505,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         );
@@ -2547,6 +2562,7 @@ mod tests {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
             },
@@ -2619,6 +2635,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -2995,6 +3012,7 @@ mod tests {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
             },
@@ -3064,6 +3082,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -3232,6 +3251,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records1,
         )
@@ -3272,6 +3292,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records4,
         )
@@ -3379,6 +3400,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -3692,6 +3714,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -3812,6 +3835,7 @@ mod tests {
                 cut_selection: None,
                 budget: None,
                 cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 warm_start_cuts: 0,
                 risk_measures: vec![RiskMeasure::Expectation],
             },
@@ -3883,6 +3907,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -4127,6 +4152,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         );
@@ -4267,6 +4293,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -4402,6 +4429,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )
@@ -4500,6 +4528,7 @@ mod tests {
                 iteration: 0,
                 fwd_offset: 0,
                 event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             &mut records,
         )

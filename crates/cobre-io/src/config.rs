@@ -223,6 +223,16 @@ pub struct CutSelectionConfig {
     #[serde(default)]
     pub cut_activity_tolerance: Option<f64>,
 
+    /// Activity-window size for the basis-reconstruction classifier and
+    /// Scheme 1 sort popcount. Bit `i` of `active_window` counts toward the
+    /// classifier and popcount mask when `i < basis_activity_window`.
+    ///
+    /// Validated range: 1..=31. Default when absent: 5 (inherited from
+    /// CEPEL NEWAVE). See Epic 06 AD-7 and
+    /// `docs/design/performance-mechanism-interactions.md` §9.
+    #[serde(default)]
+    pub basis_activity_window: Option<u32>,
+
     /// Maximum number of active cuts per stage (stage 2 of the cut selection
     /// pipeline — hard cap on LP size).
     ///
@@ -1782,12 +1792,14 @@ mod tests {
             check_frequency: None,
             cut_activity_tolerance: None,
             max_active_per_stage: Some(100),
+            basis_activity_window: Some(7),
         };
         let json = serde_json::to_string(&original).unwrap();
         let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtripped.max_active_per_stage, Some(100));
         assert_eq!(roundtripped.enabled, Some(true));
         assert_eq!(roundtripped.method.as_deref(), Some("level1"));
+        assert_eq!(roundtripped.basis_activity_window, Some(7));
     }
 
     /// max_active_per_stage absent from JSON deserializes to None.

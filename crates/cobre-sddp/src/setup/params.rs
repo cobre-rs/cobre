@@ -46,6 +46,9 @@ pub struct StudyParams {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
+    /// Activity-window size for the basis-reconstruction classifier.
+    /// Validated range 1..=31. Default: [`crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW`].
+    pub basis_activity_window: u32,
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from
@@ -134,6 +137,17 @@ impl StudyParams {
             .cut_activity_tolerance
             .unwrap_or(0.0);
 
+        let basis_activity_window = config
+            .training
+            .cut_selection
+            .basis_activity_window
+            .unwrap_or(crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW);
+        if !(1..=31).contains(&basis_activity_window) {
+            return Err(SddpError::Validation(format!(
+                "basis_activity_window must be in 1..=31, got {basis_activity_window}"
+            )));
+        }
+
         let budget = config.training.cut_selection.max_active_per_stage;
 
         // Warn when the budget is so tight that every iteration will immediately
@@ -162,6 +176,7 @@ impl StudyParams {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
+            basis_activity_window,
             budget,
         })
     }
@@ -182,6 +197,7 @@ impl StudyParams {
             inflow_method: self.inflow_method,
             cut_selection: self.cut_selection,
             cut_activity_tolerance: self.cut_activity_tolerance,
+            basis_activity_window: self.basis_activity_window,
             budget: self.budget,
             export_states: false,
         }
@@ -217,6 +233,11 @@ pub struct ConstructionConfig {
     pub cut_selection: Option<CutSelectionStrategy>,
     /// Minimum dual multiplier for a cut to count as binding (`0.0` if unset).
     pub cut_activity_tolerance: f64,
+    /// Activity-window size for the basis-reconstruction classifier.
+    ///
+    /// Validated range 1..=31. Default:
+    /// [`crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW`].
+    pub basis_activity_window: u32,
     /// Maximum number of active cuts per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from
@@ -228,4 +249,95 @@ pub struct ConstructionConfig {
     /// cut selection strategy. Defaults to `false`; set based on
     /// `exports.states`.
     pub export_states: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use cobre_io::config::{
+        Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
+        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+    };
+
+    use super::StudyParams;
+
+    /// Build a minimal `cobre_io::Config` with the given
+    /// `basis_activity_window` value in `training.cut_selection`.
+    fn config_with_window(window: Option<u32>) -> Config {
+        Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "penalty".to_string(),
+                    penalty_cost: 1000.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                tree_seed: Some(42),
+                forward_passes: Some(1),
+                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: CutSelectionConfig {
+                    basis_activity_window: window,
+                    ..CutSelectionConfig::default()
+                },
+                solver: TrainingSolverConfig::default(),
+                scenario_source: None,
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        }
+    }
+
+    #[test]
+    fn study_params_rejects_basis_activity_window_out_of_range() {
+        // Value 0 must be rejected.
+        let err = StudyParams::from_config(&config_with_window(Some(0)))
+            .expect_err("window=0 must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("basis_activity_window"),
+            "error must mention field name; got: {msg}"
+        );
+
+        // Value 32 must be rejected.
+        let err = StudyParams::from_config(&config_with_window(Some(32)))
+            .expect_err("window=32 must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("basis_activity_window"),
+            "error must mention field name; got: {msg}"
+        );
+
+        // None defaults to 5.
+        let params =
+            StudyParams::from_config(&config_with_window(None)).expect("None must succeed");
+        assert_eq!(
+            params.basis_activity_window,
+            crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            "None must default to DEFAULT_BASIS_ACTIVITY_WINDOW"
+        );
+
+        // Explicit 5 must pass.
+        let params =
+            StudyParams::from_config(&config_with_window(Some(5))).expect("window=5 must succeed");
+        assert_eq!(params.basis_activity_window, 5);
+
+        // Boundary values 1 and 31 must pass.
+        let params =
+            StudyParams::from_config(&config_with_window(Some(1))).expect("window=1 must succeed");
+        assert_eq!(params.basis_activity_window, 1);
+
+        let params = StudyParams::from_config(&config_with_window(Some(31)))
+            .expect("window=31 must succeed");
+        assert_eq!(params.basis_activity_window, 31);
+    }
 }

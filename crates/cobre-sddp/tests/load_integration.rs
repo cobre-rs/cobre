@@ -419,6 +419,7 @@ fn test_stochastic_load_training_completes() {
             budget: None,
             cut_activity_tolerance: 0.0,
             warm_start_cuts: 0,
+            basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             risk_measures: risk_measures.clone(),
         },
         events: EventConfig {
@@ -569,6 +570,7 @@ fn test_deterministic_load_training_matches_baseline() {
                 budget: None,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
+                basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 risk_measures: risk_measures.clone(),
             },
             events: EventConfig {
@@ -649,6 +651,7 @@ fn test_stochastic_load_seed_determinism() {
                 budget: None,
                 cut_activity_tolerance: 0.0,
                 warm_start_cuts: 0,
+                basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
                 risk_measures: risk_measures.clone(),
             },
             events: EventConfig {

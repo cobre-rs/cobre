@@ -268,6 +268,9 @@ struct SimStageLoadSpec<'a> {
     baked_template: &'a StageTemplate,
     /// Warm-start basis captured during training at this stage, if any.
     warm_basis: Option<&'a CapturedBasis>,
+    /// Runtime window for the basis-activity classifier (Epic 06 T5b).
+    /// Derived from `SimulationConfig::basis_activity_window`.
+    basis_activity_window: u32,
 }
 
 /// Per-stage batched form of [`SimStageLoadSpec`] consumed by
@@ -275,6 +278,9 @@ struct SimStageLoadSpec<'a> {
 struct SimScenarioLoadSpec<'a> {
     baked_templates: &'a [StageTemplate],
     stage_bases: &'a [Option<CapturedBasis>],
+    /// Runtime window for the basis-activity classifier (Epic 06 T5b).
+    /// Propagated into each per-stage [`SimStageLoadSpec`] via [`Self::stage`].
+    basis_activity_window: u32,
 }
 
 impl<'a> SimScenarioLoadSpec<'a> {
@@ -283,6 +289,7 @@ impl<'a> SimScenarioLoadSpec<'a> {
         SimStageLoadSpec {
             baked_template: &self.baked_templates[t],
             warm_basis: self.stage_bases.get(t).and_then(Option::as_ref),
+            basis_activity_window: self.basis_activity_window,
         }
     }
 }
@@ -410,6 +417,7 @@ fn solve_simulation_stage<S: SolverInterface>(
         iteration: None,            // simulation has no iteration counter
         horizon_is_terminal: false, // simulation stage-sweep semantics
         terminal_has_boundary_cuts: false,
+        basis_activity_window: load_spec.basis_activity_window,
     };
 
     let outcome =
@@ -1089,6 +1097,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 let load_spec = SimScenarioLoadSpec {
                     baked_templates,
                     stage_bases,
+                    basis_activity_window: config.basis_activity_window,
                 };
                 let (total_cost, stage_results) = process_scenario_stages(
                     ws,
@@ -1661,6 +1670,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1770,6 +1780,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1870,6 +1881,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1967,6 +1979,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2,
             io_channel_capacity: 1,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2062,6 +2075,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2165,6 +2179,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 6,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2263,6 +2278,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 3,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2355,6 +2371,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 64,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2575,6 +2592,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 10,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2694,6 +2712,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2796,6 +2815,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2907,6 +2927,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3023,6 +3044,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3150,6 +3172,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 5,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3430,6 +3453,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3619,6 +3643,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3745,6 +3770,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4133,6 +4159,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4246,6 +4273,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4352,6 +4380,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4465,6 +4494,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4567,6 +4597,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2,
             io_channel_capacity: 8,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4725,6 +4756,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 8,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -4856,6 +4888,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,

@@ -163,6 +163,11 @@ pub struct StudySetup {
     pub(crate) inflow_method: InflowNonNegativityMethod,
     pub(crate) cut_selection: Option<CutSelectionStrategy>,
     pub(crate) cut_activity_tolerance: f64,
+    /// Activity-window size for the basis-reconstruction classifier.
+    ///
+    /// Validated range 1..=31. Default:
+    /// [`crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW`].
+    pub(crate) basis_activity_window: u32,
     pub(crate) stopping_rule_set: StoppingRuleSet,
 
     /// Maximum number of active cuts per stage (hard cap on LP size).
@@ -301,6 +306,7 @@ impl StudySetup {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
+            basis_activity_window,
             budget,
             export_states,
         } = config;
@@ -689,6 +695,7 @@ impl StudySetup {
             inflow_method,
             cut_selection,
             cut_activity_tolerance,
+            basis_activity_window,
             stopping_rule_set,
             budget,
             export_states,

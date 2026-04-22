@@ -49,6 +49,7 @@ impl StudySetup {
                 cut_selection: self.cut_selection.clone(),
                 budget: self.budget,
                 cut_activity_tolerance: self.cut_activity_tolerance,
+                basis_activity_window: self.basis_activity_window,
                 warm_start_cuts: 0,
                 risk_measures: self.risk_measures.clone(),
             },

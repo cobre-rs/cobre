@@ -183,6 +183,7 @@ impl StudySetup {
         SimulationConfig {
             n_scenarios: self.n_scenarios,
             io_channel_capacity: self.io_channel_capacity,
+            basis_activity_window: self.basis_activity_window,
         }
     }
 
@@ -271,6 +272,13 @@ impl StudySetup {
     #[allow(dead_code)]
     pub(crate) fn cut_activity_tolerance(&self) -> f64 {
         self.cut_activity_tolerance
+    }
+
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    #[must_use]
+    #[allow(dead_code)]
+    pub(crate) fn basis_activity_window(&self) -> u32 {
+        self.basis_activity_window
     }
 
     /// Return a reference to the stopping rule set.

@@ -41,8 +41,8 @@
 //!
 //! ```rust
 //! use cobre_sddp::basis_reconstruct::{
-//!     PromotionScratch, PaddingContext, ReconstructionSource, ReconstructionStats,
-//!     ReconstructionTarget, reconstruct_basis,
+//!     DEFAULT_BASIS_ACTIVITY_WINDOW, PromotionScratch, PaddingContext, ReconstructionSource,
+//!     ReconstructionStats, ReconstructionTarget, reconstruct_basis,
 //! };
 //! use cobre_sddp::workspace::CapturedBasis;
 //! use cobre_solver::Basis;
@@ -51,6 +51,7 @@
 //! let source = ReconstructionSource {
 //!     target: ReconstructionTarget { base_row_count: 3, num_cols: 4 },
 //!     cut_metadata: &[],
+//!     basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
 //! };
 //! let mut out = Basis::new(0, 0);
 //! let mut lookup: Vec<Option<u32>> = vec![None; 16];
@@ -80,19 +81,25 @@ use crate::workspace::CapturedBasis;
 // Activity-classifier constants (Epic 06 AD-2)
 // ---------------------------------------------------------------------------
 
-/// Window size for the activity-driven new-cut classifier (Epic 06 AD-7).
+/// Default window size for the activity-driven new-cut classifier (Epic 06 AD-7).
 ///
-/// The classifier looks at the low `RECENT_WINDOW_K` bits of
+/// Configurable at runtime via `training.cut_selection.basis_activity_window`
+/// in the TOML config; validated range 1..=31. This is the fallback value
+/// used when the TOML field is absent.
+///
+/// The classifier looks at the low `DEFAULT_BASIS_ACTIVITY_WINDOW` bits of
 /// `CutMetadata::active_window`. A cut that was binding in any of the last
-/// `RECENT_WINDOW_K` iterations has `active_window & RECENT_WINDOW_BITS != 0`
-/// and is classified LOWER (tight guess). Cuts with a zero mask are classified
-/// BASIC (slack guess, the safe default).
-pub const RECENT_WINDOW_K: u32 = 5;
+/// `DEFAULT_BASIS_ACTIVITY_WINDOW` iterations has
+/// `active_window & DEFAULT_RECENT_WINDOW_BITS != 0` and is classified LOWER
+/// (tight guess). Cuts with a zero mask are classified BASIC (slack guess,
+/// the safe default).
+pub const DEFAULT_BASIS_ACTIVITY_WINDOW: u32 = 5;
 
-/// Mask for the low [`RECENT_WINDOW_K`] bits (Epic 06 AD-2).
-///
-/// Derived from [`RECENT_WINDOW_K`]: `(1 << RECENT_WINDOW_K) - 1 = 0b11111`.
-pub const RECENT_WINDOW_BITS: u32 = (1u32 << RECENT_WINDOW_K) - 1;
+/// Default mask for the low [`DEFAULT_BASIS_ACTIVITY_WINDOW`] bits. Used by
+/// tests that want the default mask without carrying a runtime value.
+/// Production call sites derive the mask from the runtime value via
+/// `(1u32 << basis_activity_window) - 1`.
+pub const DEFAULT_RECENT_WINDOW_BITS: u32 = (1u32 << DEFAULT_BASIS_ACTIVITY_WINDOW) - 1;
 
 /// Transient seed bit for the Epic 06 G1 "generating event" signal.
 ///
@@ -104,7 +111,7 @@ pub const RECENT_WINDOW_BITS: u32 = (1u32 << RECENT_WINDOW_K) - 1;
 /// decisions. From iteration i+1 onward, only genuine binding observations
 /// (via the `BitwiseOr` allreduce into bit 0) drive classification.
 ///
-/// Positioned outside [`RECENT_WINDOW_BITS`] (bit 31) so it is not counted
+/// Positioned outside `recent_window_bits` (bit 31) so it is not counted
 /// by the Scheme 1 sort key and does not collide with recent-binding bits.
 pub const SEED_BIT: u32 = 1u32 << 31;
 
@@ -148,6 +155,10 @@ pub struct ReconstructionSource<'a> {
     /// Indexed by cut pool slot. Use `&[]` when the caller does not have
     /// activity data (e.g. simulation, or tests with empty pools).
     pub cut_metadata: &'a [CutMetadata],
+    /// Activity-window size for the classifier and Scheme 1 popcount
+    /// (runtime knob, validated 1..=31 at `StudyParams::from_config`).
+    /// The mask is `(1u32 << basis_activity_window) - 1`.
+    pub basis_activity_window: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +217,8 @@ pub struct PromotionScratch {
     /// `(out_row_index, popcount, last_active_iter, insertion_idx)`:
     ///
     /// - `out_row_index`: destination row in the target basis (payload).
-    /// - `popcount`: `(active_window & RECENT_WINDOW_BITS).count_ones()`,
-    ///   range 0..=5. Primary sort key.
+    /// - `popcount`: `(active_window & recent_window_bits).count_ones()`,
+    ///   range 0..=`basis_activity_window`. Primary sort key.
     /// - `last_active_iter`: from `CutMetadata`. Secondary sort key. Older
     ///   last-activity → more stale → promoted first.
     /// - `insertion_idx`: position in the vec at push time, strictly
@@ -256,12 +267,14 @@ pub struct ReconstructionStats {
     /// copied directly.
     pub preserved: u32,
     /// Cut rows classified as LOWER because their
-    /// `active_window & RECENT_WINDOW_BITS != 0` (Epic 06 AD-2).
+    /// `active_window & recent_window_bits != 0` (Epic 06 AD-2), where
+    /// `recent_window_bits = (1u32 << basis_activity_window) - 1`.
     ///
     /// These are new cuts (slot not in stored basis) for which the sliding
     /// activity bitmap shows binding in at least one of the last
-    /// [`RECENT_WINDOW_K`] iterations. The simplex may pivot them back to BASIC
-    /// if the guess was wrong; a post-solve telemetry delta (`basis_offered` vs
+    /// `basis_activity_window` iterations (default: [`DEFAULT_BASIS_ACTIVITY_WINDOW`]).
+    /// The simplex may pivot them back to BASIC if the guess was wrong; a
+    /// post-solve telemetry delta (`basis_offered` vs
     /// `basis_consistency_failures`) surfaces this.
     pub new_tight: u32,
     /// New cut rows evaluated as slack at `padding_state`
@@ -324,6 +337,12 @@ where
 {
     let target = source.target;
     let cut_metadata = source.cut_metadata;
+    let basis_activity_window = source.basis_activity_window;
+    debug_assert!(
+        (1..=31).contains(&basis_activity_window),
+        "basis_activity_window must be 1..=31 (validated upstream at StudyParams); got {basis_activity_window}",
+    );
+    let recent_window_bits: u32 = (1u32 << basis_activity_window) - 1;
 
     // Clear the promotion scratch at function entry.
     // CRITICAL: both vecs are reused across stages; a stale list from a
@@ -405,7 +424,7 @@ where
     // - Preserved slots: copy stored status. If LOWER, push onto promotion
     //   candidates for potential Scheme 1 symmetric promotion.
     // - New slots: consult active_window bitmap. If any of the last
-    //   RECENT_WINDOW_K bits are set → LOWER (tight guess, count new_tight).
+    //   basis_activity_window bits are set → LOWER (tight guess, count new_tight).
     //   Otherwise → BASIC (slack default, count new_slack).
     //
     // Scheme 1 symmetric promotion (after loop, Epic 06 AD-3 corrected by T3a):
@@ -436,13 +455,13 @@ where
                 // See docs/design/epic-06-classifier-refinement-gaps.md.
                 let (popcount, last_active) = cut_metadata
                     .get(target_slot)
-                    // Epic 06 G2: mask by RECENT_WINDOW_BITS so the sort key uses the
+                    // Epic 06 G2: mask by recent_window_bits so the sort key uses the
                     // same window as the classifier (AD-9 / ticket-005).
                     // Epic 06 G3: capture last_active_iter as secondary sort key so
                     // equal-popcount ties break by staleness (older → promoted first).
                     .map_or((0u32, 0u64), |m| {
                         (
-                            (m.active_window & RECENT_WINDOW_BITS).count_ones(),
+                            (m.active_window & recent_window_bits).count_ones(),
                             m.last_active_iter,
                         )
                     });
@@ -460,7 +479,7 @@ where
             // cannot carry into the next iteration's classifier.
             let active_window = cut_metadata.get(target_slot).map_or(0, |m| m.active_window);
             let _ = (intercept, coefficients); // suppress unused-variable warnings
-            if active_window & (RECENT_WINDOW_BITS | SEED_BIT) != 0 {
+            if active_window & (recent_window_bits | SEED_BIT) != 0 {
                 // Activity-guided tight guess: classify LOWER.
                 stats.new_tight += 1;
                 lower_deficit += 1;
@@ -656,9 +675,10 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
-        PromotionScratch, RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats,
-        ReconstructionTarget, SEED_BIT, enforce_basic_count_invariant, reconstruct_basis,
+        DEFAULT_BASIS_ACTIVITY_WINDOW, HIGHS_BASIS_STATUS_BASIC as B,
+        HIGHS_BASIS_STATUS_LOWER as L, PaddingContext, PromotionScratch, ReconstructionSource,
+        ReconstructionStats, ReconstructionTarget, SEED_BIT, enforce_basic_count_invariant,
+        reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -717,6 +737,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &[],
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         }
     }
 
@@ -1809,6 +1830,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -1864,6 +1886,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -1897,10 +1920,10 @@ mod tests {
         let num_cols = 1usize;
         let stored = make_stored_basis(base_rows, num_cols, &[], &[], &[1.0]);
 
-        // Bit 5 set → outside RECENT_WINDOW_K=5, so masked away → BASIC.
+        // Bit 5 set → outside DEFAULT_BASIS_ACTIVITY_WINDOW=5, so masked away → BASIC.
         // cut_metadata indexed by pool slot; use slot 0 to align with meta[0].
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![(0, 0.0, vec![0.0])];
-        let meta = vec![meta_with_window(1u32 << RECENT_WINDOW_K)];
+        let meta = vec![meta_with_window(1u32 << DEFAULT_BASIS_ACTIVITY_WINDOW)];
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
@@ -1912,6 +1935,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -1992,6 +2016,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2054,7 +2079,7 @@ mod tests {
     /// Epic 06 G2 regression — §5.1 worked example (ticket-005).
     ///
     /// Demonstrates that the promotion sort key uses `active_window &
-    /// RECENT_WINDOW_BITS` (low 5 bits only), NOT the full 32-bit popcount.
+    /// recent_window_bits` (low `basis_activity_window` bits only), NOT the full 32-bit popcount.
     ///
     /// Fixture:
     ///   Cut A (slot 10): active_window = 0b1111_1111_1111_0000_0000_0000_0000_0000
@@ -2104,6 +2129,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2200,6 +2226,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2308,6 +2335,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2411,6 +2439,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &[], // no activity metadata needed for preservation
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let mut out = Basis::new(0, 0);
@@ -2475,7 +2504,7 @@ mod tests {
     /// exercises:
     /// - Slot identity preservation for stored slots 100,101,102 (preserved=3).
     /// - Activity-driven LOWER guess for new slot 2 (new_tight=1) — SEED_BIT
-    ///   fires the classifier predicate `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`.
+    ///   fires the classifier predicate `(aw & (recent_window_bits | SEED_BIT)) != 0`.
     /// - Scheme 1 symmetric promotion: the LOWER guess triggers promotion of one
     ///   preserved-LOWER candidate (slot 100, lowest popcount, first in insertion
     ///   order) from LOWER → BASIC.
@@ -2512,7 +2541,7 @@ mod tests {
             pool.metadata[s].active_window = 0;
         }
         // Slot 2: active_window = SEED_BIT (bit 31) — satisfies classifier
-        //   predicate `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0` → LOWER.
+        //   predicate `(aw & (recent_window_bits | SEED_BIT)) != 0` → LOWER.
         // Slots 100,101,102: cleared to 0; they will be sorted first by Scheme
         //   1 so slot 100 gets promoted LOWER → BASIC.
 
@@ -2525,6 +2554,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &pool.metadata,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let mut out = Basis::new(0, 0);
@@ -2551,7 +2581,7 @@ mod tests {
         // 5 new cuts (0..4) + 3 preserved (100..102).
         assert_eq!(stats.preserved, 3, "slots 100,101,102 preserved");
         // Slot 2 has SEED_BIT set → classifier guesses LOWER via the predicate
-        //   `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`.
+        //   `(aw & (recent_window_bits | SEED_BIT)) != 0`.
         // Scheme 1 absorbs the deficit (promotes preserved-LOWER slot 100).
         assert_eq!(stats.new_tight, 1, "slot 2 classified LOWER by classifier");
         assert_eq!(stats.new_slack, 4, "slots 0,1,3,4 classified BASIC");
@@ -2631,7 +2661,7 @@ mod tests {
     ///   Stored basis: empty (base_row_count=0, no stored cut slots, num_cols=0).
     ///   active_cuts() yields (3, ...) only.
     ///
-    /// Classifier sees `aw & (RECENT_WINDOW_BITS | SEED_BIT) != 0` → LOWER.
+    /// Classifier sees `aw & (recent_window_bits | SEED_BIT) != 0` → LOWER.
     /// lower_deficit=1; 0 preserved-LOWER candidates.
     /// Scheme 1: scheme1_count=0.
     /// Scheme 2: remaining_deficit=1 → overrides slot 3 LOWER → BASIC.
@@ -2673,6 +2703,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: pool.metadata.as_slice(),
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2744,7 +2775,7 @@ mod tests {
     ///   Slot 1 (preserved, stored LOWER): added to Scheme 1 candidates.
     ///     row_status[1] initially set to LOWER.
     ///   Slot 3 (new, active_window=SEED_BIT): classifier predicate
-    ///     `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0` → LOWER.
+    ///     `(aw & (recent_window_bits | SEED_BIT)) != 0` → LOWER.
     ///     new_tight=1, lower_deficit=1.
     ///   Scheme 1: 1 candidate (slot 1, popcount=0) ≥ lower_deficit=1.
     ///     Promote row 1 (slot 1) from LOWER → BASIC.  scheme1_count=1.
@@ -2807,6 +2838,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: pool.metadata.as_slice(),
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         let stats = reconstruct_basis(
@@ -2935,6 +2967,7 @@ mod tests {
                     num_cols,
                 },
                 cut_metadata: &meta,
+                basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
@@ -2993,6 +3026,7 @@ mod tests {
                     num_cols,
                 },
                 cut_metadata: &meta,
+                basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
             },
             delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
             PaddingContext {
@@ -3103,6 +3137,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         // ── Run 1 ──────────────────────────────────────────────────────────
@@ -3148,6 +3183,7 @@ mod tests {
                 num_cols,
             },
             cut_metadata: &meta,
+            basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
 
         reconstruct_basis(
@@ -3185,5 +3221,141 @@ mod tests {
             "HiGHS invariant: col_basic({col_basic}) + row_basic({row_basic}) \
              == num_row({num_row})"
         );
+    }
+
+    // ── T-new-2: reconstruct_basis_honors_runtime_basis_activity_window ──────
+
+    /// Verify that `basis_activity_window` controls the classifier boundary.
+    ///
+    /// Fixture: two-cut LP. Slot 0 is preserved from stored (status LOWER →
+    /// candidate for Scheme 1 promotion). Slot 1 is a new cut whose
+    /// `active_window` has only bit 5 set.
+    ///
+    /// - window=5 → mask = `0b11111` (bits 0–4); bit 5 is outside → new cut
+    ///   at slot 1 is classified BASIC (`new_slack = 1`). No Scheme 1 needed.
+    ///
+    /// - window=10 → mask = `0x3FF` (bits 0–9); bit 5 is inside → new cut at
+    ///   slot 1 is classified LOWER (`new_tight` incremented). Scheme 1 finds
+    ///   the preserved-LOWER candidate at slot 0 and promotes it to BASIC.
+    ///   Net result: `preserved = 1` (now BASIC), `new_tight = 1` (LOWER),
+    ///   `new_slack = 0`.
+    ///
+    /// This confirms that `recent_window_bits` is derived at runtime from
+    /// `basis_activity_window`, not from the compile-time constant.
+    #[test]
+    fn reconstruct_basis_honors_runtime_basis_activity_window() {
+        // stored: 1 base row, 1 cut at slot 0 with status LOWER.
+        // Slot 0 is the Scheme 1 promoted-LOWER candidate.
+        let stored = make_stored_basis(
+            1,          // base_rows
+            2,          // num_cols
+            &[0],       // cut_row_slots: one cut at slot 0
+            &[L],       // cut status: LOWER
+            &[1.0_f64], // state_at_capture: 1-dimensional state
+        );
+
+        // cut_metadata indexed by slot:
+        //   slot 0 → zero activity (the preserved cut)
+        //   slot 1 → bit 5 set (outside window=5, inside window=10)
+        let outside_default_bit: u32 = 1u32 << 5;
+        let metadata = [
+            meta_with_window(0),                   // slot 0: no recent activity
+            meta_with_window(outside_default_bit), // slot 1: only bit 5 set
+        ];
+
+        // cuts: (slot, intercept, coefficients). State dim = 1.
+        let cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (0, 0.0, vec![0.0]), // slot 0 → preserved from stored
+            (1, 0.0, vec![0.0]), // slot 1 → new cut (not in stored)
+        ];
+
+        // ── window = 5 (default): bit 5 outside mask → new cut BASIC ────
+        {
+            let source = ReconstructionSource {
+                target: ReconstructionTarget {
+                    base_row_count: 1,
+                    num_cols: 2,
+                },
+                cut_metadata: &metadata,
+                basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW, // 5
+            };
+            let mut out = Basis::new(0, 0);
+            let mut lookup: Vec<Option<u32>> = vec![None; 8];
+            let stats = reconstruct_basis(
+                &stored,
+                source,
+                cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+                PaddingContext {
+                    state: &[1.0_f64],
+                    theta: 100.0,
+                    tolerance: 1e-7,
+                },
+                &mut out,
+                &mut lookup,
+                &mut PromotionScratch::default(),
+            );
+            // Slot 0 preserved (still LOWER — no Scheme 1 needed because no
+            // new-LOWER cuts). Slot 1 classified BASIC (bit 5 outside mask).
+            assert_eq!(
+                stats,
+                ReconstructionStats {
+                    preserved: 1,
+                    new_tight: 0,
+                    new_slack: 1,
+                },
+                "window=5: new cut outside mask → BASIC, preserved stays LOWER"
+            );
+            // Slot 1 (row index 2) must be BASIC.
+            assert_eq!(out.row_status[2], B, "window=5: new cut row must be BASIC");
+        }
+
+        // ── window = 10: bit 5 inside mask → new cut LOWER + Scheme 1 ───
+        {
+            let source = ReconstructionSource {
+                target: ReconstructionTarget {
+                    base_row_count: 1,
+                    num_cols: 2,
+                },
+                cut_metadata: &metadata,
+                basis_activity_window: 10,
+            };
+            let mut out = Basis::new(0, 0);
+            let mut lookup: Vec<Option<u32>> = vec![None; 8];
+            let stats = reconstruct_basis(
+                &stored,
+                source,
+                cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+                PaddingContext {
+                    state: &[1.0_f64],
+                    theta: 100.0,
+                    tolerance: 1e-7,
+                },
+                &mut out,
+                &mut lookup,
+                &mut PromotionScratch::default(),
+            );
+            // New cut at slot 1 fires classifier (bit 5 inside 10-bit mask) →
+            // new_tight=1. Scheme 1 promotes the preserved-LOWER cut at slot 0
+            // to BASIC, maintaining basic-count invariant.
+            assert_eq!(
+                stats,
+                ReconstructionStats {
+                    preserved: 1,
+                    new_tight: 1,
+                    new_slack: 0,
+                },
+                "window=10: new cut inside mask → LOWER; Scheme 1 promotes slot-0 to BASIC"
+            );
+            // Slot 0 (row index 1) promoted to BASIC by Scheme 1.
+            assert_eq!(
+                out.row_status[1], B,
+                "window=10: slot-0 preserved-LOWER must be promoted to BASIC"
+            );
+            // Slot 1 (row index 2) stays LOWER after Scheme 1 (no fallback needed).
+            assert_eq!(
+                out.row_status[2], L,
+                "window=10: new cut row must remain LOWER after Scheme 1"
+            );
+        }
     }
 }

@@ -118,7 +118,7 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// let local_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = vec![
 ///     (0, 100.0, zero_cats),
 /// ];
-/// let config = SimulationConfig { n_scenarios: 1, io_channel_capacity: 1 };
+/// let config = SimulationConfig { n_scenarios: 1, io_channel_capacity: 1, basis_activity_window: 5 };
 /// let comm = LocalBackend;
 ///
 /// let summary = aggregate_simulation(&local_costs, &config, &comm).unwrap();
@@ -431,6 +431,7 @@ mod tests {
         SimulationConfig {
             n_scenarios: n,
             io_channel_capacity: 1,
+            basis_activity_window: 5,
         }
     }
 

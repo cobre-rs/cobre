@@ -82,6 +82,11 @@ pub struct StageInputs<'a> {
     /// forward phase to populate `SddpError::Infeasible { iteration }` without
     /// the caller having to re-wrap the error.
     pub iteration: Option<u64>,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    ///
+    /// Forwarded verbatim from [`crate::config::CutManagementConfig::basis_activity_window`]
+    /// and threaded into [`crate::basis_reconstruct::ReconstructionSource`].
+    pub basis_activity_window: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +179,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
                 num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
             },
             cut_metadata: &inputs.pool.metadata,
+            basis_activity_window: inputs.basis_activity_window,
         };
         let recon_stats = reconstruct_basis(
             captured,
@@ -416,6 +422,7 @@ mod tests {
             scenario_index: 0,
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             iteration: Some(1),
         };
 
@@ -484,6 +491,7 @@ mod tests {
             scenario_index: 0,
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             iteration: None,
         };
 
@@ -530,6 +538,7 @@ mod tests {
             scenario_index: 7,
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             iteration: Some(42),
         };
 
@@ -595,6 +604,7 @@ mod tests {
             scenario_index: 3,
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             iteration: Some(5),
         };
 

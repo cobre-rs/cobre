@@ -515,6 +515,7 @@ fn run_programmatic(
         inflow_method,
         cut_selection: None,
         cut_activity_tolerance: 0.0,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         budget: None,
         export_states: false,
     };
@@ -838,6 +839,7 @@ fn run_with_setup(
         inflow_method: InflowNonNegativityMethod::None,
         cut_selection: None,
         cut_activity_tolerance: 0.0,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         budget: None,
         export_states: false,
     };

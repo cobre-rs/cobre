@@ -818,6 +818,7 @@ fn build_study_setup(
         inflow_method: bcast_config.inflow_method.clone(),
         cut_selection,
         cut_activity_tolerance: bcast_config.cut_activity_tolerance,
+        basis_activity_window: bcast_config.basis_activity_window,
         budget: bcast_config.budget,
         export_states: bcast_config.export_states,
     };

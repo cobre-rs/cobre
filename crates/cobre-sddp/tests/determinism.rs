@@ -498,6 +498,7 @@ fn run_training(
             cut_selection: None,
             budget: None,
             cut_activity_tolerance: 0.0,
+            basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             warm_start_cuts: 0,
             risk_measures: fx.risk_measures.clone(),
         },
@@ -581,6 +582,7 @@ fn run_simulation(
     let sim_config = SimulationConfig {
         n_scenarios,
         io_channel_capacity: 64,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
     };
     let entity_counts = EntityCounts {
         hydro_ids: vec![1, 2, 3],

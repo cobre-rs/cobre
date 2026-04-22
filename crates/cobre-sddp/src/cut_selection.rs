@@ -800,6 +800,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -829,6 +830,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -857,6 +859,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -886,6 +889,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -907,6 +911,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -923,6 +928,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg).unwrap();
         assert!(
@@ -942,6 +948,7 @@ mod tests {
             max_active_per_stage: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());

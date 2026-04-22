@@ -250,6 +250,10 @@ pub const D02_EXPECTED_COST: f64 = 23_635_000.0 / 9.0;
 /// - T1: capacity 15 MW at $10/MWh → dispatched at 5 MW to cover residual load
 /// - Cost per stage = (15 × 5.0 + 5 × 10.0) × 730 = 125.0 × 730 = 91,250 $
 /// - Total (2 stages) = 2 × 91,250 = **182,500 $**
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d01_thermal_dispatch() {
     let case_dir = Path::new("../../examples/deterministic/d01-thermal-dispatch");
@@ -285,6 +289,10 @@ fn d01_thermal_dispatch() {
 /// - Stage 0: turb₀ = 100/2.628 ≈ 38.05 m3/s, gen_th₀ ≈ 41.95 MW
 /// - Stage 1: turb₁ = 50 m3/s (full capacity), gen_th₁ = 30 MW
 /// - Storage at end of stage 0: exactly 40·2.628 = 105.12 hm3
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d02_single_hydro() {
     let case_dir = Path::new("../../examples/deterministic/d02-single-hydro");
@@ -308,6 +316,10 @@ fn d02_single_hydro() {
 /// storage constraints yield thermal ≈ 28.09 MW. Total cost = 4,171,000/3 $.
 pub const D03_EXPECTED_COST: f64 = 4_171_000.0 / 3.0;
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d03_two_hydro_cascade() {
     let case_dir = Path::new("../../examples/deterministic/d03-two-hydro-cascade");
@@ -331,6 +343,10 @@ fn d03_two_hydro_cascade() {
 /// H1 depleted to minimize loss. Total cost ≈ 8,011,330 $.
 pub const D04_EXPECTED_COST: f64 = 5_263_443_883.0 / 657.0;
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d04_transmission() {
     let case_dir = Path::new("../../examples/deterministic/d04-transmission");
@@ -352,6 +368,10 @@ fn d04_transmission() {
 /// Identical to D02 except H0 uses FPHA model with one hyperplane per stage encoding
 /// `gen = 1.0 × turbined_flow` (γ₀=0, γᵥ=0, γ_q=1.0, γ_s=0.0).
 /// LP must match D02 exactly; cost tolerance 1e-6.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d05_fpha_constant_head() {
     let case_dir = Path::new("../../examples/deterministic/d05-fpha-constant-head");
@@ -443,6 +463,10 @@ pub const D06_EXPECTED_COST: f64 = 732_952_154.0 / 225.0;
 /// (γᵥ > 0). Plane 0 (γᵥ=0.002, γ_q=0.8) and plane 1 (γᵥ=0.001, γ_q=0.95)
 /// together approximate the concave production function. Cost differs from D02/D05
 /// because head variation reduces per-m3/s generation at typical storage levels.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d06_fpha_variable_head() {
     let case_dir = Path::new("../../examples/deterministic/d06-fpha-variable-head");
@@ -490,6 +514,10 @@ fn d06_fpha_variable_head() {
 /// - Sanity: `final_lb > 0.0` (positive cost; system requires thermal dispatch).
 /// - The computed cost differs from D06 because the fitting pipeline uses a
 ///   different discretization grid and number of planes; no exact match is asserted.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d07_fpha_computed() {
     let case_dir = Path::new("../../examples/deterministic/d07-fpha-computed");
@@ -576,6 +604,10 @@ fn d07_fpha_computed() {
 /// thermal dispatch.
 pub const D08_EXPECTED_COST: f64 = 94_644_561_875.0 / 36_009.0;
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d08_evaporation() {
     let case_dir = Path::new("../../examples/deterministic/d08-evaporation");
@@ -636,6 +668,10 @@ pub const D09_EXPECTED_COST: f64 = 80_738_000.0;
 ///
 /// See [`D09_EXPECTED_COST`] for the derivation. With 20 MW deficit per stage
 /// split across both segments, total cost is 80,738,000 $.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d09_multi_deficit() {
     let case_dir = Path::new("../../examples/deterministic/d09-multi-deficit");
@@ -744,6 +780,10 @@ pub const D10_EXPECTED_COST: f64 = 28_562_500.0 / 9.0;
 /// See [`D10_EXPECTED_COST`] for the full derivation. Stage 1's negative inflow
 /// activates a 5 m3/s slack (cost 1,825,000 $). The total cost is
 /// 3,164,185,000/657 ≈ 4,815,350.08 $.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d10_inflow_nonnegativity() {
     let case_dir = Path::new("../../examples/deterministic/d10-inflow-nonnegativity");
@@ -838,6 +878,10 @@ pub const D11_WATER_WITHDRAWAL_EXPECTED_COST: f64 = 3_930_320_000.0 / 657.0;
 /// See [`D11_WATER_WITHDRAWAL_EXPECTED_COST`] for the full derivation. The 10 m3/s
 /// withdrawal reduces effective net inflow from 30 to 20 m3/s, increasing thermal
 /// dispatch and pushing total cost to 3,930,320,000 / 657 ≈ 5,982,222.22 $.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d11_water_withdrawal() {
     let case_dir = Path::new("../../examples/deterministic/d11-water-withdrawal");
@@ -874,6 +918,10 @@ fn d11_water_withdrawal() {
 /// degrade performance without surfacing an error.
 ///
 /// Reuses the D02 example directory (no new case data needed).
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d11_warm_start_verification() {
     let case_dir = Path::new("../../examples/deterministic/d02-single-hydro");
@@ -912,6 +960,10 @@ fn d11_warm_start_verification() {
 /// simulation cost equals the optimal cost captured by the training LB.
 ///
 /// Reuses the D02 example directory (no new case data needed).
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d12_checkpoint_round_trip() {
     let case_dir = Path::new("../../examples/deterministic/d02-single-hydro");
@@ -1135,6 +1187,10 @@ fn d12_checkpoint_round_trip() {
 ///   total:   $7,665,000
 ///
 /// Total (2 stages) = 2 × $7,665,000 = **$15,330,000**
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d13_generic_constraint() {
     use arrow::array::{Float64Array, Int32Array};
@@ -1203,6 +1259,10 @@ fn d13_generic_constraint() {
 ///   cost = (15*5 + 9*10) * 330 = 165 * 330 = 54,450
 /// - Cost per stage = 34,000 + 54,450 = 88,450
 /// - Total (2 stages) = 2 * 88,450 = **176,900**
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d14_block_factors() {
     use arrow::array::{Float64Array, Int32Array};
@@ -1290,6 +1350,10 @@ fn d14_block_factors() {
 ///   The NCS contribution to objective = -0.001 * 730 * 50 = -36.5
 /// - Total objective per stage = 219,000 + (-36.5) = 218,963.5
 /// - Total (2 stages) = 2 * 218,963.5 = **437,927.0**
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d15_non_controllable_source() {
     use arrow::array::{Float64Array, Int32Array};
@@ -1414,6 +1478,10 @@ fn d15_non_controllable_source() {
 ///
 /// Without lag shift (bug): every stage sees lag=200, Z_t=150 for all t.
 /// Cost = 3 * 50 * 730000 = 109_500_000. Fails with correct cost.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d16_par1_lag_shift() {
     let case_dir = Path::new("../../examples/deterministic/d16-par1-lag-shift");
@@ -1607,6 +1675,10 @@ fn incremental_bit_for_bit_d01_trace() {
 ///
 /// If the hydro-major/lag-major bug regressed, the wrong lag values would be
 /// used in PAR evaluation, producing a different optimal cost.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d19_multi_hydro_par_truncation() {
     let case_dir = Path::new("../../examples/deterministic/d19-multi-hydro-par");
@@ -1664,6 +1736,10 @@ pub const D19_EXPECTED_COST: f64 = 1_332_571.796_891_952_6;
 ///
 /// The expected cost is recorded empirically and locked for regression.
 /// Simulation is also run to verify non-zero operational violation slacks.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d20_operational_violations() {
     let case_dir = Path::new("../../examples/deterministic/d20-operational-violations");
@@ -1716,6 +1792,10 @@ pub const D20_EXPECTED_COST: f64 = 195_744_444.444_444_48;
 /// LP consistency test: cost consistency between outflow violation slacks
 /// and `hydro_violation_cost`. 1 hydro (min_outflow=50 m3/s), 1 thermal,
 /// inflow=10 m3/s (insufficient), initial_storage=5 hm3, penalty=5000.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d21_min_outflow_regression() {
     use arrow::array::{Float64Array, Int32Array};
@@ -1919,6 +1999,10 @@ pub const D21_EXPECTED_COST: f64 = 285_716_111.111_111_1;
 /// inflow=10 m3/s. Violation of 20 m3/s in every block at penalty 5000 $/m3/s.
 /// Validates that per-block constraints prevent the optimizer from concentrating
 /// flow into one block while starving others.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d22_per_block_min_outflow() {
     use arrow::array::{Float64Array, Int32Array};
@@ -2113,6 +2197,10 @@ fn d20_convertido2_truncation_feasibility() {
 /// 2. Over-withdraw: cost = 1.0 * 730 = 730 per m³/s
 ///
 /// Over-withdrawal is ~1000x cheaper, so the solver strongly prefers `ww_pos > 0`.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d23_bidirectional_withdrawal() {
     use arrow::array::{Float64Array, Int32Array};
@@ -2387,6 +2475,10 @@ pub const D24_EXPECTED_COST: f64 = 23_945_000.0 / 9.0;
 /// This test catches the bus balance productivity mismatch bug: if the LP uses
 /// the entity-level productivity (1.0) instead of the per-stage override, the
 /// optimal cost would differ.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d24_productivity_override() {
     use arrow::array::{Float64Array, Int32Array};
@@ -2496,6 +2588,10 @@ const D25_EXPECTED_COST: f64 = 2_611_454.584_787_283;
 ///
 /// Verifies that the discounted SDDP lower bound converges to the correct
 /// present-value cost, and that it is strictly less than D02's undiscounted LB.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d25_discount_rate() {
     let case_dir = Path::new("../../examples/deterministic/d25-discount-rate");
@@ -2525,6 +2621,10 @@ fn d25_discount_rate() {
 /// Runs training + simulation on the D25 case and asserts that:
 /// - Stage 0 cumulative discount factor = 1.0 (always)
 /// - Stage 1 cumulative discount factor = d_0 = 1/(1.12)^(31/365.25)
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d25_simulation_discount_factors() {
     let case_dir = Path::new("../../examples/deterministic/d25-discount-rate");
@@ -2565,6 +2665,10 @@ pub const D26_EXPECTED_COST: f64 = 47_721_588.894_912_5;
 
 /// D26: PAR(2) estimation from inflow history (regression guard for forward-prediction fix).
 /// Exercises full PAR(p) pipeline with PACF order selection and Yule-Walker fitting.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d26_estimated_par2() {
     let case_dir = Path::new("../../examples/deterministic/d26-estimated-par2");
@@ -2584,6 +2688,10 @@ fn d26_estimated_par2() {
 }
 
 /// D26: Verify PACF order selection picks AR order 2.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d26_estimated_par2_order_selection() {
     use cobre_sddp::setup::prepare_stochastic;
@@ -2649,6 +2757,10 @@ pub const D27_EXPECTED_COST: f64 = 10_950_000.0;
 /// Uses pre-committed parquet fixtures (scenarios + constraints) to verify that
 /// the LP objective coefficients use the resolved per-stage cost rather than the
 /// entity base cost.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d27_per_stage_thermal_cost() {
     let case_dir = Path::new("../../examples/deterministic/d27-per-stage-thermal-cost");
@@ -2691,6 +2803,10 @@ fn d27_per_stage_thermal_cost() {
 ///
 /// The test only checks that training completes at least 1 iteration; no
 /// expected cost is asserted here — correctness is validated in ticket-017.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d28_decomp_weekly_monthly_loads_and_trains() {
     let case_dir = Path::new("../../examples/deterministic/d28-decomp-weekly-monthly");
@@ -2719,6 +2835,10 @@ fn d28_decomp_weekly_monthly_loads_and_trains() {
 /// This is the end-to-end verification that Epics 1-2 (noise group
 /// precomputation, ForwardSampler integration, opening tree integration,
 /// setup wiring) compose correctly for the Pattern C workflow.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d29_pattern_c_weekly_par() {
     let case_dir = Path::new("../../examples/deterministic/d29-pattern-c-weekly-par");
@@ -2826,6 +2946,10 @@ fn d29_pattern_c_weekly_par() {
 /// `pattern_d_integration.rs` test file, which verifies composition correctness
 /// including noise group IDs, accumulate_downstream flags, rebuild_from_downstream,
 /// and simulation.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
     let case_dir = Path::new("../../examples/deterministic/d30-pattern-d-monthly-quarterly");

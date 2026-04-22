@@ -82,6 +82,7 @@ These are non-negotiable. Violations must be fixed before committing.
 - Do not use `bincode` — use `postcard` for MPI, `FlatBuffers` for policy
 - Do not commit secrets, `.env` files, or credentials
 - Do not force-push to `main`
+- **`slow-tests` feature** — long-running tests (D-case sweep, FPHA plane-selection, forward-sampler convergence) are gated behind `#[cfg_attr(not(feature = "slow-tests"), ignore = ...)]`. Default `cargo test --workspace` skips them; pass `--features slow-tests` to include them.
 
 ---
 

@@ -12,6 +12,11 @@ readme = "README.md"
 keywords = ["stochastic", "time-series", "autoregressive", "scenarios", "sampling"]
 categories = ["science", "simulation", "mathematics"]
 
+[features]
+## Opt-in to the slow test suite (no slow tests currently in this crate;
+## declaration reserved for workspace consistency).
+slow-tests = []
+
 [dependencies]
 cobre-core = { version = "0.5.0", path = "../cobre-core" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }

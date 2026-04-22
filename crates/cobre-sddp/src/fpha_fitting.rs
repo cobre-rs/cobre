@@ -3769,6 +3769,10 @@ mod tests {
 
     /// AC: given > max_planes_per_hydro non-redundant planes, select_planes returns
     /// exactly max_planes_per_hydro planes.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_reduces_to_target_count() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3790,6 +3794,10 @@ mod tests {
     }
 
     /// AC: approximation error of selected planes is < 2× error of the full set.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_approximation_error_not_catastrophically_worse() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3853,6 +3861,10 @@ mod tests {
 
     /// AC: envelope property preserved after selection — at every grid point,
     /// max_m(plane_m(v,q,s)) >= phi(v,q,s).
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_preserves_envelope_property() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3991,6 +4003,10 @@ mod tests {
     }
 
     /// AC: selected output is a subset of the input planes.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_output_is_subset_of_input() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();

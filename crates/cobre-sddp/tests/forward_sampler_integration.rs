@@ -583,6 +583,10 @@ fn insample_equivalence_d01() {
 /// 1 bus, 1 hydro (constant productivity, mean=100 m³/s, std=30 m³/s),
 /// 3 stages with `branching_factor=5` and SAA noise. With 20 forward passes
 /// and 50 iterations both schemes reach comparable lower bounds.
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn out_of_sample_convergence() {
     const FORWARD_PASSES: u32 = 20;
@@ -1053,6 +1057,10 @@ fn build_mixed_system(
 
 // --- ticket-032: Historical integration test ---
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn historical_convergence() {
     const FORWARD_PASSES: u32 = 10;
@@ -1075,6 +1083,10 @@ fn historical_convergence() {
 
 // --- ticket-033: External integration test ---
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn external_inflow_convergence() {
     const FORWARD_PASSES: u32 = 10;
@@ -1107,6 +1119,10 @@ fn external_inflow_convergence() {
 
 // --- ticket-034: Mixed-scheme integration test ---
 
+#[cfg_attr(
+    not(feature = "slow-tests"),
+    ignore = "slow: run with --features slow-tests"
+)]
 #[test]
 fn mixed_scheme_convergence() {
     const FORWARD_PASSES: u32 = 10;

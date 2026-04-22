@@ -36,6 +36,9 @@ tracing = "0.1"
 
 [features]
 mpi = ["cobre-comm/mpi"]
+## Opt-in to the slow test suite (no slow tests currently in this crate;
+## declaration reserved for workspace consistency).
+slow-tests = []
 
 [dev-dependencies]
 assert_cmd = "2"

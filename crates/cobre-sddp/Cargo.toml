@@ -22,6 +22,14 @@ categories = ["science", "simulation", "mathematics"]
 ## every allocation.  Only activate when running the `dhat_baseline` example.
 dhat-heap = ["dep:dhat"]
 
+## Opt-in to the slow test suite.
+##
+## Tests gated by this feature (D-case sweep, FPHA plane-selection unit tests,
+## and forward-sampler convergence integration tests) are ignored by default so
+## that `cargo test --workspace` completes quickly.  Pass `--features slow-tests`
+## to include them.
+slow-tests = []
+
 [dependencies]
 cobre-core = { version = "0.5.0", path = "../cobre-core" }
 cobre-solver = { version = "0.5.0", path = "../cobre-solver" }

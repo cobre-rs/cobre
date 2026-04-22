@@ -14,6 +14,9 @@ categories = ["science", "parser-implementations"]
 
 [features]
 schema = ["dep:schemars"]
+## Opt-in to the slow test suite (no slow tests currently in this crate;
+## declaration reserved for workspace consistency).
+slow-tests = []
 
 [dependencies]
 cobre-core = { version = "0.5.0", path = "../cobre-core", features = ["serde"] }

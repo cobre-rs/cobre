@@ -1756,6 +1756,11 @@ mod tests {
         assert_eq!(stats.preserved, 1, "slot 5 preserved");
         assert_eq!(stats.new_tight, 1, "window bit 0 set → LOWER (new_tight)");
         assert_eq!(stats.new_slack, 0);
+        assert_eq!(
+            out.row_status.last().copied(),
+            Some(L),
+            "new cut slot 0 must have LOWER status",
+        );
     }
 
     /// A new cut whose `active_window` has only bits outside the recent window

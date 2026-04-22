@@ -169,25 +169,40 @@ pub struct FittingWindow {
     pub volume_max_percentile: Option<f64>,
 }
 
-/// Top-level intermediate type for `hydro_production_models.json`.
+/// Per-hydro production model configuration loaded from
+/// `system/hydro_production_models.json`.
+///
+/// Specifies how the hydro production function (HPF) model variant is selected
+/// for each stage or season. Two selection modes are supported:
+///
+/// - `stage_ranges`: maps each stage to a model via explicit `[start, end]`
+///   intervals.
+/// - `seasonal`: maps each stage to a model via its season index, with a
+///   fallback default.
+///
+/// Each hydro may appear at most once. Results are sorted by `hydro_id`
+/// ascending.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
-struct RawProductionModelFile {
-    /// `$schema` field — informational, not validated.
+pub(crate) struct RawProductionModelFile {
+    /// JSON schema URI — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
 
-    /// Array of per-hydro production model configurations.
+    /// Array of per-hydro production model configurations. Each `hydro_id`
+    /// must be unique.
     production_models: Vec<RawProductionModel>,
 }
 
-/// Intermediate type for one hydro production model entry.
+/// Production model configuration for one hydro plant.
 ///
-/// The `selection_mode` field acts as a tag for the inner union. We flatten
-/// `RawSelectionMode` into this struct so that serde resolves both the
-/// discriminator and the payload fields at the same JSON level.
+/// The `selection_mode` field discriminates between two layouts:
+/// `stage_ranges` carries a stage-range array, while `seasonal` carries a
+/// `default_model` plus a `seasons` override list.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawProductionModel {
-    /// Hydro plant identifier.
+    /// Hydro plant identifier. Must be unique within the file.
     hydro_id: i32,
 
     /// Tagged-union payload for the model selection.
@@ -195,64 +210,113 @@ struct RawProductionModel {
     selection: RawSelectionMode,
 }
 
-/// Tagged union on `selection_mode`, carrying the mode-specific payload.
-///
-/// `#[serde(tag = "selection_mode", rename_all = "snake_case")]` means the JSON
-/// discriminator field is `"selection_mode"` and variant names are `snake_case`.
+/// Model selection layout for a hydro plant, discriminated by the
+/// `selection_mode` JSON field.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(tag = "selection_mode", rename_all = "snake_case")]
 enum RawSelectionMode {
-    /// `"selection_mode": "stage_ranges"` — stage range array.
+    /// Stage-range selection: each stage maps to a model via explicit
+    /// `[start, end]` ranges.
     StageRanges {
-        /// Array of stage range descriptors.
+        /// Ordered list of stage range descriptors.
         stage_ranges: Vec<RawStageRange>,
     },
-    /// `"selection_mode": "seasonal"` — season map with fallback.
+    /// Seasonal selection: each stage maps to a model via its season index.
     Seasonal {
-        /// Fallback model string.
+        /// Fallback model for seasons not listed in `seasons`. One of
+        /// `"constant_productivity"`, `"linearized_head"`, or `"fpha"`.
         default_model: String,
-        /// Season-specific overrides.
+        /// Season-specific model overrides.
         seasons: Vec<RawSeasonConfig>,
     },
 }
 
-/// Intermediate type for one stage range descriptor.
+/// Stage range descriptor for the `stage_ranges` selection mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawStageRange {
+    /// First stage (inclusive) to which this entry applies. Must be <=
+    /// `end_stage_id` when `end_stage_id` is set.
     start_stage_id: i32,
+    /// Last stage (inclusive) to which this entry applies. `null` = until end
+    /// of horizon.
     end_stage_id: Option<i32>,
+    /// Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"`.
     model: String,
+    /// FPHA configuration. Required when `model` is `"fpha"`. Absent or null
+    /// otherwise.
     fpha_config: Option<RawFphaColumnLayout>,
+    /// Optional productivity override [MW/(m³/s)]. When present, replaces the
+    /// entity's base `productivity_mw_per_m3s` for this stage range. Only
+    /// valid for `"constant_productivity"` and `"linearized_head"` models.
+    /// Must be positive when present.
     productivity_override: Option<f64>,
 }
 
-/// Intermediate type for one season config descriptor.
+/// Season-specific model descriptor for the `seasonal` selection mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawSeasonConfig {
+    /// Season index (0-based, matching the `stages.json` season map).
     season_id: i32,
+    /// Model name: `"constant_productivity"`, `"linearized_head"`, or `"fpha"`.
     model: String,
+    /// FPHA configuration. Required when `model` is `"fpha"`. Absent or null
+    /// otherwise.
     fpha_config: Option<RawFphaColumnLayout>,
+    /// Optional productivity override [MW/(m³/s)]. When present, replaces the
+    /// entity's base `productivity_mw_per_m3s` for this season. Only valid
+    /// for `"constant_productivity"` and `"linearized_head"` models. Must be
+    /// positive when present.
     productivity_override: Option<f64>,
 }
 
-/// Intermediate type for FPHA configuration.
+/// Configuration for the FPHA production function model.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawFphaColumnLayout {
+    /// Hyperplane source: `"computed"` (fit from topology) or
+    /// `"precomputed"` (from `fpha_hyperplanes.parquet`).
     source: String,
+    /// Number of volume discretization points used when computing hyperplanes.
+    /// Absent = algorithm default (5).
     volume_discretization_points: Option<i32>,
+    /// Number of turbine flow discretization points used when computing
+    /// hyperplanes. Absent = algorithm default (5).
     turbine_discretization_points: Option<i32>,
+    /// Number of spillage discretization points used when computing
+    /// hyperplanes. Absent = algorithm default (5).
     spillage_discretization_points: Option<i32>,
+    /// Maximum number of planes per hydro after heuristic selection. Absent =
+    /// algorithm default (10).
     max_planes_per_hydro: Option<i32>,
+    /// Optional volume fitting window for hyperplane computation. Absent or
+    /// null = full operating range.
     fitting_window: Option<RawFittingWindow>,
 }
 
-/// Intermediate type for a fitting window.
+/// Volume fitting window restricting the range used for FPHA hyperplane
+/// computation.
+///
+/// Absolute bounds (`volume_min_hm3` / `volume_max_hm3`) and percentile bounds
+/// (`volume_min_percentile` / `volume_max_percentile`) are mutually exclusive:
+/// set one pair or the other, not both for the same bound.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[allow(clippy::struct_field_names)]
 #[derive(Deserialize)]
 struct RawFittingWindow {
+    /// Explicit minimum volume for fitting [hm³]. Mutually exclusive with
+    /// `volume_min_percentile`.
     volume_min_hm3: Option<f64>,
+    /// Explicit maximum volume for fitting [hm³]. Mutually exclusive with
+    /// `volume_max_percentile`.
     volume_max_hm3: Option<f64>,
+    /// Minimum as a percentile of the operating range. Mutually exclusive
+    /// with `volume_min_hm3`.
     volume_min_percentile: Option<f64>,
+    /// Maximum as a percentile of the operating range. Mutually exclusive
+    /// with `volume_max_hm3`.
     volume_max_percentile: Option<f64>,
 }
 

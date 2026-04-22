@@ -67,61 +67,100 @@ use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `initial_conditions.json`.
+/// Initial reservoir storage conditions, past inflow values, and recent
+/// observations for all hydro plants in the case.
 ///
-/// Private — only used during deserialization. Not re-exported.
+/// Two arrays specify starting volumes at simulation time zero:
+/// - `storage` — operating hydros (those participating in generation dispatch).
+/// - `filling_storage` — filling hydros (reservoirs under construction or filling).
+///
+/// An optional array provides past inflow values for PAR(p) lag initialization:
+/// - `past_inflows` — ordered from most recent (lag 1) to oldest (lag p).
+///
+/// An optional array provides observed inflow data for mid-season study starts:
+/// - `recent_observations` — date-ranged observations that seed the lag accumulator.
+///
+/// A hydro may appear in at most one of the two storage arrays. Duplicate
+/// `hydro_id` values within the same array are rejected. Cross-reference
+/// validation (checking that IDs exist in the hydro registry) is deferred to
+/// a later validation layer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
-struct RawInitialConditions {
-    /// `$schema` field — informational, not validated.
+pub(crate) struct RawInitialConditions {
+    /// JSON schema URI — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
 
-    /// Initial storage for operating hydros.
+    /// Initial reservoir volumes for operating hydros [hm³].
     storage: Vec<RawHydroStorage>,
 
-    /// Initial storage for filling hydros.
+    /// Initial reservoir volumes for filling hydros [hm³].
+    /// A filling hydro may not also appear in `storage`.
     filling_storage: Vec<RawHydroStorage>,
 
-    /// Past inflow values for PAR(p) lag initialization.
+    /// Past inflow values for PAR(p) lag initialization [m³/s], one entry per
+    /// hydro. For each hydro, `values_m3s[0]` is the most recent past inflow
+    /// (lag 1) and `values_m3s[p-1]` is the oldest (lag p). Required when
+    /// `inflow_lags` is enabled and the PAR order is > 0. Optional; defaults
+    /// to empty.
     #[serde(default)]
     past_inflows: Vec<RawHydroPastInflows>,
 
-    /// Observed inflow data for partial periods before the study start.
+    /// Observed inflow data for partial periods before the study start
+    /// [m³/s per date range per hydro]. Used to seed the lag accumulator when
+    /// a study begins mid-season. Date ranges for the same hydro must not
+    /// overlap; adjacent ranges (start == previous end) are accepted.
+    /// Optional; defaults to empty.
     #[serde(default)]
     recent_observations: Vec<RawRecentObservation>,
 }
 
-/// Intermediate type for one hydro storage entry.
+/// Initial reservoir volume for one hydro plant, in hm³.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawHydroStorage {
-    /// Hydro plant identifier.
+    /// Hydro plant identifier. Must be unique within its array.
     hydro_id: i32,
-    /// Reservoir volume in hm³.
+    /// Reservoir volume [hm³]. Must be >= 0.0.
     value_hm3: f64,
 }
 
-/// Intermediate type for one hydro past-inflows entry.
+/// Past inflow values for PAR(p) lag initialization for one hydro plant.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawHydroPastInflows {
-    /// Hydro plant identifier.
+    /// Hydro plant identifier. Must be unique within `past_inflows`.
     hydro_id: i32,
-    /// Past inflow values in m³/s, ordered from most recent (lag 1) to oldest.
+    /// Past inflow values [m³/s], ordered from most recent (lag 1, index 0) to
+    /// oldest (lag p, index p-1). Must have length >= the hydro's PAR order.
     values_m3s: Vec<f64>,
-    /// Optional season IDs for each lag entry. Absent from legacy JSON files.
+    /// Optional season IDs corresponding to each lag entry in `values_m3s`,
+    /// one per entry. When present, length must equal `values_m3s.length`.
+    /// Each value must reference a season ID defined in `season_definitions`.
+    /// Absent from legacy JSON files (backward compatible).
     #[serde(default)]
     season_ids: Option<Vec<u32>>,
 }
 
-/// Intermediate type for one recent-observation entry.
+/// Observed inflow for a single hydro plant over a specific date range.
+///
+/// Used to seed the lag accumulator when a study begins mid-season (before the
+/// first lag-period boundary). Each entry covers one hydro over one
+/// observation period. Multiple entries per hydro are allowed for rolling
+/// revisions.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawRecentObservation {
-    /// Hydro plant identifier.
+    /// Hydro plant identifier. Must reference a hydro entity in the system.
     hydro_id: i32,
-    /// Start of the observation period (inclusive), as an ISO 8601 date string.
+    /// Start of the observation period (inclusive), as an ISO 8601 date
+    /// (YYYY-MM-DD).
     start_date: String,
-    /// End of the observation period (exclusive), as an ISO 8601 date string.
+    /// End of the observation period (exclusive), as an ISO 8601 date
+    /// (YYYY-MM-DD). Must be after `start_date`.
     end_date: String,
-    /// Average inflow observed during the period, in m³/s.
+    /// Average inflow observed during the period [m³/s]. Must be finite and
+    /// non-negative.
     value_m3s: f64,
 }
 

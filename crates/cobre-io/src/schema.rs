@@ -22,8 +22,13 @@
 use crate::{
     config::Config,
     constraints::{exchange_factors::RawExchangeFactorsFile, generic::RawGenericConstraintsFile},
+    extensions::production_models::RawProductionModelFile,
+    initial_conditions::RawInitialConditions,
     penalties::RawPenalties,
-    scenarios::{load_factors::RawLoadFactorsFile, non_controllable_factors::RawNcsFactorsFile},
+    scenarios::{
+        correlation::RawCorrelationFile, load_factors::RawLoadFactorsFile,
+        non_controllable_factors::RawNcsFactorsFile,
+    },
     stages::RawStagesFile,
     system::{
         buses::RawBusFile, energy_contracts::RawContractFile, hydros::RawHydroFile,
@@ -55,6 +60,10 @@ use crate::{
 /// | `generic_constraints.schema.json`     | `constraints/generic_constraints.json` |
 /// | `exchange_factors.schema.json`        | `constraints/exchange_factors.json`    |
 /// | `load_factors.schema.json`            | `scenarios/load_factors.json`          |
+/// | `non_controllable_factors.schema.json`| `scenarios/non_controllable_factors.json` |
+/// | `correlation.schema.json`             | `scenarios/correlation.json`           |
+/// | `initial_conditions.schema.json`      | `initial_conditions.json`              |
+/// | `production_models.schema.json`       | `system/hydro_production_models.json`  |
 ///
 /// # Errors
 ///
@@ -69,7 +78,7 @@ use crate::{
 /// use cobre_io::schema::generate_schemas;
 ///
 /// let schemas = generate_schemas().expect("schema generation must not fail");
-/// assert!(schemas.len() >= 13);
+/// assert!(schemas.len() >= 17);
 /// let config_schema = schemas.iter().find(|(name, _)| name == "config.schema.json");
 /// assert!(config_schema.is_some());
 /// ```
@@ -113,6 +122,18 @@ pub fn generate_schemas() -> Result<Vec<(String, serde_json::Value)>, serde_json
             "non_controllable_factors.schema.json",
             schemars::schema_for!(RawNcsFactorsFile),
         ),
+        (
+            "correlation.schema.json",
+            schemars::schema_for!(RawCorrelationFile),
+        ),
+        (
+            "initial_conditions.schema.json",
+            schemars::schema_for!(RawInitialConditions),
+        ),
+        (
+            "production_models.schema.json",
+            schemars::schema_for!(RawProductionModelFile),
+        ),
     ];
 
     pairs
@@ -131,13 +152,13 @@ pub fn generate_schemas() -> Result<Vec<(String, serde_json::Value)>, serde_json
 mod tests {
     use super::*;
 
-    /// `generate_schemas()` returns at least 13 entries (one per input file).
+    /// `generate_schemas()` returns at least 17 entries (one per input file).
     #[test]
     fn test_generate_schemas_returns_expected_count() {
         let schemas = generate_schemas().unwrap();
         assert!(
-            schemas.len() >= 13,
-            "expected at least 13 schema entries, got {}",
+            schemas.len() >= 17,
+            "expected at least 17 schema entries, got {}",
             schemas.len()
         );
     }

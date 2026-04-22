@@ -62,64 +62,94 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use cobre_core::EntityId;
 use cobre_core::scenario::{
     CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
     CorrelationScheduleEntry,
 };
+use cobre_core::EntityId;
 use serde::Deserialize;
 
 use crate::LoadError;
 
 // ── Intermediate serde types ──────────────────────────────────────────────────
 
-/// Top-level intermediate type for `correlation.json`.
+/// Spatial correlation model loaded from `scenarios/correlation.json`.
 ///
-/// Private — only used during deserialization. Not re-exported.
+/// Defines named correlation profiles and an optional stage-to-profile schedule
+/// for stochastic scenario generation. Each profile contains one or more
+/// correlation groups, each grouping a set of entity inflow series with a
+/// symmetric correlation matrix decomposed via the method specified in the
+/// `method` field (default: `"spectral"`).
+///
+/// Profiles are stored in deterministic order regardless of JSON declaration
+/// order. Schedule entries reference profile names that must exist in the
+/// `profiles` map.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
-struct RawCorrelationFile {
-    /// `$schema` field — informational, not validated.
+pub(crate) struct RawCorrelationFile {
+    /// JSON schema URI — informational, not validated.
     #[serde(rename = "$schema")]
     _schema: Option<String>,
 
-    /// Decomposition method. Must not be empty. `"spectral"` is the default;
-    /// `"cholesky"` is accepted for backward compatibility.
+    /// Decomposition method for the correlation matrix. Must not be empty.
+    /// Defaults to `"spectral"`. `"cholesky"` is also accepted for backward
+    /// compatibility with existing case files. Unrecognized values produce a
+    /// warning but are not rejected.
     method: String,
 
-    /// Named correlation profiles. Must not be empty.
-    /// Uses `HashMap` during deserialization; converted to `BTreeMap` in `convert`.
+    /// Named correlation profiles. Must not be empty. Keys are profile names
+    /// (e.g. `"default"`, `"wet_season"`).
     profiles: HashMap<String, RawProfile>,
 
-    /// Optional stage-to-profile schedule.
-    /// Absent or null is treated as empty vec.
+    /// Optional stage-to-profile schedule. Absent or null = empty schedule
+    /// (single profile applies everywhere). Each entry's `profile_name` must
+    /// match a key in `profiles`.
     #[serde(default)]
     schedule: Option<Vec<RawScheduleEntry>>,
 }
 
-/// Intermediate type for a single named correlation profile.
+/// A named correlation profile containing one or more correlation groups.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawProfile {
-    /// Groups of correlated entities, using the JSON field name `correlation_groups`.
+    /// Groups of correlated entities, each with a correlation matrix.
     correlation_groups: Vec<RawCorrelationGroup>,
 }
 
-/// Intermediate type for a single correlation group.
+/// A named group of correlated entities with an associated correlation matrix.
+///
+/// All entities in a group must share the same `type` (same-type constraint).
+/// Mixing entity types (e.g. inflow and load in the same group) produces a
+/// runtime validation error.
+///
+/// The `matrix` must be square, symmetric, have 1.0 on every diagonal, and
+/// have all off-diagonal entries in [-1.0, 1.0]. The number of rows (and
+/// columns) must equal the number of `entities`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawCorrelationGroup {
     /// Human-readable group label.
     name: String,
 
-    /// Ordered list of correlated entity references.
+    /// Ordered list of entity references. The matrix row/column order matches
+    /// this list. All entities must have the same `type` value; mixing entity
+    /// types in one group produces a runtime validation error.
     entities: Vec<RawEntity>,
 
     /// Symmetric correlation matrix in row-major order.
+    /// - Must be square.
+    /// - Diagonal entries must be exactly 1.0.
+    /// - Off-diagonal entries must be in [-1.0, 1.0].
+    /// - Must be symmetric: |m[i][j] - m[j][i]| <= 1e-10.
     matrix: Vec<Vec<f64>>,
 }
 
-/// Intermediate type for a single entity reference within a correlation group.
+/// Reference to a single entity within a correlation group.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawEntity {
-    /// Entity type tag. Uses `#[serde(rename = "type")]` since `type` is a Rust keyword.
+    /// Entity type tag. Valid values: `"inflow"` (hydro inflow series),
+    /// `"load"` (bus load), `"ncs"` (non-controllable source availability).
     #[serde(rename = "type")]
     entity_type: String,
 
@@ -127,14 +157,15 @@ struct RawEntity {
     id: i32,
 }
 
-/// Intermediate type for a single schedule entry.
+/// Maps a stage to the named correlation profile active for that stage.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Deserialize)]
 struct RawScheduleEntry {
     /// Stage index (0-based) this entry applies to.
     stage_id: i32,
 
-    /// Name of the correlation profile active for this stage.
-    /// Must match a key in `profiles`.
+    /// Name of the correlation profile for this stage. Must match a key in
+    /// `profiles`.
     profile_name: String,
 }
 

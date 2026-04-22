@@ -1,36 +1,44 @@
 {
   "$defs": {
     "RawFittingWindow": {
-      "description": "Volume fitting window restricting the range used for FPHA hyperplane computation.\n\nAbsolute bounds (`volume_min_hm3` / `volume_max_hm3`) and percentile bounds\n(`volume_min_percentile` / `volume_max_percentile`) are mutually exclusive:\nset one pair or the other, not both for the same bound.",
+      "description": "Volume fitting window restricting the range used for FPHA hyperplane\ncomputation.\n\nAbsolute bounds (`volume_min_hm3` / `volume_max_hm3`) and percentile bounds\n(`volume_min_percentile` / `volume_max_percentile`) are mutually exclusive:\nset one pair or the other, not both for the same bound.",
       "properties": {
         "volume_max_hm3": {
-          "default": null,
-          "description": "Explicit maximum volume for fitting [hm³]. Mutually exclusive with `volume_max_percentile`.",
+          "description": "Explicit maximum volume for fitting [hm³]. Mutually exclusive with\n`volume_max_percentile`.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "volume_max_percentile": {
-          "default": null,
-          "description": "Maximum as a percentile of the operating range. Mutually exclusive with `volume_max_hm3`.",
+          "description": "Maximum as a percentile of the operating range. Mutually exclusive\nwith `volume_max_hm3`.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "volume_min_hm3": {
-          "default": null,
-          "description": "Explicit minimum volume for fitting [hm³]. Mutually exclusive with `volume_min_percentile`.",
+          "description": "Explicit minimum volume for fitting [hm³]. Mutually exclusive with\n`volume_min_percentile`.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "volume_min_percentile": {
-          "default": null,
-          "description": "Minimum as a percentile of the operating range. Mutually exclusive with `volume_min_hm3`.",
+          "description": "Minimum as a percentile of the operating range. Mutually exclusive\nwith `volume_min_hm3`.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         }
       },
       "type": "object"
     },
-    "RawFphaConfig": {
+    "RawFphaColumnLayout": {
       "description": "Configuration for the FPHA production function model.",
       "properties": {
         "fitting_window": {
@@ -42,52 +50,56 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "Optional volume fitting window for hyperplane computation. Absent or null = full operating range."
+          "description": "Optional volume fitting window for hyperplane computation. Absent or\nnull = full operating range."
         },
         "max_planes_per_hydro": {
-          "default": null,
-          "description": "Maximum number of planes per hydro after heuristic selection. Absent = algorithm default (10).",
+          "description": "Maximum number of planes per hydro after heuristic selection. Absent =\nalgorithm default (10).",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "source": {
-          "description": "Hyperplane source: `\"computed\"` (fit from topology) or `\"precomputed\"` (from `fpha_hyperplanes.parquet`).",
+          "description": "Hyperplane source: `\"computed\"` (fit from topology) or\n`\"precomputed\"` (from `fpha_hyperplanes.parquet`).",
           "type": "string"
         },
         "spillage_discretization_points": {
-          "default": null,
-          "description": "Number of spillage discretization points used when computing hyperplanes. Absent = algorithm default (5).",
+          "description": "Number of spillage discretization points used when computing\nhyperplanes. Absent = algorithm default (5).",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "turbine_discretization_points": {
-          "default": null,
-          "description": "Number of turbine flow discretization points used when computing hyperplanes. Absent = algorithm default (5).",
+          "description": "Number of turbine flow discretization points used when computing\nhyperplanes. Absent = algorithm default (5).",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "volume_discretization_points": {
-          "default": null,
-          "description": "Number of volume discretization points used when computing hyperplanes. Absent = algorithm default (5).",
+          "description": "Number of volume discretization points used when computing hyperplanes.\nAbsent = algorithm default (5).",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "required": ["source"],
+      "required": [
+        "source"
+      ],
       "type": "object"
     },
     "RawProductionModel": {
-      "description": "Intermediate type for one hydro production model entry.\n\nThe `selection_mode` field acts as a discriminator for the union.\nDepending on `selection_mode`, either `stage_ranges` or `default_model` + `seasons` fields are present.",
+      "description": "Production model configuration for one hydro plant.\n\nThe `selection_mode` field discriminates between two layouts:\n`stage_ranges` carries a stage-range array, while `seasonal` carries a\n`default_model` plus a `seasons` override list.",
       "oneOf": [
         {
-          "description": "Stage-range selection: each stage maps to a model via explicit `[start, end]` ranges.",
+          "description": "Stage-range selection: each stage maps to a model via explicit\n`[start, end]` ranges.",
           "properties": {
-            "hydro_id": {
-              "description": "Hydro plant identifier. Must be unique within the file.",
-              "format": "int32",
-              "type": "integer"
-            },
             "selection_mode": {
               "const": "stage_ranges",
               "type": "string"
@@ -100,20 +112,18 @@
               "type": "array"
             }
           },
-          "required": ["hydro_id", "selection_mode", "stage_ranges"],
+          "required": [
+            "selection_mode",
+            "stage_ranges"
+          ],
           "type": "object"
         },
         {
           "description": "Seasonal selection: each stage maps to a model via its season index.",
           "properties": {
             "default_model": {
-              "description": "Fallback model for seasons not listed in `seasons`. One of `\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
+              "description": "Fallback model for seasons not listed in `seasons`. One of\n`\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
               "type": "string"
-            },
-            "hydro_id": {
-              "description": "Hydro plant identifier. Must be unique within the file.",
-              "format": "int32",
-              "type": "integer"
             },
             "seasons": {
               "description": "Season-specific model overrides.",
@@ -128,14 +138,24 @@
             }
           },
           "required": [
-            "hydro_id",
             "selection_mode",
             "default_model",
             "seasons"
           ],
           "type": "object"
         }
-      ]
+      ],
+      "properties": {
+        "hydro_id": {
+          "description": "Hydro plant identifier. Must be unique within the file.",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hydro_id"
+      ],
+      "type": "object"
     },
     "RawSeasonConfig": {
       "description": "Season-specific model descriptor for the `seasonal` selection mode.",
@@ -143,24 +163,25 @@
         "fpha_config": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RawFphaConfig"
+              "$ref": "#/$defs/RawFphaColumnLayout"
             },
             {
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "FPHA configuration. Required when `model` is `\"fpha\"`. Absent or null otherwise."
+          "description": "FPHA configuration. Required when `model` is `\"fpha\"`. Absent or null\notherwise."
         },
         "model": {
           "description": "Model name: `\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
           "type": "string"
         },
         "productivity_override": {
-          "default": null,
-          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the entity's base `productivity_mw_per_m3s` for this season. Only valid for `\"constant_productivity\"` and `\"linearized_head\"` models. Must be positive when present.",
+          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the\nentity's base `productivity_mw_per_m3s` for this season. Only valid\nfor `\"constant_productivity\"` and `\"linearized_head\"` models. Must be\npositive when present.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "season_id": {
           "description": "Season index (0-based, matching the `stages.json` season map).",
@@ -168,65 +189,80 @@
           "type": "integer"
         }
       },
-      "required": ["season_id", "model"],
+      "required": [
+        "season_id",
+        "model"
+      ],
       "type": "object"
     },
     "RawStageRange": {
       "description": "Stage range descriptor for the `stage_ranges` selection mode.",
       "properties": {
         "end_stage_id": {
-          "description": "Last stage (inclusive) to which this entry applies. `null` = until end of horizon.",
+          "description": "Last stage (inclusive) to which this entry applies. `null` = until end\nof horizon.",
           "format": "int32",
-          "type": ["integer", "null"]
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "fpha_config": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RawFphaConfig"
+              "$ref": "#/$defs/RawFphaColumnLayout"
             },
             {
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "FPHA configuration. Required when `model` is `\"fpha\"`. Absent or null otherwise."
+          "description": "FPHA configuration. Required when `model` is `\"fpha\"`. Absent or null\notherwise."
         },
         "model": {
           "description": "Model name: `\"constant_productivity\"`, `\"linearized_head\"`, or `\"fpha\"`.",
           "type": "string"
         },
         "productivity_override": {
-          "default": null,
-          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the entity's base `productivity_mw_per_m3s` for this stage range. Only valid for `\"constant_productivity\"` and `\"linearized_head\"` models. Must be positive when present.",
+          "description": "Optional productivity override [MW/(m³/s)]. When present, replaces the\nentity's base `productivity_mw_per_m3s` for this stage range. Only\nvalid for `\"constant_productivity\"` and `\"linearized_head\"` models.\nMust be positive when present.",
           "format": "double",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "start_stage_id": {
-          "description": "First stage (inclusive) to which this entry applies. Must be <= `end_stage_id` when `end_stage_id` is set.",
+          "description": "First stage (inclusive) to which this entry applies. Must be <=\n`end_stage_id` when `end_stage_id` is set.",
           "format": "int32",
           "type": "integer"
         }
       },
-      "required": ["start_stage_id", "model"],
+      "required": [
+        "start_stage_id",
+        "model"
+      ],
       "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Per-hydro production model configuration loaded from `system/hydro_production_models.json`.\n\nSpecifies how the hydro production function (HPF) model variant is selected for\neach stage or season. Two selection modes are supported:\n\n- `stage_ranges`: maps each stage to a model via explicit `[start, end]` intervals.\n- `seasonal`: maps each stage to a model via its season index, with a fallback default.\n\nEach hydro may appear at most once. Results are sorted by `hydro_id` ascending.",
+  "description": "Per-hydro production model configuration loaded from\n`system/hydro_production_models.json`.\n\nSpecifies how the hydro production function (HPF) model variant is selected\nfor each stage or season. Two selection modes are supported:\n\n- `stage_ranges`: maps each stage to a model via explicit `[start, end]`\n  intervals.\n- `seasonal`: maps each stage to a model via its season index, with a\n  fallback default.\n\nEach hydro may appear at most once. Results are sorted by `hydro_id`\nascending.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "production_models": {
-      "description": "Array of per-hydro production model configurations. Each `hydro_id` must be unique.",
+      "description": "Array of per-hydro production model configurations. Each `hydro_id`\nmust be unique.",
       "items": {
         "$ref": "#/$defs/RawProductionModel"
       },
       "type": "array"
     }
   },
-  "required": ["production_models"],
+  "required": [
+    "production_models"
+  ],
   "title": "RawProductionModelFile",
   "type": "object"
 }

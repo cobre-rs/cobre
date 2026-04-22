@@ -73,6 +73,16 @@
     "CutSelectionConfig": {
       "description": "Cut selection settings (`config.json → training.cut_selection`).",
       "properties": {
+        "basis_activity_window": {
+          "default": null,
+          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `active_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5 (inherited from\nCEPEL NEWAVE). See Epic 06 AD-7 and\n`docs/design/performance-mechanism-interactions.md` §9.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "check_frequency": {
           "default": null,
           "description": "Iterations between pruning checks.",
@@ -686,6 +696,7 @@
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
           "default": {
+            "basis_activity_window": null,
             "check_frequency": null,
             "cut_activity_tolerance": null,
             "domination_epsilon": null,

@@ -267,37 +267,60 @@ simulation from the same LP vertex, regardless of rank count.
 
 Each stored warm-start basis is wrapped in a `CapturedBasis { basis,
 base_row_count, cut_row_slots, state_at_capture }` struct that records
-the LP row count and the ordered list of cut pool slot indices at capture
-time, alongside the state vector used to evaluate cut slacks. The
-`reconstruct_basis` function in `cobre-sddp::basis_reconstruct` is the
-sole entry point for applying a stored basis across cut-set churn on the
-forward pass, backward pass, and simulation pipeline.
+the LP row count and the ordered list of cut pool slot indices at
+capture time, alongside the state vector at which the basis was
+captured. The `reconstruct_basis` function in
+`cobre-sddp::basis_reconstruct` is the sole entry point for applying a
+stored basis across cut-set churn on the forward pass, backward pass,
+and simulation pipeline.
 
 When a stored basis is applied to an LP whose cut rows have changed,
-`reconstruct_basis` walks the current LP's cut rows, looks each slot up
-in an O(1) scratch map built from `cut_row_slots`, and classifies each
-row into one of three categories:
+`reconstruct_basis` walks the current LP's cut rows, looks each slot
+up in an O(1) scratch map built from `cut_row_slots`, and classifies
+each row into one of two paths:
 
-- **Preserved**: the slot identity was found in the stored basis —
-  the original status code is copied verbatim.
-- **New-tight**: the slot was not found (a newly added cut) and its
-  slack at `state_at_capture` is <= 1e-7 — the row is assigned
-  `NONBASIC_LOWER`.
-- **New-slack**: the slot was not found and its slack at
-  `state_at_capture` is > 1e-7 — the row is assigned `BASIC`.
+- **Preserved** (slot present in the stored basis): the original status
+  is copied verbatim.
+- **New** (slot not present — a cut added since capture): the classifier
+  consults the cut's sliding bitmap of recent binding observations. If
+  any bit within the `basis_activity_window` mask is set, or if the cut
+  was generated in the current iteration, the row is assigned
+  `NONBASIC_LOWER` (tight guess); otherwise `BASIC` (slack guess).
 
-Reconstruction is always active when a stored basis exists — there is no
-configuration flag. The Epic 02 A/B benchmark provided the motivation:
-across a 10-iteration training run on a representative case, 148,060 cut
-rows were preserved and the mechanism delivered a -3.5% wall-time
-improvement versus the pre-Epic-01 baseline.
+Each `NONBASIC_LOWER` classification on a new cut requires a
+compensating demotion on a preserved cut to keep HiGHS's
+column-basic + row-basic invariant. The stalest preserved-`LOWER`
+candidate is promoted, ranked lexicographically by recent-activity
+popcount, last-active iteration, and insertion order. When
+new-`LOWER` classifications outnumber preserved-`LOWER` candidates,
+a tail fallback flips the most recent new-`LOWER` rows back to
+`BASIC` until the invariant holds.
+
+Reconstruction is always active when a stored basis exists — there is
+no configuration flag.
 
 The `basis_reconstructions` counter in
 `training/solver/iterations.parquet` and
-`simulation/solver/iterations.parquet` tracks how often `reconstruct_basis`
-was invoked with a non-empty stored basis. See the [Output Format
-reference](../reference/output-format.md#trainingsolveriterationsparquet)
-for the full column schema.
+`simulation/solver/iterations.parquet` tracks how often
+`reconstruct_basis` was invoked with a non-empty stored basis.
+
+### Backward-Pass Basis Cache
+
+During training, rank 0's ω=0 backward-pass worker captures a fresh
+basis for every stage into a per-iteration backward cache. At end of
+iteration the cache is broadcast to all ranks, and on the next
+iteration's backward pass every rank's ω=0 solve warm-starts from the
+cached basis instead of falling back to the forward-pass `BasisStore`.
+The first iteration has no backward cache yet, so it uses the forward
+cache exclusively.
+
+The backward cache matters because cuts added earlier in the current
+iteration's backward walk are **new** relative to the previous
+iteration's stored basis — so the classifier fires frequently on
+backward solves, while the forward pass sees mostly preserved slots
+and the classifier rarely runs. A warm-start at ω=0 also cascades
+through the remaining openings (ω=1..`n_openings`-1) via HiGHS's
+retained factorization, amplifying the per-solve impact.
 
 ---
 
@@ -389,3 +412,4 @@ millions of LP solves occur per training run.
 - [Output Format](../reference/output-format.md) — timing, solver statistics, and cut selection output schemas
 - [cobre-solver](../crates/solver.md) — solver interface and retry escalation details
 - [cobre-sddp](../crates/sddp.md) — training loop architecture and data structures
+- `docs/design/performance-mechanism-interactions.md` — maintainer reference for the classifier, invariant-preserving promotion/demotion schemes, sliding-window activity bitmap, and the forward/backward asymmetry

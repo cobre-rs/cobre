@@ -98,7 +98,7 @@ near zero.
 | `lower_bound`         | `evaluate_lower_bound`: step 5b risk-adjusted LB computation (parallelized across openings)                                                                                                                                                                                        |
 | `convergence`         | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                                                                                                                                                                                           |
 | `cut`                 | `CutPool`, `FutureCostFunction`, `CutRowMap`, `WARM_START_ITERATION`: cut data structures, wire format, and LP row mapping                                                                                                                                                         |
-| `basis_reconstruct`   | `reconstruct_basis`: slot-tracked warm-start basis reconstruction — reconciles stored cut rows by slot identity and classifies newly added cuts at the capture-time state                                                                                                       |
+| `basis_reconstruct`   | `reconstruct_basis`: slot-tracked warm-start basis reconstruction — reconciles stored cut rows by slot identity and classifies newly added cuts at the capture-time state                                                                                                          |
 | `config`              | `TrainingConfig`: algorithm parameters                                                                                                                                                                                                                                             |
 | `context`             | `StageContext`, `TrainingContext`: hot-path argument bundles that absorb parameters into context structs                                                                                                                                                                           |
 | `stopping_rule`       | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                                                                                                                                                                                            |
@@ -106,7 +106,7 @@ near zero.
 | `horizon_mode`        | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` currently)                                                                                                                                                                                                         |
 | `indexer`             | `StageIndexer`, `EquipmentCounts`, `FphaColumnLayout`: LP column/row offset arithmetic for stage subproblems                                                                                                                                                                       |
 | `lp_builder`          | `build_stage_templates`, `StageTemplates`, `PatchBuffer`: stage template construction, LP scaling, and row-bound patch arrays                                                                                                                                                      |
-| `workspace`           | `SolverWorkspace`, `WorkspacePool`, `BasisStore`, `CapturedBasis`: per-worker solver instances with pre-allocated scratch buffers and slot-tracked basis storage                                                                                                                                                 |
+| `workspace`           | `SolverWorkspace`, `WorkspacePool`, `BasisStore`, `CapturedBasis`: per-worker solver instances with pre-allocated scratch buffers and slot-tracked basis storage                                                                                                                   |
 | `trajectory`          | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                                                                                                                                                                                    |
 | `noise`               | Noise-to-RHS-patch logic shared across forward, backward, and simulation passes; includes `accumulate_and_shift_lag_state` for sub-monthly lag accumulation                                                                                                                        |
 | `lag_transition`      | `precompute_stage_lag_transitions`: builds per-stage `StageLagTransition` configs from stage dates and lag period boundaries; accumulator seeding from `RecentObservation` for mid-season starts                                                                                   |
@@ -136,15 +136,15 @@ near zero.
 and must be set explicitly — there is no `Default` implementation, preventing
 silent misconfigurations.
 
-| Field                   | Type                            | Description                                               |
-| ----------------------- | ------------------------------- | --------------------------------------------------------- |
-| `forward_passes`        | `u32`                           | Scenarios per rank per iteration (must be >= 1)           |
-| `max_iterations`        | `u64`                           | Safety bound on total iterations; also sizes the cut pool |
-| `checkpoint_interval`   | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled    |
-| `warm_start_cuts`       | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file        |
-| `event_sender`          | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
-| `cut_selection`         | `Option<CutSelectionStrategy>`  | Stage 1 cut selection strategy; `None` = no selection     |
-| `budget`                | `Option<u32>`                   | Stage 2 max active cuts per stage; `None` = no budget     |
+| Field                 | Type                            | Description                                               |
+| --------------------- | ------------------------------- | --------------------------------------------------------- |
+| `forward_passes`      | `u32`                           | Scenarios per rank per iteration (must be >= 1)           |
+| `max_iterations`      | `u64`                           | Safety bound on total iterations; also sizes the cut pool |
+| `checkpoint_interval` | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled    |
+| `warm_start_cuts`     | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file        |
+| `event_sender`        | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
+| `cut_selection`       | `Option<CutSelectionStrategy>`  | Stage 1 cut selection strategy; `None` = no selection     |
+| `budget`              | `Option<u32>`                   | Stage 2 max active cuts per stage; `None` = no budget     |
 
 ### `StoppingRuleSet`
 
@@ -501,6 +501,18 @@ The cut wire format used by `CutSyncBuffers` is a fixed-size record:
 24 bytes of header (slot index, iteration, forward pass index, intercept)
 followed by `n_state * 8` bytes of coefficients. The record size is
 `cut_wire_size(n_state) = 24 + n_state * 8` bytes.
+
+### Basis cache wire format
+
+`CapturedBasis` owns the pack/unpack layout for broadcasting a stored
+basis via `to_broadcast_payload` and `try_from_broadcast_payload`. Each
+stage's payload is either a `0_i32` absent-sentinel or a `1_i32`
+present-sentinel followed by five length fields, the `col_status` and
+`row_status` slices, the `cut_row_slots` indices cast to `i32`, and the
+`state_at_capture` values carried in a separate `f64` buffer.
+`broadcast_basis_cache` in `training` issues four broadcasts per
+transfer — i32 length, i32 payload, f64 length, f64 payload — wrapping
+the single-stage serialisation in a stage-major loop.
 
 ### Communication-free parallelism
 

@@ -95,12 +95,15 @@ pub struct CutMetadata {
     /// (so any rank observing the cut binding sets bit 0 globally). Consumed
     /// by the activity-guided basis classifier in Epic 06 T2.
     ///
-    /// Bit 0 is seeded to `1` at `add_cut` time (Epic 06 G1) so the
-    /// activity-guided classifier treats a cut as "tight at its
-    /// generating trial point" on its first LP encounter. The
-    /// generating event is thus recorded identically to a regular
-    /// bind event and decays out of the recent window over the
-    /// end-of-iteration shifts.
+    /// **Epic 06 G1 (transient seed)**: `add_cut` sets
+    /// [`crate::basis_reconstruct::SEED_BIT`] (bit 31, outside
+    /// `RECENT_WINDOW_BITS`) so the classifier fires LOWER on a freshly
+    /// generated cut during the same iteration's remaining backward stages —
+    /// the cut is tight at the x̂ it was derived from by construction. The
+    /// end-of-iteration logic clears `SEED_BIT` *before* the `<<= 1` shift so
+    /// the seed does **not** persist into the next iteration's basis
+    /// reconstruction. From iteration i+1 onward, only genuine binding
+    /// observations drive classification decisions.
     pub active_window: u32,
 }
 

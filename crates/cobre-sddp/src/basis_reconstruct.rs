@@ -94,6 +94,20 @@ pub const RECENT_WINDOW_K: u32 = 5;
 /// Derived from [`RECENT_WINDOW_K`]: `(1 << RECENT_WINDOW_K) - 1 = 0b11111`.
 pub const RECENT_WINDOW_BITS: u32 = (1u32 << RECENT_WINDOW_K) - 1;
 
+/// Transient seed bit for the Epic 06 G1 "generating event" signal.
+///
+/// Set by `CutPool::add_cut` so the classifier fires LOWER on a freshly
+/// generated cut during the *same* iteration's remaining backward stages
+/// (the cut is tight at the x̂ it was derived from by construction). Cleared
+/// at end-of-iteration — before the `active_window <<= 1` shift — so the
+/// seed does **not** carry over into the next iteration's classifier
+/// decisions. From iteration i+1 onward, only genuine binding observations
+/// (via the `BitwiseOr` allreduce into bit 0) drive classification.
+///
+/// Positioned outside [`RECENT_WINDOW_BITS`] (bit 31) so it is not counted
+/// by the Scheme 1 sort key and does not collide with recent-binding bits.
+pub const SEED_BIT: u32 = 1u32 << 31;
+
 // ---------------------------------------------------------------------------
 // Target LP shape (absorbs two scalar parameters to stay within clippy budget)
 // ---------------------------------------------------------------------------
@@ -416,9 +430,12 @@ where
             stored_status
         } else {
             // New cut — consult the activity window (Epic 06 AD-2).
+            // G1 transient: SEED_BIT fires LOWER for cuts added this iteration
+            // (within-iter warm-start); it is cleared at end-of-iter so it
+            // cannot carry into the next iteration's classifier.
             let active_window = cut_metadata.get(target_slot).map_or(0, |m| m.active_window);
             let _ = (intercept, coefficients); // suppress unused-variable warnings
-            if active_window & RECENT_WINDOW_BITS != 0 {
+            if active_window & (RECENT_WINDOW_BITS | SEED_BIT) != 0 {
                 // Activity-guided tight guess: classify LOWER.
                 stats.new_tight += 1;
                 lower_deficit += 1;
@@ -2409,12 +2426,14 @@ mod tests {
 
     /// T3 Requirement 7: activity-driven classifier fires on the production path.
     ///
-    /// Build a pool with 8 cuts: 5 new cuts at slots 0..4 (slot 2 has
-    /// active_window=0b1) and 3 preserved cuts at slots 100..102 (stored
-    /// LOWER). The stored basis has only the 3 high-slot cuts as cut rows.
-    /// Calling reconstruct_basis with pool.active_cuts() exercises:
+    /// Build a pool with 8 cuts: 5 new cuts at slots 0..4 (slot 2 keeps the
+    /// G1-transient SEED_BIT from `add_cut`) and 3 preserved cuts at slots
+    /// 100..102 (stored LOWER). The stored basis has only the 3 high-slot
+    /// cuts as cut rows. Calling reconstruct_basis with pool.active_cuts()
+    /// exercises:
     /// - Slot identity preservation for stored slots 100,101,102 (preserved=3).
-    /// - Activity-driven LOWER guess for new slot 2 (new_tight=1).
+    /// - Activity-driven LOWER guess for new slot 2 (new_tight=1) — SEED_BIT
+    ///   fires the classifier predicate `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`.
     /// - Scheme 1 symmetric promotion: the LOWER guess triggers promotion of one
     ///   preserved-LOWER candidate (slot 100, lowest popcount, first in insertion
     ///   order) from LOWER → BASIC.
@@ -2442,16 +2461,18 @@ mod tests {
         for i in 100u64..103 {
             pool.add_cut(i, 0, 0.0, &[0.0]);
         }
-        // Epic 06 G1: add_cut now seeds active_window=1 on all freshly generated
-        // cuts. Clear the seed for slots 0,1,3,4 (no recent activity) and for
-        // slots 100,101,102 (preserved — need popcount=0 for Scheme 1 sort).
-        // Keep slot 2 at active_window=0b1 (bit 0 set) to represent recent activity.
+        // Epic 06 G1 (transient): add_cut seeds active_window=SEED_BIT on all
+        // freshly generated cuts. Clear for slots 0,1,3,4 (no recent activity)
+        // and for slots 100,101,102 (preserved — need popcount=0 for Scheme 1
+        // sort). Keep slot 2 at active_window=SEED_BIT to represent the
+        // within-iter "generating event" signal that fires the classifier.
         for s in [0usize, 1, 3, 4, 100, 101, 102] {
             pool.metadata[s].active_window = 0;
         }
-        // Slot 2: active_window is already 1 from G1 seed (bit 0 = recent activity).
-        // Slots 100,101,102: cleared above to active_window=0 (popcount=0); they will
-        // be sorted first by Scheme 1 so slot 100 gets promoted LOWER → BASIC.
+        // Slot 2: active_window = SEED_BIT (bit 31) — satisfies classifier
+        //   predicate `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0` → LOWER.
+        // Slots 100,101,102: cleared to 0; they will be sorted first by Scheme
+        //   1 so slot 100 gets promoted LOWER → BASIC.
 
         assert_eq!(pool.active_count(), 8, "5 new + 3 preserved cuts active");
 
@@ -2487,7 +2508,8 @@ mod tests {
 
         // 5 new cuts (0..4) + 3 preserved (100..102).
         assert_eq!(stats.preserved, 3, "slots 100,101,102 preserved");
-        // Slot 2 has active_window bit 0 set → classifier guesses LOWER.
+        // Slot 2 has SEED_BIT set → classifier guesses LOWER via the predicate
+        //   `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`.
         // Scheme 1 absorbs the deficit (promotes preserved-LOWER slot 100).
         assert_eq!(stats.new_tight, 1, "slot 2 classified LOWER by classifier");
         assert_eq!(stats.new_slack, 4, "slots 0,1,3,4 classified BASIC");
@@ -2496,7 +2518,7 @@ mod tests {
         // Output cut rows (base_rows=1):
         //   row 1 → slot 0 → B (new, no activity)
         //   row 2 → slot 1 → B (new, no activity)
-        //   row 3 → slot 2 → L (new, active_window=0b1 → LOWER)
+        //   row 3 → slot 2 → L (new, active_window=SEED_BIT → LOWER)
         //   row 4 → slot 3 → B (new, no activity)
         //   row 5 → slot 4 → B (new, no activity)
         //   row 6 → slot 100 → B (preserved L, promoted by Scheme 1)
@@ -2544,11 +2566,10 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Epic 06 T4: G1 seed tests
+    // Epic 06 T4: G1 seed tests (transient — cleared at end-of-iter)
     //
-    // These tests verify that the `active_window: 1` seed introduced by Epic
-    // 06 G1 (ticket-004) is correctly observed by the activity-driven
-    // classifier in `reconstruct_basis`.  Two fixtures:
+    // These tests verify that `SEED_BIT` set by `add_cut` is correctly observed
+    // by the activity-driven classifier in `reconstruct_basis`.  Two fixtures:
     //
     //   1. Raw classifier verdict when no preserved-LOWER candidates exist:
     //      Scheme 2 overrides the LOWER guess back to BASIC because the
@@ -2558,17 +2579,17 @@ mod tests {
     //      → BASIC), and the new slot 3 stays LOWER.  The G1 verdict survives.
     // -----------------------------------------------------------------------
 
-    /// Epic 06 T4 Requirement 4: freshly generated cut gets LOWER via G1 seed,
-    /// but Scheme 2 overrides it back to BASIC when no preserved-LOWER
-    /// candidates are available.
+    /// Epic 06 T4 Requirement 4: freshly generated cut gets LOWER via the
+    /// transient G1 SEED_BIT seed, but Scheme 2 overrides it back to BASIC when
+    /// no preserved-LOWER candidates are available.
     ///
     /// Fixture:
     ///   Pool: 8 slots, 3-dim state, 3 forward passes, 0 warm-start cuts.
-    ///   add_cut(1, 0, ...) → slot 3.  G1 seed: meta[3].active_window = 1.
+    ///   add_cut(1, 0, ...) → slot 3.  G1 seed: meta[3].active_window = SEED_BIT.
     ///   Stored basis: empty (base_row_count=0, no stored cut slots, num_cols=0).
     ///   active_cuts() yields (3, ...) only.
     ///
-    /// Classifier sees active_window=1 & RECENT_WINDOW_BITS != 0 → LOWER.
+    /// Classifier sees `aw & (RECENT_WINDOW_BITS | SEED_BIT) != 0` → LOWER.
     /// lower_deficit=1; 0 preserved-LOWER candidates.
     /// Scheme 1: scheme1_count=0.
     /// Scheme 2: remaining_deficit=1 → overrides slot 3 LOWER → BASIC.
@@ -2585,7 +2606,7 @@ mod tests {
 
         // Pool: 8 slots, 3-dim state, 3 forward passes.
         // add_cut(iter=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
-        // G1 seed sets meta[3].active_window = 1.
+        // G1 seed sets meta[3].active_window = SEED_BIT.
         let mut pool = CutPool::new(8, 3, 3, 0);
         pool.add_cut(
             /*iteration=*/ 1,
@@ -2594,8 +2615,9 @@ mod tests {
             /*coefficients=*/ &[1.0, 2.0, 3.0],
         );
         assert_eq!(
-            pool.metadata[3].active_window, 1,
-            "G1 seed: add_cut must initialise active_window to 1 at slot 3"
+            pool.metadata[3].active_window,
+            crate::basis_reconstruct::SEED_BIT,
+            "G1 seed: add_cut must initialise active_window to SEED_BIT at slot 3"
         );
 
         let num_row = base_rows + 1; // 0 template + 1 new cut
@@ -2667,11 +2689,11 @@ mod tests {
     ///
     /// Fixture:
     ///   Pool: 8 slots, 3-dim state, 3 forward passes, 0 warm-start cuts.
-    ///   add_cut(iter=0, fp=1, ...) → slot 1.  G1 seed: meta[1].active_window=1.
+    ///   add_cut(iter=0, fp=1, ...) → slot 1.  G1 seed: meta[1].active_window=SEED_BIT.
     ///   Manually clear: pool.metadata[1].active_window = 0  (simulates a cut
     ///     that was never tight recently; popcount=0 — cheapest promotion
     ///     candidate for Scheme 1).
-    ///   add_cut(iter=1, fp=0, ...) → slot 3.  G1 seed: meta[3].active_window=1.
+    ///   add_cut(iter=1, fp=0, ...) → slot 3.  G1 seed: meta[3].active_window=SEED_BIT.
     ///   Stored basis (T3a-corrected): 1 base row, 1 col, slot 1 stored as LOWER
     ///     (the promotion candidate; NOT BASIC as the pre-T3a ticket draft said).
     ///   active_cuts() yields slots 1 and 3 (in insertion order).
@@ -2679,7 +2701,8 @@ mod tests {
     /// Reconstruction walk:
     ///   Slot 1 (preserved, stored LOWER): added to Scheme 1 candidates.
     ///     row_status[1] initially set to LOWER.
-    ///   Slot 3 (new, active_window=1): recent bit set → LOWER.
+    ///   Slot 3 (new, active_window=SEED_BIT): classifier predicate
+    ///     `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0` → LOWER.
     ///     new_tight=1, lower_deficit=1.
     ///   Scheme 1: 1 candidate (slot 1, popcount=0) ≥ lower_deficit=1.
     ///     Promote row 1 (slot 1) from LOWER → BASIC.  scheme1_count=1.
@@ -2699,8 +2722,9 @@ mod tests {
         let mut pool = CutPool::new(8, 3, 3, 0);
 
         // Slot 1: add_cut(iter=0, fp=1) → slot = 0 + 0*3 + 1 = 1.
-        // G1 seed gives active_window=1; we clear it to simulate a cut not
-        // recently tight — making it the cheapest Scheme 1 candidate (popcount=0).
+        // G1 seed gives active_window=SEED_BIT; we clear it to simulate a cut
+        // not recently tight — making it the cheapest Scheme 1 candidate
+        // (popcount in window = 0).
         pool.add_cut(
             /*iteration=*/ 0,
             /*forward_pass_index=*/ 1,
@@ -2710,8 +2734,8 @@ mod tests {
         pool.metadata[1].active_window = 0; // popcount=0 → selected by Scheme 1
 
         // Slot 3: add_cut(iter=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
-        // G1 seed gives active_window=1; this is the fresh cut whose LOWER
-        // classification we want to verify survives after Scheme 1.
+        // G1 seed gives active_window=SEED_BIT; this is the fresh cut whose
+        // LOWER classification we want to verify survives after Scheme 1.
         pool.add_cut(
             /*iteration=*/ 1,
             /*forward_pass_index=*/ 0,
@@ -2719,8 +2743,9 @@ mod tests {
             /*coefficients=*/ &[1.0, 2.0, 3.0],
         );
         assert_eq!(
-            pool.metadata[3].active_window, 1,
-            "G1 seed: slot 3 must have active_window=1 after add_cut"
+            pool.metadata[3].active_window,
+            crate::basis_reconstruct::SEED_BIT,
+            "G1 seed: slot 3 must have active_window=SEED_BIT after add_cut"
         );
 
         // Stored basis (T3a-corrected): slot 1 stored as LOWER.
@@ -2760,7 +2785,7 @@ mod tests {
         assert_eq!(stats.preserved, 1, "slot 1 preserved from stored basis");
         assert_eq!(
             stats.new_tight, 1,
-            "slot 3: G1 seed (active_window=1) → LOWER (new_tight=1); Scheme 1 absorbed the deficit"
+            "slot 3: G1 seed (active_window=SEED_BIT) → LOWER (new_tight=1); Scheme 1 absorbed the deficit"
         );
         assert_eq!(stats.new_slack, 0, "no BASIC-classified new cuts");
 

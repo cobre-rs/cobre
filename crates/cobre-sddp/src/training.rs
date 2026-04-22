@@ -1059,9 +1059,15 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // bit 0 starts clear and records fresh binding events. Placed AFTER cut
         // selection (so deactivated cuts are already marked inactive) and BEFORE
         // template baking (so the shifted bitmaps are in the pool when T2 consumes them).
+        //
+        // Epic 06 G1 (transient): clear SEED_BIT before the shift. The seed is a
+        // within-iter warm-start hint only; letting it carry into iter i+1 biases
+        // the classifier on cuts that are now "preserved" (stored-status copied)
+        // rather than newly-generated. Clearing here confines G1's effect to the
+        // same backward pass in which the cut was generated.
         for pool in &mut fcf.pools {
             for m in pool.metadata.iter_mut().take(pool.populated_count) {
-                m.active_window <<= 1;
+                m.active_window = (m.active_window & !crate::basis_reconstruct::SEED_BIT) << 1;
             }
         }
 

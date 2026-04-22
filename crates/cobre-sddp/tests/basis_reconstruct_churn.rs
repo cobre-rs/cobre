@@ -192,15 +192,23 @@ fn basis_reconstruct_churn() {
     // Pinned regression values — declared first to satisfy `clippy::items_after_statements`.
     //
     // AC-5: simplex-iteration pin (±5 % tolerance).
-    // Pinned from local run 2026-04-19 (ticket-002 always-baked path).
-    // On the always-baked forward path cuts are structural rows in the template;
-    // reconstruct_basis receives an empty delta-cut iterator so HiGHS warm-starts
-    // from load_model(baked_template) rather than slot-tracked row injection.
-    // This reduces the simplex iteration count vs the pre-ticket-002 pin of 180.
-    // Regenerate if `HiGHS` major version changes or the fixture parameters change.
-    // Sensitivity: a padding_state = x_hat regression (ticket-004) raises this
-    // count by ~+6 %, which exceeds the ±5 % band and trips this assertion.
-    const PINNED_SIMPLEX_ITERS: u64 = 120;
+    // Pinned 2026-04-22 from the transient-G1 design (Epic 06 T4 refinement):
+    // `add_cut` seeds `SEED_BIT` (bit 31, outside RECENT_WINDOW_BITS) instead of
+    // bit 0, and the end-of-iter shift clears SEED_BIT so the G1 signal does not
+    // carry into the next iteration. Previous pin was 120 (pre-T4; classifier
+    // dormant) and 123 (T4 cross-iter-persistent seed).
+    //
+    // D03 churn is an adversarial fixture for transient-G1: it has only 3 FP
+    // and 1 scenario per stage, so iter-to-iter x̂ drift is tiny and cross-iter
+    // G1 persistence yields a real 68-simplex win. Transient-G1 gives that up
+    // in exchange for recovering the convertido (stochastic, 50 FP) wall-clock.
+    //
+    // Regenerate if `HiGHS` major version changes, the fixture parameters
+    // change, or the G1 design changes again.
+    //
+    // Sensitivity: the `padding_state = x_hat` regression this test was
+    // designed to catch raises this count to >>193, well outside the ±5 % band.
+    const PINNED_SIMPLEX_ITERS: u64 = 184;
     // ±5 % expressed as integer fractions to avoid `clippy::cast_sign_loss`.
     const LO_SIMPLEX: u64 = PINNED_SIMPLEX_ITERS * 95 / 100; // floor of 0.95×pin
     const HI_SIMPLEX: u64 = PINNED_SIMPLEX_ITERS * 105 / 100; // floor of 1.05×pin
@@ -286,8 +294,7 @@ fn basis_reconstruct_churn() {
     assert!(
         (LO_SIMPLEX..=HI_SIMPLEX).contains(&observed_simplex),
         "basis_reconstruct_churn: simplex_iterations={observed_simplex} is outside \
-         the ±5 % band [{LO_SIMPLEX}, {HI_SIMPLEX}] around pin={PINNED_SIMPLEX_ITERS} \
-         (a padding_state=x_hat regression raises this by ~+6 %)"
+         the ±5 % band [{LO_SIMPLEX}, {HI_SIMPLEX}] around pin={PINNED_SIMPLEX_ITERS}"
     );
 
     assert_eq!(

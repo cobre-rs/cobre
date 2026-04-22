@@ -253,7 +253,11 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
-            active_window: 1, // Epic 06 G1: cut generated at x̂_t is tight at x̂_t by construction.
+            // Epic 06 G1 (transient): seed SEED_BIT (outside RECENT_WINDOW_BITS)
+            // so the classifier fires LOWER within the same iteration but the
+            // seed is cleared at end-of-iter before the shift — no cross-iter
+            // carryover.
+            active_window: crate::basis_reconstruct::SEED_BIT,
         };
 
         if slot >= self.populated_count {

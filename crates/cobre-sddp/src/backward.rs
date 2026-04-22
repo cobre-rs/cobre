@@ -4870,15 +4870,18 @@ mod tests {
         }
     }
 
-    /// `add_cut` must seed `active_window = 0b1` (Epic 06 G1) so the
-    /// activity-guided classifier treats the generating event as a bind signal.
+    /// `add_cut` must seed `active_window = SEED_BIT` (Epic 06 G1, transient) so
+    /// the activity-guided classifier treats the generating event as a bind
+    /// signal within the current iteration.
     ///
     /// A cut generated at `x̂_t` is tight at `x̂_t` by construction. Seeding
-    /// bit 0 ensures the classifier returns LOWER for that cut on its first LP
-    /// encounter within the same iteration, matching the CEPEL SC adoption
-    /// paper's "generating event as activity start" intuition (Epic 06 AD-7).
+    /// `SEED_BIT` (bit 31, outside `RECENT_WINDOW_BITS`) ensures the classifier
+    /// returns LOWER for that cut on its first LP encounter within the same
+    /// iteration. The seed is cleared at end-of-iter before the shift so it does
+    /// not carry into iter i+1's classifier decisions (transient semantics).
     #[test]
-    fn add_cut_seeds_active_window_bit_zero() {
+    fn add_cut_seeds_active_window_with_seed_bit() {
+        use crate::basis_reconstruct::{RECENT_WINDOW_BITS, SEED_BIT};
         use crate::cut::CutPool;
         // CutPool::new(capacity=8, state_dim=1, forward_passes=3, warm_start=0).
         // add_cut(iteration=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
@@ -4891,17 +4894,53 @@ mod tests {
         );
         // slot = warm_start_count(0) + iteration(1) * forward_passes(3) + fp(0) = 3.
         assert_eq!(
-            pool.metadata[3].active_window, 1,
-            "Epic 06 G1: add_cut must seed active_window = 0b1 so the \
-             classifier treats the generating event as a bind signal."
+            pool.metadata[3].active_window, SEED_BIT,
+            "Epic 06 G1 (transient): add_cut must seed active_window = SEED_BIT \
+             so the classifier treats the generating event as a bind signal."
         );
-        // The seed must satisfy the classifier's recent-window predicate.
-        let recent_bits: u32 = (1u32 << crate::basis_reconstruct::RECENT_WINDOW_K) - 1;
+        // The classifier predicate is `(aw & (RECENT_WINDOW_BITS | SEED_BIT)) != 0`;
+        // SEED_BIT alone (with bits 0..4 clear) must satisfy it.
         assert_ne!(
-            pool.metadata[3].active_window & recent_bits,
+            pool.metadata[3].active_window & (RECENT_WINDOW_BITS | SEED_BIT),
             0,
-            "seeded bit 0 must be inside RECENT_WINDOW_BITS for \
-             any RECENT_WINDOW_K >= 1"
+            "the seed must fire the classifier's new-cut LOWER branch"
+        );
+        // SEED_BIT must live outside RECENT_WINDOW_BITS so it is not counted by
+        // the Scheme 1 popcount sort key.
+        assert_eq!(
+            SEED_BIT & RECENT_WINDOW_BITS,
+            0,
+            "SEED_BIT must not overlap RECENT_WINDOW_BITS"
+        );
+    }
+
+    /// The G1 seed must be transient: after the end-of-iter cleanup
+    /// (`(aw & !SEED_BIT) << 1`), the seed must be gone and genuine binding
+    /// observations (bit 0) must survive as bit 1.
+    #[test]
+    fn seed_bit_cleared_by_end_of_iter_shift() {
+        use crate::basis_reconstruct::{RECENT_WINDOW_BITS, SEED_BIT};
+
+        // Scenario A: freshly seeded cut with no binding observation.
+        let mut aw: u32 = SEED_BIT;
+        aw = (aw & !SEED_BIT) << 1;
+        assert_eq!(
+            aw, 0,
+            "pure seed with no binding observation must shift to 0"
+        );
+
+        // Scenario B: seeded cut that was also observed binding this iter.
+        let mut aw: u32 = SEED_BIT | 0b1;
+        aw = (aw & !SEED_BIT) << 1;
+        assert_eq!(
+            aw, 0b10,
+            "observed-binding bit 0 must survive and land at bit 1; \
+             seed bit must be cleared"
+        );
+        assert_ne!(
+            aw & RECENT_WINDOW_BITS,
+            0,
+            "surviving bit 1 still fires the classifier in iter i+1 (real activity)"
         );
     }
 

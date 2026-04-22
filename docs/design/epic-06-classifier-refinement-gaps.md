@@ -297,9 +297,173 @@ G2 alone (masking the popcount) fixes this specific example. The other options o
 
 ---
 
-## 6. Interaction of G1, G2, G3 with determinism
+## 6. Gap G4 — `RECENT_WINDOW_K` is a compile-time constant
 
-All three proposed fixes preserve the hard rules in `CLAUDE.md`:
+### 6.1 Current state
+
+`RECENT_WINDOW_K = 5` is declared at `basis_reconstruct.rs:83-95` as a `pub const`:
+
+```rust
+pub const RECENT_WINDOW_K: u32 = 5;
+pub const RECENT_WINDOW_BITS: u32 = (1u32 << RECENT_WINDOW_K) - 1;
+```
+
+Every consumer — the classifier at `basis_reconstruct.rs:365` and (after T7 lands) the demotion mask at G2 — uses `RECENT_WINDOW_BITS` directly. The value `5` was inherited from CEPEL's NEWAVE calibration, cited by the Epic 06 overview (AD-7) and the retired `cepel-sc-adoption.md` design doc. It has never been tuned on a cobre-scale study.
+
+### 6.2 Why a fixed default is not defensible long-term
+
+Different studies should probably prefer different `k`:
+
+- **Short-horizon / fast-converging studies** (e.g. 60-stage problems that converge in 3-5 iterations): the bitmap barely fills. `k = 5` throws away bits 0..2 that DO carry signal early. `k = 3` or even `k = 2` would make the classifier less noisy while the policy is still stabilising.
+- **Long-horizon / slow-converging studies** (convertido-scale, 117 stages, 20+ iterations to convergence): a cut that bound heavily in iters 1-10 and has been quiet since is genuinely stale — `k = 5` correctly ignores it. But a cut that only binds every 7-8 iterations (a "periodic" cut tied to a seasonal pattern in inflow/demand) is invisible to `k = 5`. `k = 10` would catch it.
+- **Cut-selection-heavy studies** (aggressive `Level1` or `Lml1`): cut churn is high, the pool turns over, and a narrower window matches the effective age of the live pool. `k = 3` might be more honest than `k = 5`.
+- **Cut-selection-off studies** (no deactivation, uncapped budget): cut lifetimes are unbounded, the pool carries history from every iteration. A wider `k` is justified because stale cuts stay in the pool.
+
+None of these interact in a way that "5 is always right." AD-7 in the Epic 06 overview explicitly leaves `k ∈ {3, 5, 10}` as an A/B sub-test; A/B #7 cannot perform that sub-test today without re-editing the constant and rebuilding, because the value is compile-time. Making it configurable unblocks that sub-test, and allows end users to tune per study without patching the source.
+
+### 6.3 Closest analogs in the codebase — which template to follow
+
+The user's question explicitly names the **active cut budget** (`max_active_per_stage` / `budget`) as a candidate template. It's worth comparing this side-by-side with `cut_activity_tolerance`, the other strong candidate:
+
+| Aspect                          | `budget` (`max_active_per_stage`)                  | `cut_activity_tolerance`           | `basis_activity_window` (proposed)                                                  |
+| ------------------------------- | -------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------- |
+| TOML-facing type (`cobre-io`)   | `Option<u32>`                                      | `Option<f64>`                      | `Option<u32>`                                                                       |
+| Runtime type (`cobre-sddp`)     | `Option<u32>` (None = uncapped)                    | `f64` (default applied)            | `u32` (default applied — see §6.5)                                                  |
+| Semantics of `None` in TOML     | "disabled"                                         | "use default" (`1e-6`)             | "use default" (5)                                                                   |
+| Validation                      | None beyond `> 0`                                  | `> 0.0` implied                    | `1..=32` (bitmap width)                                                             |
+| Default when unset              | No cap                                             | `1e-6`                             | `5`                                                                                 |
+| Flows via `StudyParams`?        | Yes                                                | Yes                                | Yes                                                                                 |
+| Flows via `ConstructionConfig`? | Yes                                                | Yes                                | Yes                                                                                 |
+| Held on `StudySetup`?           | Yes                                                | Yes                                | Yes                                                                                 |
+| Consumer phases                 | Training orchestration (post-backward)             | Backward pass (bind detection)     | **Forward + backward + simulation** (all three call `stage_solve::run_stage_solve`) |
+| Consumer file                   | `training.rs` (cut_selection loop)                 | `backward.rs:673` (bind threshold) | `basis_reconstruct.rs:365` (classifier) + (post-T7) the demotion mask               |
+| Needs MPI broadcast             | Yes (rebuilt on non-root via `ConstructionConfig`) | Yes (same path)                    | Yes (same path)                                                                     |
+
+**Verdict: `cut_activity_tolerance` is the closer template in every dimension except one (consumer phase count).**
+
+- The SHAPE (scalar, Option-wrapped TOML with runtime default, broadcast via rebuild) is identical.
+- The VALIDATION profile (a scalar with a sensible default, always applied) matches.
+- The INFORMATIONAL semantic (tunable magnitude, not an on/off toggle) matches.
+
+`budget` differs in that `None` is load-bearing — it means "disabled." For `basis_activity_window`, `None` only ever means "no user override, use the default"; there is no "disable the classifier" semantic associated with any `k`. So copying `budget`'s `Option<u32>` runtime representation would create a spurious "disabled" interpretation on the runtime side.
+
+The one dimension where the new parameter differs from `cut_activity_tolerance` is consumer phase count: `cut_activity_tolerance` is a backward-only input (packed into `BackwardPassSpec` and read at `backward.rs:673`), whereas `basis_activity_window` is consumed by `reconstruct_basis` which is called from forward, backward, AND simulation paths via `stage_solve::run_stage_solve`. This means the parameter must be reachable from `StageInputs` (the struct passed to `run_stage_solve`), not just the backward spec. That's a one-field addition on `StageInputs` and one field addition on `ReconstructionSource`, plus one scalar carried on `StudySetup`.
+
+### 6.4 Proposed plumbing — full flow diagram
+
+Mirror `cut_activity_tolerance` with the small extension noted above. Full path:
+
+```
+        1. TOML / JSON entry point
+           crates/cobre-io/src/config.rs :: CutSelectionConfig
+              pub basis_activity_window: Option<u32>   #[serde(default)]
+                      │
+                      ▼
+        2. Rank-0 parse + default application
+           crates/cobre-sddp/src/setup/params.rs :: StudyParams::try_from
+              let basis_activity_window = config
+                  .training.cut_selection.basis_activity_window
+                  .unwrap_or(DEFAULT_BASIS_ACTIVITY_WINDOW);   // 5
+              validate: (1..=32).contains(&basis_activity_window)
+                      │
+                      ▼
+        3. MPI broadcast payload
+           crates/cobre-sddp/src/setup/params.rs :: ConstructionConfig
+              pub basis_activity_window: u32
+              (rebuilt on non-root ranks by the CLI / Python runner with
+               the same field value — existing config-broadcast pattern)
+                      │
+                      ▼
+        4. Study-wide holding pen
+           crates/cobre-sddp/src/setup/mod.rs :: StudySetup
+              pub(crate) basis_activity_window: u32
+           crates/cobre-sddp/src/setup/accessors.rs
+              pub(crate) fn basis_activity_window(&self) -> u32
+                      │
+                      ▼
+        5. Orchestration hand-off
+           crates/cobre-sddp/src/setup/orchestration.rs
+              training_inputs.basis_activity_window = setup.basis_activity_window();
+              (same line as `cut_activity_tolerance` at :51)
+                      │
+                      ▼
+        6. Runtime config held on training/simulation structs
+           crates/cobre-sddp/src/training.rs (+ simulation/pipeline.rs)
+              read from config once, store on TrainingState / SimulationPipeline
+                      │
+                      ▼
+        7. Stage-solve call boundary
+           crates/cobre-sddp/src/stage_solve.rs :: StageInputs
+              pub basis_activity_window: u32
+                      │
+                      ▼
+        8. Consumer boundary
+           crates/cobre-sddp/src/basis_reconstruct.rs :: ReconstructionSource
+              pub basis_activity_window: u32
+           derive mask at function entry:
+              let recent_window_bits = (1u32 << source.basis_activity_window) - 1;
+           replace every use of `RECENT_WINDOW_BITS` with `recent_window_bits`
+                      │
+                      ▼
+        9. Classifier site (basis_reconstruct.rs:365)
+           active_window & recent_window_bits != 0
+        9. Demotion mask site (post-T7, same file)
+           (m.active_window & recent_window_bits).count_ones()
+```
+
+The only new wire-format concern is that step 3 (`ConstructionConfig`) is reconstructed on non-root ranks by the CLI / Python layer. That path already carries `cut_activity_tolerance`, `budget`, and 20+ other scalar fields; adding one more `u32` is a single extra line in the reconstruction code (grep for `cut_activity_tolerance:` in `crates/cobre-cli/` and `crates/cobre-python/` to find the broadcast-rebuild sites).
+
+### 6.5 Validation rules
+
+**Range:** `1..=32`. `0` would produce a zero mask and disable the classifier entirely; `>32` overflows the u32 bitmap. Validation lives at the `StudyParams::try_from` site (step 2 above), alongside the existing `budget` and `cut_activity_tolerance` checks, returning `SddpError::Validation` on violation.
+
+**Default:** `5`, matching the current hardcoded value. Introduce as `pub const DEFAULT_BASIS_ACTIVITY_WINDOW: u32 = 5;` near the top of `basis_reconstruct.rs` (keeping the old constant `RECENT_WINDOW_K` as an alias or removing it entirely once all sites migrate). A visible constant in the code lets tests and doc examples reference it without duplicating the magic number.
+
+**Warnings (optional):** if `basis_activity_window > training.max_iterations`, emit a warning — the window is wider than the study will ever run, so high bits are unreachable. Not an error (still correct), but usually a misconfiguration.
+
+### 6.6 Naming
+
+Two candidates:
+
+1. **`basis_activity_window`** — describes the semantic purpose ("how wide is the activity window the basis-reuse classifier consults"). Matches the spirit of `cut_activity_tolerance` naming — both are "cut/basis + activity + \<scalar>". TOML-friendly.
+2. **`classifier_window_k`** / **`recent_window_k`** — literal mirror of the internal constant name. Shorter but less self-describing to end users who don't read source.
+
+**Recommended: `basis_activity_window`.** It is the user-facing name; the internal constant can remain `RECENT_WINDOW_K` inside `basis_reconstruct.rs` for continuity with the existing rustdoc and CEPEL reference, fed from the config.
+
+### 6.7 Composition with G1, G2, G3
+
+- **G1** (seed `active_window: 1` at creation): independent of `k`. Seeding bit 0 is correct for any window size ≥ 1.
+- **G2** (align demotion mask to the classifier's window): **fused by G4**. Once `recent_window_bits` is derived from the runtime `basis_activity_window`, both the classifier and the demotion site use the same mask automatically. G2 becomes a one-line change at the demotion site ("use `recent_window_bits` not `count_ones()` over the full u32") rather than requiring a separate constant.
+- **G3** (recency-aware sort key): composes cleanly. Whichever option is adopted (`last_active_iter`, `leading_zeros`, or lex-pair), the `popcount`-in-window component uses the runtime mask.
+
+The landing order that minimises redundant test churn:
+
+```
+T9 (G4: plumb the window as config)
+  │
+  ├─ T7 (G2: demotion mask uses the same runtime mask)
+  │
+  └─ T8 (G3: add secondary recency key)
+
+T6 (G1) parallel to the above — no shared code path.
+```
+
+### 6.8 Burden assessment — to answer the user's "it has to be done" framing directly
+
+Yes, the plumbing is wide: ~15 files touched, ~70 lines added, one new config field through `cobre-io` / `cobre-sddp` / `cobre-cli` / `cobre-python`. But:
+
+1. **The pattern is already proven.** `cut_activity_tolerance` went through the exact same chain. Copying its shape is mechanical — grep for the field name in the workspace, add a sibling at every hit.
+2. **The Python parity hard rule is easy to satisfy.** Every output file the CLI writes must also be writable by `cobre-python`; for config fields, every field the CLI reads must also be readable by `cobre-python::run`. One sibling field addition in `crates/cobre-python/src/run.rs` is enough.
+3. **The MPI determinism hard rule is automatically preserved.** The field is a `u32` scalar copied verbatim into the broadcast payload — no floating-point, no collection ordering, no order-dependent computation. Rank-invariant by construction.
+4. **It unblocks AD-7's original intent.** Epic 06 AD-7 said "A/B sub-test `k ∈ {3, 5, 10}` is optional; not a gate." Today that sub-test is impossible without three rebuilds; after G4 it's a config toggle. A/B #7 can run the sub-test in-line with the primary A/B.
+
+The alternative — keeping the constant hardcoded — means that whenever a downstream user finds their study wants a different `k`, the only path is to fork the source. That is not a defensible posture for a production solver.
+
+---
+
+## 7. Interaction of G1, G2, G3, G4 with determinism
+
+All four proposed fixes preserve the hard rules in `CLAUDE.md`:
 
 1. **Bit-for-bit identical regardless of input ordering** — every fix uses deterministic inputs (u32 bitmap, u64 iteration counter, u32 slot number) plus stable sort.
 2. **MPI parity at 1/2/4 ranks** — `active_window` is `allreduce(BOR)`-unified (`backward.rs:1118-1154`); `last_active_iter` is already MPI-synced via the existing per-slot metadata allreduce. Both are rank-invariant.
@@ -311,9 +475,9 @@ Clippy will happily accept any of the options. The test fixture impact is limite
 
 ---
 
-## 7. Testing strategy additions
+## 8. Testing strategy additions
 
-### 7.1 Additional unit tests needed
+### 8.1 Additional unit tests needed
 
 For any Gap addressed:
 
@@ -343,21 +507,43 @@ fn scheme_1_recency_aware_sort_preserves_fresh_cuts() {
 }
 ```
 
-### 7.2 Integration test impact
+```rust
+// G4 — configurable window affects classifier and demotion consistently
+#[test]
+fn classifier_respects_runtime_basis_activity_window() {
+    // Seed active_window = 0b10_0000 (bit 5, outside k=5 but inside k=10).
+    // With basis_activity_window=5: classifier returns BASIC (out-of-window).
+    // With basis_activity_window=10: classifier returns LOWER (in-window).
+    ...
+}
+
+#[test]
+fn study_params_rejects_basis_activity_window_out_of_range() {
+    // basis_activity_window = 0 → SddpError::Validation.
+    // basis_activity_window = 33 → SddpError::Validation.
+    // basis_activity_window = 5 → Ok.
+    // basis_activity_window = None → Ok (defaults to 5).
+    ...
+}
+```
+
+### 8.2 Integration test impact
 
 - `test_backward_cache_hit_rate.rs` — threshold ≥ 0.95. All fixes preserve this by construction (they only change which cuts are tight-guessed, not which slots are preserved).
 - `test_backward_cache_reduces_pivots.rs` — threshold unchanged, but with G1 + G2 + G3, should tighten further. If A/B #7 shows sizeable improvement, this is the place to lock it in.
 - `reconstructed_basis_preserves_invariant_on_baked_truncation` — unaffected. The truncation path does not touch the classifier.
 
-### 7.3 D-suite byte-identity
+### 8.3 D-suite byte-identity
 
 At iter=1 with G1 applied, the classifier fires LOWER on the first-iteration generated cohort, whereas without G1 it fires BASIC. This **does** cause iter=1 drift on the `simplex_iterations` and `basis_consistency_failures` columns. Since these are observability columns already allowlisted for Epic 06, the drift is acceptable. Operational columns (hydro, thermal, cost) remain byte-identical because the LP optimum is unchanged — only the warm-start quality differs.
 
-Update `scripts/compare_v045_reference.py`'s `EXPECTED_DRIFTS` with a 1-line reference to Gap G1 if G1 ticket lands.
+G4 alone (with default `basis_activity_window = 5`) produces byte-identical output to the pre-G4 tree — the default matches the current compile-time constant. D-suite drift is therefore zero for G4 unless a test fixture explicitly sets a non-default value.
+
+Update `scripts/compare_v045_reference.py`'s `EXPECTED_DRIFTS` with a 1-line reference to Gap G1 if G1 ticket lands. G4 does not need an allowlist entry.
 
 ---
 
-## 8. Ticket candidates
+## 9. Ticket candidates
 
 Proposed atomic tickets, following the Epic 06 ticket format:
 
@@ -385,19 +571,42 @@ Proposed atomic tickets, following the Epic 06 ticket format:
 
 **Estimated effort:** 1.5 days. Depends on T7 (shared code path). Dispatch order: T7 → measure → T8 if needed.
 
+### T9 — Promote `RECENT_WINDOW_K` to a configurable parameter (Gap G4)
+
+**Scope:** plumb `basis_activity_window: Option<u32>` (TOML) → `u32` (runtime, default 5) through the same chain as `cut_activity_tolerance`. Validate range `1..=32` at `StudyParams::try_from`. Pipe to `ReconstructionSource` via `StageInputs`. Replace `RECENT_WINDOW_BITS` in `basis_reconstruct.rs` with a locally-derived `(1u32 << window) - 1` mask. Preserve `DEFAULT_BASIS_ACTIVITY_WINDOW = 5` as a named constant.
+
+**Files:**
+
+- `crates/cobre-io/src/config.rs` — add `basis_activity_window: Option<u32>` to `CutSelectionConfig` with `#[serde(default)]` (~5 lines + schema doc).
+- `crates/cobre-sddp/src/config.rs` — add `basis_activity_window: u32` to `CutManagementConfig`, default 5 (~3 lines).
+- `crates/cobre-sddp/src/setup/params.rs` — parse in `StudyParams::try_from`, validate range, forward through `into_construction_config` (~10 lines).
+- `crates/cobre-sddp/src/setup/mod.rs` — store on `StudySetup` (~3 lines).
+- `crates/cobre-sddp/src/setup/accessors.rs` — `fn basis_activity_window(&self) -> u32` (~3 lines).
+- `crates/cobre-sddp/src/setup/orchestration.rs` — hand-off to training / simulation (~2 lines).
+- `crates/cobre-sddp/src/training.rs` + `crates/cobre-sddp/src/simulation/pipeline.rs` — carry on relevant state structs, populate `StageInputs` (~5 lines each).
+- `crates/cobre-sddp/src/stage_solve.rs` — add `basis_activity_window: u32` field to `StageInputs`, pass into `ReconstructionSource` (~3 lines + test-fixture updates).
+- `crates/cobre-sddp/src/basis_reconstruct.rs` — add `basis_activity_window: u32` to `ReconstructionSource`, derive mask at function entry, replace all references to `RECENT_WINDOW_BITS` (~10 lines body + ~40 lines of test-fixture updates across the ~15 existing test call sites).
+- `crates/cobre-cli/src/commands/*.rs` + `crates/cobre-python/src/run.rs` — forward the new field on the broadcast/rebuild path (~5 lines).
+- `crates/cobre-sddp/tests/` — add `classifier_respects_runtime_basis_activity_window` and `study_params_rejects_basis_activity_window_out_of_range` tests (~60 lines).
+- `book/` — document the new config field alongside `cut_activity_tolerance` (~15 lines of docs).
+
+**Estimated effort:** 2 days. Independent of T6/T7/T8 in scope but should land BEFORE T7 (G2's fix is "use the runtime mask at the demotion site", which requires G4's mask to exist). Dispatch order: T9 → T7 → T8. T6 parallel.
+
+**Test fixture update volume:** ~15 existing `reconstruct_basis` test call sites will need `basis_activity_window: DEFAULT_BASIS_ACTIVITY_WINDOW` added to their `ReconstructionSource` literal — same shape as the T2 fixture updates for `cut_metadata`. Mechanical.
+
 ### Ticket sequencing options
 
-**Option A — fix before T3:** land T6 + T7 + T8 before T3 activates the classifier in production. A/B #7 measures the full stack. Pros: one measurement, cleanest story. Cons: delays T3 by ~3 days, risks scope creep if any of the fixes show surprises.
+**Option A — fix before T3:** land T6 + T9 + T7 (+ optionally T8) before T3 activates the classifier in production. A/B #7 measures the full stack AND can sub-test `k ∈ {3, 5, 10}` per AD-7's original intent. Pros: one clean measurement; AD-7 sub-test becomes possible. Cons: delays T3 by ~4-5 days.
 
-**Option B — T3 first, then T6/T7/T8 as follow-ups:** A/B #7 measures the current classifier design. If it meets the 5% threshold, the fixes are optional polish. If it doesn't (or worse, regresses), T6/T7/T8 are candidate interventions before declaring null-result and reverting. Pros: faster path to production signal. Cons: may produce a null-result A/B that prompts rollback of work that was fixable.
+**Option B — T3 first, then T6/T7/T8/T9 as follow-ups:** A/B #7 measures the current classifier design. If it meets the 5% threshold, the fixes are optional polish. If it doesn't (or worse, regresses), T6/T7/T8/T9 are candidate interventions before declaring null-result and reverting. Pros: faster path to production signal. Cons: may produce a null-result A/B that prompts rollback of work that was fixable; AD-7 sub-test remains impossible until G4 lands anyway.
 
-**Recommended:** Option A, specifically T6 + T7 as a bundled "classifier refinement" ticket pair before T3. T8 deferred until A/B #7 shows whether the simpler G2 fix alone is sufficient.
+**Recommended:** **Option A**, specifically **T6 + T9 + T7** as a bundled "classifier refinement" ticket sequence before T3. T8 deferred until A/B #7 shows whether the simpler G2 fix alone is sufficient. T9 is load-bearing — without it, T7 has to invent its own runtime mask or remain hardcoded, and AD-7's sub-test is locked out.
 
 ---
 
-## 9. Risks and open questions
+## 10. Risks and open questions
 
-### 9.1 Risks
+### 10.1 Risks
 
 **R-G1-1 — Over-classification of LOWER on generating cohort.** If fresh cuts are systematically slack at the adjacent stage's trial point (contra our prior), G1 trades one wrong-default for another wrong-default. Pivot cost is roughly symmetric, so no correctness risk — only wall-time neutrality or minor regression.
 
@@ -407,7 +616,13 @@ Proposed atomic tickets, following the Epic 06 ticket format:
 
 **R-G3-1 — `last_active_iter` stale for cuts that have never bound.** Cuts that have never bound have `last_active_iter = iteration_generated`. If many cuts land with the same `iteration_generated`, sorting by `last_active_iter` ascending collapses them all to the same bin. Slot-order tie-break still determinises.
 
-### 9.2 Open questions for the user
+**R-G4-1 — Runtime-derived mask is slightly slower than compile-time constant.** Deriving `(1u32 << k) - 1` on function entry is one shift + one subtract per `reconstruct_basis` call. On convertido (~50,000 calls per run) this is negligible microseconds in the noise floor; `cargo flamegraph` will not resolve it. No hot-path impact.
+
+**R-G4-2 — Config-field drift between `cobre-io` and `cobre-sddp`.** Historically every new `CutSelectionConfig` field has also needed a sibling on `CutManagementConfig` and a parse site in `StudyParams`. Missing one of the three leaves the field silently ignored. Mitigation: the TOML round-trip test at `crates/cobre-io/src/config.rs:1776-1790` already covers serialisation parity for this struct; extend it with `basis_activity_window`. An integration test that writes a TOML with `basis_activity_window = 10`, runs training, and reads back the effective value from `StudySetup::basis_activity_window()` catches end-to-end drift.
+
+**R-G4-3 — Python-parity hard rule.** `crates/cobre-python/src/run.rs` must accept the new config field in its kwargs-to-Config conversion, otherwise `cobre-python` users would silently run with the default. One sibling line alongside the existing `cut_activity_tolerance` handling.
+
+### 10.2 Open questions for the user
 
 1. **Should G1 ticket seed `active_window: 1` (bit 0 only) or `0b11111` (full recent window)?** The latter is more aggressive — it forces LOWER for the next 5 iterations without relying on bind events. Less sensitive to first-encounter timing but more aggressive when the fresh cut is actually slack.
 
@@ -417,9 +632,13 @@ Proposed atomic tickets, following the Epic 06 ticket format:
 
 4. **Should the rustdoc on `CutMetadata.active_window` call out the two consumer sites' windows explicitly?** Currently it describes the shift/update rules but not how consumers use the data. A sentence noting the classifier/demotion-sort asymmetry (or its resolution after T7) would prevent future regressions.
 
+5. **For G4, should `basis_activity_window` live under `training.cut_selection` (alongside `cut_activity_tolerance`) or under a new `training.basis_reuse` sub-section?** The former matches existing locations and keeps related knobs together; the latter foreshadows a future "basis reuse strategy" section if more knobs are added (e.g., demotion-strategy selection per §5.3). Recommendation: stay under `training.cut_selection` for now — avoid premature structure.
+
+6. **For G4, should the default 5 live in `cobre-sddp` (consumer side) or `cobre-io` (TOML side)?** Today `cut_activity_tolerance`'s default `1e-6` lives in `CutManagementConfig::default()` on the sddp side, with `cobre-io` treating it as `Option<f64>` defaulting to `None` (unwrap_or in `StudyParams`). Consistency argues for the same pattern. Recommendation: default lives on `CutManagementConfig`, mirrored by a `pub const DEFAULT_BASIS_ACTIVITY_WINDOW: u32 = 5;` in `basis_reconstruct.rs` for test/doc convenience.
+
 ---
 
-## 10. Artifacts referenced
+## 11. Artifacts referenced
 
 - **Authoritative spec:** `docs/design/epic-06-cut-basis-reconstruction.md`
 - **Epic overview:** `plans/backward-basis-cache/epic-06-cut-basis-reconstruction/00-epic-overview.md`
@@ -429,6 +648,13 @@ Proposed atomic tickets, following the Epic 06 ticket format:
 
 **Key source locations cited in this report:**
 
+- `crates/cobre-io/src/config.rs:183-238` — `CutSelectionConfig` (TOML-facing, G4 adds a sibling field)
+- `crates/cobre-sddp/src/config.rs:150-202` — `CutManagementConfig` (runtime, G4 adds a sibling field)
+- `crates/cobre-sddp/src/setup/params.rs:131-189` — `cut_activity_tolerance` parse + forward pattern (G4 template)
+- `crates/cobre-sddp/src/setup/params.rs:201-230` — `ConstructionConfig` (MPI broadcast-reconstructed struct)
+- `crates/cobre-sddp/src/setup/mod.rs:165` — `StudySetup.cut_activity_tolerance` storage
+- `crates/cobre-sddp/src/setup/accessors.rs:272-274` — `StudySetup::cut_activity_tolerance()` accessor
+- `crates/cobre-sddp/src/setup/orchestration.rs:51` — orchestration-level hand-off
 - `crates/cobre-sddp/src/cut_selection.rs:57-97` — `CutMetadata`
 - `crates/cobre-sddp/src/cut/pool.rs:245-262` — `CutPool::add_cut`
 - `crates/cobre-sddp/src/cut/pool.rs:282-295` — `CutPool::active_cuts`
@@ -446,12 +672,13 @@ Proposed atomic tickets, following the Epic 06 ticket format:
 
 ---
 
-## 11. Summary — what each gap costs if shipped unfixed
+## 12. Summary — what each gap costs if shipped unfixed
 
-| Gap | Population affected per iter (convertido 50-scenario baseline) | Signal lost                                       | Simplex consequence                                                                                                                                                    |
-| --- | -------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | ~5,850 fresh cuts (50 × 117 stages)                            | Domain prior: "generating event = bound"          | Warm-start defaults to BASIC for exactly the cohort where LOWER is most defensible. Pivot overhead on these cuts is fully unmitigated.                                 |
-| G2  | Every demotion decision where fresh and stale cuts coexist     | "What counts as recent" alignment with classifier | Demotion occasionally picks cuts the classifier has already decided are irrelevant (bits 5..31). Wasted flips.                                                         |
-| G3  | Same as G2, pathological whenever pool has varied bind ages    | Recency vs. cumulative volume                     | Demotion can swap fresh-active cuts for stale-inactive cuts. Direct pivot regression when the fresh cut was correctly BASIC and the stale cut's demotion was harmless. |
+| Gap | Population affected per iter (convertido 50-scenario baseline)                                                                  | Signal lost                                                                                         | Simplex / study consequence                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | ~5,850 fresh cuts (50 × 117 stages)                                                                                             | Domain prior: "generating event = bound"                                                            | Warm-start defaults to BASIC for exactly the cohort where LOWER is most defensible. Pivot overhead on these cuts is fully unmitigated.                                 |
+| G2  | Every demotion decision where fresh and stale cuts coexist                                                                      | "What counts as recent" alignment with classifier                                                   | Demotion occasionally picks cuts the classifier has already decided are irrelevant (bits 5..31). Wasted flips.                                                         |
+| G3  | Same as G2, pathological whenever pool has varied bind ages                                                                     | Recency vs. cumulative volume                                                                       | Demotion can swap fresh-active cuts for stale-inactive cuts. Direct pivot regression when the fresh cut was correctly BASIC and the stale cut's demotion was harmless. |
+| G4  | Every study run (hardcoded `k = 5` never tuned against cobre scale); every end user who wants to tune `k` for their study shape | AD-7's explicit sub-test intent (`k ∈ {3, 5, 10}`); end-user ability to tune without forking source | A/B #7 cannot evaluate window-size sensitivity. Downstream consumers have no path to adapt the solver to their study's convergence profile short of patching source.   |
 
-If A/B #7 produces a null result, **any of these three gaps could be responsible**. Investigating after the fact means re-running the full measurement stack; fixing before means one clean A/B.
+If A/B #7 produces a null result, **any of these four gaps could be responsible**. Investigating after the fact means re-running the full measurement stack; fixing before means one clean A/B with AD-7's sub-test embedded.

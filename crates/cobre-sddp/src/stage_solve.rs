@@ -182,18 +182,18 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
             padding,
             &mut ws.scratch_basis,
             &mut ws.scratch.recon_slot_lookup,
-            &mut ws.scratch.demotion_scratch,
+            &mut ws.scratch.promotion_scratch,
         );
         // Epic 06 T3: reconstruct_basis now handles cut rows via slot
-        // identity (not positional truncation). Scheme 1 symmetric demotion
-        // (Epic 06 AD-3) keeps total_basic == num_row by construction on
-        // the happy path; enforce_basic_count_invariant is retained as a
-        // safety net for (a) the forward-apply path where cut selection
-        // drops BASIC cut rows whose stored status was LOWER (creates
+        // identity (not positional truncation). Scheme 1 symmetric promotion
+        // (Epic 06 AD-3, corrected by T3a) keeps total_basic == num_row by
+        // construction on the happy path; enforce_basic_count_invariant is
+        // retained as a safety net for (a) the forward-apply path where cut
+        // selection drops BASIC cut rows whose stored status was LOWER (creates
         // excess BASIC in the non-cut template rows), and (b) the Scheme 2
         // fallback tail-override in reconstruct_basis where the activity-
-        // driven LOWER guesses exceed the preserved-BASIC demotion budget.
-        // base_row_for_invariant = n_state bounds demotion to rows
+        // driven LOWER guesses exceed the preserved-LOWER promotion budget.
+        // base_row_for_invariant = n_state bounds promotion to rows
         // [n_state, num_row); state-fixing rows at [0, n_state) are
         // equality constraints and never BASIC, so excluding them is safe.
         //

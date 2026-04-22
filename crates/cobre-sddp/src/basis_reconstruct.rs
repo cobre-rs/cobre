@@ -41,7 +41,7 @@
 //!
 //! ```rust
 //! use cobre_sddp::basis_reconstruct::{
-//!     DemotionScratch, PaddingContext, ReconstructionSource, ReconstructionStats,
+//!     PromotionScratch, PaddingContext, ReconstructionSource, ReconstructionStats,
 //!     ReconstructionTarget, reconstruct_basis,
 //! };
 //! use cobre_sddp::workspace::CapturedBasis;
@@ -54,7 +54,7 @@
 //! };
 //! let mut out = Basis::new(0, 0);
 //! let mut lookup: Vec<Option<u32>> = vec![None; 16];
-//! let mut demotion_scratch = DemotionScratch::default();
+//! let mut promotion_scratch = PromotionScratch::default();
 //! let cuts: Vec<(usize, f64, Vec<f64>)> = vec![];
 //! let padding = PaddingContext { state: &[], theta: 0.0, tolerance: 1e-7 };
 //! let stats = reconstruct_basis(
@@ -64,7 +64,7 @@
 //!     padding,
 //!     &mut out,
 //!     &mut lookup,
-//!     &mut demotion_scratch,
+//!     &mut promotion_scratch,
 //! );
 //! assert_eq!(stats, ReconstructionStats::default());
 //! ```
@@ -159,37 +159,47 @@ pub struct PaddingContext<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Demotion scratch (grouped to keep reconstruct_basis arg count <= 7)
+// Promotion scratch (grouped to keep reconstruct_basis arg count <= 7)
 // ---------------------------------------------------------------------------
 
-/// Scratch buffers for the Scheme 1 symmetric demotion and Scheme 2 tail
+/// Scratch buffers for the Scheme 1 symmetric promotion and Scheme 2 tail
 /// fallback inside [`reconstruct_basis`].
+///
+/// **Scheme 1 symmetric promotion** (Epic 06 AD-3, corrected by T3a): for each
+/// new cut classified `LOWER` by the activity-driven classifier, one
+/// preserved-`LOWER` cut-row is promoted to `BASIC`.  The two cuts swap
+/// roles — the new cut takes the "active/binding" `LOWER` slot; the stale
+/// preserved cut takes the "non-binding slack" `BASIC` slot.  Net change to
+/// `col_basic + row_basic`: zero.  Invariant preserved by construction.
 ///
 /// Grouped into a single struct so [`reconstruct_basis`] stays within the
 /// workspace-level `clippy::too_many_arguments` deny threshold (7 args max).
 ///
-/// Pre-allocate with [`DemotionScratch::with_capacity`] at workspace
-/// construction time and pass `&mut demotion_scratch` on every call.  The
+/// Pre-allocate with [`PromotionScratch::with_capacity`] at workspace
+/// construction time and pass `&mut promotion_scratch` on every call.  The
 /// function clears both vecs at entry, so stale data from a previous call
 /// is never visible.
 ///
-/// Use [`DemotionScratch::default()`] in tests and one-off callers where
+/// Use [`PromotionScratch::default()`] in tests and one-off callers where
 /// allocation cost is acceptable.
+///
+/// (Renamed from the previous Scheme 1 scratch type in T3a — see
+/// `ticket-003a-fix-scheme-1-direction.md`.)
 #[derive(Debug, Default)]
-pub struct DemotionScratch {
-    /// Preserved-BASIC cut rows that are candidates for Scheme 1 symmetric
-    /// demotion.  Each entry is `(out_row_index, popcount)`.  Sorted by
-    /// popcount (ascending) after the consumer loop so the weakest candidates
-    /// are demoted first.
+pub struct PromotionScratch {
+    /// Preserved-LOWER cut rows that are candidates for Scheme 1 symmetric
+    /// promotion (LOWER → BASIC).  Each entry is `(out_row_index, popcount)`.
+    /// Sorted by popcount ascending after the consumer loop so the least-active
+    /// candidates are promoted first (safest to move into the basis as BASIC).
     pub candidates: Vec<(usize, u32)>,
     /// Output row indices of new cuts classified as LOWER by the activity-
     /// driven classifier (Epic 06 AD-2).  Used by the Scheme 2 tail fallback
     /// to override the most-recently-classified LOWER cuts back to BASIC when
-    /// the Scheme 1 preserved-BASIC pool is exhausted.
+    /// the Scheme 1 preserved-LOWER pool is exhausted.
     pub new_lower_indices: Vec<usize>,
 }
 
-impl DemotionScratch {
+impl PromotionScratch {
     /// Allocate both scratch vecs with the given initial capacity.
     ///
     /// Pass `initial_pool_capacity` (the `CutPool` initial size) so that the
@@ -255,10 +265,10 @@ pub struct ReconstructionStats {
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
 ///   at least `max_slot + 1`.  Grown in place if undersized (hot path should
 ///   avoid this via `ScratchBuffers::recon_slot_lookup`).
-/// - `demotion_scratch` — scratch buffers for Scheme 1 symmetric demotion
+/// - `promotion_scratch` — scratch buffers for Scheme 1 symmetric promotion
 ///   and Scheme 2 tail fallback. Both vecs are cleared at function entry;
 ///   stale data from a previous call is never visible. Pre-sized by the
-///   caller via `ScratchBuffers::demotion_scratch`.
+///   caller via `ScratchBuffers::promotion_scratch`.
 ///
 /// ## Returns
 ///
@@ -268,7 +278,7 @@ pub struct ReconstructionStats {
 /// ## Allocation contract
 ///
 /// Allocation-free on the hot path when `slot_lookup.len() >= max_slot + 1`
-/// and `demotion_scratch` has sufficient capacity.
+/// and `promotion_scratch` has sufficient capacity.
 /// The growth path triggers a `debug_assert!(false)` to surface caller
 /// under-sizing, but does not panic in release.
 #[allow(clippy::too_many_lines)]
@@ -279,7 +289,7 @@ pub fn reconstruct_basis<'a, I>(
     padding: PaddingContext<'_>,
     out: &mut Basis,
     slot_lookup: &mut Vec<Option<u32>>,
-    demotion_scratch: &mut DemotionScratch,
+    promotion_scratch: &mut PromotionScratch,
 ) -> ReconstructionStats
 where
     I: Iterator<Item = (usize, f64, &'a [f64])>,
@@ -287,11 +297,11 @@ where
     let target = source.target;
     let cut_metadata = source.cut_metadata;
 
-    // Clear the demotion scratch at function entry.
+    // Clear the promotion scratch at function entry.
     // CRITICAL: both vecs are reused across stages; a stale list from a
-    // previous stage would contaminate the current stage's demotion.
-    demotion_scratch.candidates.clear();
-    demotion_scratch.new_lower_indices.clear();
+    // previous stage would contaminate the current stage's promotion.
+    promotion_scratch.candidates.clear();
+    promotion_scratch.new_lower_indices.clear();
 
     debug_assert!(
         padding.state.len() == stored.state_at_capture.len() || stored.state_at_capture.is_empty(),
@@ -364,17 +374,17 @@ where
     // (d) Walk current cut rows and assign statuses.
     //
     // Activity-driven classifier (Epic 06 AD-2):
-    // - Preserved slots: copy stored status. If BASIC, push onto demotion
-    //   candidates for potential Scheme 1 symmetric demotion.
+    // - Preserved slots: copy stored status. If LOWER, push onto promotion
+    //   candidates for potential Scheme 1 symmetric promotion.
     // - New slots: consult active_window bitmap. If any of the last
     //   RECENT_WINDOW_K bits are set → LOWER (tight guess, count new_tight).
     //   Otherwise → BASIC (slack default, count new_slack).
     //
-    // Scheme 1 symmetric demotion (after loop): for each LOWER-guessed new
-    // cut, demote one preserved-BASIC candidate (lowest popcount first) to
-    // LOWER to maintain basic_count == num_row. If the preserved-BASIC pool
-    // is exhausted (Scheme 2 tail), flip the latest activity-driven LOWER
-    // guesses back to BASIC instead.
+    // Scheme 1 symmetric promotion (after loop, Epic 06 AD-3 corrected by T3a):
+    // for each LOWER-guessed new cut, promote one preserved-LOWER candidate
+    // (lowest popcount first) to BASIC to maintain basic_count == num_row.
+    // If the preserved-LOWER pool is exhausted (Scheme 2 tail), flip the
+    // latest activity-driven LOWER guesses back to BASIC instead.
     let mut stats = ReconstructionStats::default();
     let mut lower_deficit: usize = 0;
 
@@ -393,12 +403,13 @@ where
             let stored_row_idx = stored.base_row_count + pos as usize;
             let stored_status = stored.basis.row_status[stored_row_idx];
             stats.preserved += 1;
-            if stored_status == HIGHS_BASIS_STATUS_BASIC {
-                // Candidate for Scheme 1 symmetric demotion.
+            if stored_status == HIGHS_BASIS_STATUS_LOWER {
+                // Candidate for Scheme 1 symmetric promotion (preserved-LOWER → BASIC).
+                // See docs/design/epic-06-classifier-refinement-gaps.md.
                 let popcount = cut_metadata
                     .get(target_slot)
                     .map_or(0, |m| m.active_window.count_ones());
-                demotion_scratch.candidates.push((out_row_index, popcount));
+                promotion_scratch.candidates.push((out_row_index, popcount));
             }
             stored_status
         } else {
@@ -409,7 +420,7 @@ where
                 // Activity-guided tight guess: classify LOWER.
                 stats.new_tight += 1;
                 lower_deficit += 1;
-                demotion_scratch.new_lower_indices.push(out_row_index);
+                promotion_scratch.new_lower_indices.push(out_row_index);
                 HIGHS_BASIS_STATUS_LOWER
             } else {
                 // No recent activity: classify BASIC (safe default).
@@ -420,44 +431,45 @@ where
         out.row_status.push(row_status_byte);
     }
 
-    // (e) Scheme 1 symmetric demotion: restore basic_count == num_row.
+    // (e) Scheme 1 symmetric promotion: restore basic_count == num_row.
     //
-    // Each LOWER-guessed new cut reduced total_basic by 1 (relative to the
-    // unconditional-BASIC default). Offset by demoting the preserved-BASIC
-    // candidate with the lowest activity popcount (least likely to need
-    // BASIC status at the next solve).
+    // Each LOWER-classified new cut reduced total_basic by 1 relative to
+    // the BASIC-default HiGHS dimension extension. Offset by promoting
+    // the preserved-LOWER candidate with the lowest activity popcount
+    // (least likely to still be binding → safest to move into the basis
+    // as BASIC). Net change to total_basic: zero.
     if lower_deficit > 0 {
         // Stable sort: equal-popcount ties preserve insertion order
         // (declaration-order invariance). Do NOT use sort_unstable_by_key.
-        demotion_scratch
+        promotion_scratch
             .candidates
             .sort_by_key(|&(_, popcount)| popcount);
 
-        let available_candidates = demotion_scratch.candidates.len();
+        let available_candidates = promotion_scratch.candidates.len();
         let scheme1_count = lower_deficit.min(available_candidates);
 
-        // Apply Scheme 1: demote the `scheme1_count` preserved-BASIC
-        // candidates with the lowest popcounts.
-        for &(row_idx, _) in demotion_scratch.candidates.iter().take(scheme1_count) {
+        // Apply Scheme 1: promote the `scheme1_count` preserved-LOWER
+        // candidates with the lowest popcounts to BASIC.
+        for &(row_idx, _) in promotion_scratch.candidates.iter().take(scheme1_count) {
             debug_assert!(
                 row_idx >= target.base_row_count,
-                "Scheme 1 demotion target row_idx {row_idx} must be >= base_row_count {}",
+                "Scheme 1 promotion target row_idx {row_idx} must be >= base_row_count {}",
                 target.base_row_count,
             );
             debug_assert_eq!(
-                out.row_status[row_idx], HIGHS_BASIS_STATUS_BASIC,
-                "Scheme 1 demotion target must be BASIC",
+                out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
+                "Scheme 1 promotion target must currently be LOWER",
             );
-            out.row_status[row_idx] = HIGHS_BASIS_STATUS_LOWER;
+            out.row_status[row_idx] = HIGHS_BASIS_STATUS_BASIC;
         }
 
-        // Scheme 2 tail fallback: if more LOWER guesses than preserved-BASIC
+        // Scheme 2 tail fallback: if more LOWER guesses than preserved-LOWER
         // candidates, override the most-recently-classified new LOWER cuts
         // back to BASIC. This keeps the invariant under adversarial inputs.
         let remaining_deficit = lower_deficit - scheme1_count;
         if remaining_deficit > 0 {
             // Walk the new-LOWER indices from latest to earliest.
-            for &row_idx in demotion_scratch
+            for &row_idx in promotion_scratch
                 .new_lower_indices
                 .iter()
                 .rev()
@@ -583,9 +595,9 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        DemotionScratch, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
-        PaddingContext, RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats,
-        ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
+        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, PromotionScratch,
+        ReconstructionSource, ReconstructionStats, ReconstructionTarget,
+        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, RECENT_WINDOW_K,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -696,7 +708,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -742,7 +754,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -780,7 +792,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -825,7 +837,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -891,7 +903,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -935,7 +947,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -973,7 +985,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(stats, ReconstructionStats::default());
@@ -1011,7 +1023,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         // Growth path: lookup must have grown to >= max_stored_slot + 1 = 1000.
@@ -1076,7 +1088,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         // Both surviving cuts (slots 0 and 2) should be preserved, no new cuts.
@@ -1130,7 +1142,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(
@@ -1267,7 +1279,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(stats.preserved, 3, "all delta cuts preserved");
@@ -1322,7 +1334,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
 
         assert_eq!(stats.preserved, 3, "three preserved delta cuts");
@@ -1432,7 +1444,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
         assert_eq!(stats.preserved, 3, "all 3 cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1514,7 +1526,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
         assert_eq!(stats.preserved, 2, "both surviving cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1588,7 +1600,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
         assert_eq!(stats, ReconstructionStats::default());
         assert_eq!(out.row_status.len(), l_new);
@@ -1681,7 +1693,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut DemotionScratch::default(),
+            &mut PromotionScratch::default(),
         );
         assert_eq!(stats.preserved, 2, "slots 10,11 preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1728,7 +1740,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1749,7 +1761,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
         assert_eq!(stats.new_tight, 0, "window=0 → BASIC (new_slack)");
         assert_eq!(stats.new_slack, 1);
@@ -1758,15 +1770,19 @@ mod tests {
     /// A new cut whose `active_window` has bit 0 set (tight in the most recent
     /// iteration) gets classified LOWER (new_tight += 1).
     ///
-    /// Includes one preserved-BASIC cut (slot 5) so Scheme 1 demotion can
-    /// absorb the LOWER guess — otherwise Scheme 2 would override it back to
+    /// Includes one preserved-LOWER cut (slot 5) so Scheme 1 symmetric promotion
+    /// can absorb the LOWER guess — otherwise Scheme 2 would override it back to
     /// BASIC and the new_tight increment would be cancelled.
+    ///
+    /// Invariant sizing: num_row=3 (1 base + 1 preserved + 1 new).
+    /// After Scheme 1: row_basic = template(B) + slot5(B promoted) + slot0(L) = 2.
+    /// col_basic = num_cols = 1. Total = 3 = num_row. ✓
     #[test]
     fn classifier_returns_lower_when_active_window_has_recent_bit() {
         let base_rows = 1usize;
         let num_cols = 1usize;
-        // stored has slot 5 = BASIC so Scheme 1 has a demotion candidate.
-        let stored = make_stored_basis(base_rows, num_cols, &[5], &[B], &[1.0]);
+        // stored has slot 5 = LOWER so Scheme 1 has a promotion candidate.
+        let stored = make_stored_basis(base_rows, num_cols, &[5], &[L], &[1.0]);
 
         // Preserved cut at slot 5, new cut at slot 0 with recent-bit activity.
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
@@ -1775,11 +1791,11 @@ mod tests {
         ];
         let mut meta = vec![meta_with_window(0); 6];
         meta[0] = meta_with_window(0b0000_0001); // new cut — recent bit
-        // meta[5] left at 0 → popcount=0, will be picked for demotion.
+                                                 // meta[5] left at 0 → popcount=0, will be picked for promotion.
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1800,7 +1816,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
         assert_eq!(stats.preserved, 1, "slot 5 preserved");
         assert_eq!(stats.new_tight, 1, "window bit 0 set → LOWER (new_tight)");
@@ -1827,7 +1843,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1848,31 +1864,39 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
         assert_eq!(stats.new_tight, 0, "bits outside window → BASIC");
         assert_eq!(stats.new_slack, 1);
     }
 
-    /// Scheme 1: when 2 new cuts are classified LOWER (both have recent bits),
-    /// the 2 preserved-BASIC candidates with the lowest popcounts are demoted
-    /// to LOWER, keeping total basic == num_row.
+    /// Scheme 1 symmetric promotion (T3a, Epic 06 AD-3 corrected):
+    /// when 2 new cuts are classified LOWER (both have recent bits), the 2
+    /// preserved-LOWER candidates with the lowest popcounts are promoted to
+    /// BASIC, keeping `col_basic + row_basic == num_row`.
     ///
-    /// Fixture:
-    ///   base_rows=1 (col [B], row 0 = B).
-    ///   stored cuts: slots [10, 11, 12, 13] — all BASIC.
+    /// Fixture (post-T3a direction: preserved cuts are LOWER, not BASIC):
+    ///   base_rows=1 (col [B] × 4, row 0 = B).
+    ///   stored cuts: slots [10, 11, 12, 13] — all LOWER (promotion candidates).
     ///   Target: all 4 preserved + 2 new (slots 20, 21), both with recent activity.
-    ///   meta for preserved 10..13 has monotonic popcounts 1, 3, 5, 7 so the
-    ///   symmetric demotion picks slots 10 and 11 (the two lowest).
+    ///   meta for preserved 10..13 has monotonic popcounts 1, 3, 5, 7; stable
+    ///   sort picks the two lowest (10 and 11) for promotion LOWER → BASIC.
+    ///
+    /// num_cols=4 chosen so col_basic(4) + row_basic(3) = 7 = num_row. ✓
+    /// After promotion: template(B) + slot10(B) + slot11(B) → row_basic=3.
+    /// The HiGHS invariant col_basic + row_basic == num_row holds exactly.
     #[test]
-    fn scheme_1_symmetric_demotion_preserves_total_basic() {
+    fn scheme_1_symmetric_promotion_preserves_total_basic() {
         let base_rows = 1usize;
-        let num_cols = 1usize;
+        // num_cols=4: col_basic(4) + row_basic(3 after promotion) = 7 = num_row.
+        // This satisfies the HiGHS invariant col_basic + row_basic == num_row.
+        let num_cols = 4usize;
+        // Stored cuts are LOWER — these are the promotion candidates.
         let stored = make_stored_basis(
             base_rows,
             num_cols,
             &[10, 11, 12, 13],
-            &[B, B, B, B],
+            &[L, L, L, L],
             &[1.0],
         );
 
@@ -1881,25 +1905,25 @@ mod tests {
             (11, 0.0, vec![0.0]),
             (12, 0.0, vec![0.0]),
             (13, 0.0, vec![0.0]),
-            (20, 0.0, vec![0.0]), // new, tight
-            (21, 0.0, vec![0.0]), // new, tight
+            (20, 0.0, vec![0.0]), // new, tight → LOWER
+            (21, 0.0, vec![0.0]), // new, tight → LOWER
         ];
         let num_row = base_rows + delta_cuts.len(); // 1+6=7
 
         // meta indexed by cut-pool slot. Size=22 so slots 20/21 are in bounds.
         // Preserved slot popcounts: 1, 3, 5, 7 (monotonic); stable sort picks
-        // the two lowest (10 and 11) for demotion.
+        // the two lowest (10 and 11) for promotion.
         let mut meta = vec![meta_with_window(0); 22];
-        meta[10] = meta_with_window(0b0000_0001); // popcount=1
-        meta[11] = meta_with_window(0b0000_0111); // popcount=3
-        meta[12] = meta_with_window(0b0001_1111); // popcount=5
-        meta[13] = meta_with_window(0b0111_1111); // popcount=7
-        meta[20] = meta_with_window(0b0000_0001); // new, recent
-        meta[21] = meta_with_window(0b0000_0001); // new, recent
+        meta[10] = meta_with_window(0b0000_0001); // popcount=1 — promoted first
+        meta[11] = meta_with_window(0b0000_0111); // popcount=3 — promoted second
+        meta[12] = meta_with_window(0b0001_1111); // popcount=5 — stays LOWER
+        meta[13] = meta_with_window(0b0111_1111); // popcount=7 — stays LOWER
+        meta[20] = meta_with_window(0b0000_0001); // new, recent → LOWER
+        meta[21] = meta_with_window(0b0000_0001); // new, recent → LOWER
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 32];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1920,7 +1944,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
 
         assert_eq!(stats.preserved, 4, "4 slots preserved");
@@ -1928,69 +1952,87 @@ mod tests {
         assert_eq!(stats.new_slack, 0);
 
         // Verify that the 2 preserved slots with the LOWEST popcounts (10, 11)
-        // were demoted from BASIC to LOWER. Preserved slots 12 and 13 remain
-        // BASIC because they had higher popcounts.
-        // Row layout: [template(B), slot10, slot11, slot12, slot13, slot20(L), slot21(L)]
+        // were promoted from LOWER to BASIC. Preserved slots 12 and 13 remain
+        // LOWER because they had higher popcounts (more recently active).
+        // Row layout:
+        //   [template(B), slot10(B-promoted), slot11(B-promoted),
+        //    slot12(L), slot13(L), slot20(L-new), slot21(L-new)]
         assert_eq!(out.row_status[0], B, "template row unchanged");
-        assert_eq!(out.row_status[1], L, "slot 10 (popcount=1) demoted");
-        assert_eq!(out.row_status[2], L, "slot 11 (popcount=3) demoted");
-        assert_eq!(out.row_status[3], B, "slot 12 (popcount=5) remains BASIC");
-        assert_eq!(out.row_status[4], B, "slot 13 (popcount=7) remains BASIC");
+        assert_eq!(
+            out.row_status[1], B,
+            "slot 10 (popcount=1) promoted LOWER → BASIC"
+        );
+        assert_eq!(
+            out.row_status[2], B,
+            "slot 11 (popcount=3) promoted LOWER → BASIC"
+        );
+        assert_eq!(out.row_status[3], L, "slot 12 (popcount=5) stays LOWER");
+        assert_eq!(out.row_status[4], L, "slot 13 (popcount=7) stays LOWER");
         assert_eq!(out.row_status[5], L, "new slot 20 classified LOWER");
         assert_eq!(out.row_status[6], L, "new slot 21 classified LOWER");
 
-        // Sanity: 2 preserved demoted + 2 new LOWER = 4 LOWER total; 2 preserved
-        // still BASIC + 1 template BASIC = 3 BASIC. num_row = 7.
+        // Critical invariant assertion absent from T2 — the primary reason the
+        // direction bug survived review. Scheme 1 symmetric promotion keeps
+        // total_basic unchanged: 2 new LOWER each consume one promotion (net ±0).
+        // col_basic=4 (all 4 cols BASIC) + row_basic=3 (template + slot10 + slot11)
+        // = 7 = num_row. ✓
         let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
-        let row_lower = out.row_status.iter().filter(|&&s| s == L).count();
-        assert_eq!(row_basic, 3);
-        assert_eq!(row_lower, 4);
-        assert_eq!(row_basic + row_lower, num_row);
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
 
-        // Scheme 1 maintains total_basic <= num_row, so the enforcer is a no-op.
+        // Scheme 1 keeps col_basic + row_basic == num_row by construction, so
+        // the safety-net enforcer is a no-op.
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
-        assert_eq!(demoted, 0, "Scheme 1 makes enforcer a no-op");
+        assert_eq!(demoted, 0, "Scheme 1 promotion makes enforcer a no-op");
     }
 
-    /// Scheme 2: when the LOWER-classified new cuts exceed the preserved-BASIC
+    /// Scheme 2 fallback (T3a updated fixture):
+    /// when the LOWER-classified new cuts exceed the preserved-LOWER promotion
     /// candidates, the excess LOWERs are overridden back to BASIC.
     ///
-    /// Fixture (matches ticket AC math):
-    ///   base_rows=1 (col [B], row 0 = B).
-    ///   stored: 2 preserved BASIC cuts at slots 5 and 6 (low popcounts).
+    /// Fixture (post-T3a: preserved cuts are LOWER, not BASIC):
+    ///   base_rows=1 (col [B] × 2, row 0 = B).
+    ///   stored: 2 preserved LOWER cuts at slots 5 and 6 (promotion candidates).
     ///   Target: 2 preserved + 3 new (all with recent activity).
     ///   Classifier: 3 LOWER guesses (lower_deficit=3).
-    ///   Scheme 1: demotes both preserved BASICs → scheme1_count=2.
-    ///   Scheme 2: remaining_deficit=1 → overrides the latest new LOWER back
-    ///     to BASIC. Final: 2 LOWER from demotion + 2 LOWER from new + 1 BASIC
-    ///     from overridden new → new_tight=2, new_slack=1.
+    ///   Scheme 1: promotes both preserved LOWERs → BASIC (scheme1_count=2).
+    ///   Scheme 2: remaining_deficit=1 → overrides the latest new LOWER back to BASIC.
+    ///   Final: slot5(B-promoted), slot6(B-promoted), slot20(L), slot21(L),
+    ///          slot22(B-overridden) → new_tight=2, new_slack=1.
+    ///
+    /// num_cols=2: col_basic(2) + row_basic(4) = 6 = num_row. ✓
     #[test]
     fn scheme_2_fallback_when_deficit_exceeds_candidates() {
         let base_rows = 1usize;
-        let num_cols = 1usize;
-        // 2 preserved BASIC cuts so Scheme 1 absorbs 2 of the 3-deficit.
-        let stored = make_stored_basis(base_rows, num_cols, &[5, 6], &[B, B], &[1.0]);
+        // num_cols=2: col_basic(2) + row_basic(4 after promotion+override) = 6 = num_row.
+        let num_cols = 2usize;
+        // Preserved cuts are LOWER — promotion candidates for Scheme 1.
+        let stored = make_stored_basis(base_rows, num_cols, &[5, 6], &[L, L], &[1.0]);
 
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
-            (5, 0.0, vec![0.0]),  // preserved (BASIC)
-            (6, 0.0, vec![0.0]),  // preserved (BASIC)
-            (20, 0.0, vec![0.0]), // new, tight
-            (21, 0.0, vec![0.0]), // new, tight
-            (22, 0.0, vec![0.0]), // new, tight — this one will be overridden by Scheme 2
+            (5, 0.0, vec![0.0]),  // preserved (LOWER) → promoted to BASIC by Scheme 1
+            (6, 0.0, vec![0.0]),  // preserved (LOWER) → promoted to BASIC by Scheme 1
+            (20, 0.0, vec![0.0]), // new, tight → LOWER
+            (21, 0.0, vec![0.0]), // new, tight → LOWER
+            (22, 0.0, vec![0.0]), // new, tight → LOWER; overridden to BASIC by Scheme 2
         ];
         let num_row = base_rows + delta_cuts.len(); // 1+5=6
 
         // meta indexed by pool slot; size=23 covers slots 20..22.
         let mut meta = vec![meta_with_window(0); 23];
-        meta[5] = meta_with_window(0b0000_0001); // popcount=1 — picked first
-        meta[6] = meta_with_window(0b0000_0011); // popcount=2 — picked second
-        meta[20] = meta_with_window(0b0000_0001);
-        meta[21] = meta_with_window(0b0000_0001);
-        meta[22] = meta_with_window(0b0000_0001);
+        meta[5] = meta_with_window(0b0000_0001); // popcount=1 — promoted first
+        meta[6] = meta_with_window(0b0000_0011); // popcount=2 — promoted second
+        meta[20] = meta_with_window(0b0000_0001); // new, recent
+        meta[21] = meta_with_window(0b0000_0001); // new, recent
+        meta[22] = meta_with_window(0b0000_0001); // new, recent — latest, overridden
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 32];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -2011,7 +2053,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
 
         assert_eq!(stats.preserved, 2, "2 slots preserved");
@@ -2024,12 +2066,18 @@ mod tests {
             "1 LOWER overridden to BASIC by Scheme 2 tail"
         );
 
-        // Verify final row statuses. Row layout:
-        // [template(B), slot5(L demoted), slot6(L demoted),
-        //  slot20(L), slot21(L), slot22(B overridden)]
+        // Verify final row statuses. Row layout (post-T3a promotion):
+        // [template(B), slot5(B-promoted), slot6(B-promoted),
+        //  slot20(L), slot21(L), slot22(B-overridden)]
         assert_eq!(out.row_status[0], B, "template row unchanged");
-        assert_eq!(out.row_status[1], L, "slot 5 demoted by Scheme 1");
-        assert_eq!(out.row_status[2], L, "slot 6 demoted by Scheme 1");
+        assert_eq!(
+            out.row_status[1], B,
+            "slot 5 promoted LOWER → BASIC by Scheme 1"
+        );
+        assert_eq!(
+            out.row_status[2], B,
+            "slot 6 promoted LOWER → BASIC by Scheme 1"
+        );
         assert_eq!(out.row_status[3], L, "slot 20 classified LOWER (tight)");
         assert_eq!(out.row_status[4], L, "slot 21 classified LOWER (tight)");
         assert_eq!(
@@ -2038,10 +2086,118 @@ mod tests {
         );
         assert_eq!(out.row_status.len(), num_row);
 
-        // Scheme 1 + Scheme 2 keep total_basic <= num_row, so the enforcer is
-        // a no-op under this fixture.
+        // Invariant assertion: Scheme 1 promotion + Scheme 2 override together
+        // keep col_basic + row_basic == num_row (Epic 06 AD-3).
+        // col_basic=2 + row_basic=4 (template, slot5, slot6, slot22) = 6 = num_row.
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
+
+        // Scheme 1 + Scheme 2 keep the invariant by construction, so the enforcer
+        // is a no-op.
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
-        assert_eq!(demoted, 0, "Scheme 2 makes enforcer a no-op");
+        assert_eq!(demoted, 0, "Scheme 1+2 together make enforcer a no-op");
+    }
+
+    /// Scheme 1 promotion with no preserved-LOWER candidates falls back to Scheme 2
+    /// (T3a Requirement 8, Epic 06 AD-3).
+    ///
+    /// Fixture: stored basis has 0 preserved LOWER cuts — all preserved are BASIC
+    /// (the pre-T3a configuration where Scheme 1 would have acted on BASIC candidates).
+    /// Under T3a, the preserved BASIC cuts are NOT promotion candidates, so Scheme 1
+    /// finds 0 candidates and the entire deficit is handled by Scheme 2.
+    ///
+    ///   base_rows=1 (0 cols → col_basic=0, row 0 = B).
+    ///   stored: 1 preserved BASIC cut at slot 3 (not a promotion candidate).
+    ///   new: slot 10 with recent activity → LOWER (lower_deficit=1).
+    ///   Scheme 1: 0 LOWER candidates → scheme1_count=0.
+    ///   Scheme 2: remaining_deficit=1 → overrides slot 10 LOWER → BASIC.
+    ///   Final: template(B), slot3(B), slot10(B-overridden). new_tight=0, new_slack=1.
+    ///
+    /// num_cols=0: col_basic(0) + row_basic(3) = 3 = num_row. ✓
+    #[test]
+    fn scheme_1_promotion_with_no_preserved_lowers_fallback_to_scheme_2() {
+        let base_rows = 1usize;
+        // num_cols=0: col_basic(0) + row_basic(num_row) = num_row. ✓
+        // All preserved cuts are BASIC — none qualify as promotion candidates.
+        let num_cols = 0usize;
+        let stored = make_stored_basis(base_rows, num_cols, &[3], &[B], &[1.0]);
+
+        let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (3, 0.0, vec![]),  // preserved (BASIC) — not a Scheme 1 candidate
+            (10, 0.0, vec![]), // new, tight → LOWER; Scheme 2 overrides to BASIC
+        ];
+        let num_row = base_rows + delta_cuts.len(); // 1+2=3
+
+        // meta: slot 10 has recent activity; slot 3 (preserved) has no impact on
+        // promotion (it's BASIC — not selected as a candidate regardless of popcount).
+        let mut meta = vec![meta_with_window(0); 11];
+        meta[10] = meta_with_window(0b0000_0001); // recent bit set → LOWER classified
+
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 16];
+        let mut promotion_scratch = PromotionScratch::default();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &meta,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            delta_cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[1.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut promotion_scratch,
+        );
+
+        // Scheme 1 found 0 LOWER candidates → Scheme 2 overrode the 1 new LOWER.
+        assert_eq!(stats.preserved, 1, "slot 3 preserved");
+        assert_eq!(
+            stats.new_tight, 0,
+            "Scheme 2 adjusted new_tight to 0 (1 LOWER overridden)"
+        );
+        assert_eq!(
+            stats.new_slack, 1,
+            "Scheme 2 override counts as new_slack += 1"
+        );
+
+        // Verify final row statuses:
+        // [template(B), slot3(B-preserved), slot10(B-overridden-by-Scheme2)]
+        assert_eq!(out.row_status[0], B, "template row unchanged");
+        assert_eq!(out.row_status[1], B, "slot 3 preserved BASIC unchanged");
+        assert_eq!(
+            out.row_status[2], B,
+            "slot 10 overridden to BASIC by Scheme 2 (no Scheme 1 candidates)"
+        );
+        assert_eq!(out.row_status.len(), num_row);
+
+        // Invariant assertion: Scheme 2 alone keeps col_basic + row_basic == num_row.
+        // col_basic=0 (num_cols=0) + row_basic=3 (all rows BASIC) = 3 = num_row. ✓
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
+
+        // Scheme 2 kept the invariant, so the enforcer is a no-op.
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(demoted, 0, "Scheme 2 alone makes enforcer a no-op");
     }
 
     // -----------------------------------------------------------------------
@@ -2100,7 +2256,7 @@ mod tests {
         let mut out = Basis::new(0, 0);
         // slot_lookup must cover slot 9 (max stored slot).
         let mut lookup: Vec<Option<u32>> = vec![None; 16];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let padding = PaddingContext {
             state: &[1.0],
@@ -2115,7 +2271,7 @@ mod tests {
             padding,
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
 
         // All 8 surviving slots must be preserved (slot identity).
@@ -2154,21 +2310,27 @@ mod tests {
     ///
     /// Build a pool with 8 cuts: 5 new cuts at slots 0..4 (slot 2 has
     /// active_window=0b1) and 3 preserved cuts at slots 100..102 (stored
-    /// BASIC). The stored basis has only the 3 high-slot cuts as cut rows.
+    /// LOWER). The stored basis has only the 3 high-slot cuts as cut rows.
     /// Calling reconstruct_basis with pool.active_cuts() exercises:
     /// - Slot identity preservation for stored slots 100,101,102 (preserved=3).
     /// - Activity-driven LOWER guess for new slot 2 (new_tight=1).
-    /// - Scheme 1 demotion: the LOWER guess triggers demotion of one preserved
-    ///   BASIC candidate (slot 100, lowest popcount, first in insertion order).
+    /// - Scheme 1 symmetric promotion: the LOWER guess triggers promotion of one
+    ///   preserved-LOWER candidate (slot 100, lowest popcount, first in insertion
+    ///   order) from LOWER → BASIC.
     /// - enforce_basic_count_invariant is a no-op (Scheme 1 kept the invariant).
+    ///
+    /// Invariant sizing: num_row = 1 + 8 = 9.
+    /// After Scheme 1: row_basic = template(B) + slots 0,1,3,4(B) + slot100(B)
+    ///   = 6. col_basic = num_cols = 3. Total = 9 = num_row. ✓
     #[test]
     fn baked_path_classifier_fires_on_recent_activity() {
         let base_rows = 1usize;
-        let num_cols = 1usize;
+        // num_cols=3: col_basic(3) + row_basic(6) = 9 = num_row(9). ✓
+        let num_cols = 3usize;
         let state_dim = 1usize;
 
-        // Stored basis: 3 cuts at slots 100,101,102 all BASIC.
-        let stored = make_stored_basis(base_rows, num_cols, &[100, 101, 102], &[B, B, B], &[1.0]);
+        // Stored basis: 3 cuts at slots 100,101,102 all LOWER (promotion candidates).
+        let stored = make_stored_basis(base_rows, num_cols, &[100, 101, 102], &[L, L, L], &[1.0]);
 
         // Pool: 5 new cuts at slots 0..4 + 3 preserved at slots 100..102.
         // Capacity must be >= 103 to hold slot 102.
@@ -2182,12 +2344,11 @@ mod tests {
         // Seed activity on slot 2: bit 0 set → recent activity → LOWER guess.
         pool.metadata[2].active_window = 0b0000_0001;
         // Slots 100,101,102 have active_window=0 (popcount=0); they will be
-        // sorted first by Scheme 1 so slot 100 gets demoted.
+        // sorted first by Scheme 1 so slot 100 gets promoted LOWER → BASIC.
 
         assert_eq!(pool.active_count(), 8, "5 new + 3 preserved cuts active");
 
         // Build metadata slice for the source. cut_metadata indexed by slot.
-        // Clone pool.metadata as the source slice.
         let source = ReconstructionSource {
             target: ReconstructionTarget {
                 base_row_count: base_rows,
@@ -2199,7 +2360,7 @@ mod tests {
         let mut out = Basis::new(0, 0);
         // slot_lookup must cover slot 102.
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotion_scratch = DemotionScratch::default();
+        let mut promotion_scratch = PromotionScratch::default();
 
         let padding = PaddingContext {
             state: &[1.0],
@@ -2214,13 +2375,13 @@ mod tests {
             padding,
             &mut out,
             &mut lookup,
-            &mut demotion_scratch,
+            &mut promotion_scratch,
         );
 
         // 5 new cuts (0..4) + 3 preserved (100..102).
         assert_eq!(stats.preserved, 3, "slots 100,101,102 preserved");
         // Slot 2 has active_window bit 0 set → classifier guesses LOWER.
-        // Scheme 1 absorbs the deficit (preserved BASICs at 100,101,102).
+        // Scheme 1 absorbs the deficit (promotes preserved-LOWER slot 100).
         assert_eq!(stats.new_tight, 1, "slot 2 classified LOWER by classifier");
         assert_eq!(stats.new_slack, 4, "slots 0,1,3,4 classified BASIC");
 
@@ -2231,9 +2392,9 @@ mod tests {
         //   row 3 → slot 2 → L (new, active_window=0b1 → LOWER)
         //   row 4 → slot 3 → B (new, no activity)
         //   row 5 → slot 4 → B (new, no activity)
-        //   row 6 → slot 100 → L (preserved B, demoted by Scheme 1)
-        //   row 7 → slot 101 → B (preserved B, not demoted)
-        //   row 8 → slot 102 → B (preserved B, not demoted)
+        //   row 6 → slot 100 → B (preserved L, promoted by Scheme 1)
+        //   row 7 → slot 101 → L (preserved L, not promoted)
+        //   row 8 → slot 102 → L (preserved L, not promoted)
         assert_eq!(out.row_status[base_rows], B, "slot 0 → BASIC");
         assert_eq!(out.row_status[base_rows + 1], B, "slot 1 → BASIC");
         assert_eq!(
@@ -2245,14 +2406,29 @@ mod tests {
         assert_eq!(out.row_status[base_rows + 4], B, "slot 4 → BASIC");
         assert_eq!(
             out.row_status[base_rows + 5],
-            L,
-            "slot 100 → LOWER (Scheme 1)"
+            B,
+            "slot 100 → BASIC (Scheme 1 promoted from LOWER)"
         );
-        assert_eq!(out.row_status[base_rows + 6], B, "slot 101 → BASIC");
-        assert_eq!(out.row_status[base_rows + 7], B, "slot 102 → BASIC");
+        assert_eq!(
+            out.row_status[base_rows + 6],
+            L,
+            "slot 101 → LOWER (preserved, not promoted)"
+        );
+        assert_eq!(
+            out.row_status[base_rows + 7],
+            L,
+            "slot 102 → LOWER (preserved, not promoted)"
+        );
 
         // Scheme 1 kept the invariant: enforce_basic_count_invariant is a no-op.
         let num_row = base_rows + 8; // 1 template + 8 cut rows
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(
             demoted, 0,

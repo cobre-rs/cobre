@@ -94,6 +94,13 @@ pub struct CutMetadata {
     /// Populated by the MPI `allreduce(BitwiseOr)` in the backward pass
     /// (so any rank observing the cut binding sets bit 0 globally). Consumed
     /// by the activity-guided basis classifier in Epic 06 T2.
+    ///
+    /// Bit 0 is seeded to `1` at `add_cut` time (Epic 06 G1) so the
+    /// activity-guided classifier treats a cut as "tight at its
+    /// generating trial point" on its first LP encounter. The
+    /// generating event is thus recorded identically to a regular
+    /// bind event and decays out of the recent window over the
+    /// end-of-iteration shifts.
     pub active_window: u32,
 }
 

@@ -253,7 +253,7 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
-            active_window: 0,
+            active_window: 1, // Epic 06 G1: cut generated at x̂_t is tight at x̂_t by construction.
         };
 
         if slot >= self.populated_count {

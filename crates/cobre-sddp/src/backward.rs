@@ -4846,13 +4846,15 @@ mod tests {
     // Epic 06 T1: active_window unit tests
     // -----------------------------------------------------------------------
 
-    /// A freshly created `CutMetadata` must have `active_window == 0`.
+    /// Pre-allocated metadata rows must have `active_window == 0` before any
+    /// `add_cut` call.
     ///
-    /// This checks that `CutPool::add_cut` (the production path) initialises
-    /// the bitmap field to zero, so bit 0 does not spuriously appear set before
-    /// any backward pass has run.
+    /// `CutPool::new` zero-initialises all metadata slots so that unused slots
+    /// do not spuriously register as tight to the classifier. The Epic 06 G1
+    /// seed (`active_window: 1`) is applied exclusively inside `add_cut`; it
+    /// must not bleed into pre-allocated but un-populated slots.
     #[test]
-    fn active_window_initialised_to_zero() {
+    fn active_window_pre_allocation_is_zero() {
         use crate::cut::CutPool;
 
         let n_state = 1;
@@ -4863,22 +4865,43 @@ mod tests {
         for m in &pool.metadata {
             assert_eq!(
                 m.active_window, 0,
-                "newly allocated CutMetadata must have active_window == 0"
+                "newly allocated CutMetadata must have active_window == 0 before add_cut"
             );
         }
+    }
 
-        // add_cut also initialises active_window to 0.
-        let mut pool2 = CutPool::new(capacity, n_state, 3, 0);
-        pool2.add_cut(
+    /// `add_cut` must seed `active_window = 0b1` (Epic 06 G1) so the
+    /// activity-guided classifier treats the generating event as a bind signal.
+    ///
+    /// A cut generated at `x̂_t` is tight at `x̂_t` by construction. Seeding
+    /// bit 0 ensures the classifier returns LOWER for that cut on its first LP
+    /// encounter within the same iteration, matching the CEPEL SC adoption
+    /// paper's "generating event as activity start" intuition (Epic 06 AD-7).
+    #[test]
+    fn add_cut_seeds_active_window_bit_zero() {
+        use crate::cut::CutPool;
+        // CutPool::new(capacity=8, state_dim=1, forward_passes=3, warm_start=0).
+        // add_cut(iteration=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
+        let mut pool = CutPool::new(8, 1, 3, 0);
+        pool.add_cut(
             /*iteration=*/ 1,
             /*forward_pass_index=*/ 0,
             /*intercept=*/ 0.5,
             /*coefficients=*/ &[1.0_f64],
         );
+        // slot = warm_start_count(0) + iteration(1) * forward_passes(3) + fp(0) = 3.
         assert_eq!(
-            pool2.metadata[pool2.populated_count - 1].active_window,
+            pool.metadata[3].active_window, 1,
+            "Epic 06 G1: add_cut must seed active_window = 0b1 so the \
+             classifier treats the generating event as a bind signal."
+        );
+        // The seed must satisfy the classifier's recent-window predicate.
+        let recent_bits: u32 = (1u32 << crate::basis_reconstruct::RECENT_WINDOW_K) - 1;
+        assert_ne!(
+            pool.metadata[3].active_window & recent_bits,
             0,
-            "add_cut must initialise active_window to 0"
+            "seeded bit 0 must be inside RECENT_WINDOW_BITS for \
+             any RECENT_WINDOW_K >= 1"
         );
     }
 

@@ -595,9 +595,9 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        enforce_basic_count_invariant, reconstruct_basis, PaddingContext, PromotionScratch,
-        ReconstructionSource, ReconstructionStats, ReconstructionTarget,
-        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, RECENT_WINDOW_K,
+        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
+        PromotionScratch, RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats,
+        ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -1791,7 +1791,7 @@ mod tests {
         ];
         let mut meta = vec![meta_with_window(0); 6];
         meta[0] = meta_with_window(0b0000_0001); // new cut — recent bit
-                                                 // meta[5] left at 0 → popcount=0, will be picked for promotion.
+        // meta[5] left at 0 → popcount=0, will be picked for promotion.
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
@@ -2341,10 +2341,16 @@ mod tests {
         for i in 100u64..103 {
             pool.add_cut(i, 0, 0.0, &[0.0]);
         }
-        // Seed activity on slot 2: bit 0 set → recent activity → LOWER guess.
-        pool.metadata[2].active_window = 0b0000_0001;
-        // Slots 100,101,102 have active_window=0 (popcount=0); they will be
-        // sorted first by Scheme 1 so slot 100 gets promoted LOWER → BASIC.
+        // Epic 06 G1: add_cut now seeds active_window=1 on all freshly generated
+        // cuts. Clear the seed for slots 0,1,3,4 (no recent activity) and for
+        // slots 100,101,102 (preserved — need popcount=0 for Scheme 1 sort).
+        // Keep slot 2 at active_window=0b1 (bit 0 set) to represent recent activity.
+        for s in [0usize, 1, 3, 4, 100, 101, 102] {
+            pool.metadata[s].active_window = 0;
+        }
+        // Slot 2: active_window is already 1 from G1 seed (bit 0 = recent activity).
+        // Slots 100,101,102: cleared above to active_window=0 (popcount=0); they will
+        // be sorted first by Scheme 1 so slot 100 gets promoted LOWER → BASIC.
 
         assert_eq!(pool.active_count(), 8, "5 new + 3 preserved cuts active");
 
@@ -2434,5 +2440,255 @@ mod tests {
             demoted, 0,
             "Scheme 1 maintained the invariant; enforcer is no-op"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 06 T4: G1 seed tests
+    //
+    // These tests verify that the `active_window: 1` seed introduced by Epic
+    // 06 G1 (ticket-004) is correctly observed by the activity-driven
+    // classifier in `reconstruct_basis`.  Two fixtures:
+    //
+    //   1. Raw classifier verdict when no preserved-LOWER candidates exist:
+    //      Scheme 2 overrides the LOWER guess back to BASIC because the
+    //      invariant cannot be maintained otherwise.
+    //   2. Classifier verdict with one preserved-LOWER candidate present:
+    //      Scheme 1 absorbs the deficit by promoting slot 1 (preserved-LOWER
+    //      → BASIC), and the new slot 3 stays LOWER.  The G1 verdict survives.
+    // -----------------------------------------------------------------------
+
+    /// Epic 06 T4 Requirement 4: freshly generated cut gets LOWER via G1 seed,
+    /// but Scheme 2 overrides it back to BASIC when no preserved-LOWER
+    /// candidates are available.
+    ///
+    /// Fixture:
+    ///   Pool: 8 slots, 3-dim state, 3 forward passes, 0 warm-start cuts.
+    ///   add_cut(1, 0, ...) → slot 3.  G1 seed: meta[3].active_window = 1.
+    ///   Stored basis: empty (base_row_count=0, no stored cut slots, num_cols=0).
+    ///   active_cuts() yields (3, ...) only.
+    ///
+    /// Classifier sees active_window=1 & RECENT_WINDOW_BITS != 0 → LOWER.
+    /// lower_deficit=1; 0 preserved-LOWER candidates.
+    /// Scheme 1: scheme1_count=0.
+    /// Scheme 2: remaining_deficit=1 → overrides slot 3 LOWER → BASIC.
+    ///   Telemetry: new_tight -= 1, new_slack += 1.
+    /// Final: new_tight=0, new_slack=1, row_status[0]=BASIC.
+    ///
+    /// num_cols=0: col_basic(0) + row_basic(1) = 1 = num_row. ✓
+    #[test]
+    fn classifier_returns_lower_for_freshly_generated_cut_same_iteration() {
+        let base_rows = 0usize;
+        let num_cols = 0usize;
+        // Empty stored basis: no base rows, no cut slots.
+        let stored = CapturedBasis::new(num_cols, base_rows, base_rows, 0, 0);
+
+        // Pool: 8 slots, 3-dim state, 3 forward passes.
+        // add_cut(iter=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
+        // G1 seed sets meta[3].active_window = 1.
+        let mut pool = CutPool::new(8, 3, 3, 0);
+        pool.add_cut(
+            /*iteration=*/ 1,
+            /*forward_pass_index=*/ 0,
+            /*intercept=*/ 10.0,
+            /*coefficients=*/ &[1.0, 2.0, 3.0],
+        );
+        assert_eq!(
+            pool.metadata[3].active_window, 1,
+            "G1 seed: add_cut must initialise active_window to 1 at slot 3"
+        );
+
+        let num_row = base_rows + 1; // 0 template + 1 new cut
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 8];
+        let mut promotion_scratch = PromotionScratch::default();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: pool.metadata.as_slice(),
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            pool.active_cuts(),
+            PaddingContext {
+                state: &[0.0, 0.0, 0.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut promotion_scratch,
+        );
+
+        // Scheme 2 overrides the LOWER guess (no preserved-LOWER candidates).
+        assert_eq!(stats.preserved, 0, "no stored cuts — nothing preserved");
+        assert_eq!(
+            stats.new_tight, 0,
+            "Scheme 2 adjusted new_tight to 0 (G1-LOWER overridden)"
+        );
+        assert_eq!(
+            stats.new_slack, 1,
+            "Scheme 2 override counts as new_slack (no Scheme 1 candidates)"
+        );
+        assert_eq!(
+            out.row_status.len(),
+            num_row,
+            "one cut row total (no template rows)"
+        );
+        assert_eq!(
+            out.row_status[0], B,
+            "slot 3: G1-LOWER overridden to BASIC by Scheme 2"
+        );
+
+        // Invariant: col_basic(0) + row_basic(1) = 1 = num_row. ✓
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(demoted, 0, "Scheme 2 alone makes enforcer a no-op");
+    }
+
+    /// Epic 06 T4 Requirement 5 (T3a-corrected): freshly generated cut stays
+    /// LOWER because a preserved-LOWER candidate absorbs the deficit via
+    /// Scheme 1 symmetric promotion.
+    ///
+    /// Under T3a, Scheme 1 promotes preserved-LOWER → BASIC (not the inverse).
+    /// For the G1-seeded LOWER classification to survive, the stored basis must
+    /// have at least one preserved-LOWER cut as a promotion candidate.
+    ///
+    /// Fixture:
+    ///   Pool: 8 slots, 3-dim state, 3 forward passes, 0 warm-start cuts.
+    ///   add_cut(iter=0, fp=1, ...) → slot 1.  G1 seed: meta[1].active_window=1.
+    ///   Manually clear: pool.metadata[1].active_window = 0  (simulates a cut
+    ///     that was never tight recently; popcount=0 — cheapest promotion
+    ///     candidate for Scheme 1).
+    ///   add_cut(iter=1, fp=0, ...) → slot 3.  G1 seed: meta[3].active_window=1.
+    ///   Stored basis (T3a-corrected): 1 base row, 1 col, slot 1 stored as LOWER
+    ///     (the promotion candidate; NOT BASIC as the pre-T3a ticket draft said).
+    ///   active_cuts() yields slots 1 and 3 (in insertion order).
+    ///
+    /// Reconstruction walk:
+    ///   Slot 1 (preserved, stored LOWER): added to Scheme 1 candidates.
+    ///     row_status[1] initially set to LOWER.
+    ///   Slot 3 (new, active_window=1): recent bit set → LOWER.
+    ///     new_tight=1, lower_deficit=1.
+    ///   Scheme 1: 1 candidate (slot 1, popcount=0) ≥ lower_deficit=1.
+    ///     Promote row 1 (slot 1) from LOWER → BASIC.  scheme1_count=1.
+    ///   Scheme 2: remaining_deficit=0 → no-op.
+    ///
+    /// Final row layout:
+    ///   row_status = [B(template), B(slot1-promoted), L(slot3-new-G1)]
+    ///   stats: preserved=1, new_tight=1, new_slack=0.
+    ///
+    /// num_cols=1: col_basic(1) + row_basic(2) = 3 = num_row. ✓
+    #[test]
+    fn classifier_returns_lower_for_freshly_generated_cut_with_scheme_1_absorbed_demotion() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+
+        // Pool: 8 slots, 3-dim state, 3 forward passes.
+        let mut pool = CutPool::new(8, 3, 3, 0);
+
+        // Slot 1: add_cut(iter=0, fp=1) → slot = 0 + 0*3 + 1 = 1.
+        // G1 seed gives active_window=1; we clear it to simulate a cut not
+        // recently tight — making it the cheapest Scheme 1 candidate (popcount=0).
+        pool.add_cut(
+            /*iteration=*/ 0,
+            /*forward_pass_index=*/ 1,
+            /*intercept=*/ 1.0,
+            /*coefficients=*/ &[0.0, 0.0, 0.0],
+        );
+        pool.metadata[1].active_window = 0; // popcount=0 → selected by Scheme 1
+
+        // Slot 3: add_cut(iter=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
+        // G1 seed gives active_window=1; this is the fresh cut whose LOWER
+        // classification we want to verify survives after Scheme 1.
+        pool.add_cut(
+            /*iteration=*/ 1,
+            /*forward_pass_index=*/ 0,
+            /*intercept=*/ 5.0,
+            /*coefficients=*/ &[1.0, 2.0, 3.0],
+        );
+        assert_eq!(
+            pool.metadata[3].active_window, 1,
+            "G1 seed: slot 3 must have active_window=1 after add_cut"
+        );
+
+        // Stored basis (T3a-corrected): slot 1 stored as LOWER.
+        // Under T3a, Scheme 1 promotes preserved-LOWER → BASIC; the stored
+        // status MUST be LOWER (not BASIC) to be a promotion candidate.
+        let stored = make_stored_basis(base_rows, num_cols, &[1], &[L], &[0.0, 0.0, 0.0]);
+
+        // active_cuts() yields slots 1 and 3 (slots 0 and 2 were never populated).
+        let num_row = base_rows + 2; // 1 template + 2 cut rows (slots 1 and 3)
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 8];
+        let mut promotion_scratch = PromotionScratch::default();
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: pool.metadata.as_slice(),
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            pool.active_cuts(),
+            PaddingContext {
+                state: &[0.0, 0.0, 0.0],
+                theta: 0.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut promotion_scratch,
+        );
+
+        // Classifier and Scheme 1 verdicts.
+        assert_eq!(stats.preserved, 1, "slot 1 preserved from stored basis");
+        assert_eq!(
+            stats.new_tight, 1,
+            "slot 3: G1 seed (active_window=1) → LOWER (new_tight=1); Scheme 1 absorbed the deficit"
+        );
+        assert_eq!(stats.new_slack, 0, "no BASIC-classified new cuts");
+
+        // Final row layout (T3a direction: preserved-LOWER promoted to BASIC).
+        // row_status[0] = template row (B from make_stored_basis).
+        // row_status[1] = slot 1 (preserved LOWER, promoted to BASIC by Scheme 1).
+        // row_status[2] = slot 3 (new, G1-seeded LOWER — verdict survives Scheme 1).
+        assert_eq!(out.row_status.len(), num_row);
+        assert_eq!(out.row_status[0], B, "template row unchanged");
+        assert_eq!(
+            out.row_status[1], B,
+            "slot 1: preserved-LOWER promoted to BASIC by Scheme 1 (T3a direction)"
+        );
+        assert_eq!(
+            out.row_status[2], L,
+            "slot 3: G1-seeded LOWER survives — Scheme 1 absorbed the deficit via slot 1 promotion"
+        );
+
+        // Invariant: col_basic(1) + row_basic(2) = 3 = num_row. ✓
+        let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
+        let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
+        assert_eq!(
+            col_basic + row_basic,
+            num_row,
+            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+        );
+
+        // Scheme 1 kept the invariant, so the enforcer is a no-op.
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(demoted, 0, "Scheme 1 promotion makes enforcer a no-op");
     }
 }

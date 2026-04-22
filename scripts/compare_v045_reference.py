@@ -52,7 +52,11 @@ EXPECTED_DRIFTS: list[tuple[str, str]] = [
         "`num_iters * num_stages`. "
         "ticket 07-001: deleted add_rows_time_ms column; column count drops from 23 to 22. "
         "ticket 07-002: consolidated basis_preserved/new_tight/new_slack/demotions into single "
-        "basis_reconstructions (UInt64); column count drops from 22 to 19.",
+        "basis_reconstructions (UInt64); column count drops from 22 to 19. "
+        "Epic 06 G1 (ticket 004): seeding active_window=1 at add_cut time causes freshly generated "
+        "cuts to be classified LOWER (instead of BASIC) on their first LP encounter within the "
+        "same backward iteration; iter=1 simplex_iterations drift is expected. Operational columns "
+        "(hydro, thermal, cost) remain byte-identical because the LP optimum is unchanged.",
     ),
     (
         "**/simulation/solver/iterations.parquet",

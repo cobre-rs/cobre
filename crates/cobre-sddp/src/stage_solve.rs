@@ -165,11 +165,12 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         };
 
         // All solves now use the baked path: cuts are structural rows in the
-        // baked template; the delta-cut iterator is always empty (AD-3).
-        let baked = inputs.baked_template;
+        // baked template. base_row_count is set to the non-baked template
+        // row count so reconstruct_basis handles cut rows via slot identity
+        // rather than positional copy from the stored basis (Epic 06 T3).
         let source = crate::basis_reconstruct::ReconstructionSource {
             target: ReconstructionTarget {
-                base_row_count: baked.num_rows,
+                base_row_count: inputs.stage_context.templates[inputs.stage_index].num_rows,
                 num_cols: inputs.stage_context.templates[inputs.stage_index].num_cols,
             },
             cut_metadata: &inputs.pool.metadata,
@@ -177,22 +178,31 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         let recon_stats = reconstruct_basis(
             captured,
             source,
-            std::iter::empty(),
+            inputs.pool.active_cuts(),
             padding,
             &mut ws.scratch_basis,
             &mut ws.scratch.recon_slot_lookup,
-            &mut ws.scratch.demotion_candidates,
+            &mut ws.scratch.demotion_scratch,
         );
-        // base_row_for_invariant = n_state bounds demotion to the non-state-
-        // fixing rows [n_state, num_row). Cut-selection between iterations can
-        // shrink baked.num_rows, making reconstruct_basis truncate stored rows;
-        // if the dropped tail contained any LOWER entries, total_basic exceeds
-        // num_row and the non-alien setBasis rejects. With this bound the
-        // enforcer demotes trailing BASIC rows from the baked-cut and
-        // structural-balance range until the invariant holds. State-fixing
-        // rows at [0, n_state) are equality constraints and never BASIC, so
-        // excluding them from the scan is safe.
-        let num_row_for_invariant = baked.num_rows;
+        // Epic 06 T3: reconstruct_basis now handles cut rows via slot
+        // identity (not positional truncation). Scheme 1 symmetric demotion
+        // (Epic 06 AD-3) keeps total_basic == num_row by construction on
+        // the happy path; enforce_basic_count_invariant is retained as a
+        // safety net for (a) the forward-apply path where cut selection
+        // drops BASIC cut rows whose stored status was LOWER (creates
+        // excess BASIC in the non-cut template rows), and (b) the Scheme 2
+        // fallback tail-override in reconstruct_basis where the activity-
+        // driven LOWER guesses exceed the preserved-BASIC demotion budget.
+        // base_row_for_invariant = n_state bounds demotion to rows
+        // [n_state, num_row); state-fixing rows at [0, n_state) are
+        // equality constraints and never BASIC, so excluding them is safe.
+        //
+        // num_row_for_invariant uses the actual reconstructed basis length
+        // rather than baked.num_rows because active_cuts() may include delta
+        // cuts (added during the current backward pass) that extend beyond
+        // the baked template row count. The two values agree when there are
+        // no delta cuts (forward path and first backward stage per iteration).
+        let num_row_for_invariant = ws.scratch_basis.row_status.len();
         let base_row_for_invariant = inputs.indexer.n_state;
 
         enforce_basic_count_invariant(

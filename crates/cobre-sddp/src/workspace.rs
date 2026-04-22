@@ -6,6 +6,8 @@
 
 use cobre_solver::{Basis, SolverInterface};
 
+use crate::basis_reconstruct::DemotionScratch;
+
 // ---------------------------------------------------------------------------
 // CapturedBasis
 // ---------------------------------------------------------------------------
@@ -416,14 +418,18 @@ pub(crate) struct ScratchBuffers {
     /// When `initial_pool_capacity == 0` (simulation-only workspaces), this
     /// vec starts empty; tickets 003/004 grow it in-place if needed.
     pub(crate) recon_slot_lookup: Vec<Option<u32>>,
-    /// Scratch buffer for Scheme 1 symmetric demotion in `reconstruct_basis`
-    /// (Epic 06 T2).
+    /// Scratch buffers for Scheme 1 symmetric demotion and Scheme 2 tail
+    /// fallback in `reconstruct_basis` (Epic 06 T2/T3).
     ///
-    /// Accumulates `(out_row_index, popcount)` pairs for preserved-BASIC rows
-    /// during the reconstruction loop.  Sorted by popcount after the loop so
-    /// the `lower_deficit` weakest candidates can be demoted without extra
-    /// allocation.  Cleared at the start of each `reconstruct_basis` call.
-    pub(crate) demotion_candidates: Vec<(usize, u32)>,
+    /// `demotion_scratch.candidates` accumulates `(out_row_index, popcount)`
+    /// pairs for preserved-BASIC rows during the reconstruction loop.
+    /// `demotion_scratch.new_lower_indices` tracks output row indices of new
+    /// cuts classified LOWER so the Scheme 2 fallback can override the
+    /// most-recently-classified ones back to BASIC when the preserved-BASIC
+    /// pool is exhausted.  Both vecs are cleared at the start of each
+    /// `reconstruct_basis` call.  Pre-allocated to `initial_pool_capacity`
+    /// so the hot path avoids reallocation.
+    pub(crate) demotion_scratch: DemotionScratch,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -575,7 +581,7 @@ impl ScratchBuffers {
             },
             downstream_n_completed: 0,
             recon_slot_lookup: vec![None; initial_pool_capacity],
-            demotion_candidates: Vec::with_capacity(initial_pool_capacity),
+            demotion_scratch: DemotionScratch::with_capacity(initial_pool_capacity),
         }
     }
 }

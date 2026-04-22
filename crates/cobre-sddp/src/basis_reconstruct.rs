@@ -41,8 +41,8 @@
 //!
 //! ```rust
 //! use cobre_sddp::basis_reconstruct::{
-//!     PaddingContext, ReconstructionSource, ReconstructionStats, ReconstructionTarget,
-//!     reconstruct_basis,
+//!     DemotionScratch, PaddingContext, ReconstructionSource, ReconstructionStats,
+//!     ReconstructionTarget, reconstruct_basis,
 //! };
 //! use cobre_sddp::workspace::CapturedBasis;
 //! use cobre_solver::Basis;
@@ -54,7 +54,7 @@
 //! };
 //! let mut out = Basis::new(0, 0);
 //! let mut lookup: Vec<Option<u32>> = vec![None; 16];
-//! let mut demotion_candidates: Vec<(usize, u32)> = Vec::new();
+//! let mut demotion_scratch = DemotionScratch::default();
 //! let cuts: Vec<(usize, f64, Vec<f64>)> = vec![];
 //! let padding = PaddingContext { state: &[], theta: 0.0, tolerance: 1e-7 };
 //! let stats = reconstruct_basis(
@@ -64,7 +64,7 @@
 //!     padding,
 //!     &mut out,
 //!     &mut lookup,
-//!     &mut demotion_candidates,
+//!     &mut demotion_scratch,
 //! );
 //! assert_eq!(stats, ReconstructionStats::default());
 //! ```
@@ -159,6 +159,51 @@ pub struct PaddingContext<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Demotion scratch (grouped to keep reconstruct_basis arg count <= 7)
+// ---------------------------------------------------------------------------
+
+/// Scratch buffers for the Scheme 1 symmetric demotion and Scheme 2 tail
+/// fallback inside [`reconstruct_basis`].
+///
+/// Grouped into a single struct so [`reconstruct_basis`] stays within the
+/// workspace-level `clippy::too_many_arguments` deny threshold (7 args max).
+///
+/// Pre-allocate with [`DemotionScratch::with_capacity`] at workspace
+/// construction time and pass `&mut demotion_scratch` on every call.  The
+/// function clears both vecs at entry, so stale data from a previous call
+/// is never visible.
+///
+/// Use [`DemotionScratch::default()`] in tests and one-off callers where
+/// allocation cost is acceptable.
+#[derive(Debug, Default)]
+pub struct DemotionScratch {
+    /// Preserved-BASIC cut rows that are candidates for Scheme 1 symmetric
+    /// demotion.  Each entry is `(out_row_index, popcount)`.  Sorted by
+    /// popcount (ascending) after the consumer loop so the weakest candidates
+    /// are demoted first.
+    pub candidates: Vec<(usize, u32)>,
+    /// Output row indices of new cuts classified as LOWER by the activity-
+    /// driven classifier (Epic 06 AD-2).  Used by the Scheme 2 tail fallback
+    /// to override the most-recently-classified LOWER cuts back to BASIC when
+    /// the Scheme 1 preserved-BASIC pool is exhausted.
+    pub new_lower_indices: Vec<usize>,
+}
+
+impl DemotionScratch {
+    /// Allocate both scratch vecs with the given initial capacity.
+    ///
+    /// Pass `initial_pool_capacity` (the `CutPool` initial size) so that the
+    /// hot path avoids reallocation for typical pool sizes.
+    #[must_use]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            candidates: Vec::with_capacity(cap),
+            new_lower_indices: Vec::with_capacity(cap),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Return type
 // ---------------------------------------------------------------------------
 
@@ -210,10 +255,10 @@ pub struct ReconstructionStats {
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
 ///   at least `max_slot + 1`.  Grown in place if undersized (hot path should
 ///   avoid this via `ScratchBuffers::recon_slot_lookup`).
-/// - `demotion_candidates` — scratch `Vec<(usize, u32)>` for Scheme 1
-///   symmetric demotion. Cleared at function entry; holds `(out_row_index,
-///   popcount)` pairs for preserved BASIC cut-rows. Pre-sized by the caller
-///   via `ScratchBuffers::demotion_candidates`.
+/// - `demotion_scratch` — scratch buffers for Scheme 1 symmetric demotion
+///   and Scheme 2 tail fallback. Both vecs are cleared at function entry;
+///   stale data from a previous call is never visible. Pre-sized by the
+///   caller via `ScratchBuffers::demotion_scratch`.
 ///
 /// ## Returns
 ///
@@ -223,7 +268,7 @@ pub struct ReconstructionStats {
 /// ## Allocation contract
 ///
 /// Allocation-free on the hot path when `slot_lookup.len() >= max_slot + 1`
-/// and `demotion_candidates` has sufficient capacity.
+/// and `demotion_scratch` has sufficient capacity.
 /// The growth path triggers a `debug_assert!(false)` to surface caller
 /// under-sizing, but does not panic in release.
 #[allow(clippy::too_many_lines)]
@@ -234,7 +279,7 @@ pub fn reconstruct_basis<'a, I>(
     padding: PaddingContext<'_>,
     out: &mut Basis,
     slot_lookup: &mut Vec<Option<u32>>,
-    demotion_candidates: &mut Vec<(usize, u32)>,
+    demotion_scratch: &mut DemotionScratch,
 ) -> ReconstructionStats
 where
     I: Iterator<Item = (usize, f64, &'a [f64])>,
@@ -242,10 +287,11 @@ where
     let target = source.target;
     let cut_metadata = source.cut_metadata;
 
-    // Clear the demotion-candidates scratch at function entry.
-    // CRITICAL: this vec is reused across stages; a stale list from a
+    // Clear the demotion scratch at function entry.
+    // CRITICAL: both vecs are reused across stages; a stale list from a
     // previous stage would contaminate the current stage's demotion.
-    demotion_candidates.clear();
+    demotion_scratch.candidates.clear();
+    demotion_scratch.new_lower_indices.clear();
 
     debug_assert!(
         padding.state.len() == stored.state_at_capture.len() || stored.state_at_capture.is_empty(),
@@ -332,10 +378,6 @@ where
     let mut stats = ReconstructionStats::default();
     let mut lower_deficit: usize = 0;
 
-    // Track the output row indices of new cuts classified as LOWER, in
-    // reverse-appended order, for Scheme 2 tail fallback.
-    let mut new_lower_indices: Vec<usize> = Vec::new();
-
     for (target_slot, intercept, coefficients) in current_cut_rows {
         // Capture the output row index BEFORE the push.
         let out_row_index = out.row_status.len();
@@ -356,7 +398,7 @@ where
                 let popcount = cut_metadata
                     .get(target_slot)
                     .map_or(0, |m| m.active_window.count_ones());
-                demotion_candidates.push((out_row_index, popcount));
+                demotion_scratch.candidates.push((out_row_index, popcount));
             }
             stored_status
         } else {
@@ -367,7 +409,7 @@ where
                 // Activity-guided tight guess: classify LOWER.
                 stats.new_tight += 1;
                 lower_deficit += 1;
-                new_lower_indices.push(out_row_index);
+                demotion_scratch.new_lower_indices.push(out_row_index);
                 HIGHS_BASIS_STATUS_LOWER
             } else {
                 // No recent activity: classify BASIC (safe default).
@@ -387,14 +429,16 @@ where
     if lower_deficit > 0 {
         // Stable sort: equal-popcount ties preserve insertion order
         // (declaration-order invariance). Do NOT use sort_unstable_by_key.
-        demotion_candidates.sort_by_key(|&(_, popcount)| popcount);
+        demotion_scratch
+            .candidates
+            .sort_by_key(|&(_, popcount)| popcount);
 
-        let available_candidates = demotion_candidates.len();
+        let available_candidates = demotion_scratch.candidates.len();
         let scheme1_count = lower_deficit.min(available_candidates);
 
         // Apply Scheme 1: demote the `scheme1_count` preserved-BASIC
         // candidates with the lowest popcounts.
-        for &(row_idx, _) in demotion_candidates.iter().take(scheme1_count) {
+        for &(row_idx, _) in demotion_scratch.candidates.iter().take(scheme1_count) {
             debug_assert!(
                 row_idx >= target.base_row_count,
                 "Scheme 1 demotion target row_idx {row_idx} must be >= base_row_count {}",
@@ -413,7 +457,12 @@ where
         let remaining_deficit = lower_deficit - scheme1_count;
         if remaining_deficit > 0 {
             // Walk the new-LOWER indices from latest to earliest.
-            for &row_idx in new_lower_indices.iter().rev().take(remaining_deficit) {
+            for &row_idx in demotion_scratch
+                .new_lower_indices
+                .iter()
+                .rev()
+                .take(remaining_deficit)
+            {
                 debug_assert_eq!(
                     out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
                     "Scheme 2 override target must be LOWER",
@@ -534,9 +583,9 @@ mod tests {
     use cobre_solver::Basis;
 
     use super::{
-        HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L, PaddingContext,
-        RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats, ReconstructionTarget,
-        enforce_basic_count_invariant, reconstruct_basis,
+        DemotionScratch, HIGHS_BASIS_STATUS_BASIC as B, HIGHS_BASIS_STATUS_LOWER as L,
+        PaddingContext, RECENT_WINDOW_K, ReconstructionSource, ReconstructionStats,
+        ReconstructionTarget, enforce_basic_count_invariant, reconstruct_basis,
     };
     use crate::cut::pool::CutPool;
     use crate::cut_selection::CutMetadata;
@@ -647,7 +696,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -693,7 +742,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -731,7 +780,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -776,7 +825,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -842,7 +891,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -886,7 +935,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -924,7 +973,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(stats, ReconstructionStats::default());
@@ -962,7 +1011,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         // Growth path: lookup must have grown to >= max_stored_slot + 1 = 1000.
@@ -1027,7 +1076,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         // Both surviving cuts (slots 0 and 2) should be preserved, no new cuts.
@@ -1081,7 +1130,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(
@@ -1218,7 +1267,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(stats.preserved, 3, "all delta cuts preserved");
@@ -1273,7 +1322,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
 
         assert_eq!(stats.preserved, 3, "three preserved delta cuts");
@@ -1383,7 +1432,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
         assert_eq!(stats.preserved, 3, "all 3 cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1465,7 +1514,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
         assert_eq!(stats.preserved, 2, "both surviving cuts preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1539,7 +1588,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
         assert_eq!(stats, ReconstructionStats::default());
         assert_eq!(out.row_status.len(), l_new);
@@ -1632,7 +1681,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut Vec::new(),
+            &mut DemotionScratch::default(),
         );
         assert_eq!(stats.preserved, 2, "slots 10,11 preserved");
         assert_eq!(stats.new_tight, 0);
@@ -1679,7 +1728,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotions: Vec<(usize, u32)> = Vec::new();
+        let mut demotion_scratch = DemotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1700,7 +1749,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotions,
+            &mut demotion_scratch,
         );
         assert_eq!(stats.new_tight, 0, "window=0 → BASIC (new_slack)");
         assert_eq!(stats.new_slack, 1);
@@ -1730,7 +1779,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotions: Vec<(usize, u32)> = Vec::new();
+        let mut demotion_scratch = DemotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1751,7 +1800,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotions,
+            &mut demotion_scratch,
         );
         assert_eq!(stats.preserved, 1, "slot 5 preserved");
         assert_eq!(stats.new_tight, 1, "window bit 0 set → LOWER (new_tight)");
@@ -1778,7 +1827,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 128];
-        let mut demotions: Vec<(usize, u32)> = Vec::new();
+        let mut demotion_scratch = DemotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1799,7 +1848,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotions,
+            &mut demotion_scratch,
         );
         assert_eq!(stats.new_tight, 0, "bits outside window → BASIC");
         assert_eq!(stats.new_slack, 1);
@@ -1850,7 +1899,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 32];
-        let mut demotions: Vec<(usize, u32)> = Vec::new();
+        let mut demotion_scratch = DemotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1871,7 +1920,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotions,
+            &mut demotion_scratch,
         );
 
         assert_eq!(stats.preserved, 4, "4 slots preserved");
@@ -1941,7 +1990,7 @@ mod tests {
 
         let mut out = Basis::new(0, 0);
         let mut lookup: Vec<Option<u32>> = vec![None; 32];
-        let mut demotions: Vec<(usize, u32)> = Vec::new();
+        let mut demotion_scratch = DemotionScratch::default();
 
         let source = ReconstructionSource {
             target: ReconstructionTarget {
@@ -1962,7 +2011,7 @@ mod tests {
             },
             &mut out,
             &mut lookup,
-            &mut demotions,
+            &mut demotion_scratch,
         );
 
         assert_eq!(stats.preserved, 2, "2 slots preserved");
@@ -1993,5 +2042,221 @@ mod tests {
         // a no-op under this fixture.
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(demoted, 0, "Scheme 2 makes enforcer a no-op");
+    }
+
+    // -----------------------------------------------------------------------
+    // Epic 06 T3: production-path activation tests
+    //
+    // These tests exercise the slot-identity preservation and activity-driven
+    // classifier on the production baked path, where stage_solve.rs passes
+    // inputs.pool.active_cuts() instead of std::iter::empty().
+    // -----------------------------------------------------------------------
+
+    /// T3 Requirement 6: slot-identity preservation across cut deactivation.
+    ///
+    /// Build a pool with 10 cuts at slots 0..9. Capture a basis with
+    /// cut_row_slots=[0..9] and alternating row_statuses [L,B,L,B,...].
+    /// Deactivate slots 3 and 7. Call reconstruct_basis with pool.active_cuts()
+    /// (yields 8 slots: 0,1,2,4,5,6,8,9). Assert all 8 surviving slots are
+    /// preserved and their statuses match the stored status for each slot,
+    /// NOT the positional status that a truncation-based approach would copy.
+    #[test]
+    fn baked_path_preserves_slot_identity_across_cut_deactivation() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let state_dim = 1usize;
+
+        // Stored basis: 10 cuts at slots 0..9 with alternating [L,B,...].
+        // slot 0=L, 1=B, 2=L, 3=B, 4=L, 5=B, 6=L, 7=B, 8=L, 9=B.
+        #[allow(clippy::cast_possible_truncation)]
+        let stored_slots: Vec<u32> = (0u32..10).collect();
+        let stored_statuses: Vec<i32> = (0..10).map(|i| if i % 2 == 0 { L } else { B }).collect();
+        let stored =
+            make_stored_basis(base_rows, num_cols, &stored_slots, &stored_statuses, &[1.0]);
+
+        // Pool: 10 cuts at slots 0..9, then deactivate 3 and 7.
+        // With forward_passes=1, warm_start_count=0: slot = iteration.
+        let mut pool = CutPool::new(16, state_dim, 1, 0);
+        for i in 0u64..10 {
+            #[allow(clippy::cast_precision_loss)]
+            let intercept = i as f64;
+            pool.add_cut(i, 0, intercept, &[1.0]);
+        }
+        pool.deactivate(&[3, 7]);
+
+        // active_cuts() now yields 8 slots: 0,1,2,4,5,6,8,9.
+        assert_eq!(pool.active_count(), 8, "8 active cuts after deactivation");
+
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                // base_row_count = template rows only (not baked rows).
+                // Mirrors what stage_solve.rs does after T3.
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &[], // no activity metadata needed for preservation
+        };
+
+        let mut out = Basis::new(0, 0);
+        // slot_lookup must cover slot 9 (max stored slot).
+        let mut lookup: Vec<Option<u32>> = vec![None; 16];
+        let mut demotion_scratch = DemotionScratch::default();
+
+        let padding = PaddingContext {
+            state: &[1.0],
+            theta: 100.0,
+            tolerance: 1e-7,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            pool.active_cuts(),
+            padding,
+            &mut out,
+            &mut lookup,
+            &mut demotion_scratch,
+        );
+
+        // All 8 surviving slots must be preserved (slot identity).
+        assert_eq!(stats.preserved, 8, "all 8 surviving slots preserved");
+        assert_eq!(stats.new_tight, 0, "no new tight cuts");
+        assert_eq!(stats.new_slack, 0, "no new slack cuts");
+
+        // Output has base_rows (template) + 8 (cut) rows.
+        let num_cut_rows = 8usize;
+        assert_eq!(out.row_status.len(), base_rows + num_cut_rows);
+
+        // Verify each surviving slot's status matches its stored status.
+        // active_cuts() yields in slot order: 0,1,2,4,5,6,8,9.
+        // Stored statuses (slot 0=L,1=B,2=L,3=B[deactivated],4=L,5=B,6=L,
+        //                   7=B[deactivated],8=L,9=B).
+        // Output cut rows (indices base_rows..base_rows+8):
+        //   row 1 → slot 0 → L
+        //   row 2 → slot 1 → B
+        //   row 3 → slot 2 → L
+        //   row 4 → slot 4 → L  (NOT slot 3's B — identity, not position)
+        //   row 5 → slot 5 → B
+        //   row 6 → slot 6 → L
+        //   row 7 → slot 8 → L  (NOT slot 7's B — identity, not position)
+        //   row 8 → slot 9 → B
+        let expected = [L, B, L, L, B, L, L, B];
+        for (i, &expected_status) in expected.iter().enumerate() {
+            assert_eq!(
+                out.row_status[base_rows + i],
+                expected_status,
+                "cut row {i}: expected {expected_status}",
+            );
+        }
+    }
+
+    /// T3 Requirement 7: activity-driven classifier fires on the production path.
+    ///
+    /// Build a pool with 8 cuts: 5 new cuts at slots 0..4 (slot 2 has
+    /// active_window=0b1) and 3 preserved cuts at slots 100..102 (stored
+    /// BASIC). The stored basis has only the 3 high-slot cuts as cut rows.
+    /// Calling reconstruct_basis with pool.active_cuts() exercises:
+    /// - Slot identity preservation for stored slots 100,101,102 (preserved=3).
+    /// - Activity-driven LOWER guess for new slot 2 (new_tight=1).
+    /// - Scheme 1 demotion: the LOWER guess triggers demotion of one preserved
+    ///   BASIC candidate (slot 100, lowest popcount, first in insertion order).
+    /// - enforce_basic_count_invariant is a no-op (Scheme 1 kept the invariant).
+    #[test]
+    fn baked_path_classifier_fires_on_recent_activity() {
+        let base_rows = 1usize;
+        let num_cols = 1usize;
+        let state_dim = 1usize;
+
+        // Stored basis: 3 cuts at slots 100,101,102 all BASIC.
+        let stored = make_stored_basis(base_rows, num_cols, &[100, 101, 102], &[B, B, B], &[1.0]);
+
+        // Pool: 5 new cuts at slots 0..4 + 3 preserved at slots 100..102.
+        // Capacity must be >= 103 to hold slot 102.
+        let mut pool = CutPool::new(128, state_dim, 1, 0);
+        for i in 0u64..5 {
+            pool.add_cut(i, 0, 0.0, &[0.0]);
+        }
+        for i in 100u64..103 {
+            pool.add_cut(i, 0, 0.0, &[0.0]);
+        }
+        // Seed activity on slot 2: bit 0 set → recent activity → LOWER guess.
+        pool.metadata[2].active_window = 0b0000_0001;
+        // Slots 100,101,102 have active_window=0 (popcount=0); they will be
+        // sorted first by Scheme 1 so slot 100 gets demoted.
+
+        assert_eq!(pool.active_count(), 8, "5 new + 3 preserved cuts active");
+
+        // Build metadata slice for the source. cut_metadata indexed by slot.
+        // Clone pool.metadata as the source slice.
+        let source = ReconstructionSource {
+            target: ReconstructionTarget {
+                base_row_count: base_rows,
+                num_cols,
+            },
+            cut_metadata: &pool.metadata,
+        };
+
+        let mut out = Basis::new(0, 0);
+        // slot_lookup must cover slot 102.
+        let mut lookup: Vec<Option<u32>> = vec![None; 128];
+        let mut demotion_scratch = DemotionScratch::default();
+
+        let padding = PaddingContext {
+            state: &[1.0],
+            theta: 100.0,
+            tolerance: 1e-7,
+        };
+
+        let stats = reconstruct_basis(
+            &stored,
+            source,
+            pool.active_cuts(),
+            padding,
+            &mut out,
+            &mut lookup,
+            &mut demotion_scratch,
+        );
+
+        // 5 new cuts (0..4) + 3 preserved (100..102).
+        assert_eq!(stats.preserved, 3, "slots 100,101,102 preserved");
+        // Slot 2 has active_window bit 0 set → classifier guesses LOWER.
+        // Scheme 1 absorbs the deficit (preserved BASICs at 100,101,102).
+        assert_eq!(stats.new_tight, 1, "slot 2 classified LOWER by classifier");
+        assert_eq!(stats.new_slack, 4, "slots 0,1,3,4 classified BASIC");
+
+        // active_cuts() yields in slot order: 0,1,2,3,4,100,101,102.
+        // Output cut rows (base_rows=1):
+        //   row 1 → slot 0 → B (new, no activity)
+        //   row 2 → slot 1 → B (new, no activity)
+        //   row 3 → slot 2 → L (new, active_window=0b1 → LOWER)
+        //   row 4 → slot 3 → B (new, no activity)
+        //   row 5 → slot 4 → B (new, no activity)
+        //   row 6 → slot 100 → L (preserved B, demoted by Scheme 1)
+        //   row 7 → slot 101 → B (preserved B, not demoted)
+        //   row 8 → slot 102 → B (preserved B, not demoted)
+        assert_eq!(out.row_status[base_rows], B, "slot 0 → BASIC");
+        assert_eq!(out.row_status[base_rows + 1], B, "slot 1 → BASIC");
+        assert_eq!(
+            out.row_status[base_rows + 2],
+            L,
+            "slot 2 → LOWER (classifier)"
+        );
+        assert_eq!(out.row_status[base_rows + 3], B, "slot 3 → BASIC");
+        assert_eq!(out.row_status[base_rows + 4], B, "slot 4 → BASIC");
+        assert_eq!(
+            out.row_status[base_rows + 5],
+            L,
+            "slot 100 → LOWER (Scheme 1)"
+        );
+        assert_eq!(out.row_status[base_rows + 6], B, "slot 101 → BASIC");
+        assert_eq!(out.row_status[base_rows + 7], B, "slot 102 → BASIC");
+
+        // Scheme 1 kept the invariant: enforce_basic_count_invariant is a no-op.
+        let num_row = base_rows + 8; // 1 template + 8 cut rows
+        let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
+        assert_eq!(
+            demoted, 0,
+            "Scheme 1 maintained the invariant; enforcer is no-op"
+        );
     }
 }

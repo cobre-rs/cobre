@@ -575,7 +575,7 @@ mod tests {
             downstream_completed_lags: Vec::new(),
             downstream_n_completed: 0,
             recon_slot_lookup: Vec::new(),
-            demotion_candidates: Vec::new(),
+            demotion_scratch: crate::basis_reconstruct::DemotionScratch::default(),
         }
     }
 

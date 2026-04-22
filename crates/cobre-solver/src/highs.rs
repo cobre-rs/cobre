@@ -1877,8 +1877,6 @@ mod tests {
 // These tests verify LP formulations that reliably trigger non-optimal
 // HiGHS model statuses. They use the raw FFI layer to set options not
 // exposed through SolverInterface and confirm the expected model status.
-// Findings are documented in:
-//   plans/phase-3-solver/epic-08-coverage/research-edge-case-lps.md
 //
 // The SS1.1 LP (3-variable, 2-constraint) is too small: HiGHS's crash
 // heuristic solves it without entering the simplex loop, so time/iteration

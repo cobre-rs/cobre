@@ -589,19 +589,17 @@ pub fn build_delta_cut_row_batch_into(
 /// [`build_cut_row_batch_into`]: negated state coefficients with column
 /// scaling and a positive theta column entry.
 ///
-/// # Role in post-epic-05 architecture
+/// # Callers and design invariant
 ///
-/// There are three production callers of
-/// [`SolverInterface::add_rows`]
-/// post-epic-05: this function (lower-bound LP), the backward pass delta-cut
-/// append in `cobre_sddp::backward::load_backward_lp`, and a test-only
-/// fallback path in `cobre_sddp::lower_bound`. The training-loop forward pass
-/// does not call `add_rows`; it uses pre-baked templates exclusively. The
-/// lower-bound LP grows monotonically across iterations (new cuts are appended;
-/// nothing is ever removed), and re-baking its template each iteration would
-/// increase cumulative setup cost from `O(n_iters)` to `O(n_iters^2)`. The
-/// append-only design is therefore intentional and is not pursued for
-/// replacement.
+/// There are three production callers of [`SolverInterface::add_rows`]: this
+/// function (lower-bound LP), the backward pass delta-cut append in
+/// `cobre_sddp::backward::load_backward_lp`, and a test-only fallback path in
+/// `cobre_sddp::lower_bound`. The training-loop forward pass does not call
+/// `add_rows`; it uses pre-baked templates exclusively. The lower-bound LP
+/// grows monotonically across iterations (new cuts are appended; nothing is
+/// ever removed), and re-baking its template each iteration would increase
+/// cumulative setup cost from `O(n_iters)` to `O(n_iters^2)`. The
+/// append-only design is intentional.
 ///
 /// # Arguments
 ///
@@ -777,7 +775,7 @@ struct StageKey<'a> {
     iteration: u64,
     /// Raw noise sample for this (stage, scenario) pair.
     raw_noise: &'a [f64],
-    /// Total LP row count, equal to `baked[t].num_rows` after epic-05
+    /// Total LP row count, equal to `baked[t].num_rows`
     /// (the baked template absorbs all active cut rows as structural
     /// rows). Used to pre-allocate basis storage and avoid
     /// per-scenario heap reallocation. Consumed by

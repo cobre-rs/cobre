@@ -970,7 +970,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
         // Archive gathered states for dominated cut selection (if active).
         // Use pack_real_states_into so that zero-padded trailing entries from
         // ranks with fewer forward passes in an uneven distribution are never
-        // archived (ticket-003 fix).
+        // archived.
         if let Some(ref mut archive) = spec.visited_archive {
             let total_fwd = spec.exchange.real_total_scenarios();
             spec.exchange.pack_real_states_into(spec.real_states_buf);
@@ -1284,7 +1284,7 @@ pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
 
         // Build the per-(rank, worker_id, opening) stage_stats entries.
         // Skip padded slots (omega >= n_openings) and zero-solve slots unless omega == 0
-        // (the omega=0 sentinel preserves "stage was visited" semantics from epic-04a).
+        // (the omega=0 sentinel preserves "stage was visited" semantics).
         let mut stage_entries: Vec<StageWorkerOpeningDelta> = Vec::new();
         for r in 0..n_ranks {
             let rank_i32 = i32::try_from(r).map_err(|_| {

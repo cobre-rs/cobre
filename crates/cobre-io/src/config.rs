@@ -269,10 +269,8 @@ impl Default for TrainingSolverConfig {
 
 /// Intermediate serde type for per-class scenario source configuration in `config.json`.
 ///
-/// Structurally identical to `RawScenarioSource` in `stages.rs` but scoped to
-/// `config.json` fields (`training.scenario_source` / `simulation.scenario_source`).
-/// The two types are kept separate during the transition to per-phase sampling config
-/// (Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.
+/// Scoped to `config.json` fields (`training.scenario_source` /
+/// `simulation.scenario_source`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RawScenarioSourceConfig {

@@ -398,12 +398,12 @@ pub fn prepare_stochastic(
         }
     };
 
-    // Compute noise group IDs for Pattern C noise sharing (Epic 2).
+    // Compute noise group IDs for Pattern C noise sharing.
     // Groups stages with the same (season_id, year) so weekly stages within
     // the same monthly bucket share noise draws in the opening tree.
     // For uniform monthly studies each stage has a unique group ID, so no
     // sharing is triggered and the opening tree is identical to the pre-noise-
-    // sharing baseline (modulo the seed domain change from ticket-003).
+    // sharing baseline.
     let opening_tree_noise_group_ids: Vec<u32> = {
         let study_stages: Vec<_> = system
             .stages()

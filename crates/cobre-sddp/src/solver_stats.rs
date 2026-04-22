@@ -387,7 +387,7 @@ pub fn unpack_worker_opening_stats(
     for w in 0..n_workers {
         for k in 0..n_slots {
             let entry_base = (w * n_slots + k) * WORKER_STATS_ENTRY_STRIDE;
-            // NOTE: The prefix fields buf[entry_base] (worker_id) and
+            // The prefix fields buf[entry_base] (worker_id) and
             // buf[entry_base + 1] (slot_idx) store the LOCAL rank-relative
             // indices written by pack_worker_opening_stats on each rank.
             // When n_workers = n_ranks * n_workers_local, the combined flat

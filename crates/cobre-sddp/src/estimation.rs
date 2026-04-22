@@ -794,8 +794,8 @@ fn run_user_ar_estimation(
         estimate_seasonal_stats_with_season_map(&observations, stages, &hydro_ids, season_map)?;
 
     // ── Load user AR coefficients from file ───────────────────────────────────
-    // NOTE: system.inflow_models() is empty for this path (assemble_inflow_models
-    // returned an empty vec because stats were absent). Load AR from file directly.
+    // system.inflow_models() is empty for this path (assemble_inflow_models
+    // returns an empty vec when stats are absent). Load AR from file directly.
     let ar_path = case_dir.join("scenarios/inflow_ar_coefficients.parquet");
     let user_ar_rows = parse_inflow_ar_coefficients(&ar_path)?;
 

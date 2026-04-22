@@ -47,8 +47,7 @@ pub struct StageContext<'a> {
     /// entry per study stage. Indexed by stage: `stage_lag_transitions[t]`.
     ///
     /// Populated by `crate::lag_transition::precompute_stage_lag_transitions`
-    /// at setup time. Used by the forward pass and simulation pipeline starting
-    /// in Epic 2 ticket-006.
+    /// at setup time. Used by the forward pass and simulation pipeline.
     pub stage_lag_transitions: &'a [StageLagTransition],
     /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
     ///

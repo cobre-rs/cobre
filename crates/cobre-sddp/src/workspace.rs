@@ -397,17 +397,17 @@ pub(crate) struct ScratchBuffers {
     pub(crate) effective_eta_buf: Vec<f64>,
     pub(crate) unscaled_primal: Vec<f64>,
     pub(crate) unscaled_dual: Vec<f64>,
-    // Used by accumulate_and_shift_lag_state (ticket-004 / ticket-010).
+    // Used by accumulate_and_shift_lag_state.
     pub(crate) lag_accumulator: Vec<f64>,
     pub(crate) lag_weight_accum: f64,
-    // Downstream ring buffer for multi-resolution lag accumulation (ticket-010).
+    // Downstream ring buffer for multi-resolution lag accumulation.
     pub(crate) downstream_accumulator: Vec<f64>,
     pub(crate) downstream_weight_accum: f64,
     // Slot-major: `completed_lags[slot * hydro_count + hydro]`.
     // Slot 0 = oldest completed quarter, slot n-1 = most recent.
     pub(crate) downstream_completed_lags: Vec<f64>,
     pub(crate) downstream_n_completed: usize,
-    /// Scratch lookup table for basis reconstruction (ticket-002+).
+    /// Scratch lookup table for basis reconstruction.
     ///
     /// Maps each cut pool slot to its position in the stored
     /// `CapturedBasis::cut_row_slots`, so the reconstruction algorithm can
@@ -416,7 +416,7 @@ pub(crate) struct ScratchBuffers {
     /// first call can index up to that bound without resize.
     ///
     /// When `initial_pool_capacity == 0` (simulation-only workspaces), this
-    /// vec starts empty; tickets 003/004 grow it in-place if needed.
+    /// vec starts empty and grows in-place if needed.
     pub(crate) recon_slot_lookup: Vec<Option<u32>>,
     /// Scratch buffers for Scheme 1 symmetric promotion and Scheme 2 tail
     /// fallback in `reconstruct_basis` (Epic 06 T2/T3, corrected by T3a).
@@ -442,8 +442,8 @@ pub(crate) struct ScratchBuffers {
 ///
 /// `rank` and `worker_id` are assigned at [`WorkspacePool::new`] construction
 /// time and never change. They provide a stable identity for per-worker
-/// observability without any thread-local lookup at call sites. Later epic-04b
-/// tickets (T003, T005, T006) key their buffers on these fields.
+/// observability without any thread-local lookup at call sites, and are the
+/// keys used by per-worker instrumentation buffers.
 pub struct SolverWorkspace<S: SolverInterface> {
     /// MPI rank that owns this workspace. Stable across the run.
     ///

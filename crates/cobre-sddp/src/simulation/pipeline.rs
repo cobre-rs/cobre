@@ -89,7 +89,7 @@ type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 ///
 /// The `opening` field is always `-1` for simulation rows — simulation has one
 /// solve per `(scenario, stage)` with no opening loop. The sentinel value `-1`
-/// maps to a NULL `Int32` in the parquet schema (ticket-007).
+/// maps to a NULL `Int32` in the parquet schema.
 type WorkerStats = Vec<(u32, i32, SolverStatsDelta)>;
 
 /// Result of a simulation run, containing per-scenario costs and solver statistics.
@@ -1121,7 +1121,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
                 let scenario_solve_time_ms = scenario_delta.solve_time_ms;
                 let scenario_lp_solves = scenario_delta.lp_solves;
                 // opening = -1: simulation has no opening loop (one solve per
-                // scenario×stage). The sentinel maps to NULL in parquet (ticket-007).
+                // scenario×stage). The sentinel maps to NULL in parquet.
                 worker_stats.push((scenario_id, -1_i32, scenario_delta));
 
                 worker_costs.push(dispatch_scenario_result(

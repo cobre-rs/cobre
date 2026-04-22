@@ -605,11 +605,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
         // ── iteration_timing ──────────────────────────────────────────────
         ("iteration_timing", "iteration") => "Iteration number (1-based)",
         ("iteration_timing", "rank") => {
-            "MPI rank that produced this row (epic-04b T007). Always set; \
+            "MPI rank that produced this row. Always set; \
              single-rank runs use 0."
         }
         ("iteration_timing", "worker_id") => {
-            "Rayon worker index within the rank's pool (epic-04b T007). NULL on \
+            "Worker thread index within the rank's pool. NULL on \
              rank-aggregated rows that carry rank-only timings (cut_selection, \
              mpi_allreduce, cut_sync, lower_bound, state_exchange, cut_batch_build, \
              load_imbalance / scheduling_overhead, overhead). Set on per-worker \
@@ -691,12 +691,11 @@ fn description_for(file: &str, column: &str) -> &'static str {
              do not have an opening dimension. Backward rows range 0..n_openings."
         }
         ("solver_iterations", "rank") => {
-            "MPI rank that produced this row. NULL until epic-04b T005 wires the \
-             per-(rank, worker_id) aggregation into the writer."
+            "MPI rank that produced this row. NULL for rank-aggregated rows."
         }
         ("solver_iterations", "worker_id") => {
-            "Rayon worker index within the rank's pool that produced this row. NULL \
-             until epic-04b T005 wires the per-(rank, worker_id) aggregation into the writer."
+            "Worker thread index within the rank's pool that produced this row. \
+             NULL for rank-aggregated rows."
         }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",

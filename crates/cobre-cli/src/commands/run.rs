@@ -1439,9 +1439,9 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
         })?;
     let global_agg = cobre_sddp::unpack_delta_scalars(&recv_scalars);
 
-    // ── Part B: per-scenario allgatherv (F1-003) ──────────────────────────────
+    // ── Part B: per-scenario allgatherv ───────────────────────────────────────
     // Strip the opening field (always -1 for simulation) before packing — the
-    // MPI wire format is unchanged until ticket-008 adds opening serialisation.
+    // MPI wire format does not carry the opening field.
     let local_stats_stripped: Vec<(u32, cobre_sddp::SolverStatsDelta)> = local_stats
         .iter()
         .map(|(id, _opening, delta)| (*id, delta.clone()))

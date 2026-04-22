@@ -2,7 +2,7 @@
 //!
 //! This module provides `resolve_variable_ref`, which maps a [`VariableRef`]
 //! and block index to a list of `(column_index, coefficient_multiplier)` pairs.
-//! The LP builder (ticket-004) calls this function for each [`cobre_core::LinearTerm`] in a
+//! The LP builder calls this function for each [`cobre_core::LinearTerm`] in a
 //! generic constraint expression to produce the CSC matrix entries.
 //!
 //! ## Column index arithmetic

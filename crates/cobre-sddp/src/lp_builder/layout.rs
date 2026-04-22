@@ -203,8 +203,8 @@ pub(crate) struct StageLayout {
     /// Per-row metadata for active generic constraint rows at this stage.
     ///
     /// One entry per active `(constraint, block)` pair, in constraint-index-major
-    /// order within each constraint's bound entries. Consumed by ticket-004 for
-    /// CSC matrix construction, row bound filling, and objective coefficient filling.
+    /// order within each constraint's bound entries. Used for CSC matrix construction,
+    /// row bound filling, and objective coefficient filling.
     pub(crate) generic_constraint_rows: Vec<GenericConstraintRowEntry>,
 }
 

@@ -682,12 +682,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // Holds globally OR-reduced window bitmaps after the reduction.
     let mut bwd_global_window_increments_buf: Vec<u32> = Vec::new();
     // Pre-allocated buffer for packing real (non-padded) gathered state vectors
-    // when archiving visited states for dominated cut selection (ticket-003).
+    // when archiving visited states for dominated cut selection.
     // Pre-sized to the true total forward passes to avoid first-iteration
     // reallocation; capacity is preserved across iterations.
     let mut bwd_real_states_buf: Vec<f64> =
         Vec::with_capacity(exchange_bufs.real_total_scenarios() * n_state);
-    // Per-(worker, opening) flat buffer for backward stats gather (epic-04b T003).
+    // Per-(worker, opening) flat buffer for backward stats gather.
     // Allocated once at training setup, reset per stage. Sized to the worst-case
     // openings across all stages so the slot index `worker_id * max_openings + omega`
     // is stable for the run.
@@ -698,7 +698,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     let mut bwd_stage_worker_stats_buf =
         StageWorkerStatsBuffer::new(fwd_pool.workspaces.len(), bwd_max_openings);
 
-    // MPI allgatherv buffers for per-(rank, worker, opening) backward stats (epic-04b T005).
+    // MPI allgatherv buffers for per-(rank, worker, opening) backward stats.
     // All four are allocated once here and reused per stage and per iteration — zero
     // hot-path allocation. Sizes are derived from constants that do not change for the run.
     let n_workers_local = fwd_pool.workspaces.len();
@@ -762,7 +762,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
         // Push one SolverStatsEntry per (iteration, "forward", stage) — no opening
         // dimension on the forward pass. The opening sentinel -1 maps to NULL at
-        // the parquet writer boundary (unchanged from ticket-007 behaviour).
+        // the parquet writer boundary.
         #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         for (stage_idx, delta) in forward_result.stage_stats.iter().enumerate() {
             solver_stats_log.push((

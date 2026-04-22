@@ -344,9 +344,6 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// One equality constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == k_evap0`.
 ///
-/// CSC matrix entries for the evaporation constraint are added by ticket-011
-/// and ticket-012.  Violation cost objective coefficients are added by ticket-013.
-///
 /// # Examples
 ///
 /// ```

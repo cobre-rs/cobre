@@ -272,7 +272,6 @@ pub(crate) struct DownstreamAccumState<'a> {
 /// # Panics (debug only)
 ///
 /// Panics in debug builds if `lag.accumulator.len() < indexer.hydro_count`.
-// Wired into forward pass and simulation pipeline in ticket-006.
 ///
 /// # Downstream accumulation (multi-resolution studies)
 ///

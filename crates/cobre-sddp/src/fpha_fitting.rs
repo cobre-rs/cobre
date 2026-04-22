@@ -675,8 +675,7 @@ pub(crate) fn evaluate_losses(
 /// Used by the net-head derivative computation to analytically propagate the loss
 /// term through the production function gradient.
 ///
-/// This function is retained for use in integration tests (ticket-010) and
-/// future derivative-based diagnostics.
+/// This function is retained for integration tests and future derivative-based diagnostics.
 #[allow(dead_code)]
 pub(crate) fn evaluate_losses_factor(model: &HydraulicLossesModel) -> f64 {
     match model {
@@ -747,7 +746,7 @@ pub(crate) struct ProductionFunction {
     pub(crate) max_turbined_m3s: f64,
     /// Human-readable plant name for error messages.
     ///
-    /// Retained for future diagnostic use in integration tests (ticket-010).
+    /// Retained for diagnostic use in integration tests.
     #[allow(dead_code)]
     pub(crate) hydro_name: String,
 }
@@ -1214,7 +1213,7 @@ pub(crate) fn eliminate_redundant(
 /// - `pf` — production function used for ground-truth evaluation.
 /// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
 ///
-/// Retained for use in integration tests (ticket-010) that verify approximation quality.
+/// Retained for integration tests that verify approximation quality.
 #[allow(dead_code)]
 pub(crate) fn compute_max_approximation_error(
     planes: &[RawHyperplane],

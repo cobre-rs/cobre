@@ -175,7 +175,7 @@ impl StudySetup {
     ///
     /// Pool size equals `n_threads`. Each workspace gets a fresh solver instance.
     /// `comm` is used to read the MPI rank that is stamped into each workspace's
-    /// `rank` field for downstream per-worker observability (epic-04b).
+    /// `rank` field for downstream per-worker observability.
     ///
     /// # Errors
     ///

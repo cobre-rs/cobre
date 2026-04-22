@@ -175,7 +175,7 @@ pub(super) fn fill_stage_columns(
 
     // FPHA generation columns (g_{h,k}): one per FPHA hydro per block.
     // Bounds: [0, max_generation_mw].  Objective: 0.0 (fpha_turbined_cost goes on
-    // the turbine column, handled in ticket-008).
+    // the turbine column).
     for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
@@ -432,8 +432,8 @@ pub(super) fn fill_stage_rows(
 
     // Evaporation constraint rows: Q_ev = k_evap0 + k_evap_v/2*(v + v_in - 2*V_ref).
     // The volume-dependent term `k_evap_v/2 * v` is added via the CSC matrix entry
-    // on the outgoing-storage column (ticket-011), so the static row bounds only
-    // encode the constant term `k_evap0`.  The constraint is an equality:
+    // on the outgoing-storage column, so the static row bounds only encode the
+    // constant term `k_evap0`.  The constraint is an equality:
     // row_lower == row_upper == k_evap0.
     for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
         if let EvaporationModel::Linearized { coefficients, .. } =

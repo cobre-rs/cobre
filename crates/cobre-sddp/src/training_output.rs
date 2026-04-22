@@ -402,7 +402,7 @@ pub fn build_training_output(
 }
 
 /// Build the per-`(iteration, rank, worker_id)` timing rows for
-/// `training/timing/iterations.parquet` (epic-04b T007).
+/// `training/timing/iterations.parquet`.
 ///
 /// For each completed iteration:
 /// - One rank-aggregated row per rank (`worker_id=None`) carries the rank-only

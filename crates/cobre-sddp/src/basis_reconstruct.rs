@@ -18,7 +18,7 @@
 //! (slot found → preserved) or evaluates the cut at `padding_state` to assign
 //! tight/slack (slot not found → new).
 //!
-//! ## Forward-path basic-count invariant (ticket-009)
+//! ## Forward-path basic-count invariant
 //!
 //! On the forward path, cut selection may drop cuts whose stored row status was
 //! `HIGHS_BASIS_STATUS_LOWER`.  Each such LOWER drop reduces the running basic
@@ -35,7 +35,7 @@
 //! `excess = dropped_lower >= 0` and is always non-negative (never a deficit).
 //!
 //! This pass is applied **only on the forward path**; the backward path produces
-//! `delta == 0` by construction (ticket-008) and does not need it.
+//! `delta == 0` by construction and does not need it.
 //!
 //! ## Usage
 //!
@@ -207,9 +207,6 @@ pub struct PaddingContext<'a> {
 ///
 /// Use [`PromotionScratch::default()`] in tests and one-off callers where
 /// allocation cost is acceptable.
-///
-/// (Renamed from the previous Scheme 1 scratch type in T3a — see
-/// `ticket-003a-fix-scheme-1-direction.md`.)
 #[derive(Debug, Default)]
 pub struct PromotionScratch {
     /// Preserved-LOWER cut rows that are candidates for Scheme 1 symmetric
@@ -454,10 +451,9 @@ where
                 // Candidate for Scheme 1 symmetric promotion (preserved-LOWER → BASIC).
                 let (popcount, last_active) = cut_metadata
                     .get(target_slot)
-                    // Epic 06 G2: mask by recent_window_bits so the sort key uses the
-                    // same window as the classifier (AD-9 / ticket-005).
-                    // Epic 06 G3: capture last_active_iter as secondary sort key so
-                    // equal-popcount ties break by staleness (older → promoted first).
+                    // Mask by recent_window_bits so the sort key uses the same window
+                    // as the classifier. Secondary sort key is last_active_iter: equal
+                    // popcounts break by staleness (older → promoted first).
                     .map_or((0u32, 0u64), |m| {
                         (
                             (m.active_window & recent_window_bits).count_ones(),

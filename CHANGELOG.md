@@ -100,7 +100,7 @@ disappears from `cobre.results.load_policy` per-cut dicts.
 
 - D01-D30 + convertido SHA256 map matches v0.4.5 reference except for
   the documented schema renames. All 90 stable parquet entries are
-  byte-identical versus the pre-epic-03 baseline.
+  byte-identical versus the previous baseline.
 
 ## [0.4.4] - 2026-04-14
 

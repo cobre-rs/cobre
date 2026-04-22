@@ -418,8 +418,9 @@ workloads; D03-churn remains our main regression fixture.
 
 ω=0 solves populate the cached basis; ω=1..19 hot-start from it via HiGHS's
 retained factorization. A future enhancement could aggregate basis information
-across openings (median status per row?) for a more robust warm-start. Orthogonal
-to the classifier design; see `docs/design/cross-opening-basis-aggregation.md`.
+across openings (median status per row?) for a more robust warm-start.
+Orthogonal to the classifier design — it would only change the ω=0 write side,
+not the reconstruction read side.
 
 ---
 
@@ -429,8 +430,6 @@ to the classifier design; see `docs/design/cross-opening-basis-aggregation.md`.
 - `crates/cobre-sddp/src/basis_reconstruct.rs` module docs
 - `crates/cobre-sddp/src/workspace.rs` — `CapturedBasis` wire format ownership
 - `crates/cobre-sddp/src/cut_selection.rs` — `CutMetadata` field semantics
-- `docs/design/epic-06-cut-basis-reconstruction.md` — original design doc
-- `docs/design/epic-06-classifier-refinement-gaps.md` — post-T3 review that produced G1–G4
 
 When in doubt: the four write-sites of `active_window` (`add_cut`, the
 backward-pass allreduce loop, the end-of-iter shift, and Scheme 1/2 local

@@ -16,7 +16,6 @@ import shutil
 import pyarrow.parquet as pq
 import pytest
 
-
 VALID_CASE = "examples/1dtoy"
 D20_CASE = "examples/deterministic/d20-operational-violations"
 D28_CASE = "examples/deterministic/d28-decomp-weekly-monthly"
@@ -25,7 +24,7 @@ D28_CASE = "examples/deterministic/d28-decomp-weekly-monthly"
 @pytest.fixture(scope="module")
 def run_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     """Run 1dtoy once and return the output directory."""
-    import cobre.run  # noqa: PLC0415
+    import cobre.run
 
     output_dir = tmp_path_factory.mktemp("outputs_test")
     cobre.run.run(VALID_CASE, output_dir=str(output_dir))
@@ -127,7 +126,7 @@ def d20_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     we need the full write path exercised, so we copy the case to a temp
     directory and flip the simulation flag on.
     """
-    import cobre.run  # noqa: PLC0415
+    import cobre.run
 
     src = pathlib.Path(D20_CASE)
     case_dir = tmp_path_factory.mktemp("d20_case")
@@ -168,7 +167,7 @@ def test_hydro_parquet_has_slack_columns(d20_output: pathlib.Path) -> None:
 def test_hydro_slack_values_nonzero_on_violations(d20_output: pathlib.Path) -> None:
     """D20 forces operational violations. At least one scenario/stage must
     have non-zero ``outflow_slack_below_m3s`` and ``turbined_slack_m3s``."""
-    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow as pa
 
     hydros_dir = d20_output / "simulation" / "hydros"
     parquets = sorted(hydros_dir.rglob("*.parquet"))
@@ -192,14 +191,14 @@ def test_hydro_slack_values_nonzero_on_violations(d20_output: pathlib.Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# D28 DECOMP weekly+monthly parity tests
+# D28 weekly+monthly parity tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def d28_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
-    """Run D28 DECOMP case via Python bindings and return the output directory."""
-    import cobre.run  # noqa: PLC0415
+    """Run D28 case via Python bindings and return the output directory."""
+    import cobre.run
 
     src = pathlib.Path(D28_CASE)
     case_dir = tmp_path_factory.mktemp("d28_case")
@@ -216,8 +215,8 @@ def d28_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return output_dir
 
 
-def test_decomp_d28_runs_and_produces_outputs(d28_output: pathlib.Path) -> None:
-    """D28 DECOMP case produces all standard training and simulation outputs."""
+def test_d28_runs_and_produces_outputs(d28_output: pathlib.Path) -> None:
+    """D28 case produces all standard training and simulation outputs."""
     # Training artifacts
     assert (d28_output / "training" / "_SUCCESS").is_file()
     assert (d28_output / "training" / "metadata.json").is_file()
@@ -238,7 +237,7 @@ def test_decomp_d28_runs_and_produces_outputs(d28_output: pathlib.Path) -> None:
         assert (sim / subdir).is_dir(), f"simulation/{subdir}/ must exist"
 
 
-def test_decomp_d28_convergence_has_iterations(d28_output: pathlib.Path) -> None:
+def test_d28_convergence_has_iterations(d28_output: pathlib.Path) -> None:
     """D28 convergence metadata reports at least 1 training iteration."""
     meta_path = d28_output / "training" / "metadata.json"
     meta = json.loads(meta_path.read_text())

@@ -29,8 +29,7 @@
 //! upper bound relative to the pre-plan baseline, catching only
 //! catastrophic failures (basis rejected every iteration, capture path
 //! never fires, wire-format corruption).  The correct performance metric
-//! is total backward wall time, measured separately in the convertido A/B
-//! reports (`docs/assessments/backward-basis-cache-baseline.md`).
+//! is total backward wall time, measured separately.
 //!
 //! ## Baseline provenance
 //!
@@ -60,7 +59,7 @@ use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
-use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
+use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
 use cobre_solver::highs::HighsSolver;
 
 // ---------------------------------------------------------------------------

@@ -412,4 +412,3 @@ millions of LP solves occur per training run.
 - [Output Format](../reference/output-format.md) — timing, solver statistics, and cut selection output schemas
 - [cobre-solver](../crates/solver.md) — solver interface and retry escalation details
 - [cobre-sddp](../crates/sddp.md) — training loop architecture and data structures
-- `docs/design/performance-mechanism-interactions.md` — maintainer reference for the classifier, invariant-preserving promotion/demotion schemes, sliding-window activity bitmap, and the forward/backward asymmetry

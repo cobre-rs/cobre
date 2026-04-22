@@ -7,7 +7,7 @@
 //! 0.0, and computes `D = V * diag(√λ) * Vᵀ`. This handles non-positive-
 //! definite and rank-deficient matrices naturally.
 //!
-//! The NEWAVE-style transform `b = D * z` where `z ~ N(0, I)` produces
+//! The transform `b = D * z` where `z ~ N(0, I)` produces
 //! spatially correlated noise `b` with covariance `D * Dᵀ = C` (or the nearest
 //! positive-semidefinite approximation to `C` in the spectral sense).
 

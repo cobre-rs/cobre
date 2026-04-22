@@ -2792,7 +2792,7 @@ fn d27_per_stage_thermal_cost() {
     );
 }
 
-/// D28: DECOMP-style mixed-resolution case (5 weekly + 1 monthly stages).
+/// D28: Mixed-resolution case (5 weekly + 1 monthly stages).
 ///
 /// Smoke test that verifies the full pipeline loads and trains without error
 /// on a case with:

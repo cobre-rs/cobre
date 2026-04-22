@@ -61,7 +61,7 @@ pub struct StageContext<'a> {
     ///
     /// `0` for uniform-resolution studies — all downstream accumulation code paths
     /// in `accumulate_and_shift_lag_state` are skipped. Non-zero for studies with a
-    /// monthly-to-quarterly transition (e.g., DECOMP hybrid studies).
+    /// monthly-to-quarterly transition (e.g., hybrid resolution studies).
     ///
     /// Used to size the downstream scratch buffers in the forward-pass workspace pool
     /// (`train`) and to pass as `par_order` to `crate::noise::DownstreamAccumState`.

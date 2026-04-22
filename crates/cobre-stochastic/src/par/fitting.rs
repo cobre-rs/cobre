@@ -1352,7 +1352,7 @@ pub fn periodic_autocorrelation(
     // crosses into an earlier calendar position, or `lag / n_seasons` when
     // it wraps full cycles.
     //
-    // NEWAVE's approach: for lag `k` within one cycle (k < n_seasons),
+    // Approach: for lag `k` within one cycle (k < n_seasons),
     // detect cross-year when lag_season >= ref_season. For larger lags,
     // additional years are spanned. The total drop count equals the number
     // of year boundaries crossed.

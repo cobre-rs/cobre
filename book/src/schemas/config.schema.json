@@ -75,7 +75,7 @@
       "properties": {
         "basis_activity_window": {
           "default": null,
-          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `active_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5 (inherited from\nCEPEL NEWAVE). See Epic 06 AD-7 and\n`docs/design/performance-mechanism-interactions.md` §9.",
+          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `active_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -446,7 +446,7 @@
       "description": "Intermediate serde type for `historical_years` in `config.json`.\n\nHandles two JSON representations via `#[serde(untagged)]`:\n- Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]\n- Object: `{\"from\": 1940, \"to\": 2010}` → [`RawHistoricalYearsConfig::Range`]\n\nThe `List` variant must be declared first so serde tries it before `Range`\n(an integer array is tried before an object)."
     },
     "RawScenarioSourceConfig": {
-      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nStructurally identical to `RawScenarioSource` in `stages.rs` but scoped to\n`config.json` fields (`training.scenario_source` / `simulation.scenario_source`).\nThe two types are kept separate during the transition to per-phase sampling config\n(Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.",
+      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nScoped to `config.json` fields (`training.scenario_source` /\n`simulation.scenario_source`).",
       "properties": {
         "historical_years": {
           "anyOf": [

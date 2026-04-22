@@ -1,14 +1,13 @@
 //! DHAT heap allocation baseline for the cobre-sddp backward pass.
 //!
 //! This example runs the D19 test case (multi-hydro PAR, 4 plants, 12 stages)
-//! under DHAT heap instrumentation to capture a quantitative allocation baseline
-//! before Epic 03 hot-path optimisations land.
+//! under DHAT heap instrumentation to capture a quantitative allocation
+//! baseline for the backward pass hot path.
 //!
 //! # Usage
 //!
 //! ```text
 //! cargo run --example dhat_baseline --features dhat-heap -p cobre-sddp --release
-//! cp dhat-heap.json docs/assessments/dhat-baseline-v044.json
 //! ```
 //!
 //! The `--release` flag is mandatory: debug builds have different allocation
@@ -44,7 +43,7 @@ use std::path::Path;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{config::StoppingRuleConfig, parse_config};
-use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
+use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
 use cobre_solver::highs::HighsSolver;
 
 /// Single-rank stub communicator — mirrors the one in `tests/deterministic.rs`.
@@ -137,9 +136,7 @@ fn main() {
     );
 
     #[cfg(feature = "dhat-heap")]
-    println!(
-        "DHAT profile written to dhat-heap.json — copy to docs/assessments/dhat-baseline-v044.json"
-    );
+    println!("DHAT profile written to dhat-heap.json");
 
     #[cfg(not(feature = "dhat-heap"))]
     println!(

@@ -1261,8 +1261,6 @@ fn estimate_ar_with_pacf(
 /// check + contribution validation cycle. Repeats until all seasons pass or
 /// their ceilings reach 0.
 ///
-/// This implements NEWAVE's `reducao_ordem` algorithm.
-///
 /// Structurally independent parameters: `estimates` is the in/out estimate vector,
 /// `n_seasons`/`hydro_ids` are dimension data, `group_obs`/`stats_map` are observation
 /// lookups, `initial_max_order`/`z_alpha`/`max_coeff_magnitude` are PAR-fit knobs.

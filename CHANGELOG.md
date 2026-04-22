@@ -19,21 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Verified
 
-- Epic 09 test-suite audit: default `cargo test --workspace --release`
-  incremental median dropped from 5.53 s to 4.62 s (**−16.5%**) on
-  12th Gen Intel i7-12700KF (Fedora 43, 12c/20t). The 40% target
-  against `cargo test --workspace --all-features --release` was not
-  met (5.55 → 5.45 s, −1.8%) because the `slow-tests` feature gate
-  re-activates under `--all-features`; a future epic will restructure
-  the gate so it survives the all-features build (see
-  `plans/architecture-unification/epic-09-test-audit/ticket-007-*.md`
-  Scope Resolution). `crates/cobre-sddp/tests/` LoC changed from
-  16,591 to 16,780 (+189); the ≥15% reduction is deferred to a
-  plan-end cleanup that deletes `v045_regression.rs` and related
-  v0.4.5 comparison files. Full measurement in
-  `docs/assessments/test-wall-time-baseline-epic-09.md` §7.
 
-## [0.5.0] - 2026-04-20
+## [0.5.0] - 2026-04-22
 
 Major refactor. Consumers must update `config.json`, any code calling
 solver traits, and any tooling reading `solver/iterations.parquet`
@@ -76,7 +63,7 @@ disappears from `cobre.results.load_policy` per-cut dicts.
   state metadata; `reconstruct_basis` applies a stored basis across
   cut-set churn on forward, backward, and simulation paths. Controlled
   by `training.cut_selection.basis_activity_window` (1-31, default 5).
-- **Weekly+monthly DECOMP studies** — sub-monthly lag accumulation,
+- **Weekly+monthly studies** — sub-monthly lag accumulation,
   `recent_observations` input for mid-season starts, terminal boundary
   cuts (`policy.boundary.{path, source_stage}`) for Cobre-to-Cobre FCF
   coupling, and non-uniform per-stage scenario counts.

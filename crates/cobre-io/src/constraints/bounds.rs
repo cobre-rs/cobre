@@ -132,7 +132,7 @@ pub struct ThermalBoundsRow {
     /// Dispatch cost override (`$/MWh`). Overrides `Thermal.cost_per_mwh` when `Some` and
     /// `block_id` is `None`. Ignored when `block_id` is `Some`.
     pub cost_per_mwh: Option<f64>,
-    /// Reserved for future per-block cost support (DECOMP). Rows with non-null `block_id`
+    /// Reserved for future per-block cost support. Rows with non-null `block_id`
     /// are parsed but silently ignored during bounds resolution.
     pub block_id: Option<i32>,
 }

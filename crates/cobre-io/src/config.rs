@@ -226,9 +226,7 @@ pub struct CutSelectionConfig {
     /// Scheme 1 sort popcount. Bit `i` of `active_window` counts toward the
     /// classifier and popcount mask when `i < basis_activity_window`.
     ///
-    /// Validated range: 1..=31. Default when absent: 5 (inherited from
-    /// CEPEL NEWAVE). See Epic 06 AD-7 and
-    /// `docs/design/performance-mechanism-interactions.md` §9.
+    /// Validated range: 1..=31. Default when absent: 5.
     #[serde(default)]
     pub basis_activity_window: Option<u32>,
 

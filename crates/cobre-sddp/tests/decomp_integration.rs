@@ -1,6 +1,6 @@
-//! End-to-end integration test for the DECOMP mixed-resolution pipeline.
+//! End-to-end integration test for the mixed-resolution pipeline.
 //!
-//! Exercises all DECOMP feature components together on the D28 test case
+//! Exercises all feature components together on the D28 test case
 //! (5 weekly stages + 1 monthly terminal stage), confirming they compose
 //! correctly:
 //!
@@ -158,13 +158,13 @@ fn build_setup(case_dir: &Path, config: &cobre_io::Config) -> StudySetup {
 // ---------------------------------------------------------------------------
 
 /// Verify structural properties, training correctness, lag accumulation, and
-/// simulation completion for the D28 DECOMP mixed-resolution case.
+/// simulation completion for the D28 mixed-resolution case.
 ///
 /// D28 has 5 weekly stages (indices 0-4, `num_scenarios == 1`) followed by
 /// 1 monthly terminal stage (index 5, `num_scenarios == 5`). The monthly
 /// season map must have 12 seasons.
 #[test]
-fn decomp_structural_properties_and_training() {
+fn structural_properties_and_training() {
     let case_dir = d28_case_dir();
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config");

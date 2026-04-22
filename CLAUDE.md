@@ -12,57 +12,6 @@ vertical is SDDP-based hydrothermal dispatch.
 - **Test**: `cargo test --workspace --all-features`
 - **Format**: `cargo fmt --all` (CI enforces `--check`)
 
-See `CONTRIBUTING.md` for build prerequisites and commit message format.
-
----
-
-## Current State (v0.5.0)
-
-The SDDP solver is fully functional: case loading, stochastic scenario
-generation, training, simulation, policy checkpointing, and output writing.
-3,600+ tests, including 27 deterministic regression cases (D01–D11, D13–D16,
-D19–D30) and 2 cut selection integration tests (D17–D18).
-
-**Implemented:** constant-productivity and FPHA hydro models, evaporation,
-cascade coupling, water withdrawal, inflow non-negativity (truncation, penalty,
-truncation-with-penalty), multi-segment deficit, generic constraints (20
-variable types), NCS stochastic availability, block factors, per-stage
-productivity override, per-stage thermal cost override, CVaR risk measure,
-PAR(p) estimation (periodic YW, PACF), LP scaling, solver statistics
-instrumentation, LP setup optimisation (model persistence, incremental cuts,
-sparse cuts), simulation basis warm-start, two-stage cut management pipeline
-(strategy-based selection, active cut budget enforcement),
-slot-tracked basis reconstruction with capture-time state metadata (CapturedBasis), backward pass work-stealing
-parallelism, parallel lower bound evaluation, solver safeguards (12-level retry
-escalation with wall-clock budgets), MPI distribution with execution topology
-reporting, Python bindings with Arrow zero-copy, CLI with 7 subcommands, policy
-warm-start and resume-from-checkpoint with per-stage cut counts, cost
-decomposition, per-block operational violations, bidirectional
-withdrawal/evaporation slacks, per-plant inflow penalty via cascade, discount
-rate, visited state persistence, per-class scenario sampling (Historical,
-External, InSample, OutOfSample per entity class), composite ForwardSampler with
-ClassSampler dispatch, HistoricalScenarioLibrary and ExternalScenarioLibrary,
-HistoricalResiduals noise method, historical window discovery, per-class
-external scenario files, same-type correlation enforcement, sub-monthly stage
-lag accumulation (StageLagTransition precomputation with frozen-lag semantics),
-recent_observations input for mid-season study starts, terminal boundary cuts
-(BoundaryPolicy for Cobre-to-Cobre FCF coupling), non-uniform scenario count
-support (V3.4 relaxation with padding for DECOMP weekly+monthly studies).
-Simulation pipeline bakes per-stage templates end-to-end when training produced
-baked templates; the full CapturedBasis metadata propagates to non-root MPI
-ranks via a 4-broadcast wire format.
-
-**Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
-
-Epic-06 (v0.5.0) tightened public-API invariants to the type level:
-`TrainingResult` is `#[non_exhaustive]` with a single `::new(...)` constructor,
-the 4-broadcast basis wire format is owned by
-`CapturedBasis::{to,try_from}_broadcast_payload`, and
-`clippy::too_many_arguments` is a workspace-level deny (retiring
-`scripts/check_suppressions.py`).
-
----
-
 ## Hard Rules
 
 These are non-negotiable. Violations must be fixed before committing.
@@ -83,7 +32,16 @@ These are non-negotiable. Violations must be fixed before committing.
 - Do not commit secrets, `.env` files, or credentials
 - Do not force-push to `main`
 - **`slow-tests` feature** — long-running tests (D-case sweep, FPHA plane-selection, forward-sampler convergence) are gated behind `#[cfg_attr(not(feature = "slow-tests"), ignore = ...)]`. Default `cargo test --workspace` skips them; pass `--features slow-tests` to include them.
-
+- **No plan-structure references in user-facing artifacts** — identifiers such
+  as `Epic 09`, `ticket-007`, or `architecture-unification plan` must not
+  appear in `CHANGELOG.md`, release notes, `book/`, public rustdoc, or
+  comments in shipped code. Plans live in `plans/` (gitignored); public
+  artifacts describe behavior, not how the work was organized. Git commit
+  messages may reference plan structure — they target git-log readers, not
+  release consumers. Existing rustdoc/comment references predating this
+  rule are tech debt; clean up opportunistically when touching the
+  surrounding code.
+  
 ---
 
 ## Architecture Guides (Read When Relevant)

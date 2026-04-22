@@ -405,7 +405,7 @@ pub fn resolve_bounds(
 
     for row in thermal_overrides {
         // Rows with non-null block_id are reserved for future per-block cost support
-        // (DECOMP). They are parsed but silently ignored during bounds resolution.
+        // They are parsed but silently ignored during bounds resolution.
         if row.block_id.is_some() {
             continue;
         }

@@ -176,7 +176,7 @@ pub struct SampleRequest<'b> {
     ///
     /// Stages within the same `(season_id, year)` bucket share the same
     /// `noise_group_id` so that their noise draws are identical (Pattern C
-    /// sharing). Until ticket-005 wires actual group IDs, callers supply
+    /// sharing). Callers supply
     /// `stage.id as u32` to preserve current per-stage seed behaviour.
     pub noise_group_id: u32,
 }
@@ -1151,10 +1151,6 @@ mod tests {
         assert_eq!(a.as_slice(), b.as_slice());
     }
 
-    // -----------------------------------------------------------------------
-    // New composite tests required by ticket-027
-    // -----------------------------------------------------------------------
-
     /// AC: composite with three `InSample` class samplers fills each segment
     /// from the correct tree region.
     #[test]
@@ -1312,7 +1308,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-003): `noise_group_id` propagates through `ForwardSampler::sample`
+    /// `noise_group_id` propagates through `ForwardSampler::sample`
     /// to the underlying `ClassSampler`. Two calls with the same `noise_group_id`
     /// but different `stage` produce identical `OutOfSample` noise; different
     /// `noise_group_id` values produce different noise.

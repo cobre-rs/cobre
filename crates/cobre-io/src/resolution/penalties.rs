@@ -65,7 +65,7 @@ pub struct PenaltiesOverrides<'a> {
 /// the table and then overlays the sparse tier-3 stage overrides.
 ///
 /// Override rows referencing unknown entity IDs or out-of-range stage IDs are silently
-/// skipped — referential integrity is a Layer 3 concern validated in Epic 06.
+/// skipped — referential integrity is a Layer 3 concern (deferred).
 ///
 /// # Arguments
 ///
@@ -321,7 +321,7 @@ pub fn resolve_penalties(
 
     // Override rows are sparse: only (entity_id, stage_id) pairs that differ from
     // the entity-level value need rows. Unknown entity IDs and out-of-range stage IDs
-    // are silently skipped (Layer 3 validation concern, Epic 06).
+    // are silently skipped (Layer 3 validation concern, deferred).
 
     for row in hydro_overrides {
         let Some(&entity_idx) = hydro_index.get(&row.hydro_id) else {

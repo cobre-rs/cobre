@@ -36,9 +36,9 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - Minimum planes per hydro-per-stage (at least 3) — Layer 5, Epic 06.
-//! - `gamma_v` positive, `gamma_s` non-positive semantic checks — Layer 5, Epic 06.
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
+//! - Minimum planes per hydro-per-stage (at least 3) — Layer 5.
+//! - `gamma_v` positive, `gamma_s` non-positive semantic checks — Layer 5.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
 
 use arrow::array::Array;
 use cobre_core::EntityId;

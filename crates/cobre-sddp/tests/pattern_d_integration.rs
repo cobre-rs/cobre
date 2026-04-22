@@ -125,9 +125,8 @@ fn build_setup(case_dir: &Path, config: &cobre_io::Config) -> StudySetup {
 /// 4 quarterly stages (Q3 2024 – Q2 2025, stage indices 6-9). The season map
 /// is `Custom` with 16 seasons: ids 0-11 (monthly) + ids 12-15 (quarterly).
 ///
-/// This test is the capstone for Epic 6 (Pattern D Integration): it confirms
-/// that the components built across Epics 1-4 compose correctly into a
-/// functioning multi-resolution pipeline.
+/// This test confirms that the multi-resolution pipeline components compose
+/// correctly into a functioning end-to-end Pattern D workflow.
 #[test]
 fn pattern_d_structural_properties_and_training() {
     let case_dir = d30_case_dir();

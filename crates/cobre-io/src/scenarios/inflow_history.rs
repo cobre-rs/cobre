@@ -25,8 +25,8 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
-//! - Date coverage checks — Layer 4/5, Epic 06.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
+//! - Date coverage checks — Layer 4/5.
 
 use arrow::temporal_conversions::date32_to_datetime;
 use cobre_core::EntityId;

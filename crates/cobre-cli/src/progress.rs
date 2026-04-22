@@ -70,8 +70,7 @@ impl ProgressHandle {
     #[allow(clippy::expect_used)]
     pub fn join(self) -> Vec<TrainingEvent> {
         // Intentional: a panic in the progress thread is a programming error,
-        // not a recoverable condition. Propagating it here matches the contract
-        // described in the ticket's error-handling section.
+        // not a recoverable condition.
         self.handle.join().expect("progress thread panicked")
     }
 }

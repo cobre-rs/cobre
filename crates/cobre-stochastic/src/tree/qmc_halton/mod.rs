@@ -448,7 +448,7 @@ mod tests {
         }
     }
 
-    // --- Batch generator tests (ticket-020) ---
+    // --- Batch generator tests ---
 
     /// Same inputs produce bitwise identical output (determinism).
     #[test]
@@ -531,7 +531,7 @@ mod tests {
         assert!(output.is_empty());
     }
 
-    // --- Point-wise generator tests (ticket-020) ---
+    // --- Point-wise generator tests ---
 
     /// Same `HaltonPointSpec` produces bitwise identical output (determinism).
     #[test]

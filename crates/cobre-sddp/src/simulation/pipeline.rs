@@ -268,7 +268,7 @@ struct SimStageLoadSpec<'a> {
     baked_template: &'a StageTemplate,
     /// Warm-start basis captured during training at this stage, if any.
     warm_basis: Option<&'a CapturedBasis>,
-    /// Runtime window for the basis-activity classifier (Epic 06 T5b).
+    /// Runtime window for the basis-activity classifier.
     /// Derived from `SimulationConfig::basis_activity_window`.
     basis_activity_window: u32,
 }
@@ -278,7 +278,7 @@ struct SimStageLoadSpec<'a> {
 struct SimScenarioLoadSpec<'a> {
     baked_templates: &'a [StageTemplate],
     stage_bases: &'a [Option<CapturedBasis>],
-    /// Runtime window for the basis-activity classifier (Epic 06 T5b).
+    /// Runtime window for the basis-activity classifier.
     /// Propagated into each per-stage [`SimStageLoadSpec`] via [`Self::stage`].
     basis_activity_window: u32,
 }

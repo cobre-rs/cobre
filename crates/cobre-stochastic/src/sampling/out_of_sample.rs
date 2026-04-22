@@ -151,7 +151,7 @@ pub(crate) fn fill_uncorrelated(
         NoiseMethod::HistoricalResiduals => {
             tracing::warn!(
                 stage_id = spec.stage_id,
-                "historical_residuals noise method not yet wired in forward pass; falling back to SAA at stage {} (see ticket-009)",
+                "historical_residuals noise method not yet wired in forward pass; falling back to SAA at stage {}",
                 spec.stage_id,
             );
             fill_saa(spec, output);

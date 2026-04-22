@@ -2,8 +2,8 @@
 # mpi_determinism.sh
 #
 # Runs the 4ree example case with 1 rank and 2 ranks, then compares the
-# resulting convergence.parquet files byte-by-byte to verify that the
-# upper-bound summation fix in ticket-009 produces bit-identical output
+# resulting convergence.parquet files byte-by-byte to verify the
+# upper-bound summation fix produces bit-identical output
 # regardless of MPI rank count.
 #
 # Usage:
@@ -122,8 +122,7 @@ main() {
     log "============================================================"
 
     # convergence.parquet is written under the training/ subdirectory of the
-    # output root. The ticket spec listed a flat path, but the cobre binary
-    # nests training outputs under training/.
+    # output root.
     local file1="${OUT_DIR}/rank1/training/convergence.parquet"
     local file2="${OUT_DIR}/rank2/training/convergence.parquet"
 

@@ -43,7 +43,7 @@
 //! 6. Evaporation array, if present, must have exactly 12 elements.
 //!
 //! Cross-reference validation (`bus_id`, `downstream_id`, `diversion.downstream_id`)
-//! is deferred to Layer 3 (Epic 06).
+//! is deferred to Layer 3.
 
 use cobre_core::{
     EntityId,
@@ -368,7 +368,7 @@ pub(crate) struct RawHydroPenaltyOverrides {
 /// sorted by `id` ascending to satisfy declaration-order invariance.
 ///
 /// Cross-reference validation (`bus_id`, `downstream_id`,
-/// `diversion.downstream_id`) is deferred to Layer 3 (Epic 06).
+/// `diversion.downstream_id`) is deferred to Layer 3.
 ///
 /// # Errors
 ///

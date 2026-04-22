@@ -501,8 +501,8 @@ mod tests {
         );
     }
 
-    /// Confirms the post-epic-07 `BroadcastConfig` wire does not carry any of the
-    /// deleted fields from earlier epics.
+    /// Confirms the `BroadcastConfig` wire does not carry any previously
+    /// deleted fields.
     ///
     /// Postcard encodes fields by declaration order (no field names in the binary),
     /// so the string check is a guardrail: if a future author switches to a

@@ -253,10 +253,9 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
-            // Epic 06 G1 (transient): seed SEED_BIT (outside RECENT_WINDOW_BITS)
-            // so the classifier fires LOWER within the same iteration but the
-            // seed is cleared at end-of-iter before the shift — no cross-iter
-            // carryover.
+            // Transient seed: set SEED_BIT (outside RECENT_WINDOW_BITS) so the
+            // classifier fires LOWER within the same iteration, but the seed is
+            // cleared at end-of-iter before the shift — no cross-iter carryover.
             active_window: crate::basis_reconstruct::SEED_BIT,
         };
 

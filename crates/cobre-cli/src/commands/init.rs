@@ -256,7 +256,7 @@ mod tests {
         }
     }
 
-    /// AC (ticket-007b): generated `config.json` contains the correct `$schema` URL.
+    /// generated `config.json` contains the correct `$schema` URL.
     #[test]
     fn test_init_config_json_contains_schema_url() {
         let tmp = TempDir::new().unwrap();
@@ -276,7 +276,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): generated `system/buses.json` contains the correct `$schema` URL.
+    /// generated `system/buses.json` contains the correct `$schema` URL.
     #[test]
     fn test_init_system_json_files_contain_schema_urls() {
         let tmp = TempDir::new().unwrap();

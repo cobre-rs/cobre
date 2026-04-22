@@ -14,7 +14,7 @@
 # Usage:
 #   /shared/run-tests.sh
 #
-# Prerequisites (satisfied by the ticket-003 Docker image):
+# Prerequisites (satisfied by the Docker image):
 #   - /shared/cobre-mpi   (cobre binary built with --features mpi)
 #   - /shared/4ree        (example case directory)
 #   - /opt/mpich/bin      (MPICH installation)

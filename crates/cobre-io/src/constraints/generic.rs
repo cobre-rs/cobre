@@ -41,7 +41,7 @@
 //! - `slack.enabled = true` requires `slack.penalty` to be present and > 0.0.
 //! - Each `expression` string must parse without error.
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - Entity ID existence in entity registries — Layer 3.
 //! - Block ID validity for the referenced stage — Layer 3/5.

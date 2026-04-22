@@ -97,7 +97,7 @@ pub struct StageInputs<'a> {
 ///
 /// Variant layout covers what forward, backward, and simulation need today
 /// without requiring owned allocations inside `run_stage_solve`. The three
-/// variants carry identical data for now; they exist so that later epics can
+/// variants carry identical data for now; they exist so that later we can
 /// specialize per-phase fields (e.g., add `captured_basis` to `Forward` only)
 /// without a breaking re-shape.
 #[derive(Debug)]
@@ -172,7 +172,7 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
         // All solves now use the baked path: cuts are structural rows in the
         // baked template. base_row_count is set to the non-baked template
         // row count so reconstruct_basis handles cut rows via slot identity
-        // rather than positional copy from the stored basis (Epic 06 T3).
+        // rather than positional copy from the stored basis.
         let source = crate::basis_reconstruct::ReconstructionSource {
             target: ReconstructionTarget {
                 base_row_count: inputs.stage_context.templates[inputs.stage_index].num_rows,
@@ -190,9 +190,8 @@ pub fn run_stage_solve<'ws, S: SolverInterface>(
             &mut ws.scratch.recon_slot_lookup,
             &mut ws.scratch.promotion_scratch,
         );
-        // Epic 06 T3: reconstruct_basis now handles cut rows via slot
-        // identity (not positional truncation). Scheme 1 symmetric promotion
-        // (Epic 06 AD-3, corrected by T3a) keeps total_basic == num_row by
+        // reconstruct_basis handles cut rows via slot identity (not positional
+        // truncation). Scheme 1 symmetric promotion keeps total_basic == num_row by
         // construction on the happy path; enforce_basic_count_invariant is
         // retained as a safety net for (a) the forward-apply path where cut
         // selection drops BASIC cut rows whose stored status was LOWER (creates

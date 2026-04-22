@@ -1560,7 +1560,7 @@ fn model_persistence_regression_d01() {
 }
 
 // ---------------------------------------------------------------------------
-// Incremental cut management integration tests (Epic 03, Ticket 005)
+// Incremental cut management integration tests
 // ---------------------------------------------------------------------------
 
 /// Verify the LB solver's incremental cut management reduces `load_model_count`
@@ -1704,8 +1704,8 @@ fn d19_multi_hydro_par_truncation() {
 /// the PAR evaluation and truncation logic -- it is not hand-computable
 /// due to the 2-hydro x 2-lag state space.
 ///
-/// Updated from 1,332,425.292_764_49 after Epic 2 ticket-005 wired
-/// `noise_group_ids` to the opening tree. D19 has all 3 study stages with
+/// Updated from 1,332,425.292_764_49 after `noise_group_ids` was wired
+/// to the opening tree. D19 has all 3 study stages with
 /// `season_id=0` in year 2024, so `precompute_noise_groups` assigns them
 /// the same group ID. The Pattern C copy path in `generate_opening_tree`
 /// therefore makes stages 1 and 2 share stage 0's correlated noise draws,
@@ -2832,9 +2832,9 @@ fn d28_decomp_weekly_monthly_loads_and_trains() {
 /// - Training with noise sharing completes without error.
 /// - Simulation completes with sensible costs.
 ///
-/// This is the end-to-end verification that Epics 1-2 (noise group
-/// precomputation, ForwardSampler integration, opening tree integration,
-/// setup wiring) compose correctly for the Pattern C workflow.
+/// This is the end-to-end verification that noise group precomputation,
+/// ForwardSampler integration, opening tree integration, and setup wiring
+/// compose correctly for the Pattern C workflow.
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "slow: run with --features slow-tests"

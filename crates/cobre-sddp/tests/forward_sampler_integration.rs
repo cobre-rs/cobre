@@ -1,4 +1,4 @@
-//! Integration tests for `ForwardSampler` dispatch added in Epic 06.
+//! Integration tests for `ForwardSampler` dispatch.
 //!
 //! Covers three scenarios:
 //! 1. `InSample` bitwise equivalence: the refactored path produces identical
@@ -1433,7 +1433,7 @@ fn external_library_population_sweep() {
 }
 
 // ---------------------------------------------------------------------------
-// Noise-sharing regression tests (Epic 02, ticket-005)
+// Noise-sharing regression tests
 // ---------------------------------------------------------------------------
 
 /// Build a 12-stage monthly system where every stage has a distinct

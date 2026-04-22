@@ -584,7 +584,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         row_upper: Vec::new(),
     };
 
-    // Epic-03 template baking: per-stage baked templates + reusable cut row
+    // Template baking: per-stage baked templates + reusable cut row
     // batches. The baked template at index t has num_rows =
     // stage_ctx.templates[t].num_rows + fcf.pools[t].active_count() after
     // every bake.
@@ -675,7 +675,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
     // increment counts. Reused across stages to avoid per-stage allocation.
     let mut bwd_global_increments_buf: Vec<u64> = Vec::new();
     // Pre-allocated send buffer for the per-iteration allreduce(BitwiseOr)
-    // of sliding-window binding-activity bitmaps (Epic 06 AD-1).
+    // of sliding-window binding-activity bitmaps.
     // Cleared at the start of each backward pass; resized per stage.
     let mut bwd_metadata_sync_window_buf: Vec<u32> = Vec::new();
     // Pre-allocated receive buffer for the allreduce(BitwiseOr).
@@ -1057,17 +1057,18 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             );
         }
 
-        // Epic 06 AD-1: shift the sliding-window binding bitmap left by 1 on every
-        // populated cut slot. This ages the activity record so the next iteration's
-        // bit 0 starts clear and records fresh binding events. Placed AFTER cut
+        // Shift the sliding-window binding bitmap left by 1 on every populated
+        // cut slot. This ages the activity record so the next iteration's bit 0
+        // starts clear and records fresh binding events. Placed AFTER cut
         // selection (so deactivated cuts are already marked inactive) and BEFORE
-        // template baking (so the shifted bitmaps are in the pool when T2 consumes them).
+        // template baking (so the shifted bitmaps are in the pool when the
+        // basis classifier consumes them).
         //
-        // Epic 06 G1 (transient): clear SEED_BIT before the shift. The seed is a
+        // Transient seed: clear SEED_BIT before the shift. The seed is a
         // within-iter warm-start hint only; letting it carry into iter i+1 biases
         // the classifier on cuts that are now "preserved" (stored-status copied)
-        // rather than newly-generated. Clearing here confines G1's effect to the
-        // same backward pass in which the cut was generated.
+        // rather than newly-generated. Clearing here confines the seed's effect
+        // to the same backward pass in which the cut was generated.
         for pool in &mut fcf.pools {
             for m in pool.metadata.iter_mut().take(pool.populated_count) {
                 m.active_window = (m.active_window & !crate::basis_reconstruct::SEED_BIT) << 1;

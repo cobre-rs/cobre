@@ -5,9 +5,8 @@
 # resulting training/solver/iterations.parquet files to verify that per-
 # opening counter columns are invariant to MPI rank count.
 #
-# This test confirms the acceptance criterion from the epic-04a architecture-
-# unification plan:
-#   "Cross-MPI parity: per-opening values identical across rank counts."
+# This test confirms the cross-MPI parity property:
+#   "per-opening values are identical across rank counts."
 #
 # Usage:
 #   cargo build --release --features mpi
@@ -26,11 +25,11 @@
 #   - Timing columns (solve_time_ms, basis_set_time_ms, load_model_time_ms,
 #     add_rows_time_ms, set_bounds_time_ms) are excluded from the comparison
 #     because wall-clock time is inherently rank-count-dependent.
-#   - Post-epic-04b T005, parquets carry per-(rank, worker_id) backward rows.
+#   - Parquets carry per-(rank, worker_id) backward rows.
 #     The Python comparator first SUMs all numeric counter columns over those
-#     rows GROUP BY (iteration, phase, stage, opening), recovering the pre-T005
-#     row shape so cross-rank comparison is meaningful. It also asserts each
-#     (rank, worker_id) tuple appears exactly once per backward group.
+#     rows GROUP BY (iteration, phase, stage, opening), recovering a
+#     rank-invariant row shape so cross-rank comparison is meaningful. It also
+#     asserts each (rank, worker_id) tuple appears exactly once per backward group.
 #   - Output directories target/parity_1, target/parity_2, and target/parity_4
 #     are preserved on failure for post-mortem investigation.
 #   - On success, output directories are cleaned up.

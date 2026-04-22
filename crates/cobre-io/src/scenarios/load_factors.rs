@@ -38,9 +38,9 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `bus_id` existence in the bus registry — Layer 3, Epic 06.
-//! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
-//! - `block_id` contiguity and count matching the stage block count — Layer 3/5, Epic 06.
+//! - `bus_id` existence in the bus registry — Layer 3.
+//! - `stage_id` existence in the stages registry — Layer 3.
+//! - `block_id` contiguity and count matching the stage block count — Layer 3/5.
 
 use cobre_core::EntityId;
 use serde::Deserialize;

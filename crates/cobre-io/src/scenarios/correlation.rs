@@ -52,7 +52,7 @@
 //!   - Matrix must be symmetric: `|m[i][j] - m[j][i]| <= 1e-10`.
 //! - Each `schedule` entry's `profile_name` must exist in `profiles`.
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - Entity ID existence in entity registries.
 //! - Positive semi-definiteness of correlation matrices.

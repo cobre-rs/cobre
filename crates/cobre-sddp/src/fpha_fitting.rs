@@ -229,7 +229,7 @@ impl std::error::Error for FphaFittingError {}
 /// Resolved volume range and discretization counts for the FPHA fitting grid.
 ///
 /// Produced by [`resolve_fitting_bounds`] from an [`FphaColumnLayout`] and the hydro
-/// plant entity. Consumed by the grid construction step in Epic 02.
+/// plant entity. Consumed by the FPHA fitting grid construction step.
 #[derive(Debug)]
 pub(crate) struct FittingBounds {
     /// Resolved lower bound of the fitting volume range (hm³).

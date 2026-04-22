@@ -4,7 +4,7 @@
 //! determinism, `OutOfSample` correlation correctness, factory error paths,
 //! and resume invariance.
 //!
-//! This is the quality-gate test suite for Epic 05.
+//! This is the quality-gate test suite for the [`ForwardSampler`] abstraction.
 
 #![allow(
     clippy::unwrap_used,

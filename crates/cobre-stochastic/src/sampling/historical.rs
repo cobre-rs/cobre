@@ -58,7 +58,7 @@ use crate::{
 /// # Construction
 ///
 /// Use [`HistoricalScenarioLibrary::new`], which allocates zero-filled
-/// buffers. Population is done by ticket-019.
+/// buffers.
 ///
 /// # Examples
 ///
@@ -211,7 +211,7 @@ impl HistoricalScenarioLibrary {
 
     /// Returns a mutable `n_hydros`-length slice of eta values for `(window, stage)`.
     ///
-    /// Used by the eta-standardisation pass (ticket-019) to populate the library.
+    /// Used by the eta-standardisation pass to populate the library.
     ///
     /// # Panics
     ///
@@ -260,7 +260,7 @@ impl HistoricalScenarioLibrary {
     /// Returns a mutable `max_order * n_hydros`-length slice of pre-study lag
     /// values for `window`.
     ///
-    /// Used by the library-population pass (ticket-025) to write lag values.
+    /// Used by the library-population pass to write lag values.
     #[must_use]
     #[inline]
     pub fn lag_slice_mut(&mut self, window: usize) -> &mut [f64] {
@@ -292,8 +292,7 @@ impl HistoricalScenarioLibrary {
 /// where `raw_lag[ℓ]` is the **raw historical inflow** at lag `ℓ` (BR6 —
 /// not a PAR-reconstructed value). When `σ = 0` and the observation matches
 /// the deterministic value exactly, `η = 0.0` is stored; when they disagree,
-/// `f64::NEG_INFINITY` is stored (data quality issue, caught by V2.8
-/// validation in ticket-020).
+/// `f64::NEG_INFINITY` is stored (data quality issue).
 ///
 /// The function additionally writes the `max_order` pre-study raw inflow
 /// observations into `library.lag_slice_mut(w)` in the layout
@@ -307,7 +306,7 @@ impl HistoricalScenarioLibrary {
 /// - `hydro_ids` — canonical-order hydro entity IDs (must match `par`)
 /// - `stages` — study stages (non-negative IDs) with `season_id`
 /// - `par` — precomputed PAR coefficient cache
-/// - `window_years` — valid starting years from window discovery (ticket-018)
+/// - `window_years` — valid starting years from window discovery
 /// - `season_map` — controls how observation dates outside the study range are
 ///   mapped to season IDs (same three-tier fallback as
 ///   [`discover_historical_windows`](super::window::discover_historical_windows)):
@@ -322,7 +321,7 @@ impl HistoricalScenarioLibrary {
 ///
 /// Panics in debug builds if dimension mismatches between `library`, `par`,
 /// and `stages` are detected. Does not panic for valid inputs where all
-/// windows were pre-validated by ticket-018.
+/// windows were pre-validated
 #[allow(clippy::too_many_lines)]
 pub fn standardize_historical_windows(
     library: &mut HistoricalScenarioLibrary,
@@ -511,8 +510,8 @@ pub fn standardize_historical_windows(
 /// Validate a [`HistoricalScenarioLibrary`] against construction inputs.
 ///
 /// This is the Tier 2 validation gate for the historical scenario library.
-/// It runs after window discovery (ticket-018) and eta standardization
-/// (ticket-019), confirming that the library is well-formed before it is
+/// It runs after window discovery and eta standardization
+/// , confirming that the library is well-formed before it is
 /// stored on `StudySetup`.
 ///
 /// Validation uses **fail-fast** semantics: the first failed check immediately

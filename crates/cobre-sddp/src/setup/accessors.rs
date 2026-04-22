@@ -137,7 +137,7 @@ impl StudySetup {
     ///
     /// Contains the resolved production models, evaporation models, and
     /// provenance records for all hydro plants. Used by the LP builder
-    /// (Epic 2/3) to configure hydro-related LP variables and constraints.
+    /// Used by the LP builder to configure hydro-related LP variables and constraints.
     #[must_use]
     pub fn hydro_models(&self) -> &PrepareHydroModelsResult {
         &self.hydro_models
@@ -291,7 +291,7 @@ impl StudySetup {
     /// Return the precomputed noise group IDs, indexed by stage.
     ///
     /// Stages sharing the same `(season_id, year)` have the same group ID.
-    /// Consumed by `ForwardSampler` and `generate_opening_tree` in Epic 2
+    /// Consumed by `ForwardSampler` and `generate_opening_tree`
     /// to share noise draws across weekly stages within the same monthly bucket.
     #[must_use]
     pub fn noise_group_ids(&self) -> &[u32] {

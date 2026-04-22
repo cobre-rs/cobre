@@ -37,7 +37,7 @@
 /// Phase discriminant for [`TrainingEvent::WorkerTiming`].
 ///
 /// Distinguishes whether the timing buffer was captured during the forward
-/// or backward parallel region so that [`ticket-007`] can place the row on
+/// or backward parallel region so we place the row on
 /// the correct iteration-timing parquet column.
 #[derive(Clone, Debug)]
 pub enum WorkerTimingPhase {
@@ -408,7 +408,7 @@ pub enum TrainingEvent {
     /// Consumers can use this to display a progress indicator during the
     /// simulation phase. Each event carries the cost of the most recently
     /// completed scenario; the progress thread accumulates statistics across
-    /// events (see ticket-007).
+    /// events.
     SimulationProgress {
         /// Number of simulation scenarios completed so far.
         scenarios_complete: u32,

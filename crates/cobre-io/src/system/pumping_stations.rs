@@ -37,7 +37,7 @@
 //!
 //! Cross-reference validation (e.g., checking that `bus_id`, `source_hydro_id`,
 //! `destination_hydro_id` exist in their respective registries) is deferred to
-//! Layer 3 (Epic 06).
+//! Layer 3.
 
 use cobre_core::{EntityId, entities::PumpingStation};
 use serde::Deserialize;

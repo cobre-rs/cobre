@@ -2,7 +2,7 @@
 //!
 //! Future regression guard for the SAA tree generation path. Golden values
 //! were captured from the pre-refactor (opening-major loop order)
-//! implementation as part of ticket-006 step 1. Any change to the seed
+//! implementation. Any change to the seed
 //! derivation, RNG, or loop structure that alters the output for SAA stages
 //! must be caught here before merging.
 //!
@@ -35,7 +35,7 @@ use cobre_stochastic::{
 
 // ---------------------------------------------------------------------------
 // Golden values — stage 0, openings 0-2, dimensions 0-1
-// Captured from the pre-refactor opening-major implementation (ticket-006).
+// Captured from the pre-refactor opening-major implementation.
 // ---------------------------------------------------------------------------
 
 /// Stage 0, opening 0, entity 0.
@@ -113,7 +113,7 @@ fn identity_correlation(entity_ids: &[i32]) -> DecomposedCorrelation {
 /// SAA golden-value regression guard.
 ///
 /// Asserts bitwise equality between the generated opening tree and the
-/// 6 values captured from the pre-refactor implementation (ticket-006).
+/// 6 values captured from the pre-refactor implementation.
 /// This test fails immediately if any change to seed derivation, RNG
 /// selection, or loop order alters the SAA output.
 #[test]

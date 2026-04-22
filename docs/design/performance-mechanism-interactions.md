@@ -7,7 +7,7 @@
 
 - Scheme 1/2 invariant preservation), and the sliding-window activity bitmap
   interact across a training iteration. Includes empirical findings from the
-  Epic 06 A/B series that validated (or falsified) our design hypotheses.
+  A/B validation series that validated (or falsified) our design hypotheses.
 
 **Audience:** Maintainers touching any of `cut/pool.rs`, `cut_selection.rs`,
 `basis_reconstruct.rs`, `training.rs`, or `stage_solve.rs`. Read before
@@ -263,7 +263,7 @@ generation point.
 
 ---
 
-## 7. Empirical findings (Epic 06 A/B series)
+## 7. Empirical findings (A/B validation series)
 
 ### Test case: `convertido_backward_basis`
 

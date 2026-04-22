@@ -31,7 +31,7 @@
 //! - All `direct_factor` and `reverse_factor` values must be finite.
 //! - All `direct_factor` and `reverse_factor` values must be > 0.0.
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - `line_id` existence in the line registry.
 //! - `block_id` validity for the referenced stage.

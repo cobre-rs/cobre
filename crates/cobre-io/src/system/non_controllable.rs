@@ -39,7 +39,7 @@
 //! 2. `max_generation_mw >= 0.0`.
 //!
 //! Cross-reference validation (e.g., checking that `bus_id` exists in the bus
-//! registry) is deferred to Layer 3 (Epic 06).
+//! registry) is deferred to Layer 3.
 
 use cobre_core::{
     EntityId,

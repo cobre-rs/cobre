@@ -83,7 +83,7 @@ pub struct CutMetadata {
     /// pass (`backward.rs:995`).
     pub last_active_iter: u64,
 
-    /// Sliding-window binding-activity bitmap. (Epic 06 AD-1)
+    /// Sliding-window binding-activity bitmap.
     ///
     /// Bit 0 = current iteration; bit `i` = iteration `current_iter - i`.
     /// Updated to bit-0-set when the cut was binding (dual >
@@ -93,9 +93,9 @@ pub struct CutMetadata {
     ///
     /// Populated by the MPI `allreduce(BitwiseOr)` in the backward pass
     /// (so any rank observing the cut binding sets bit 0 globally). Consumed
-    /// by the activity-guided basis classifier in Epic 06 T2.
+    /// by the activity-guided basis classifier in `reconstruct_basis`.
     ///
-    /// **Epic 06 G1 (transient seed)**: `add_cut` sets
+    /// **Transient seed**: `add_cut` sets
     /// [`crate::basis_reconstruct::SEED_BIT`] (bit 31, outside
     /// `RECENT_WINDOW_BITS`) so the classifier fires LOWER on a freshly
     /// generated cut during the same iteration's remaining backward stages —

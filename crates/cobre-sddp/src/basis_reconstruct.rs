@@ -78,10 +78,10 @@ use crate::cut_selection::CutMetadata;
 use crate::workspace::CapturedBasis;
 
 // ---------------------------------------------------------------------------
-// Activity-classifier constants (Epic 06 AD-2)
+// Activity-classifier constants
 // ---------------------------------------------------------------------------
 
-/// Default window size for the activity-driven new-cut classifier (Epic 06 AD-7).
+/// Default window size for the activity-driven new-cut classifier.
 ///
 /// Configurable at runtime via `training.cut_selection.basis_activity_window`
 /// in the TOML config; validated range 1..=31. This is the fallback value
@@ -101,7 +101,7 @@ pub const DEFAULT_BASIS_ACTIVITY_WINDOW: u32 = 5;
 /// `(1u32 << basis_activity_window) - 1`.
 pub const DEFAULT_RECENT_WINDOW_BITS: u32 = (1u32 << DEFAULT_BASIS_ACTIVITY_WINDOW) - 1;
 
-/// Transient seed bit for the Epic 06 G1 "generating event" signal.
+/// Transient seed bit for the "generating event" signal.
 ///
 /// Set by `CutPool::add_cut` so the classifier fires LOWER on a freshly
 /// generated cut during the *same* iteration's remaining backward stages
@@ -190,12 +190,12 @@ pub struct PaddingContext<'a> {
 /// Scratch buffers for the Scheme 1 symmetric promotion and Scheme 2 tail
 /// fallback inside [`reconstruct_basis`].
 ///
-/// **Scheme 1 symmetric promotion** (Epic 06 AD-3, corrected by T3a): for each
-/// new cut classified `LOWER` by the activity-driven classifier, one
-/// preserved-`LOWER` cut-row is promoted to `BASIC`.  The two cuts swap
-/// roles — the new cut takes the "active/binding" `LOWER` slot; the stale
-/// preserved cut takes the "non-binding slack" `BASIC` slot.  Net change to
-/// `col_basic + row_basic`: zero.  Invariant preserved by construction.
+/// **Scheme 1 symmetric promotion**: for each new cut classified `LOWER` by
+/// the activity-driven classifier, one preserved-`LOWER` cut-row is promoted
+/// to `BASIC`.  The two cuts swap roles — the new cut takes the
+/// "active/binding" `LOWER` slot; the stale preserved cut takes the
+/// "non-binding slack" `BASIC` slot.  Net change to `col_basic + row_basic`:
+/// zero.  Invariant preserved by construction.
 ///
 /// Grouped into a single struct so [`reconstruct_basis`] stays within the
 /// workspace-level `clippy::too_many_arguments` deny threshold (7 args max).
@@ -229,9 +229,9 @@ pub struct PromotionScratch {
     /// reconstruction, millions of reconstructions per run).
     pub candidates: Vec<(usize, u32, u64, u32)>,
     /// Output row indices of new cuts classified as LOWER by the activity-
-    /// driven classifier (Epic 06 AD-2).  Used by the Scheme 2 tail fallback
-    /// to override the most-recently-classified LOWER cuts back to BASIC when
-    /// the Scheme 1 preserved-LOWER pool is exhausted.
+    /// driven classifier.  Used by the Scheme 2 tail fallback to override the
+    /// most-recently-classified LOWER cuts back to BASIC when the Scheme 1
+    /// preserved-LOWER pool is exhausted.
     pub new_lower_indices: Vec<usize>,
 }
 
@@ -264,7 +264,7 @@ pub struct ReconstructionStats {
     /// copied directly.
     pub preserved: u32,
     /// Cut rows classified as LOWER because their
-    /// `active_window & recent_window_bits != 0` (Epic 06 AD-2), where
+    /// `active_window & recent_window_bits != 0`, where
     /// `recent_window_bits = (1u32 << basis_activity_window) - 1`.
     ///
     /// These are new cuts (slot not in stored basis) for which the sliding
@@ -417,14 +417,14 @@ where
 
     // (d) Walk current cut rows and assign statuses.
     //
-    // Activity-driven classifier (Epic 06 AD-2):
+    // Activity-driven classifier:
     // - Preserved slots: copy stored status. If LOWER, push onto promotion
     //   candidates for potential Scheme 1 symmetric promotion.
     // - New slots: consult active_window bitmap. If any of the last
     //   basis_activity_window bits are set → LOWER (tight guess, count new_tight).
     //   Otherwise → BASIC (slack default, count new_slack).
     //
-    // Scheme 1 symmetric promotion (after loop, Epic 06 AD-3 corrected by T3a):
+    // Scheme 1 symmetric promotion (after loop):
     // for each LOWER-guessed new cut, promote one preserved-LOWER candidate
     // (lowest popcount first) to BASIC to maintain basic_count == num_row.
     // If the preserved-LOWER pool is exhausted (Scheme 2 tail), flip the
@@ -468,7 +468,7 @@ where
             }
             stored_status
         } else {
-            // New cut — consult the activity window (Epic 06 AD-2).
+            // New cut — consult the activity window.
             // G1 transient: SEED_BIT fires LOWER for cuts added this iteration
             // (within-iter warm-start); it is cleared at end-of-iter so it
             // cannot carry into the next iteration's classifier.
@@ -1801,7 +1801,7 @@ mod tests {
         );
     }
 
-    // ── Activity-driven classifier tests (Epic 06 T2) ─────────────────────────
+    // ── Activity-driven classifier tests ──────────────────────────────────────
 
     /// A new cut whose `active_window` is all-zero (never seen as binding) gets
     /// classified BASIC (new_slack += 1).
@@ -1950,10 +1950,10 @@ mod tests {
         assert_eq!(stats.new_slack, 1);
     }
 
-    /// Scheme 1 symmetric promotion (T3a, Epic 06 AD-3 corrected):
-    /// when 2 new cuts are classified LOWER (both have recent bits), the 2
-    /// preserved-LOWER candidates with the lowest popcounts are promoted to
-    /// BASIC, keeping `col_basic + row_basic == num_row`.
+    /// Scheme 1 symmetric promotion: when 2 new cuts are classified LOWER
+    /// (both have recent bits), the 2 preserved-LOWER candidates with the
+    /// lowest popcounts are promoted to BASIC, keeping
+    /// `col_basic + row_basic == num_row`.
     ///
     /// Fixture (post-T3a direction: preserved cuts are LOWER, not BASIC):
     ///   base_rows=1 (col [B] × 4, row 0 = B).
@@ -2062,7 +2062,7 @@ mod tests {
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
 
         // Scheme 1 keeps col_basic + row_basic == num_row by construction, so
@@ -2071,7 +2071,7 @@ mod tests {
         assert_eq!(demoted, 0, "Scheme 1 promotion makes enforcer a no-op");
     }
 
-    /// Epic 06 G2 regression — §5.1 worked example (ticket-005).
+    /// Regression: promotion sort uses masked popcount, not full 32-bit popcount.
     ///
     /// Demonstrates that the promotion sort key uses `active_window &
     /// recent_window_bits` (low `basis_activity_window` bits only), NOT the full 32-bit popcount.
@@ -2151,17 +2151,16 @@ mod tests {
         assert_eq!(out.row_status[0], B, "template unchanged");
         assert_eq!(
             out.row_status[1], B,
-            "Epic 06 G2: slot 10 (masked popcount 0) promoted to BASIC ahead of slot 11 \
-             (masked popcount 1). Pre-G2, full popcount 12 > 1 would have kept \
-             slot 10 LOWER and promoted slot 11 instead."
+            "slot 10 (masked popcount 0) promoted to BASIC ahead of slot 11 \
+             (masked popcount 1): masked sort selects by window bits, not full popcount"
         );
         assert_eq!(
             out.row_status[2], L,
-            "Epic 06 G2: slot 11 preserved LOWER under masked sort."
+            "slot 11 preserved LOWER under masked sort"
         );
         assert_eq!(out.row_status[3], L, "new cut at slot 20 classified LOWER");
 
-        // HiGHS invariant (Epic 06 AD-3 via T3a): col_basic + row_basic == num_row.
+        // HiGHS invariant: col_basic + row_basic == num_row.
         let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
         let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
         assert_eq!(
@@ -2269,14 +2268,14 @@ mod tests {
         assert_eq!(out.row_status.len(), num_row);
 
         // Invariant assertion: Scheme 1 promotion + Scheme 2 override together
-        // keep col_basic + row_basic == num_row (Epic 06 AD-3).
+        // keep col_basic + row_basic == num_row.
         // col_basic=2 + row_basic=4 (template, slot5, slot6, slot22) = 6 = num_row.
         let row_basic = out.row_status.iter().filter(|&&s| s == B).count();
         let col_basic = out.col_status.iter().filter(|&&s| s == B).count();
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
 
         // Scheme 1 + Scheme 2 keep the invariant by construction, so the enforcer
@@ -2285,8 +2284,7 @@ mod tests {
         assert_eq!(demoted, 0, "Scheme 1+2 together make enforcer a no-op");
     }
 
-    /// Scheme 1 promotion with no preserved-LOWER candidates falls back to Scheme 2
-    /// (T3a Requirement 8, Epic 06 AD-3).
+    /// Scheme 1 promotion with no preserved-LOWER candidates falls back to Scheme 2.
     ///
     /// Fixture: stored basis has 0 preserved LOWER cuts — all preserved are BASIC
     /// (the pre-T3a configuration where Scheme 1 would have acted on BASIC candidates).
@@ -2375,7 +2373,7 @@ mod tests {
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
 
         // Scheme 2 kept the invariant, so the enforcer is a no-op.
@@ -2384,14 +2382,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Epic 06 T3: production-path activation tests
+    // Production-path activation tests
     //
     // These tests exercise the slot-identity preservation and activity-driven
     // classifier on the production baked path, where stage_solve.rs passes
     // inputs.pool.active_cuts() instead of std::iter::empty().
     // -----------------------------------------------------------------------
 
-    /// T3 Requirement 6: slot-identity preservation across cut deactivation.
+    /// Slot-identity preservation across cut deactivation.
     ///
     /// Build a pool with 10 cuts at slots 0..9. Capture a basis with
     /// cut_row_slots=[0..9] and alternating row_statuses [L,B,L,B,...].
@@ -2527,11 +2525,11 @@ mod tests {
         for i in 100u64..103 {
             pool.add_cut(i, 0, 0.0, &[0.0]);
         }
-        // Epic 06 G1 (transient): add_cut seeds active_window=SEED_BIT on all
-        // freshly generated cuts. Clear for slots 0,1,3,4 (no recent activity)
-        // and for slots 100,101,102 (preserved — need popcount=0 for Scheme 1
-        // sort). Keep slot 2 at active_window=SEED_BIT to represent the
-        // within-iter "generating event" signal that fires the classifier.
+        // add_cut seeds active_window=SEED_BIT on all freshly generated cuts.
+        // Clear for slots 0,1,3,4 (no recent activity) and for slots 100,101,102
+        // (preserved — need popcount=0 for Scheme 1 sort). Keep slot 2 at
+        // active_window=SEED_BIT to represent the within-iter "generating event"
+        // signal that fires the classifier.
         for s in [0usize, 1, 3, 4, 100, 101, 102] {
             pool.metadata[s].active_window = 0;
         }
@@ -2623,7 +2621,7 @@ mod tests {
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(
@@ -2633,7 +2631,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Epic 06 T4: G1 seed tests (transient — cleared at end-of-iter)
+    // G1 seed tests (transient SEED_BIT — cleared at end-of-iter)
     //
     // These tests verify that `SEED_BIT` set by `add_cut` is correctly observed
     // by the activity-driven classifier in `reconstruct_basis`.  Two fixtures:
@@ -2646,9 +2644,9 @@ mod tests {
     //      → BASIC), and the new slot 3 stays LOWER.  The G1 verdict survives.
     // -----------------------------------------------------------------------
 
-    /// Epic 06 T4 Requirement 4: freshly generated cut gets LOWER via the
-    /// transient G1 SEED_BIT seed, but Scheme 2 overrides it back to BASIC when
-    /// no preserved-LOWER candidates are available.
+    /// Freshly generated cut gets LOWER via the transient SEED_BIT seed, but
+    /// Scheme 2 overrides it back to BASIC when no preserved-LOWER candidates
+    /// are available.
     ///
     /// Fixture:
     ///   Pool: 8 slots, 3-dim state, 3 forward passes, 0 warm-start cuts.
@@ -2741,18 +2739,17 @@ mod tests {
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
         let demoted = enforce_basic_count_invariant(&mut out, num_row, base_rows);
         assert_eq!(demoted, 0, "Scheme 2 alone makes enforcer a no-op");
     }
 
-    /// Epic 06 T4 Requirement 5 (T3a-corrected): freshly generated cut stays
-    /// LOWER because a preserved-LOWER candidate absorbs the deficit via
-    /// Scheme 1 symmetric promotion.
+    /// Freshly generated cut stays LOWER because a preserved-LOWER candidate
+    /// absorbs the deficit via Scheme 1 symmetric promotion.
     ///
-    /// Under T3a, Scheme 1 promotes preserved-LOWER → BASIC (not the inverse).
-    /// For the G1-seeded LOWER classification to survive, the stored basis must
+    /// Scheme 1 promotes preserved-LOWER → BASIC (not the inverse). For the
+    /// SEED_BIT-seeded LOWER classification to survive, the stored basis must
     /// have at least one preserved-LOWER cut as a promotion candidate.
     ///
     /// Fixture:
@@ -2879,7 +2876,7 @@ mod tests {
         assert_eq!(
             col_basic + row_basic,
             num_row,
-            "Epic 06 AD-3: HiGHS invariant col_basic + row_basic == num_row"
+            "HiGHS invariant: col_basic + row_basic == num_row"
         );
 
         // Scheme 1 kept the invariant, so the enforcer is a no-op.
@@ -2888,7 +2885,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Epic 06 T5a: recency-aware sort key (Gap G3) and partial selection tests
+    // Recency-aware sort key and partial selection tests
     // -----------------------------------------------------------------------
 
     /// Build the shared metadata fixture for the `last_active_iter` tie-break tests.
@@ -2929,8 +2926,8 @@ mod tests {
         meta
     }
 
-    /// Epic 06 T5a AC5a: `last_active_iter` as secondary sort key breaks
-    /// popcount ties — slot with the smallest `last_active_iter` is promoted.
+    /// `last_active_iter` as secondary sort key breaks popcount ties —
+    /// slot with the smallest `last_active_iter` is promoted.
     ///
     /// Fixture: 3 preserved-LOWER cuts at slots 10, 20, 30, all popcount=1,
     /// with last_active_iter = 1, 5, 9. Slot 10 is most-stale → promoted.
@@ -2991,11 +2988,11 @@ mod tests {
         assert_eq!(col_basic + row_basic, num_row, "HiGHS invariant");
     }
 
-    /// Epic 06 T5a AC5b: `last_active_iter` tie-break — promotion victim changes
-    /// when the stalest slot changes.
+    /// `last_active_iter` tie-break — promotion victim changes when the stalest
+    /// slot changes.
     ///
-    /// Same fixture as AC5a but `last_active_iter` reversed: slot 30 is now
-    /// oldest (lai=1) → slot 30 is promoted instead of slot 10.
+    /// Same fixture as the previous test but `last_active_iter` reversed:
+    /// slot 30 is now oldest (lai=1) → slot 30 is promoted instead of slot 10.
     #[test]
     fn promotion_sort_breaks_popcount_ties_by_last_active_iter_reversed() {
         let base_rows = 1usize;
@@ -3047,8 +3044,8 @@ mod tests {
         assert_eq!(col_basic + row_basic, num_row, "HiGHS invariant (reversed)");
     }
 
-    /// Epic 06 T5a AC6: `select_nth_unstable_by_key` produces a deterministic
-    /// promotion SET across two identical calls on n=200 candidates.
+    /// `select_nth_unstable_by_key` produces a deterministic promotion SET
+    /// across two identical calls on n=200 candidates.
     ///
     /// Synthesize 200 preserved-LOWER candidates with a deterministic mix of
     /// popcounts (0..=5 uniform) and `last_active_iter` values. Run

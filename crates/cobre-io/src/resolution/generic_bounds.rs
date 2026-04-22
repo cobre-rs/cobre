@@ -9,7 +9,7 @@
 //! This function is infallible: the validation pipeline has already confirmed
 //! that every `constraint_id` in the bounds rows refers to a known constraint.
 //! Any residual unknown IDs (from rows that somehow slipped through or from
-//! future Epic 06 relaxation) are silently skipped.
+//! future relaxation) are silently skipped.
 
 use std::collections::HashMap;
 

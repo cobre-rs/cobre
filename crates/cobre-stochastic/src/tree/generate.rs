@@ -103,7 +103,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// Structurally independent parameters: `base_seed`/`stages`/`dim`/`correlation`/`entity_order`/`dims`
 /// are primary inputs; `historical_library`/`external_scenario_counts`/`noise_group_ids` are optional
 /// extensions. The pre-existing TODO proposes absorbing the optionals into `OpeningTreeInputs`;
-/// pursue in a follow-up epic.
+/// pursue in future
 // TODO: absorb historical_library + external_scenario_counts + noise_group_ids into
 // OpeningTreeInputs to reduce argument count (currently 9 — 6 required + 3 optional).
 #[allow(clippy::too_many_arguments)]
@@ -1163,7 +1163,7 @@ mod tests {
     /// values that were confirmed identical to the old full-vector path.
     ///
     /// Acceptance criterion: both produce the same correlated noise because L is
-    /// block-diagonal under same-type groups (ticket-010).
+    /// block-diagonal under same-type groups.
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_per_class_tree_matches_full_vector_tree() {
@@ -1413,7 +1413,7 @@ mod tests {
     /// spectral factor. This mirrors the per-class path, which splits the noise
     /// into class segments and applies each class's spectral factor separately.
     /// Under a same-type correlation group (block-diagonal L) the two paths must
-    /// produce identical output (ticket-m9).
+    /// produce identical output.
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_per_class_tree_matches_full_vector_tree_lhs() {
@@ -1638,7 +1638,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // HistoricalResiduals tests (ticket-008)
+    // HistoricalResiduals tests
     // -------------------------------------------------------------------------
 
     /// Helper: build a `HistoricalScenarioLibrary` with known, distinct eta values.
@@ -2062,7 +2062,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // noise_group_ids tests (ticket-004)
+    // noise_group_ids tests
     // -----------------------------------------------------------------------
 
     /// Calling `generate_opening_tree` with `noise_group_ids = None` produces the

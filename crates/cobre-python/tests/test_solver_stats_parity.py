@@ -49,9 +49,9 @@ TIMING_COLS = frozenset(
 )
 
 # Expected schema for training/solver/iterations.parquet.
-# rank and worker_id added in epic-04b; add_rows_time_ms removed in epic-07 ticket-001;
-# 4 basis_preserved/new_tight/new_slack/demotions columns consolidated to single
-# basis_reconstructions in epic-07 ticket-002.
+# rank and worker_id are present; add_rows_time_ms was removed;
+# 4 basis_preserved/new_tight/new_slack/demotions columns were consolidated
+# to a single basis_reconstructions column.
 EXPECTED_COLUMNS = [
     "iteration",
     "phase",

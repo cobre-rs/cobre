@@ -19,8 +19,8 @@
 //! `fs::read_to_string` → `serde_json::from_str` → `validate_raw` → `convert`.
 //!
 //! Cross-reference validation (checking that entity IDs exist in registries)
-//! and duplicate-key validation are deferred to Layer 3 (Epic 06).
-//! Semantic bound validation (e.g., min < max) is deferred to Epic 06.
+//! and duplicate-key validation are deferred to Layer 3.
+//! Semantic bound validation (e.g., min < max) is deferred.
 
 pub mod bounds;
 pub mod exchange_factors;

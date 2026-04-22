@@ -1,7 +1,7 @@
 //! Criterion micro-benchmark for the per-stage `StageWorkerStatsBuffer` gather.
 //!
-//! Locks in the zero-allocation property of the gather loop introduced in
-//! epic-04b T003. Target: < 100 microseconds per stage at production sizing
+//! Locks in the zero-allocation property of the gather loop.
+//! Target: < 100 microseconds per stage at production sizing
 //! (`n_workers = 10`, `n_openings = 20`).
 //!
 //! Run with: `cargo bench --bench backward_stats_gather`
@@ -35,8 +35,8 @@ fn bench_gather(c: &mut Criterion) {
     });
 }
 
-/// Per-worker `WorkerTiming` event construction + send micro-benchmark
-/// (epic-04b T006). Locks in the zero-heap-allocation property of the per-worker
+/// Per-worker `WorkerTiming` event construction + send micro-benchmark.
+/// Locks in the zero-heap-allocation property of the per-worker
 /// emission path: the `[f64; 16]` payload is stack-resident, the channel send
 /// of the variant is amortised across iterations.
 ///

@@ -31,7 +31,7 @@
 /// # Future variants
 ///
 /// `Tcp` and `Shm` will be added when the corresponding backend crates are
-/// implemented. They are deliberately excluded from this ticket because no
+/// implemented. They are deliberately excluded because no
 /// concrete `TcpBackend` or `ShmBackend` types exist yet.
 ///
 /// # Examples

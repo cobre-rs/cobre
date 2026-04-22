@@ -53,7 +53,7 @@
 //!    (adjacent ranges where `start == prev_end` are accepted).
 //!
 //! Cross-reference validation (checking that hydro IDs exist in the hydro
-//! registry) is deferred to Layer 3 (Epic 06). Storage bounds validation
+//! registry) is deferred to Layer 3 (deferred). Storage bounds validation
 //! (value within `[min_storage_hm3, max_storage_hm3]`) also requires the
 //! hydro registry and is likewise deferred.
 

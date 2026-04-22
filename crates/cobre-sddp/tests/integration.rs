@@ -1359,7 +1359,7 @@ fn d17_level1_cut_selection_convergence() {
 /// D17 with basis reconstruction always active: truncation guard does not
 /// corrupt convergence.
 ///
-/// Basis reconstruction is now unconditional (post-Epic-02 flag removal).
+/// Basis reconstruction is now unconditional.
 /// Verifies:
 /// - Lower bound matches the D17 baseline.
 /// - Zero basis rejections (reconstruction produces valid warm-start bases).

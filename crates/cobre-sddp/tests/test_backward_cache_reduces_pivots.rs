@@ -1,4 +1,4 @@
-//! Backward-basis-cache sanity test (Epic 01, ticket-005).
+//! Backward-basis-cache sanity test.
 //!
 //! Verifies that the backward-basis cache plumbing (capture → broadcast →
 //! swap → read) is operational end-to-end on D03 and does not cause
@@ -59,13 +59,13 @@ use std::sync::mpsc;
 
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
-use cobre_sddp::{hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup};
+use cobre_sddp::{StudySetup, hydro_models::prepare_hydro_models, setup::prepare_stochastic};
 use cobre_solver::highs::HighsSolver;
 
 // ---------------------------------------------------------------------------
-// Pre-plan baseline constant
+// Baseline constant
 //
-// Measured on commit 98ac5c1 (pre-Epic-01) using the default D03 config
+// Measured on commit 98ac5c1 using the default D03 config
 // (10 iterations, 1 forward pass, no cut selection):
 //
 //   backward ω=0 (opening == 0) iter ≥ 2 rows: 18
@@ -73,8 +73,8 @@ use cobre_solver::highs::HighsSolver;
 //   mean: 2.0 / 18.0 ≈ 0.1111
 //
 // The baseline is set to 0.112 — just above the measured mean — to give
-// a tight but noise-tolerant threshold.  Post-Epic-01 the cache drives
-// the mean to 0.0, so the assertion holds with a large margin.
+// a tight but noise-tolerant threshold.  With the backward-basis cache the
+// mean drops to 0.0, so the assertion holds with a large margin.
 // ---------------------------------------------------------------------------
 
 const D03_PRE_PLAN_BWD_OMEGA0_MEAN_PIVOTS: f64 = 0.112;
@@ -146,13 +146,13 @@ fn d03_case_dir() -> std::path::PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Asserts that the backward-basis cache reduces iter-≥2 ω=0 backward-pass
-/// simplex iterations on D03 vs the pre-plan baseline.
+/// simplex iterations on D03 vs the baseline.
 ///
-/// The cache (Epic 01, tickets 002–004) stores rank-0's m=0 backward-pass
-/// basis after each iteration and broadcasts it to all ranks.  Starting from
-/// iteration 2, the ω=0 backward solve warm-starts from this cached basis
-/// rather than from the forward-pass basis, which is a better starting point
-/// and should require fewer (ideally zero) additional simplex pivots.
+/// The backward-basis cache stores rank-0's m=0 backward-pass basis after
+/// each iteration and broadcasts it to all ranks.  Starting from iteration 2,
+/// the ω=0 backward solve warm-starts from this cached basis rather than from
+/// the forward-pass basis, which is a better starting point and should require
+/// fewer (ideally zero) additional simplex pivots.
 ///
 /// ## Failure triage
 ///

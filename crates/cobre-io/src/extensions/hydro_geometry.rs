@@ -27,8 +27,8 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - Monotonicity (`volume_hm3` increasing within each hydro) — Layer 5, Epic 06.
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
+//! - Monotonicity (`volume_hm3` increasing within each hydro) — Layer 5.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
 
 use arrow::array::{Array, Float64Array, Int32Array};
 use cobre_core::EntityId;

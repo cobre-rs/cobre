@@ -73,7 +73,7 @@ TIMING_COLS: list[str] = [
 
 
 def _load_sorted(path: Path) -> pa.Table:
-    """Load a parquet file, aggregate per-(rank, worker_id) rows (epic-04b T005),
+    """Load a parquet file, aggregate per-(rank, worker_id) rows,
     and sort by SORT_KEYS.
 
     Post-T005, the parquet contains one row per ``(iteration, phase, stage,

@@ -337,7 +337,7 @@ impl StoppingRule {
         // `simulation_costs` carries the NEW costs; the convergence monitor
         // stores the PREVIOUS costs externally. At this stage we only have
         // one snapshot — triggered = false (requires two consecutive snapshots).
-        // Full two-snapshot comparison is wired in Epic 05.
+        // Full two-snapshot comparison is deferred (requires two consecutive snapshots).
         // For now: if costs are available, compute distance against a zero
         // baseline (conservative: never triggers on first evaluation).
         // This stub is correct: the simulation cost comparison requires two

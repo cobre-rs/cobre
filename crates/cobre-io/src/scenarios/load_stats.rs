@@ -27,8 +27,8 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `bus_id` existence in the bus registry — Layer 3, Epic 06.
-//! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
+//! - `bus_id` existence in the bus registry — Layer 3.
+//! - `stage_id` existence in the stages registry — Layer 3.
 
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;

@@ -4849,7 +4849,7 @@ mod tests {
             );
         }
 
-        // active_window bit 0 must be set for binding slots (Epic 06 T1).
+        // active_window bit 0 must be set for binding slots.
         // The BitwiseOr allreduce populates active_window |= 1 for any slot
         // where at least one rank observed a binding event this iteration.
         for slot in 3..6 {
@@ -4874,14 +4874,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Epic 06 T1: active_window unit tests
+    // active_window unit tests
     // -----------------------------------------------------------------------
 
     /// Pre-allocated metadata rows must have `active_window == 0` before any
     /// `add_cut` call.
     ///
     /// `CutPool::new` zero-initialises all metadata slots so that unused slots
-    /// do not spuriously register as tight to the classifier. The Epic 06 G1
+    /// do not spuriously register as tight to the classifier. The transient
     /// seed (`active_window: 1`) is applied exclusively inside `add_cut`; it
     /// must not bleed into pre-allocated but un-populated slots.
     #[test]
@@ -4901,8 +4901,8 @@ mod tests {
         }
     }
 
-    /// `add_cut` must seed `active_window = SEED_BIT` (Epic 06 G1, transient) so
-    /// the activity-guided classifier treats the generating event as a bind
+    /// `add_cut` must seed `active_window = SEED_BIT` (transient) so the
+    /// activity-guided classifier treats the generating event as a bind
     /// signal within the current iteration.
     ///
     /// A cut generated at `x̂_t` is tight at `x̂_t` by construction. Seeding
@@ -4926,7 +4926,7 @@ mod tests {
         // slot = warm_start_count(0) + iteration(1) * forward_passes(3) + fp(0) = 3.
         assert_eq!(
             pool.metadata[3].active_window, SEED_BIT,
-            "Epic 06 G1 (transient): add_cut must seed active_window = SEED_BIT \
+            "add_cut must seed active_window = SEED_BIT \
              so the classifier treats the generating event as a bind signal."
         );
         // The classifier predicate is `(aw & (DEFAULT_RECENT_WINDOW_BITS | SEED_BIT)) != 0`;

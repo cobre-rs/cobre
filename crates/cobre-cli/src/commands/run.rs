@@ -754,7 +754,7 @@ fn broadcast_and_build_setup(
                 // noise_group_ids: None for non-root ranks — the opened tree
                 // is broadcast from rank 0 when auto-generated, so independent
                 // noise per stage is acceptable here. Pattern C wiring for
-                // non-root SAA tree generation is deferred to Epic 5.
+                // non-root SAA tree generation is deferred.
                 noise_group_ids: None,
             },
             cobre_stochastic::ClassSchemes {
@@ -1829,7 +1829,7 @@ mod tests {
     #[test]
     fn test_delta_to_stats_row_forward_opening_and_worker_id_are_none() {
         // Forward rows must carry None for opening and worker_id; rank is Some.
-        // ticket-011a: forward rows use stage = real stage index, not -1.
+        // forward rows use stage = real stage index, not -1.
         let delta = make_delta(4);
         let row = delta_to_stats_row(1, "forward", 0, None, Some(0), None, &delta);
         assert_eq!(row.opening, None);

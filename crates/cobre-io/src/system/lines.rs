@@ -40,7 +40,7 @@
 //! 3. `losses_percent >= 0.0` (defaults to 0.0 when absent).
 //!
 //! Cross-reference validation (e.g., checking that `source_bus_id` and `target_bus_id`
-//! exist in the bus registry) is deferred to Layer 3 (Epic 06).
+//! exist in the bus registry) is deferred to Layer 3.
 
 use cobre_core::{
     EntityId,

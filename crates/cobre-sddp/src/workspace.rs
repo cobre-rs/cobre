@@ -419,7 +419,7 @@ pub(crate) struct ScratchBuffers {
     /// vec starts empty and grows in-place if needed.
     pub(crate) recon_slot_lookup: Vec<Option<u32>>,
     /// Scratch buffers for Scheme 1 symmetric promotion and Scheme 2 tail
-    /// fallback in `reconstruct_basis` (Epic 06 T2/T3, corrected by T3a).
+    /// fallback in `reconstruct_basis`.
     ///
     /// `promotion_scratch.candidates` accumulates `(out_row_index, popcount)`
     /// pairs for preserved-LOWER rows during the reconstruction loop.

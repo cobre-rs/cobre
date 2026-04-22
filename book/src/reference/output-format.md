@@ -388,7 +388,6 @@ solve. A near-zero value on a multi-rank run suggests that `CapturedBasis`
 metadata was not delivered to non-root ranks; see
 `CapturedBasis::to_broadcast_payload` in
 `crates/cobre-sddp/src/workspace.rs` for the 4-broadcast wire format
-introduced in epic-06.
 
 ### `training/solver/retry_histogram.parquet`
 
@@ -905,6 +904,7 @@ inferred `scenario_id` column:
 ```python
 # Polars — reads all scenarios at once, infers scenario_id from directory names
 import polars as pl
+
 df = pl.read_parquet("results/simulation/costs/")
 print(df.head())
 ```
@@ -912,6 +912,7 @@ print(df.head())
 ```python
 # Pandas with PyArrow backend
 import pandas as pd
+
 df = pd.read_parquet("results/simulation/costs/")
 ```
 

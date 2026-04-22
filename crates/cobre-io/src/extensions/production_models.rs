@@ -46,7 +46,7 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
 //! - Cross-validation that `source: "precomputed"` hydros have FPHA hyperplanes — Layer 3/5.
 
 use cobre_core::EntityId;

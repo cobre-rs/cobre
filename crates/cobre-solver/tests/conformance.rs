@@ -848,7 +848,7 @@ fn test_solver_highs_solve_unbounded() {
 // The SS1.1 fixture (3 vars, 2 constraints) is too small to trigger these limits:
 // HiGHS's crash heuristic produces an optimal starting point without entering the
 // simplex loop, so per-iteration and per-second checks never fire. A larger LP
-// is required (see research doc: plans/phase-3-solver/epic-08-coverage/research-edge-case-lps.md).
+// is required
 //
 // ─── Larger LP fixture (5 vars, 4 constraints) ───────────────────────────────
 //

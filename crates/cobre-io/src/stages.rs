@@ -55,7 +55,7 @@
 //! 9. `start_date` and `end_date` parse as ISO 8601 dates with `start_date < end_date`.
 //!
 //! Cross-file validation (season-stage containment, transition probability sums,
-//! block hours sum equals stage duration) is deferred to Epic 06 Layer 5.
+//! block hours sum equals stage duration) is deferred (Layer 5).
 
 use chrono::NaiveDate;
 use cobre_core::temporal::{

@@ -2,14 +2,13 @@
 //!
 //! Guards against regressions in [`cobre_sddp::basis_reconstruct`] that
 //! would break slot reconciliation, `state_at_capture` routing, or the
-//! iteration-wide hot-path allocation invariants introduced in Epic 01.
+//! iteration-wide hot-path allocation invariants.
 //!
 //! ## Tests
 //!
 //! 1. [`basis_reconstruct_churn`] — cross-churn: all three churn types
 //!    (LML1 deactivation, budget eviction, new cuts) active simultaneously
-//!    on D03 (3 stages). Slot-tracked reconstruction is always active
-//!    post-Epic-01.
+//!    on D03 (3 stages). Slot-tracked reconstruction is always active.
 //!
 //! 2. [`test_basis_reconstruct_no_churn_full_preservation`] — happy-path:
 //!    no cut selection, no eviction, cuts only grow.  By the third
@@ -22,22 +21,15 @@
 //!
 //! ## Regression sensitivity
 //!
-//! Injecting the `padding_state = x_hat` regression from ticket-004 will
-//! cause test 1's `simplex_iterations` to exceed the ±5 % tolerance band.
-//!
-//! ## Relation to Epic 01
-//!
-//! This is the closing test of Epic 01.  Epic 02's A/B benchmark depends
-//! on this safety net being in place.
+//! Injecting the `padding_state = x_hat` regression will cause test 1's
+//! `simplex_iterations` to exceed the ±5 % tolerance band.
 //!
 //! ## Stage-count note
 //!
-//! The ticket spec calls for 5 study stages.  The repository's closest
-//! clean deterministic case is D03 (3 stages, 2 cascaded hydros, 1
-//! scenario per stage, no PAR estimation).  Three stages are sufficient to
-//! exercise all three churn types when the cut budget is set to 6: after
-//! iteration 2 (2 iterations × 3 forward-passes = 6 cuts per stage), any
-//! new backward-pass cut triggers eviction.
+//! D03 (3 stages, 2 cascaded hydros, 1 scenario per stage, no PAR estimation)
+//! is sufficient to exercise all three churn types when the cut budget is set
+//! to 6: after iteration 2 (2 iterations × 3 forward-passes = 6 cuts per
+//! stage), any new backward-pass cut triggers eviction.
 
 #![allow(
     clippy::unwrap_used,
@@ -192,11 +184,11 @@ fn basis_reconstruct_churn() {
     // Pinned regression values — declared first to satisfy `clippy::items_after_statements`.
     //
     // AC-5: simplex-iteration pin (±5 % tolerance).
-    // Pinned 2026-04-22 from the transient-G1 design (Epic 06 T4 refinement):
+    // Pinned 2026-04-22 with transient-G1 design:
     // `add_cut` seeds `SEED_BIT` (bit 31, outside RECENT_WINDOW_BITS) instead of
     // bit 0, and the end-of-iter shift clears SEED_BIT so the G1 signal does not
-    // carry into the next iteration. Previous pin was 120 (pre-T4; classifier
-    // dormant) and 123 (T4 cross-iter-persistent seed).
+    // carry into the next iteration. Previous pin was 120 (classifier dormant)
+    // and 123 (cross-iter-persistent seed).
     //
     // D03 churn is an adversarial fixture for transient-G1: it has only 3 FP
     // and 1 scenario per stage, so iter-to-iter x̂ drift is tiny and cross-iter
@@ -418,7 +410,7 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
 ///
 /// 1. Train D01 (2 stages, 1 scenario/stage) for 1 iteration.  This generates
 ///    2 cuts per stage (from 2 forward passes); slot-tracked reconstruction
-///    is always active post-Epic-01.
+///    is always active.
 /// 2. Deactivate ALL cuts in every pool via direct pool mutation.
 /// 3. Rebuild `setup2` — a fresh `StudySetup` with the deactivated FCF
 ///    transplanted in.  Because `setup2` is a cold-start (no prior

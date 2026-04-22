@@ -48,8 +48,8 @@ pub enum ReduceOp {
     /// local fold, because ferrompi v0.3 does not yet expose `MPI_BOR`.
     /// In the local backend (single rank) the identity copy is correct.
     ///
-    /// Used in Epic 06 for the per-cut `active_window` sliding-window bitmap
-    /// reduction across ranks.
+    /// Used for the per-cut `active_window` sliding-window bitmap reduction
+    /// across ranks.
     BitwiseOr,
 }
 

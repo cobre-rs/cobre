@@ -1255,7 +1255,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): `Config` has no `version` field — the struct does not
+    /// `Config` has no `version` field — the struct does not
     /// expose `.version` and the field is not present after deserialization.
     #[test]
     fn test_config_has_no_version_field() {
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(cfg.schema.is_none(), "schema should be None when absent");
     }
 
-    /// AC (ticket-007b): JSON with `"$schema"` property is accepted and the field
+    /// JSON with `"$schema"` property is accepted and the field
     /// value is stored correctly.
     #[test]
     fn test_schema_field_accepted() {
@@ -1304,7 +1304,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): JSON that still contains a `"version"` property is
+    /// JSON that still contains a `"version"` property is
     /// silently accepted because `Config` has no `deny_unknown_fields` and the
     /// removed field is treated as an unknown key that serde ignores.
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
         assert_eq!(cfg.training.forward_passes, Some(1));
     }
 
-    /// AC (ticket-007): `"truncation"` is accepted as a method string and
+    /// `"truncation"` is accepted as a method string and
     /// round-trips correctly through `parse_config`. The `penalty_cost` field
     /// falls back to its default (1000.0) when absent from the JSON.
     #[test]
@@ -1462,7 +1462,7 @@ mod tests {
         );
     }
 
-    // ── ScenarioSource parsing tests (ticket-001) ─────────────────────────────
+    // ── ScenarioSource parsing tests ──────────────────────────────────────────
 
     const MINIMAL_TRAINING: &str =
         r#"{"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}"#;
@@ -1482,8 +1482,7 @@ mod tests {
         ))
     }
 
-    /// AC-1 (ticket-001): absent `training.scenario_source` → all InSample,
-    /// no seed, no historical_years.
+    /// Absent `training.scenario_source` → all InSample, no seed, no historical_years.
     #[test]
     fn test_training_scenario_source_default() {
         let f = write_config(&format!(r#"{{"training": {MINIMAL_TRAINING}}}"#));
@@ -1497,7 +1496,7 @@ mod tests {
         assert_eq!(source.historical_years, None);
     }
 
-    /// AC-1b (ticket-001): explicit per-class schemes are parsed correctly.
+    /// Explicit per-class schemes are parsed correctly.
     #[test]
     fn test_training_scenario_source_explicit() {
         let f = write_with_training_scenario_source(
@@ -1515,8 +1514,7 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-001): absent `simulation.scenario_source` falls back to
-    /// `training_scenario_source()`.
+    /// Absent `simulation.scenario_source` falls back to `training_scenario_source()`.
     #[test]
     fn test_simulation_scenario_source_fallback() {
         let f = write_with_training_scenario_source(
@@ -1530,8 +1528,7 @@ mod tests {
         assert_eq!(simulation.seed, Some(7));
     }
 
-    /// AC-4 (ticket-001): both sections present with different schemes → different
-    /// `ScenarioSource` values returned.
+    /// Both sections present with different schemes → different `ScenarioSource` values returned.
     #[test]
     fn test_simulation_scenario_source_independent() {
         let f = write_with_both_scenario_sources(
@@ -1559,7 +1556,7 @@ mod tests {
         assert_eq!(source.inflow_scheme, SamplingScheme::Historical);
     }
 
-    /// AC-5 (ticket-001): Historical on load class → SchemaError.
+    /// Historical on load class → SchemaError.
     #[test]
     fn test_scenario_source_historical_load_rejected() {
         let f = write_config(&format!(
@@ -1713,7 +1710,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-013): `policy.boundary` with `path` and `source_stage` deserializes
+    /// `policy.boundary` with `path` and `source_stage` deserializes
     /// to `Some(BoundaryPolicy { .. })` with the correct field values.
     #[test]
     fn test_boundary_policy_present() {
@@ -1738,7 +1735,7 @@ mod tests {
         assert_eq!(boundary.source_stage, 2);
     }
 
-    /// AC (ticket-013): `policy` without a `boundary` key deserializes to `None`.
+    /// `policy` without a `boundary` key deserializes to `None`.
     #[test]
     fn test_boundary_policy_absent() {
         let f = write_config(
@@ -1757,7 +1754,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-013): `"boundary": null` deserializes to `None`.
+    /// `"boundary": null` deserializes to `None`.
     #[test]
     fn test_boundary_policy_explicit_null() {
         let f = write_config(
@@ -1776,7 +1773,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-013): `PolicyConfig::default()` has `boundary` set to `None`.
+    /// `PolicyConfig::default()` has `boundary` set to `None`.
     #[test]
     fn test_policy_config_default_boundary_is_none() {
         assert!(
@@ -1785,7 +1782,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-013): round-trip: serialize `PolicyConfig` with `Some(BoundaryPolicy)`
+    /// Round-trip: serialize `PolicyConfig` with `Some(BoundaryPolicy)`
     /// to JSON and deserialize back; values are preserved.
     #[test]
     fn test_boundary_policy_round_trip() {

@@ -3,7 +3,7 @@
 
 Reusable analyzer for `training/solver/iterations.parquet`, the per-opening
 per-stage solver instrumentation parquet produced by the SDDP training loop
-after epic-04a.
+by the SDDP training loop.
 
 Reports generated:
   1. Global phase totals (forward / backward / lower_bound).
@@ -676,12 +676,12 @@ PER_WORKER_STRAGGLER_THRESHOLD = 2.0
 
 
 def _report_per_worker_imbalance(t: pl.DataFrame) -> None:
-    """Section 11 (epic-04b T009): per-worker straggler attribution.
+    """Section 11: per-worker straggler attribution.
 
     For each backward stage, computes max-vs-mean per-worker `solve_time_ms`
     and flags `straggler_ratio > PER_WORKER_STRAGGLER_THRESHOLD` with a `*`.
     Also surfaces the persistently-slowest workers across the full run.
-    Skips if the parquet predates epic-04b (no `rank` / `worker_id` columns).
+    Skips if the parquet has no `rank` / `worker_id` columns.
     """
     _header("11. Per-worker imbalance")
     if "rank" not in t.columns or "worker_id" not in t.columns:
@@ -764,7 +764,7 @@ def _report_per_worker_imbalance(t: pl.DataFrame) -> None:
 
 
 def _report_per_worker_timing_imbalance(timing_path: Path | None) -> None:
-    """Section 12 (epic-04b T009): per-worker timing imbalance + cross-check.
+    """Section 12: per-worker timing imbalance + cross-check.
 
     Reads `training/timing/iterations.parquet` (T007 expansion) and surfaces
     per-iteration min/mean/max per-worker `backward_wall_ms` and

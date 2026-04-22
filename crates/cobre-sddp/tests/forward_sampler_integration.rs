@@ -1055,104 +1055,112 @@ fn build_mixed_system(
     (system, source)
 }
 
-// --- ticket-032: Historical integration test ---
+// --- tickets 032-034: Convergence sweep (Historical, External inflow, Mixed schemes) ---
+
+// Original test names consolidated into this sweep:
+//   historical_convergence         (ticket-032)
+//   external_inflow_convergence    (ticket-033)
+//   mixed_scheme_convergence       (ticket-034, combo 1: inflow=InSample/load=OOS/ncs=InSample)
+//   mixed_scheme_convergence       (ticket-034, combo 2: inflow=OOS/load=InSample/ncs=InSample)
+//
+// Cases (idx, desc):
+//   0: Historical inflow scheme — historical_library must be Some
+//   1: External inflow scheme   — external_inflow_library must be Some + reproducibility
+//   2: Mixed combo 1 — inflow InSample, load OutOfSample, ncs InSample
+//   3: Mixed combo 2 — inflow OutOfSample, load InSample, ncs InSample
+const CONVERGENCE_CASES: &[&str] = &[
+    "historical_convergence",
+    "external_inflow_convergence",
+    "mixed_scheme_inflow_insample_load_oos",
+    "mixed_scheme_inflow_oos_load_insample",
+];
 
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "slow: run with --features slow-tests"
 )]
 #[test]
-fn historical_convergence() {
-    const FORWARD_PASSES: u32 = 10;
-    const MAX_ITERATIONS: u64 = 50;
-
-    let (system, source) = build_historical_system(1, 5, 10, Some(42));
-    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
-
-    assert!(
-        setup.historical_library().is_some(),
-        "historical_library must be Some for Historical scheme"
-    );
-
-    assert!(
-        result.final_lb.is_finite(),
-        "final_lb must be finite, got {}",
-        result.final_lb
-    );
-}
-
-// --- ticket-033: External integration test ---
-
-#[cfg_attr(
-    not(feature = "slow-tests"),
-    ignore = "slow: run with --features slow-tests"
-)]
-#[test]
-fn external_inflow_convergence() {
+fn forward_sampler_convergence_sweep() {
     const FORWARD_PASSES: u32 = 10;
     const MAX_ITERATIONS: u64 = 50;
     const N_SCENARIOS: usize = 20;
 
-    let (system, source) = build_external_system(1, 5, N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
-
-    assert!(
-        setup.external_inflow_library().is_some(),
-        "external_inflow_library must be Some for External scheme"
-    );
-
-    assert!(
-        result.final_lb.is_finite(),
-        "final_lb must be finite, got {}",
-        result.final_lb
-    );
-
-    // Reproducibility: same seed must produce identical LB.
-    let (system2, source2) = build_external_system(1, 5, N_SCENARIOS, Some(42));
-    let (_setup2, result2) = run_with_setup(&system2, &source2, FORWARD_PASSES, MAX_ITERATIONS);
-    assert_eq!(
-        result.final_lb, result2.final_lb,
-        "reproducibility violated: run1={}, run2={}",
-        result.final_lb, result2.final_lb
-    );
-}
-
-// --- ticket-034: Mixed-scheme integration test ---
-
-#[cfg_attr(
-    not(feature = "slow-tests"),
-    ignore = "slow: run with --features slow-tests"
-)]
-#[test]
-fn mixed_scheme_convergence() {
-    const FORWARD_PASSES: u32 = 10;
-    const MAX_ITERATIONS: u64 = 50;
-
-    // Combination 1: inflow InSample, load OutOfSample, ncs InSample
-    let (system_a, source_a) = build_mixed_system(
-        SamplingScheme::InSample,
-        SamplingScheme::OutOfSample,
-        SamplingScheme::InSample,
-    );
-    let (setup_a, result_a) = run_with_setup(&system_a, &source_a, FORWARD_PASSES, MAX_ITERATIONS);
-    assert_no_external_libraries(&setup_a);
-    assert!(
-        result_a.final_lb.is_finite(),
-        "combo 1: final_lb must be finite"
-    );
-
-    // Combination 2: inflow OutOfSample, load InSample, ncs InSample
-    let (system_b, source_b) = build_mixed_system(
-        SamplingScheme::OutOfSample,
-        SamplingScheme::InSample,
-        SamplingScheme::InSample,
-    );
-    let (setup_b, result_b) = run_with_setup(&system_b, &source_b, FORWARD_PASSES, MAX_ITERATIONS);
-    assert_no_external_libraries(&setup_b);
-    assert!(
-        result_b.final_lb.is_finite(),
-        "combo 2: final_lb must be finite"
-    );
+    for (idx, &desc) in CONVERGENCE_CASES.iter().enumerate() {
+        match idx {
+            // case_index = 0: Historical inflow scheme convergence.
+            0 => {
+                let (system, source) = build_historical_system(1, 5, 10, Some(42));
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert!(
+                    setup.historical_library().is_some(),
+                    "case_index = {idx}, desc = {desc}: historical_library must be Some for \
+                     Historical scheme"
+                );
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}: final_lb must be finite, got {}",
+                    result.final_lb
+                );
+            }
+            // case_index = 1: External inflow scheme convergence + reproducibility.
+            1 => {
+                let (system, source) = build_external_system(1, 5, N_SCENARIOS, Some(42));
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert!(
+                    setup.external_inflow_library().is_some(),
+                    "case_index = {idx}, desc = {desc}: external_inflow_library must be Some for \
+                     External scheme"
+                );
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}: final_lb must be finite, got {}",
+                    result.final_lb
+                );
+                // Reproducibility: same seed must produce identical LB.
+                let (system2, source2) = build_external_system(1, 5, N_SCENARIOS, Some(42));
+                let (_setup2, result2) =
+                    run_with_setup(&system2, &source2, FORWARD_PASSES, MAX_ITERATIONS);
+                assert_eq!(
+                    result.final_lb, result2.final_lb,
+                    "case_index = {idx}, desc = {desc}: reproducibility violated: run1={}, run2={}",
+                    result.final_lb, result2.final_lb
+                );
+            }
+            // case_index = 2: Mixed combo 1 — inflow InSample, load OutOfSample, ncs InSample.
+            2 => {
+                let (system, source) = build_mixed_system(
+                    SamplingScheme::InSample,
+                    SamplingScheme::OutOfSample,
+                    SamplingScheme::InSample,
+                );
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert_no_external_libraries(&setup);
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}: final_lb must be finite"
+                );
+            }
+            // case_index = 3: Mixed combo 2 — inflow OutOfSample, load InSample, ncs InSample.
+            3 => {
+                let (system, source) = build_mixed_system(
+                    SamplingScheme::OutOfSample,
+                    SamplingScheme::InSample,
+                    SamplingScheme::InSample,
+                );
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert_no_external_libraries(&setup);
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}: final_lb must be finite"
+                );
+            }
+            _ => unreachable!("unexpected case_index = {idx}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,72 +1349,87 @@ fn build_external_ncs_system(
     (system, source)
 }
 
-/// Verify that `ClassSampler::External` for load populates
-/// `StudySetup::external_load_library` and produces a finite lower bound.
-///
-/// Builds a system with `load_scheme = External` and 20 pre-computed
-/// `ExternalLoadRow` entries per stage. After training, asserts that
-/// `external_load_library()` is `Some` and the final lower bound is finite.
+// Original test names consolidated into this sweep:
+//   external_load_library_populated
+//   external_ncs_library_populated
+//
+// Cases (idx, desc, entity_class):
+//   0: External load scheme — external_load_library must be Some
+//   1: External NCS scheme  — external_ncs_library must be Some
+const EXTERNAL_LIBRARY_CASES: &[(&str, &str)] = &[
+    ("external_load_library_populated", "load"),
+    ("external_ncs_library_populated", "ncs"),
+];
+
+/// Verify that `ClassSampler::External` for load and NCS each populates
+/// the corresponding library accessor and produces a finite lower bound.
 #[test]
-fn external_load_library_populated() {
+fn external_library_population_sweep() {
     const FORWARD_PASSES: u32 = 10;
     const MAX_ITERATIONS: u64 = 20;
     const N_SCENARIOS: usize = 20;
 
-    let (system, source) = build_external_load_system(N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
-
-    assert!(
-        setup.external_load_library().is_some(),
-        "external_load_library must be Some when load_scheme is External"
-    );
-    assert!(
-        setup.external_inflow_library().is_none(),
-        "external_inflow_library must be None when inflow_scheme is InSample"
-    );
-    assert!(
-        setup.external_ncs_library().is_none(),
-        "external_ncs_library must be None when ncs_scheme is InSample"
-    );
-    assert!(
-        result.final_lb.is_finite(),
-        "final_lb must be finite for External load scheme, got {}",
-        result.final_lb
-    );
-}
-
-/// Verify that `ClassSampler::External` for NCS populates
-/// `StudySetup::external_ncs_library` and produces a finite lower bound.
-///
-/// Builds a system with `ncs_scheme = External` and 20 pre-computed
-/// `ExternalNcsRow` entries per stage. After training, asserts that
-/// `external_ncs_library()` is `Some` and the final lower bound is finite.
-#[test]
-fn external_ncs_library_populated() {
-    const FORWARD_PASSES: u32 = 10;
-    const MAX_ITERATIONS: u64 = 20;
-    const N_SCENARIOS: usize = 20;
-
-    let (system, source) = build_external_ncs_system(N_SCENARIOS, Some(42));
-    let (setup, result) = run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
-
-    assert!(
-        setup.external_ncs_library().is_some(),
-        "external_ncs_library must be Some when ncs_scheme is External"
-    );
-    assert!(
-        setup.external_inflow_library().is_none(),
-        "external_inflow_library must be None when inflow_scheme is InSample"
-    );
-    assert!(
-        setup.external_load_library().is_none(),
-        "external_load_library must be None when load_scheme is InSample"
-    );
-    assert!(
-        result.final_lb.is_finite(),
-        "final_lb must be finite for External NCS scheme, got {}",
-        result.final_lb
-    );
+    for (idx, &(desc, entity_class)) in EXTERNAL_LIBRARY_CASES.iter().enumerate() {
+        match idx {
+            // case_index = 0: External load scheme.
+            // external_load_library must be Some; inflow and ncs libraries must be None.
+            0 => {
+                let (system, source) = build_external_load_system(N_SCENARIOS, Some(42));
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert!(
+                    setup.external_load_library().is_some(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_load_library must be Some when load_scheme is External"
+                );
+                assert!(
+                    setup.external_inflow_library().is_none(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_inflow_library must be None when inflow_scheme is InSample"
+                );
+                assert!(
+                    setup.external_ncs_library().is_none(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_ncs_library must be None when ncs_scheme is InSample"
+                );
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     final_lb must be finite, got {}",
+                    result.final_lb
+                );
+            }
+            // case_index = 1: External NCS scheme.
+            // external_ncs_library must be Some; inflow and load libraries must be None.
+            1 => {
+                let (system, source) = build_external_ncs_system(N_SCENARIOS, Some(42));
+                let (setup, result) =
+                    run_with_setup(&system, &source, FORWARD_PASSES, MAX_ITERATIONS);
+                assert!(
+                    setup.external_ncs_library().is_some(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_ncs_library must be Some when ncs_scheme is External"
+                );
+                assert!(
+                    setup.external_inflow_library().is_none(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_inflow_library must be None when inflow_scheme is InSample"
+                );
+                assert!(
+                    setup.external_load_library().is_none(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     external_load_library must be None when load_scheme is InSample"
+                );
+                assert!(
+                    result.final_lb.is_finite(),
+                    "case_index = {idx}, desc = {desc}, entity_class = {entity_class}: \
+                     final_lb must be finite, got {}",
+                    result.final_lb
+                );
+            }
+            _ => unreachable!("unexpected case_index = {idx}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

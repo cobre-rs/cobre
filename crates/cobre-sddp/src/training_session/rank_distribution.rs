@@ -11,6 +11,8 @@ use cobre_comm::Communicator;
 ///
 /// Fields are derived from `(comm.size(), comm.rank(), total_forward_passes,
 /// n_state, num_stages)` and remain constant for the lifetime of the session.
+/// `num_total_forward_passes` caches the `total_forward_passes` parameter as
+/// `usize` so call sites do not need to re-derive it from `LoopConfig::forward_passes`.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct RankDistribution {
     pub num_stages: usize,
@@ -22,6 +24,7 @@ pub(crate) struct RankDistribution {
     pub my_fwd_offset: usize,
     pub max_local_fwd: usize,
     pub n_state: usize,
+    pub num_total_forward_passes: usize,
     pub fwd_rank: i32,
 }
 
@@ -59,6 +62,7 @@ impl RankDistribution {
             my_fwd_offset,
             max_local_fwd,
             n_state,
+            num_total_forward_passes: total_forward_passes,
             fwd_rank,
         }
     }
@@ -170,6 +174,10 @@ mod tests {
                 "rank {rank}: my_fwd_offset"
             );
             assert_eq!(rd.max_local_fwd, 3, "rank {rank}: max_local_fwd");
+            assert_eq!(
+                rd.num_total_forward_passes, 8,
+                "rank {rank}: num_total_forward_passes"
+            );
         }
     }
 

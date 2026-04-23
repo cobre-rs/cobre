@@ -57,7 +57,6 @@ use crate::{
     evaluate_lower_bound,
     forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
-    risk_measure::RiskMeasure,
     solver_stats::{
         SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
         aggregate_solver_statistics,
@@ -121,19 +120,8 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     training_ctx: &'a TrainingContext<'a>,
     comm: &'a C,
 
-    // ── Extracted configuration (owned; no lifetime dependency) ───────────
-    cut_activity_tolerance: f64,
-    basis_activity_window: u32,
-    max_blocks: usize,
-    stopping_rules: crate::stopping_rule::StoppingRuleSet,
-    total_forward_passes: usize,
-    max_iterations: u64,
-    start_iteration: u64,
-    config_forward_passes: u32,
-    risk_measures: Vec<RiskMeasure>,
-    cut_selection: Option<crate::cut_selection::CutSelectionStrategy>,
-    budget: Option<u32>,
-    n_fwd_threads: usize,
+    // ── Training configuration (the training configuration for this run) ──
+    config: TrainingConfig,
 
     // ── Runtime handles (per-invocation hooks; set once in new) ───────────
     runtime: RuntimeHandles,
@@ -186,7 +174,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     #[allow(clippy::too_many_lines, clippy::expect_used)]
     pub(crate) fn new(
         solver: &'a mut S,
-        config: TrainingConfig,
+        mut config: TrainingConfig,
         fcf: &'a mut FutureCostFunction,
         stage_ctx: &'a StageContext<'a>,
         training_ctx: &'a TrainingContext<'a>,
@@ -194,10 +182,6 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
     ) -> Result<Self, SddpError> {
         // ── Rank math ─────────────────────────────────────────────────────
-        let cut_activity_tolerance = config.cut_management.cut_activity_tolerance;
-        let basis_activity_window = config.cut_management.basis_activity_window;
-        let n_fwd_threads = config.loop_config.n_fwd_threads;
-        let max_blocks = config.loop_config.max_blocks;
         let horizon = training_ctx.horizon;
         let indexer = training_ctx.indexer;
         let num_stages = horizon.num_stages();
@@ -205,7 +189,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let ranks = RankDistribution::new(comm, num_stages, total_forward_passes, indexer.n_state);
 
         // ── Workspace pool ────────────────────────────────────────────────
-        let n_threads = n_fwd_threads.max(1);
+        let n_threads = config.loop_config.n_fwd_threads.max(1);
         let mut fwd_pool = WorkspacePool::try_new(
             ranks.fwd_rank,
             n_threads,
@@ -214,7 +198,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 hydro_count: indexer.hydro_count,
                 max_par_order: indexer.max_par_order,
                 n_load_buses: stage_ctx.n_load_buses,
-                max_blocks,
+                max_blocks: config.loop_config.max_blocks,
                 downstream_par_order: stage_ctx.downstream_par_order,
                 max_openings: (0..ranks.num_stages)
                     .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
@@ -280,37 +264,17 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             None
         };
 
-        // ── Destructure config ─────────────────────────────────────────────
-        // The second-phase destructure preserves the exact structure from the
-        // original prelude (lines 517-539). event_sender moves out of EventConfig
-        // and must be stored separately from the remaining fields.
-        let TrainingConfig {
-            loop_config:
-                crate::config::LoopConfig {
-                    forward_passes: config_forward_passes,
-                    max_iterations,
-                    start_iteration,
-                    stopping_rules,
-                    ..
-                },
-            cut_management:
-                crate::config::CutManagementConfig {
-                    cut_selection,
-                    budget,
-                    risk_measures,
-                    ..
-                },
-            events:
-                crate::config::EventConfig {
-                    event_sender,
-                    shutdown_flag,
-                    export_states,
-                    ..
-                },
-        } = config;
+        // ── Extract runtime handles; leave the rest on `config` ──────────
+        // event_sender and shutdown_flag are moved out via .take() so that
+        // `config.events` remains in a valid state and `config` can be stored
+        // by value. export_states is Copy — it is read directly.
+        let event_sender = config.events.event_sender.take();
+        let shutdown_flag = config.events.shutdown_flag.take();
+        let export_states = config.events.export_states;
 
         // ── Convergence monitor ────────────────────────────────────────────
-        let convergence_monitor = ConvergenceMonitor::new(stopping_rules.clone());
+        let convergence_monitor =
+            ConvergenceMonitor::new(config.loop_config.stopping_rules.clone());
 
         // ── TrainingStarted event ─────────────────────────────────────────
         // Emit before moving the three locals into RuntimeHandles so that
@@ -334,7 +298,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let runtime = RuntimeHandles::new(event_sender, shutdown_flag, export_states);
 
         // ── Result accumulators ────────────────────────────────────────────
-        let results = TrainingResults::new(start_iteration);
+        let results = TrainingResults::new(config.loop_config.start_iteration);
 
         // ── Iteration scratch (reused buffers for forward/backward/cut/lb) ──
         let scratch = IterationScratch::new(
@@ -382,18 +346,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             stage_ctx,
             training_ctx,
             comm,
-            cut_activity_tolerance,
-            basis_activity_window,
-            max_blocks,
-            stopping_rules,
-            total_forward_passes,
-            max_iterations,
-            start_iteration,
-            config_forward_passes,
-            risk_measures,
-            cut_selection,
-            budget,
-            n_fwd_threads,
+            config,
             runtime,
             ranks,
             fwd_pool,
@@ -425,7 +378,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// The outer orchestrator in `train()` iterates over this range and passes
     /// each index to [`run_iteration`](Self::run_iteration).
     pub(crate) fn iteration_range(&self) -> std::ops::RangeInclusive<u64> {
-        (self.start_iteration + 1)..=self.max_iterations
+        (self.config.loop_config.start_iteration + 1)..=self.config.loop_config.max_iterations
     }
 
     /// Execute one training iteration.
@@ -670,11 +623,11 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let fwd_record_len = self.ranks.my_actual_fwd * self.ranks.num_stages;
         let fwd_batch = ForwardPassBatch {
             local_forward_passes: self.ranks.my_actual_fwd,
-            total_forward_passes: self.total_forward_passes,
+            total_forward_passes: self.ranks.num_total_forward_passes,
             iteration,
             fwd_offset: self.ranks.my_fwd_offset,
             event_sender: self.runtime.event_sender(),
-            basis_activity_window: self.basis_activity_window,
+            basis_activity_window: self.config.cut_management.basis_activity_window,
         };
 
         let fwd_stats_before = aggregate_solver_statistics(
@@ -724,7 +677,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             self.runtime.event_sender(),
             TrainingEvent::ForwardPassComplete {
                 iteration,
-                scenarios: self.config_forward_passes,
+                scenarios: self.config.loop_config.forward_passes,
                 #[allow(clippy::cast_precision_loss)]
                 ub_mean: if local_n > 0 {
                     local_cost_sum / local_n as f64
@@ -736,7 +689,11 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             },
         );
 
-        let sync_result = sync_forward(&forward_result, self.comm, self.total_forward_passes)?;
+        let sync_result = sync_forward(
+            &forward_result,
+            self.comm,
+            self.ranks.num_total_forward_passes,
+        )?;
 
         emit(
             self.runtime.event_sender(),
@@ -765,9 +722,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             iteration,
             local_work: self.ranks.my_actual_fwd,
             fwd_offset: self.ranks.my_fwd_offset,
-            risk_measures: &self.risk_measures,
-            cut_activity_tolerance: self.cut_activity_tolerance,
-            basis_activity_window: self.basis_activity_window,
+            risk_measures: &self.config.cut_management.risk_measures,
+            cut_activity_tolerance: self.config.cut_management.cut_activity_tolerance,
+            basis_activity_window: self.config.cut_management.basis_activity_window,
             cut_sync_bufs: &mut self.cut_sync_bufs,
             probabilities_buf: &mut self.bwd_probabilities_buf,
             successor_active_slots_buf: &mut self.bwd_successor_active_slots_buf,
@@ -865,7 +822,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // stages_processed) when step 4a ran; None otherwise.
         let mut sel_state: Option<(Vec<StageRowSelectionRecord>, u32, u64, u32)> = None;
 
-        if let Some(strategy) = self.cut_selection.as_ref() {
+        if let Some(strategy) = self.config.cut_management.cut_selection.as_ref() {
             if strategy.should_run(iteration) {
                 let sel_start = Instant::now();
                 let num_sel_stages = self.ranks.num_stages.saturating_sub(1);
@@ -948,13 +905,16 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // Runs unconditionally when `budget` is Some — not gated by
         // `check_frequency`. The budget is a hard cap that must be maintained
         // at all times.
-        if let Some(b) = self.budget {
+        if let Some(b) = self.config.cut_management.budget {
             let budget_start = Instant::now();
             let mut total_evicted = 0u32;
             for stage in 0..self.ranks.num_stages {
                 #[allow(clippy::cast_possible_truncation)]
-                let result =
-                    self.fcf.pools[stage].enforce_budget(b, iteration, self.config_forward_passes);
+                let result = self.fcf.pools[stage].enforce_budget(
+                    b,
+                    iteration,
+                    self.config.loop_config.forward_passes,
+                );
                 total_evicted += result.evicted_count;
                 // Annotate per-stage records with post-budget counts.
                 if let Some((ref mut per_stage, _, _, _)) = sel_state {
@@ -1053,7 +1013,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             noise_scale: self.stage_ctx.noise_scale,
             n_hydros: self.stage_ctx.n_hydros,
             opening_tree: self.training_ctx.stochastic.opening_tree(),
-            risk_measure: &self.risk_measures[0],
+            risk_measure: &self.config.cut_management.risk_measures[0],
             stochastic: Some(self.training_ctx.stochastic),
             n_load_buses: self.stage_ctx.n_load_buses,
             ncs_max_gen: self.stage_ctx.ncs_max_gen,

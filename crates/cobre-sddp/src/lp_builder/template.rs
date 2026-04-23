@@ -370,7 +370,6 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///     .expect("empty system ok");
 /// assert!(result.templates.is_empty());
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
@@ -381,8 +380,7 @@ pub fn build_stage_templates(
 ) -> Result<StageTemplates, SddpError> {
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let hydros = system.hydros();
-    let n_hydros = hydros.len();
+    let n_hydros = system.hydros().len();
 
     if study_stages.is_empty() {
         return Ok(StageTemplates {
@@ -406,7 +404,94 @@ pub fn build_stage_templates(
         });
     }
 
+    // Consistency gate: a non-empty PrecomputedNormal must have the same
+    // entity count as the stochastic load buses derived from the system.
+    let (ctx, load_bus_indices, diversion_upstream_output) = build_template_build_ctx(
+        system,
+        inflow_method,
+        par_lp,
+        production_models,
+        evaporation_models,
+    );
+    let n_load_buses = load_bus_indices.len();
+    debug_assert!(
+        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
+        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
+        normal_lp.n_entities(),
+        n_load_buses
+    );
+
+    let n_study = study_stages.len();
+    let mut templates = Vec::with_capacity(n_study);
+    let mut base_rows = Vec::with_capacity(n_study);
+    let mut load_balance_row_starts = Vec::with_capacity(n_study);
+    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
+    let mut ncs_col_starts = Vec::with_capacity(n_study);
+    let mut n_ncs_per_stage = Vec::with_capacity(n_study);
+    let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
+    for (stage_idx, stage) in study_stages.iter().enumerate() {
+        let (
+            template,
+            stage_base_row,
+            load_balance_row_start,
+            gc_entries,
+            ncs_col_start,
+            ncs_count,
+            ncs_active,
+        ) = build_single_stage_template(&ctx, stage, stage_idx);
+        templates.push(template);
+        base_rows.push(stage_base_row);
+        load_balance_row_starts.push(load_balance_row_start);
+        generic_constraint_row_entries.push(gc_entries);
+        ncs_col_starts.push(ncs_col_start);
+        n_ncs_per_stage.push(ncs_count);
+        active_ncs_indices_per_stage.push(ncs_active);
+    }
+
+    Ok(assemble_stage_templates_output(
+        templates,
+        base_rows,
+        load_balance_row_starts,
+        generic_constraint_row_entries,
+        ncs_col_starts,
+        n_ncs_per_stage,
+        active_ncs_indices_per_stage,
+        load_bus_indices,
+        diversion_upstream_output,
+        &study_stages,
+        &ctx,
+        par_lp,
+        n_hydros,
+        n_load_buses,
+        n_study,
+    ))
+}
+
+/// Build the [`TemplateBuildCtx`] and ancillary data needed by the stage loop.
+///
+/// Constructs position maps (hydro/thermal/line/bus), the diversion-upstream
+/// map, and the `TemplateBuildCtx` that is shared across all per-stage builds.
+/// Also returns `load_bus_indices` (the bus-slice positions of stochastic load
+/// buses) and `diversion_upstream_output` (the clone of the diversion map
+/// preserved for the final `StageTemplates` output field).
+///
+/// Called once per `build_stage_templates` invocation, after the early-return
+/// guard for empty systems.
+fn build_template_build_ctx<'a>(
+    system: &'a System,
+    inflow_method: &InflowNonNegativityMethod,
+    par_lp: &'a PrecomputedPar,
+    production_models: &'a ProductionModelSet,
+    evaporation_models: &'a EvaporationModelSet,
+) -> (
+    TemplateBuildCtx<'a>,
+    Vec<usize>,
+    HashMap<EntityId, Vec<usize>>,
+) {
+    let hydros = system.hydros();
     let buses = system.buses();
+    let n_hydros = hydros.len();
+
     let hydro_pos: HashMap<EntityId, usize> =
         hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
     let thermal_pos: HashMap<EntityId, usize> = system
@@ -425,15 +510,6 @@ pub fn build_stage_templates(
         buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos);
-    let n_load_buses = load_bus_indices.len();
-    // Consistency gate: a non-empty PrecomputedNormal must have the same
-    // entity count as the stochastic load buses derived from the system.
-    debug_assert!(
-        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
-        normal_lp.n_entities(),
-        n_load_buses
-    );
 
     let max_par_order: usize = system
         .inflow_models()
@@ -490,35 +566,36 @@ pub fn build_stage_templates(
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
     };
 
-    let n_study = study_stages.len();
-    let mut templates = Vec::with_capacity(n_study);
-    let mut base_rows = Vec::with_capacity(n_study);
-    let mut load_balance_row_starts = Vec::with_capacity(n_study);
-    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
-    let mut ncs_col_starts = Vec::with_capacity(n_study);
-    let mut n_ncs_per_stage = Vec::with_capacity(n_study);
-    let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
-    for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let (
-            template,
-            stage_base_row,
-            load_balance_row_start,
-            gc_entries,
-            ncs_col_start,
-            ncs_count,
-            ncs_active,
-        ) = build_single_stage_template(&ctx, stage, stage_idx);
-        templates.push(template);
-        base_rows.push(stage_base_row);
-        load_balance_row_starts.push(load_balance_row_start);
-        generic_constraint_row_entries.push(gc_entries);
-        ncs_col_starts.push(ncs_col_start);
-        n_ncs_per_stage.push(ncs_count);
-        active_ncs_indices_per_stage.push(ncs_active);
-    }
+    (ctx, load_bus_indices, diversion_upstream_output)
+}
 
+/// Assemble the final [`StageTemplates`] from per-stage loop outputs.
+///
+/// Computes noise-scale, zeta, block-hour, hydro-productivity, and discount
+/// arrays and packages them alongside the per-stage template vectors into the
+/// `StageTemplates` struct returned by `build_stage_templates`.
+///
+/// Called once, immediately after the per-stage loop completes.
+#[allow(clippy::too_many_arguments)]
+fn assemble_stage_templates_output(
+    templates: Vec<cobre_solver::StageTemplate>,
+    base_rows: Vec<usize>,
+    load_balance_row_starts: Vec<usize>,
+    generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
+    ncs_col_starts: Vec<usize>,
+    n_ncs_per_stage: Vec<usize>,
+    active_ncs_indices_per_stage: Vec<Vec<usize>>,
+    load_bus_indices: Vec<usize>,
+    diversion_upstream_output: HashMap<EntityId, Vec<usize>>,
+    study_stages: &[&cobre_core::Stage],
+    ctx: &TemplateBuildCtx<'_>,
+    par_lp: &PrecomputedPar,
+    n_hydros: usize,
+    n_load_buses: usize,
+    n_study: usize,
+) -> StageTemplates {
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
-        scaling::compute_noise_scale(&study_stages, n_hydros, par_lp);
+        scaling::compute_noise_scale(study_stages, n_hydros, par_lp);
 
     // Build per-stage productivity arrays for simulation extraction.
     let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
@@ -537,7 +614,7 @@ pub fn build_stage_templates(
     // StudySetup::from_broadcast_params and overwrite this field.
     let discount_factors = vec![1.0; templates.len()];
 
-    Ok(StageTemplates {
+    StageTemplates {
         templates,
         base_rows,
         noise_scale,
@@ -556,7 +633,7 @@ pub fn build_stage_templates(
         discount_factors,
         // Cumulative factors default to 1.0; overwritten by setup.rs.
         cumulative_discount_factors: vec![1.0; n_study],
-    })
+    }
 }
 
 #[cfg(test)]

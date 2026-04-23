@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod extraction;
 pub mod pipeline;
+pub(crate) mod state;
 pub mod types;
 
 pub use aggregation::aggregate_simulation;

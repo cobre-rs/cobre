@@ -40,24 +40,16 @@
 //! per scenario.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
-use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
-use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
-use cobre_stochastic::context::ClassSchemes;
-use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
-};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use cobre_solver::{SolverInterface, StageTemplate};
+use cobre_stochastic::{ClassSampleRequest, ForwardSampler, SampleRequest};
 
 use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
-    forward::{build_cut_row_batch_into, partition},
     lp_builder::COST_SCALE_FACTOR,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
@@ -65,8 +57,7 @@ use crate::{
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            SolutionView, StageExtractionSpec, accumulate_category_costs, extract_stage_result,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
@@ -80,17 +71,17 @@ use crate::{
 /// Training uses `global_scenario = rank * forward_passes + m`, while
 /// simulation uses `global_scenario = SIMULATION_SEED_OFFSET + scenario_id`.
 /// Both fit in `u32`; the offset guarantees no overlap for practical scenario counts.
-const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
+pub(crate) const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 
 /// Per-worker scenario cost accumulation: `(scenario_id, total_cost, category_costs)`.
-type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
+pub(crate) type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 
 /// Per-worker solver statistics: `(scenario_id, opening, delta)`.
 ///
 /// The `opening` field is always `-1` for simulation rows — simulation has one
 /// solve per `(scenario, stage)` with no opening loop. The sentinel value `-1`
 /// maps to a NULL `Int32` in the parquet schema.
-type WorkerStats = Vec<(u32, i32, SolverStatsDelta)>;
+pub(crate) type WorkerStats = Vec<(u32, i32, SolverStatsDelta)>;
 
 /// Result of a simulation run, containing per-scenario costs and solver statistics.
 #[derive(Debug)]
@@ -167,24 +158,24 @@ pub struct SimulationOutputSpec<'a> {
 ///
 /// Groups the scenario identifiers, scratch buffers, and noise sampler so the
 /// processor does not exceed the clippy `too_many_arguments` budget.
-struct ScenarioIds<'a> {
+pub(crate) struct ScenarioIds<'a> {
     /// Local scenario ID (0-based index within this rank's assigned slice).
-    scenario_id: u32,
+    pub(crate) scenario_id: u32,
     /// Global scenario ID passed to `ForwardSampler::sample` as `scenario`.
     ///
     /// Already includes [`SIMULATION_SEED_OFFSET`] to separate the simulation
     /// seed domain from the training forward pass domain.
-    global_scenario: u32,
+    pub(crate) global_scenario: u32,
     /// Total number of stages in the planning horizon.
-    num_stages: usize,
+    pub(crate) num_stages: usize,
     /// Total simulation scenario count, passed to `SampleRequest::total_scenarios`.
-    total_scenarios: u32,
+    pub(crate) total_scenarios: u32,
     /// Caller-owned buffer for raw noise output (reused across stages).
-    raw_noise_buf: &'a mut [f64],
+    pub(crate) raw_noise_buf: &'a mut [f64],
     /// Caller-owned permutation scratch for LHS generation (reused across stages).
-    perm_scratch: &'a mut [usize],
+    pub(crate) perm_scratch: &'a mut [usize],
     /// Noise sampler used to draw per-stage stochastic values.
-    sampler: &'a ForwardSampler<'a>,
+    pub(crate) sampler: &'a ForwardSampler<'a>,
 }
 
 /// Rebuild the `row_lower` slice for a stage with full unscaling.
@@ -275,12 +266,12 @@ struct SimStageLoadSpec<'a> {
 
 /// Per-stage batched form of [`SimStageLoadSpec`] consumed by
 /// `process_scenario_stages`; indexed by stage via [`Self::stage`].
-struct SimScenarioLoadSpec<'a> {
-    baked_templates: &'a [StageTemplate],
-    stage_bases: &'a [Option<CapturedBasis>],
+pub(crate) struct SimScenarioLoadSpec<'a> {
+    pub(crate) baked_templates: &'a [StageTemplate],
+    pub(crate) stage_bases: &'a [Option<CapturedBasis>],
     /// Runtime window for the basis-activity classifier.
     /// Propagated into each per-stage [`SimStageLoadSpec`] via [`Self::stage`].
-    basis_activity_window: u32,
+    pub(crate) basis_activity_window: u32,
 }
 
 impl<'a> SimScenarioLoadSpec<'a> {
@@ -747,7 +738,7 @@ fn reset_scenario_state<S: SolverInterface>(
     ws.scratch.downstream_n_completed = 0;
 }
 
-fn process_scenario_stages<S: SolverInterface>(
+pub(crate) fn process_scenario_stages<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     fcf: &FutureCostFunction,
@@ -852,7 +843,7 @@ fn process_scenario_stages<S: SolverInterface>(
 }
 
 /// Emit an in-progress simulation event if a sender is available.
-fn emit_sim_progress(
+pub(crate) fn emit_sim_progress(
     sender: Option<&Sender<TrainingEvent>>,
     scenario_cost: f64,
     solve_time_ms: f64,
@@ -879,7 +870,7 @@ fn emit_sim_progress(
 ///
 /// Extracted from `simulate`'s inner worker loop to keep that function within
 /// the 100-line limit.
-fn dispatch_scenario_result(
+pub(crate) fn dispatch_scenario_result(
     output: &SimulationOutputSpec<'_>,
     scenario_id: u32,
     total_cost: f64,
@@ -910,35 +901,11 @@ fn dispatch_scenario_result(
     Ok((scenario_id, total_cost, compact_category))
 }
 
-/// Evaluate the trained SDDP policy on this rank's assigned scenarios.
+/// Evaluate the trained SDDP policy on a set of scenarios.
 ///
-/// Distributes locally assigned scenarios across worker threads using the same
-/// static partitioning as the training forward pass. Each [`SolverWorkspace`]
-/// owns its solver, patch buffer, and current-state buffer exclusively — there
-/// is no shared mutable state between workers. When `stage_bases` provides a
-/// per-stage basis from the training checkpoint, each stage LP is warm-started
-/// via `solve(Some(&basis))`; otherwise it falls back to a cold-start `solve(None)`.
-/// The warm-start basis is read-only and shared across all threads, preserving
-/// determinism regardless of thread count.
-///
-/// `SyncSender::send()` is thread-safe; each worker sends its
-/// [`SimulationScenarioResult`] through `result_tx` as it completes each
-/// scenario. Channel send order may differ from scenario order, but the
-/// returned cost buffer is sorted by `scenario_id` for deterministic MPI
-/// aggregation.
-///
-/// Returns a compact cost buffer — one `(scenario_id, total_cost, category_costs)`
-/// entry per locally solved scenario, sorted by `scenario_id` in ascending
-/// order — for MPI aggregation by the caller.
-///
-/// ## Error handling
-///
-/// On `SolverError::Infeasible`, returns
-/// `SimulationError::LpInfeasible { scenario_id, stage_id, solver_message }`.
-/// On any other `SolverError`, returns
-/// `SimulationError::SolverError { scenario_id, stage_id, solver_message }`.
-/// On channel send failure (receiver dropped), returns
-/// `SimulationError::ChannelClosed`.
+/// Thin shim that delegates to [`crate::simulation::state::SimulationState::run`].
+/// All scheduling, bake logic, and rayon parallelism live in
+/// [`crate::simulation::state`].
 ///
 /// # Errors
 ///
@@ -946,21 +913,7 @@ fn dispatch_scenario_result(
 /// feasible solution, `Err(SimulationError::SolverError { .. })` for other
 /// terminal LP solver failures, and `Err(SimulationError::ChannelClosed)` when
 /// the channel receiver has been dropped.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if any of the following debug preconditions are violated:
-///
-/// - `ctx.templates.len() != num_stages`
-/// - `ctx.base_rows.len() != num_stages`
-/// - `initial_state.len() != indexer.n_state`
-///
-/// Structurally independent parameters: `workspaces` is the per-rank solver pool,
-/// `ctx`/`fcf`/`training_ctx` are study-level, `config`/`output` are simulation-specific,
-/// `baked_templates`/`stage_bases` are checkpoint-provided state, `comm` is the communicator.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::too_many_lines)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,
@@ -972,202 +925,19 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     stage_bases: &[Option<CapturedBasis>],
     comm: &C,
 ) -> Result<SimulationRunResult, SimulationError> {
-    let TrainingContext {
-        horizon,
-        indexer,
-        initial_state,
-        ..
-    } = training_ctx;
-    let num_stages = horizon.num_stages();
-    let rank = comm.rank();
-    debug_assert_eq!(
-        ctx.templates.len(),
-        num_stages,
-        "templates.len()={} != num_stages={num_stages}",
-        ctx.templates.len()
-    );
-    debug_assert_eq!(
-        ctx.base_rows.len(),
-        num_stages,
-        "base_rows.len()={} != num_stages={num_stages}",
-        ctx.base_rows.len()
-    );
-    debug_assert_eq!(
-        initial_state.len(),
-        indexer.n_state,
-        "initial_state.len()={} != n_state={}",
-        initial_state.len(),
-        indexer.n_state
-    );
-
-    // Validate baked-template slice length if provided.
-    if let Some(baked) = baked_templates {
-        if baked.len() != num_stages {
-            return Err(SimulationError::InvalidConfiguration(format!(
-                "baked_templates length {} != num_stages {}",
-                baked.len(),
-                num_stages
-            )));
-        }
-    }
-
-    // If the caller did not provide baked templates (e.g., checkpoint-loaded
-    // simulation), re-bake them locally from the loaded FCF.  Cost is
-    // O(num_stages * num_active_cuts), a one-time setup amortised across the
-    // simulation's per-scenario LP solves (trade-off: N copies of
-    // Vec<StageTemplate> vs per-iteration Option<> runtime branching).
-    let owned_baked: Option<Vec<StageTemplate>> = if baked_templates.is_none() {
-        let mut owned = Vec::with_capacity(num_stages);
-        let mut bake_batch = RowBatch {
-            num_rows: 0,
-            row_starts: Vec::new(),
-            col_indices: Vec::new(),
-            values: Vec::new(),
-            row_lower: Vec::new(),
-            row_upper: Vec::new(),
-        };
-        for t in 0..num_stages {
-            build_cut_row_batch_into(
-                &mut bake_batch,
-                fcf,
-                t,
-                indexer,
-                &ctx.templates[t].col_scale,
-            );
-            let mut baked = StageTemplate::empty();
-            cobre_solver::bake_rows_into_template(&ctx.templates[t], &bake_batch, &mut baked);
-            owned.push(baked);
-        }
-        Some(owned)
-    } else {
-        None
-    };
-    let baked_templates: &[StageTemplate] = match (baked_templates, owned_baked.as_deref()) {
-        (Some(b), _) | (None, Some(b)) => b,
-        (None, None) => unreachable!("owned_baked is Some when baked_templates is None"),
-    };
-    let scenario_range = assign_scenarios(config.n_scenarios, rank, comm.size());
-    #[allow(clippy::cast_possible_truncation)]
-    let local_count = (scenario_range.end - scenario_range.start) as usize;
-    let scenario_start = scenario_range.start as usize;
-    let n_workers = workspaces.len().max(1);
-    let sim_start = Instant::now();
-    let scenarios_complete = AtomicU32::new(0);
-
-    let sampler = build_forward_sampler(ForwardSamplerConfig {
-        class_schemes: ClassSchemes {
-            inflow: Some(training_ctx.inflow_scheme),
-            load: Some(training_ctx.load_scheme),
-            ncs: Some(training_ctx.ncs_scheme),
-        },
-        ctx: training_ctx.stochastic,
-        stages: training_ctx.stages,
-        dims: ClassDimensions {
-            n_hydros: training_ctx.stochastic.n_hydros(),
-            n_load_buses: training_ctx.stochastic.n_load_buses(),
-            n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
-        },
-        historical_library: training_ctx.historical_library,
-        external_inflow_library: training_ctx.external_inflow_library,
-        external_load_library: training_ctx.external_load_library,
-        external_ncs_library: training_ctx.external_ncs_library,
-    })?;
-
-    let worker_results: Vec<Result<(WorkerCosts, WorkerStats), SimulationError>> = workspaces
-        .par_iter_mut()
-        .enumerate()
-        .map(|(w, ws)| {
-            let (start_local, end_local) = partition(local_count, n_workers, w);
-            let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
-            let n_scenarios = end_local - start_local;
-            let mut worker_costs = Vec::with_capacity(n_scenarios);
-            let mut worker_stats = Vec::with_capacity(n_scenarios);
-            // Sampling scratch: allocated once per worker, reused across scenarios.
-            let noise_dim = training_ctx.stochastic.dim();
-            let mut raw_noise_buf = vec![0.0_f64; noise_dim];
-            #[allow(clippy::cast_possible_truncation)]
-            let mut perm_scratch = vec![0_usize; config.n_scenarios.max(1) as usize];
-
-            for local_idx in start_local..end_local {
-                #[allow(clippy::cast_possible_truncation)]
-                let scenario_id = (scenario_start + local_idx) as u32;
-                let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
-
-                let stats_before = ws.solver.statistics();
-                let load_spec = SimScenarioLoadSpec {
-                    baked_templates,
-                    stage_bases,
-                    basis_activity_window: config.basis_activity_window,
-                };
-                let (total_cost, stage_results) = process_scenario_stages(
-                    ws,
-                    ctx,
-                    fcf,
-                    training_ctx,
-                    &load_spec,
-                    &output,
-                    &mut ScenarioIds {
-                        scenario_id,
-                        global_scenario,
-                        num_stages,
-                        total_scenarios: config.n_scenarios,
-                        raw_noise_buf: &mut raw_noise_buf,
-                        perm_scratch: &mut perm_scratch,
-                        sampler: &sampler,
-                    },
-                )?;
-                let stats_after = ws.solver.statistics();
-                let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
-                let scenario_solve_time_ms = scenario_delta.solve_time_ms;
-                let scenario_lp_solves = scenario_delta.lp_solves;
-                // opening = -1: simulation has no opening loop (one solve per
-                // scenario×stage). The sentinel maps to NULL in parquet.
-                worker_stats.push((scenario_id, -1_i32, scenario_delta));
-
-                worker_costs.push(dispatch_scenario_result(
-                    &output,
-                    scenario_id,
-                    total_cost,
-                    stage_results,
-                )?);
-                let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
-                #[allow(clippy::cast_possible_truncation)]
-                emit_sim_progress(
-                    worker_sender.as_ref(),
-                    total_cost,
-                    scenario_solve_time_ms,
-                    scenario_lp_solves,
-                    completed,
-                    config.n_scenarios,
-                    sim_start.elapsed().as_millis() as u64,
-                );
-            }
-            Ok((worker_costs, worker_stats))
-        })
-        .collect();
-
-    let mut all_costs = Vec::with_capacity(local_count);
-    let mut all_stats = Vec::with_capacity(local_count);
-    for result in worker_results {
-        let (costs, stats) = result?;
-        all_costs.extend(costs);
-        all_stats.extend(stats);
-    }
-    all_costs.sort_by_key(|&(id, _, _)| id);
-    all_stats.sort_by_key(|&(id, _, _)| id);
-
-    if let Some(sender) = output.event_sender {
-        #[allow(clippy::cast_possible_truncation)]
-        let _ = sender.send(TrainingEvent::SimulationFinished {
-            scenarios: config.n_scenarios,
-            output_dir: String::new(),
-            elapsed_ms: sim_start.elapsed().as_millis() as u64,
-        });
-    }
-    Ok(SimulationRunResult {
-        costs: all_costs,
-        solver_stats: all_stats,
-    })
+    use crate::simulation::state::{SimulationInputs, SimulationState};
+    let mut state = SimulationState::new(training_ctx.horizon.num_stages());
+    state.run(&mut SimulationInputs::new(
+        workspaces,
+        ctx,
+        fcf,
+        training_ctx,
+        config,
+        output,
+        baked_templates,
+        stage_bases,
+        comm,
+    ))
 }
 
 #[cfg(test)]
@@ -1183,13 +953,49 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::SimulationOutputSpec;
     use crate::{
         FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
-        simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
+        simulation::{
+            config::SimulationConfig,
+            error::SimulationError,
+            extraction::EntityCounts,
+            state::{SimulationInputs, SimulationState},
+        },
         workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
     };
+
+    /// Thin test helper that mirrors the old `simulate` free-function signature
+    /// and delegates to `SimulationState::run`. Allows all 24 existing test call
+    /// sites to stay unchanged apart from the function name.
+    #[allow(clippy::too_many_arguments)]
+    fn run_simulate<S: cobre_solver::SolverInterface + Send, C: cobre_comm::Communicator>(
+        workspaces: &mut [SolverWorkspace<S>],
+        ctx: &StageContext<'_>,
+        fcf: &crate::FutureCostFunction,
+        training_ctx: &TrainingContext<'_>,
+        config: &SimulationConfig,
+        output: SimulationOutputSpec<'_>,
+        baked_templates: Option<&[cobre_solver::StageTemplate]>,
+        stage_bases: &[Option<CapturedBasis>],
+        comm: &C,
+    ) -> Result<super::SimulationRunResult, SimulationError> {
+        let num_stages = training_ctx.horizon.num_stages();
+        let mut state = SimulationState::new(num_stages);
+        let mut inputs = SimulationInputs {
+            workspaces,
+            ctx,
+            fcf,
+            training_ctx,
+            config,
+            output,
+            baked_templates,
+            stage_bases,
+            comm,
+        };
+        state.run(&mut inputs)
+    }
 
     // ── Stub communicator ────────────────────────────────────────────────────
 
@@ -1686,7 +1492,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1797,7 +1603,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1898,7 +1704,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1997,7 +1803,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2098,7 +1904,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let run_result = simulate(
+        let run_result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2196,7 +2002,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let run_result = simulate(
+        let run_result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2294,7 +2100,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2389,7 +2195,7 @@ mod tests {
         // Run with 1 workspace.
         let (tx1, _rx1) = mpsc::sync_channel(64);
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
-        let result_1 = simulate(
+        let result_1 = run_simulate(
             &mut workspaces_1,
             &StageContext {
                 templates: &templates,
@@ -2484,7 +2290,7 @@ mod tests {
                 worker_timing_buf: [0.0_f64; 16],
             })
             .collect();
-        let result_4 = simulate(
+        let result_4 = run_simulate(
             &mut workspaces_4,
             &StageContext {
                 templates: &templates,
@@ -2609,7 +2415,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2728,7 +2534,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2832,7 +2638,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2947,7 +2753,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3061,7 +2867,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3190,7 +2996,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3511,7 +3317,7 @@ mod tests {
         let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
 
         let hprod = hydro_productivities_1hydro(n_stages);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3660,7 +3466,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
 
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3826,7 +3632,7 @@ mod tests {
         let noise_scale = vec![1.0_f64];
 
         let hprod = hydro_productivities_1hydro(n_stages);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4176,7 +3982,7 @@ mod tests {
         // Use the hydro-aware workspace builder so zero_targets_buf[..1] is valid.
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4289,7 +4095,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4395,7 +4201,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
 
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4509,7 +4315,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
 
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4616,7 +4422,7 @@ mod tests {
             (0..n_stages - 1).map(|_| minimal_template_1_0()).collect();
 
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4771,7 +4577,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
 
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -4903,7 +4709,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
 
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,

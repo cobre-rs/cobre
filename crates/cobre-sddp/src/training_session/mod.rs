@@ -28,6 +28,9 @@
 //! are kept flat here as a deliberate transition step; ticket-002 will absorb
 //! them into a dedicated `BackwardPassState` struct.
 
+pub(crate) mod results;
+use self::results::TrainingResults;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -53,11 +56,11 @@ use crate::{
     lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     solver_stats::{
-        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
         aggregate_solver_statistics,
     },
     state_exchange::ExchangeBuffers,
-    stopping_rule::{RULE_GRACEFUL_SHUTDOWN, RULE_ITERATION_LIMIT},
+    stopping_rule::RULE_GRACEFUL_SHUTDOWN,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
 };
@@ -174,14 +177,7 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     bwd_stats_unpack_buf: Vec<SolverStatsDelta>,
 
     // ── Result accumulators (updated each iteration; finalized in finalize()) ─
-    final_lb: f64,
-    final_ub: f64,
-    final_ub_std: f64,
-    final_gap: f64,
-    completed_iterations: u64,
-    termination_reason: String,
-    solver_stats_log: Vec<SolverStatsEntry>,
-    start_time: Instant,
+    results: TrainingResults,
 }
 
 impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
@@ -320,8 +316,6 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             None
         };
 
-        let start_time = Instant::now();
-
         // ── Destructure config ─────────────────────────────────────────────
         // The second-phase destructure preserves the exact structure from the
         // original prelude (lines 517-539). event_sender moves out of EventConfig
@@ -371,9 +365,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         );
 
         // ── Result accumulators ────────────────────────────────────────────
-        let completed_iterations = start_iteration;
-        let termination_reason = RULE_ITERATION_LIMIT.to_string();
-        let solver_stats_log: Vec<SolverStatsEntry> = Vec::new();
+        let results = TrainingResults::new(start_iteration);
 
         // ── Cut row batch buffers (reused across iterations) ──────────────
         let cut_batches: Vec<RowBatch> = (0..num_stages)
@@ -507,14 +499,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             bwd_stats_counts,
             bwd_stats_displs,
             bwd_stats_unpack_buf,
-            final_lb: 0.0,
-            final_ub: 0.0,
-            final_ub_std: 0.0,
-            final_gap: 0.0,
-            completed_iterations,
-            termination_reason,
-            solver_stats_log,
-            start_time,
+            results,
         })
     }
 
@@ -567,25 +552,25 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // ── Convergence update ─────────────────────────────────────────────
         let (should_stop, rule_results) = self.convergence_monitor.update(lb, &sync_result);
 
-        self.final_lb = self.convergence_monitor.lower_bound();
-        self.final_ub = self.convergence_monitor.upper_bound();
-        self.final_ub_std = self.convergence_monitor.upper_bound_std();
-        self.final_gap = self.convergence_monitor.gap();
+        self.results.final_lb = self.convergence_monitor.lower_bound();
+        self.results.final_ub = self.convergence_monitor.upper_bound();
+        self.results.final_ub_std = self.convergence_monitor.upper_bound_std();
+        self.results.final_gap = self.convergence_monitor.gap();
 
         emit(
             self.event_sender.as_ref(),
             TrainingEvent::ConvergenceUpdate {
                 iteration,
-                lower_bound: self.final_lb,
-                upper_bound: self.final_ub,
+                lower_bound: self.results.final_lb,
+                upper_bound: self.results.final_ub,
                 upper_bound_std: self.convergence_monitor.upper_bound_std(),
-                gap: self.final_gap,
+                gap: self.results.final_gap,
                 rules_evaluated: rule_results.clone(),
             },
         );
 
         #[allow(clippy::cast_possible_truncation)]
-        let wall_time_ms = self.start_time.elapsed().as_millis() as u64;
+        let wall_time_ms = self.results.start_time.elapsed().as_millis() as u64;
         #[allow(clippy::cast_possible_truncation)]
         let iteration_time_ms = iter_start.elapsed().as_millis() as u64;
 
@@ -593,9 +578,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             self.event_sender.as_ref(),
             TrainingEvent::IterationSummary {
                 iteration,
-                lower_bound: self.final_lb,
-                upper_bound: self.final_ub,
-                gap: self.final_gap,
+                lower_bound: self.results.final_lb,
+                upper_bound: self.results.final_ub,
+                gap: self.results.final_gap,
                 wall_time_ms,
                 iteration_time_ms,
                 forward_ms: forward_result.elapsed_ms,
@@ -609,16 +594,16 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             },
         );
 
-        self.completed_iterations = iteration;
+        self.results.completed_iterations = iteration;
 
         if should_stop {
-            self.termination_reason = rule_results
+            self.results.termination_reason = rule_results
                 .iter()
                 .find(|r| r.triggered)
                 .map_or_else(|| "unknown".to_string(), |r| r.rule_name.clone());
 
             // Distinguish shutdown from convergence using the triggered rule name.
-            if self.termination_reason == RULE_GRACEFUL_SHUTDOWN {
+            if self.results.termination_reason == RULE_GRACEFUL_SHUTDOWN {
                 return Ok(IterationOutcome::Shutdown);
             }
             return Ok(IterationOutcome::Converged);
@@ -637,16 +622,29 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// Returns `SddpError::Communication` if `broadcast_basis_cache` fails.
     pub(crate) fn finalize(self) -> Result<TrainingOutcome, SddpError> {
         #[allow(clippy::cast_possible_truncation)]
-        let total_time_ms = (self.start_time.elapsed().as_millis() as u64).max(1);
+        let total_time_ms = (self.results.start_time.elapsed().as_millis() as u64).max(1);
+
+        let baked_templates = self.baked_templates;
+        let visited_archive = self.visited_archive;
+        let TrainingResults {
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            completed_iterations,
+            termination_reason,
+            solver_stats_log,
+            ..
+        } = self.results;
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
             self.event_sender.as_ref(),
             TrainingEvent::TrainingFinished {
-                reason: self.termination_reason.clone(),
-                iterations: self.completed_iterations,
-                final_lb: self.final_lb,
-                final_ub: self.final_ub,
+                reason: termination_reason.clone(),
+                iterations: completed_iterations,
+                final_lb,
+                final_ub,
                 total_time_ms,
                 total_rows: self.fcf.total_active_cuts() as u64,
             },
@@ -656,17 +654,17 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         Ok(TrainingOutcome {
             result: TrainingResult::new(
-                self.final_lb,
-                self.final_ub,
-                self.final_ub_std,
-                self.final_gap,
-                self.completed_iterations,
-                self.termination_reason,
+                final_lb,
+                final_ub,
+                final_ub_std,
+                final_gap,
+                completed_iterations,
+                termination_reason,
                 total_time_ms,
                 basis_cache,
-                self.solver_stats_log,
-                self.visited_archive,
-                Some(self.baked_templates),
+                solver_stats_log,
+                visited_archive,
+                Some(baked_templates),
             ),
             error: None,
         })
@@ -684,15 +682,31 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// Returns `Err(comm_err)` if `broadcast_basis_cache` itself fails (matching
     /// the original `on_error!` behavior at line 644).
     pub(crate) fn finalize_with_error(self, err: SddpError) -> Result<TrainingOutcome, SddpError> {
+        let baked_templates = self.baked_templates;
+        let visited_archive = self.visited_archive;
+        let TrainingResults {
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            completed_iterations,
+            solver_stats_log,
+            start_time,
+            ..
+        } = self.results;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
+
         #[allow(clippy::cast_possible_truncation)]
         emit(
             self.event_sender.as_ref(),
             TrainingEvent::TrainingFinished {
                 reason: "error".to_string(),
-                iterations: self.completed_iterations,
-                final_lb: self.final_lb,
-                final_ub: self.final_ub,
-                total_time_ms: (self.start_time.elapsed().as_millis() as u64).max(1),
+                iterations: completed_iterations,
+                final_lb,
+                final_ub,
+                total_time_ms,
                 #[allow(clippy::cast_possible_truncation)]
                 total_rows: self.fcf.total_active_cuts() as u64,
             },
@@ -700,22 +714,19 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         let basis_cache = broadcast_basis_cache(&self.basis_store, self.num_stages, self.comm)?;
 
-        #[allow(clippy::cast_possible_truncation)]
-        let total_time_ms = (self.start_time.elapsed().as_millis() as u64).max(1);
-
         Ok(TrainingOutcome {
             result: TrainingResult::new(
-                self.final_lb,
-                self.final_ub,
-                self.final_ub_std,
-                self.final_gap,
-                self.completed_iterations,
+                final_lb,
+                final_ub,
+                final_ub_std,
+                final_gap,
+                completed_iterations,
                 "error".to_string(),
                 total_time_ms,
                 basis_cache,
-                self.solver_stats_log,
-                self.visited_archive,
-                Some(self.baked_templates),
+                solver_stats_log,
+                visited_archive,
+                Some(baked_templates),
             ),
             error: Some(err),
         })
@@ -777,7 +788,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         for (stage_idx, delta) in forward_result.stage_stats.iter().enumerate() {
-            self.solver_stats_log.push((
+            self.results.solver_stats_log.push((
                 iteration,
                 "forward",
                 i32::try_from(stage_idx).unwrap_or(i32::MAX),
@@ -878,7 +889,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             for (stage_idx, entries) in &backward_result.stage_stats {
                 for (rank, worker_id, omega, delta) in entries {
-                    self.solver_stats_log.push((
+                    self.results.solver_stats_log.push((
                         iteration,
                         "backward",
                         *stage_idx as i32,
@@ -1147,7 +1158,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
         let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
         let lb_solve_time_ms = lb_delta.solve_time_ms;
-        self.solver_stats_log.push((
+        self.results.solver_stats_log.push((
             iteration,
             "lower_bound",
             -1,

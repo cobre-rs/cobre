@@ -30,11 +30,12 @@
 
 pub(crate) mod rank_distribution;
 pub(crate) mod results;
+pub(crate) mod runtime;
 use self::rank_distribution::RankDistribution;
 use self::results::TrainingResults;
+use self::runtime::RuntimeHandles;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -133,9 +134,9 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     cut_selection: Option<crate::cut_selection::CutSelectionStrategy>,
     budget: Option<u32>,
     n_fwd_threads: usize,
-    event_sender: Option<Sender<TrainingEvent>>,
-    shutdown_flag: Option<Arc<AtomicBool>>,
-    export_states: bool,
+
+    // ── Runtime handles (per-invocation hooks; set once in new) ───────────
+    runtime: RuntimeHandles,
 
     // ── Rank math (constant for the run) ──────────────────────────────────
     ranks: RankDistribution,
@@ -330,6 +331,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let convergence_monitor = ConvergenceMonitor::new(stopping_rules.clone());
 
         // ── TrainingStarted event ─────────────────────────────────────────
+        // Emit before moving the three locals into RuntimeHandles so that
+        // the local `event_sender` binding is still available here.
         #[allow(clippy::cast_possible_truncation)]
         emit(
             event_sender.as_ref(),
@@ -344,6 +347,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 timestamp: String::new(),
             },
         );
+
+        // ── Runtime handles ────────────────────────────────────────────────
+        let runtime = RuntimeHandles::new(event_sender, shutdown_flag, export_states);
 
         // ── Result accumulators ────────────────────────────────────────────
         let results = TrainingResults::new(start_iteration);
@@ -444,9 +450,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             cut_selection,
             budget,
             n_fwd_threads,
-            event_sender,
-            shutdown_flag,
-            export_states,
+            runtime,
             ranks,
             fwd_pool,
             basis_store,
@@ -504,7 +508,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// bound evaluation failures.
     pub(crate) fn run_iteration(&mut self, iteration: u64) -> Result<IterationOutcome, SddpError> {
         // Check external shutdown flag before starting.
-        if let Some(flag) = self.shutdown_flag.as_ref() {
+        if let Some(flag) = self.runtime.shutdown_flag.as_ref() {
             if flag.load(Ordering::Relaxed) {
                 self.convergence_monitor.set_shutdown();
             }
@@ -533,7 +537,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         self.results.final_gap = self.convergence_monitor.gap();
 
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::ConvergenceUpdate {
                 iteration,
                 lower_bound: self.results.final_lb,
@@ -550,7 +554,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let iteration_time_ms = iter_start.elapsed().as_millis() as u64;
 
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::IterationSummary {
                 iteration,
                 lower_bound: self.results.final_lb,
@@ -614,7 +618,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::TrainingFinished {
                 reason: termination_reason.clone(),
                 iterations: completed_iterations,
@@ -676,7 +680,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::TrainingFinished {
                 reason: "error".to_string(),
                 iterations: completed_iterations,
@@ -731,7 +735,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             total_forward_passes: self.total_forward_passes,
             iteration,
             fwd_offset: self.ranks.my_fwd_offset,
-            event_sender: self.event_sender.as_ref(),
+            event_sender: self.runtime.event_sender(),
             basis_activity_window: self.basis_activity_window,
         };
 
@@ -779,7 +783,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let local_n = forward_result.scenario_costs.len();
         let local_cost_sum: f64 = forward_result.scenario_costs.iter().sum();
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::ForwardPassComplete {
                 iteration,
                 scenarios: self.config_forward_passes,
@@ -797,7 +801,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let sync_result = sync_forward(&forward_result, self.comm, self.total_forward_passes)?;
 
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::ForwardSyncComplete {
                 iteration,
                 global_ub_mean: sync_result.global_ub_mean,
@@ -841,7 +845,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             bwd_stats_counts: &self.bwd_stats_counts,
             bwd_stats_displs: &self.bwd_stats_displs,
             bwd_stats_unpack_buf: &mut self.bwd_stats_unpack_buf,
-            event_sender: self.event_sender.as_ref(),
+            event_sender: self.runtime.event_sender(),
         };
 
         let backward_result = run_backward_pass(
@@ -883,7 +887,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::BackwardPassComplete {
                 iteration,
                 rows_generated: backward_result.cuts_generated as u32,
@@ -899,7 +903,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_truncation)]
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             TrainingEvent::PolicySyncComplete {
                 iteration,
                 rows_distributed: backward_result.cuts_generated as u32,
@@ -1025,7 +1029,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             #[allow(clippy::cast_possible_truncation)]
             let enforcement_time_ms = budget_start.elapsed().as_millis() as u64;
             emit(
-                self.event_sender.as_ref(),
+                self.runtime.event_sender(),
                 #[allow(clippy::cast_possible_truncation)]
                 TrainingEvent::PolicyBudgetEnforcementComplete {
                     iteration,
@@ -1040,7 +1044,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         if let Some((per_stage, rows_deactivated, selection_time_ms, stages_processed)) = sel_state
         {
             emit(
-                self.event_sender.as_ref(),
+                self.runtime.event_sender(),
                 TrainingEvent::PolicySelectionComplete {
                     iteration,
                     rows_deactivated,
@@ -1087,7 +1091,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         #[allow(clippy::cast_possible_truncation)]
         let bake_time_ms = bake_start.elapsed().as_millis() as u64;
         emit(
-            self.event_sender.as_ref(),
+            self.runtime.event_sender(),
             #[allow(clippy::cast_possible_truncation)]
             TrainingEvent::PolicyTemplateBakeComplete {
                 iteration,

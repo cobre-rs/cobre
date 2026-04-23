@@ -22,7 +22,8 @@
 //!
 //! Backward-pass scratch is fully encapsulated in [`BackwardPassState`]
 //! (owned by `bwd_state`); per-call inputs are bundled in [`BackwardPassInputs`].
-//! Forward-pass scratch decomposition remains for ticket-003.
+//! Forward-pass scratch is fully encapsulated in [`ForwardPassState`]
+//! (owned by `fwd_state`); per-call inputs are bundled in [`ForwardPassInputs`].
 
 pub(crate) mod iteration_scratch;
 pub(crate) mod rank_distribution;
@@ -51,7 +52,8 @@ use crate::{
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
+    forward::{build_cut_row_batch_into, sync_forward},
+    forward_pass_state::{ForwardPassInputs, ForwardPassState},
     lower_bound::LbEvalSpec,
     solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
@@ -102,7 +104,6 @@ pub(crate) enum IterationOutcome {
 /// for the duration of the training run. All methods that call into the
 /// forward / backward passes require only `&mut self` because the session IS
 /// the holder of all required references.
-// `ForwardPassState` decomposition remains for ticket-003.
 pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator> {
     // ── Borrowed inputs (live for 'a) ─────────────────────────────────────
     solver: &'a mut S,
@@ -129,7 +130,10 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     scratch: IterationScratch,
     convergence_monitor: ConvergenceMonitor,
 
-    // ── Backward-pass owned scratch (ticket-002) ──────────────────────────
+    // ── Forward-pass owned scratch ────────────────────────────────────────
+    fwd_state: ForwardPassState,
+
+    // ── Backward-pass owned scratch ───────────────────────────────────────
     bwd_state: BackwardPassState,
 
     // ── Result accumulators (updated each iteration; finalized in finalize()) ─
@@ -290,13 +294,17 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             stage_ctx,
         );
 
+        // ── Forward-pass scratch buffers ──────────────────────────────────
+        // All allocated once in ForwardPassState::new; reused across iterations.
+        let n_workers_local = fwd_pool.workspaces.len();
+        let fwd_state = ForwardPassState::new(n_workers_local, ranks.num_stages);
+
         // ── Backward-pass scratch buffers ─────────────────────────────────
         // All allocated once in BackwardPassState::new; reused across iterations.
         let bwd_max_openings = (0..ranks.num_stages)
             .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
             .max()
             .unwrap_or(0);
-        let n_workers_local = fwd_pool.workspaces.len();
         let n_ranks = comm.size();
         let real_states_capacity = exchange_bufs.real_total_scenarios() * ranks.n_state;
         let bwd_state = BackwardPassState::new(
@@ -322,6 +330,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             visited_archive,
             scratch,
             convergence_monitor,
+            fwd_state,
             bwd_state,
             results,
         })
@@ -574,16 +583,6 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         ),
         SddpError,
     > {
-        let fwd_record_len = self.ranks.my_actual_fwd * self.ranks.num_stages;
-        let fwd_batch = ForwardPassBatch {
-            local_forward_passes: self.ranks.my_actual_fwd,
-            total_forward_passes: self.ranks.num_total_forward_passes,
-            iteration,
-            fwd_offset: self.ranks.my_fwd_offset,
-            event_sender: self.runtime.event_sender(),
-            basis_activity_window: self.config.cut_management.basis_activity_window,
-        };
-
         let fwd_stats_before = aggregate_solver_statistics(
             self.fwd_pool
                 .workspaces
@@ -591,16 +590,22 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 .map(|w| w.solver.statistics()),
         );
 
-        let forward_result = run_forward_pass(
-            &mut self.fwd_pool.workspaces,
+        // Borrow fwd_state independently so the remaining fields can be
+        // passed to the factory without a whole-struct borrow conflict.
+        let fwd = &mut self.fwd_state;
+        let mut inputs = ForwardPassInputs::from_session_fields(
+            &mut self.fwd_pool,
             &mut self.basis_store,
             self.stage_ctx,
-            &self.scratch.baked_templates,
+            &mut self.scratch,
             self.fcf,
             self.training_ctx,
-            &fwd_batch,
-            &mut self.scratch.records[..fwd_record_len],
-        )?;
+            &self.config.cut_management,
+            &self.ranks,
+            &self.runtime,
+            iteration,
+        );
+        let forward_result = fwd.run(&mut inputs)?;
 
         let fwd_solve_time_ms = {
             let fwd_stats_after = aggregate_solver_statistics(

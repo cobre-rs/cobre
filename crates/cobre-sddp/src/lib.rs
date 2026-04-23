@@ -47,6 +47,7 @@ pub mod cut_sync;
 pub mod error;
 pub mod estimation;
 pub mod forward;
+pub(crate) mod forward_pass_state;
 pub(crate) mod fpha_fitting;
 pub mod generic_constraints;
 pub mod horizon_mode;

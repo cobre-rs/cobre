@@ -294,7 +294,7 @@ output/
 
 | File                                           | What it contains                                                           |
 | ---------------------------------------------- | -------------------------------------------------------------------------- |
-| `training/_manifest.json`                      | Run status, iteration count, convergence result, cut pool statistics       |
+| `training/_manifest.json`                      | Run status, iteration count, convergence result, row pool statistics       |
 | `training/metadata.json`                       | Problem dimensions (stages, hydros, thermals, buses), Cobre version        |
 | `training/convergence.parquet`                 | Lower bound, upper bound, gap per iteration — use this to plot convergence |
 | `simulation/buses/scenario_id=N/data.parquet`  | Bus-level demand, generation, deficit per stage for scenario N             |

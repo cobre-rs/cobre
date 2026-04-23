@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
+    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
+    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
-    OpeningTreeInputs,
+    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
+    provenance::ComponentProvenance,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
-    BroadcastOpeningTree,
+    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
+    stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -503,7 +503,7 @@ fn load_policy_for_simulation(
         Vec::new(),
         None,
         // Baked templates are not stored in policy checkpoints. simulate() re-bakes all stage
-        // templates at startup from the FCF cut pool when baked_templates is None.
+        // templates at startup from the FCF row pool when baked_templates is None.
         None,
     ))
 }
@@ -1037,8 +1037,8 @@ fn run_training_phase(
         upper_bound: training_result.final_ub,
         upper_bound_std: training_result.final_ub_std,
         gap_percent: training_result.final_gap * 100.0,
-        total_cuts_active: training_output.cut_stats.total_active,
-        total_cuts_generated: training_output.cut_stats.total_generated,
+        total_rows_active: training_output.cut_stats.total_active,
+        total_rows_generated: training_output.cut_stats.total_generated,
         total_lp_solves: global_lp_solves,
         total_time_ms: training_result.total_time_ms,
         total_first_try: Some(total_first_try),
@@ -1562,7 +1562,7 @@ struct WriteTrainingArgs<'a> {
 }
 
 /// Write training artifacts: policy checkpoint, training results, solver stats,
-/// and cut selection records. Called immediately after training completes, before
+/// and row-selection records. Called immediately after training completes, before
 /// simulation starts.
 fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> {
     if !args.quiet {
@@ -1629,10 +1629,10 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
         cobre_io::write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
     }
 
-    // Write per-stage cut selection records to training/cut_selection/iterations.parquet.
+    // Write per-stage row-selection records to training/cut_selection/iterations.parquet.
     if !args.training_output.cut_selection_records.is_empty() {
         let parquet_config = cobre_io::ParquetWriterConfig::default();
-        cobre_io::write_cut_selection_records(
+        cobre_io::write_row_selection_records(
             args.output_dir,
             &args.training_output.cut_selection_records,
             &parquet_config,

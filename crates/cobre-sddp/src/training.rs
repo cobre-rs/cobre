@@ -32,32 +32,32 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::Communicator;
-use cobre_core::{StageSelectionRecord, TrainingEvent};
+use cobre_core::{StageRowSelectionRecord, TrainingEvent};
 use cobre_solver::RowBatch;
 use cobre_solver::SolverInterface;
 use cobre_solver::StageTemplate;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
+    cut::CutRowMap,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
+    forward::{build_cut_row_batch_into, run_forward_pass, sync_forward, ForwardPassBatch},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     solver_stats::{
-        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
-        aggregate_solver_statistics,
+        aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer,
+        WORKER_STATS_ENTRY_STRIDE,
     },
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
+    SddpError, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ fn broadcast_basis_cache<C: Communicator>(
 /// synchronisation. The strategy's `should_run(iteration)` gate controls the
 /// frequency; at eligible iterations every stage's cut pool is scanned and
 /// inactive cuts are deactivated. When `cut_selection` is `None`, step 5a is
-/// skipped entirely and no [`TrainingEvent::CutSelectionComplete`] events are
+/// skipped entirely and no [`TrainingEvent::PolicySelectionComplete`] events are
 /// emitted.
 ///
 /// # Errors
@@ -633,7 +633,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     final_lb,
                     final_ub,
                     total_time_ms: (start_time.elapsed().as_millis() as u64).max(1),
-                    total_cuts: fcf.total_active_cuts() as u64,
+                    total_rows: fcf.total_active_cuts() as u64,
                 },
             );
             // Extract the canonical basis cache from rank 0's global scenario 0
@@ -890,11 +890,11 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             event_sender.as_ref(),
             TrainingEvent::BackwardPassComplete {
                 iteration,
-                cuts_generated: backward_result.cuts_generated as u32,
+                rows_generated: backward_result.cuts_generated as u32,
                 stages_processed: num_stages.saturating_sub(1) as u32,
                 elapsed_ms: backward_elapsed_ms,
                 state_exchange_time_ms: backward_result.state_exchange_time_ms,
-                cut_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
+                row_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
                 setup_time_ms: backward_result.setup_time_ms,
                 load_imbalance_ms: backward_result.load_imbalance_ms,
                 scheduling_overhead_ms: backward_result.scheduling_overhead_ms,
@@ -905,29 +905,29 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         #[allow(clippy::cast_possible_truncation)]
         emit(
             event_sender.as_ref(),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration,
-                cuts_distributed: backward_result.cuts_generated as u32,
-                cuts_active: fcf.total_active_cuts() as u32,
-                cuts_removed: 0,
+                rows_distributed: backward_result.cuts_generated as u32,
+                rows_active: fcf.total_active_cuts() as u32,
+                rows_removed: 0,
                 sync_time_ms: backward_result.cut_sync_time_ms,
             },
         );
 
         // Step 4a: Strategy-based cut selection.
-        // We defer the CutSelectionComplete event until after Step 4b
+        // We defer the PolicySelectionComplete event until after Step 4b
         // so that per_stage records can be annotated with budget post-step
         // counts before they are emitted.
         //
-        // sel_state holds (per_stage, cuts_deactivated, selection_time_ms,
+        // sel_state holds (per_stage, rows_deactivated, selection_time_ms,
         // stages_processed) when Step 4a ran; None otherwise.
-        let mut sel_state: Option<(Vec<StageSelectionRecord>, u32, u64, u32)> = None;
+        let mut sel_state: Option<(Vec<StageRowSelectionRecord>, u32, u64, u32)> = None;
 
         if let Some(strategy) = cut_selection {
             if strategy.should_run(iteration) {
                 let sel_start = Instant::now();
                 let num_sel_stages = num_stages.saturating_sub(1);
-                let mut cuts_deactivated = 0u32;
+                let mut rows_deactivated = 0u32;
                 let mut per_stage = Vec::with_capacity(num_sel_stages);
 
                 // Stage 0 is exempt: its cuts are never the "successor" in the
@@ -937,12 +937,12 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                 {
                     let pool0 = &fcf.pools[0];
                     let active_0 = pool0.active_count() as u32;
-                    per_stage.push(StageSelectionRecord {
+                    per_stage.push(StageRowSelectionRecord {
                         stage: 0,
-                        cuts_populated: pool0.populated_count as u32,
-                        cuts_active_before: active_0,
-                        cuts_deactivated: 0,
-                        cuts_active_after: active_0,
+                        rows_populated: pool0.populated_count as u32,
+                        rows_active_before: active_0,
+                        rows_deactivated: 0,
+                        rows_active_after: active_0,
                         selection_time_ms: 0.0,
                         budget_evicted: None,
                         active_after_budget: None,
@@ -975,17 +975,17 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
                     let populated = pool.populated_count as u32;
                     let active_before = pool.active_count() as u32;
                     let n_deact = deact.indices.len() as u32;
-                    cuts_deactivated += n_deact;
+                    rows_deactivated += n_deact;
 
                     fcf.pools[stage].deactivate(&deact.indices);
 
                     let active_after = fcf.pools[stage].active_count() as u32;
-                    per_stage.push(StageSelectionRecord {
+                    per_stage.push(StageRowSelectionRecord {
                         stage: stage as u32,
-                        cuts_populated: populated,
-                        cuts_active_before: active_before,
-                        cuts_deactivated: n_deact,
-                        cuts_active_after: active_after,
+                        rows_populated: populated,
+                        rows_active_before: active_before,
+                        rows_deactivated: n_deact,
+                        rows_active_after: active_after,
                         selection_time_ms: stage_sel_time_ms,
                         budget_evicted: None,
                         active_after_budget: None,
@@ -1000,7 +1000,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
 
                 sel_state = Some((
                     per_stage,
-                    cuts_deactivated,
+                    rows_deactivated,
                     selection_time_ms,
                     stages_processed_sel,
                 ));
@@ -1032,23 +1032,23 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             emit(
                 event_sender.as_ref(),
                 #[allow(clippy::cast_possible_truncation)]
-                TrainingEvent::BudgetEnforcementComplete {
+                TrainingEvent::PolicyBudgetEnforcementComplete {
                     iteration,
-                    cuts_evicted: total_evicted,
+                    rows_evicted: total_evicted,
                     stages_processed: num_stages as u32,
                     enforcement_time_ms,
                 },
             );
         }
 
-        // Emit CutSelectionComplete now that all per-stage annotation is done.
-        if let Some((per_stage, cuts_deactivated, selection_time_ms, stages_processed)) = sel_state
+        // Emit PolicySelectionComplete now that all per-stage annotation is done.
+        if let Some((per_stage, rows_deactivated, selection_time_ms, stages_processed)) = sel_state
         {
             emit(
                 event_sender.as_ref(),
-                TrainingEvent::CutSelectionComplete {
+                TrainingEvent::PolicySelectionComplete {
                     iteration,
-                    cuts_deactivated,
+                    rows_deactivated,
                     stages_processed,
                     selection_time_ms,
                     allgatherv_time_ms: 0,
@@ -1083,7 +1083,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // here would contend with the solver workspace pools already in use
         // by the LB evaluation that follows.
         let bake_start = Instant::now();
-        let mut total_cut_rows_baked: u64 = 0;
+        let mut total_rows_baked: u64 = 0;
         for t in 0..num_stages {
             build_cut_row_batch_into(
                 &mut bake_row_batches[t],
@@ -1094,7 +1094,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             );
             #[allow(clippy::cast_possible_truncation)]
             {
-                total_cut_rows_baked += bake_row_batches[t].num_rows as u64;
+                total_rows_baked += bake_row_batches[t].num_rows as u64;
             }
             cobre_solver::bake_rows_into_template(
                 &stage_ctx.templates[t],
@@ -1108,10 +1108,10 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         let stages_processed_bake = num_stages as u32;
         emit(
             event_sender.as_ref(),
-            TrainingEvent::TemplateBakeComplete {
+            TrainingEvent::PolicyTemplateBakeComplete {
                 iteration,
                 stages_processed: stages_processed_bake,
-                total_cut_rows_baked,
+                total_rows_baked,
                 bake_time_ms,
             },
         );
@@ -1234,7 +1234,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
             final_lb,
             final_ub,
             total_time_ms,
-            total_cuts: fcf.total_active_cuts() as u64,
+            total_rows: fcf.total_active_cuts() as u64,
         },
     );
 
@@ -1284,7 +1284,6 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1293,22 +1292,23 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
     };
 
     use super::train;
     use crate::{
-        CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-        RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-        TrainingConfig,
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
         solver_stats::SolverStatsDelta,
+        CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
+        RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
+        TrainingConfig,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1895,8 +1895,8 @@ mod tests {
     ///
     /// - 1 `TrainingStarted`
     /// - 2 × (`WorkerTiming` (Forward), `ForwardPassComplete`, `ForwardSyncComplete`,
-    ///   `WorkerTiming` (Backward), `BackwardPassComplete`, `CutSyncComplete`,
-    ///   `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
+    ///   `WorkerTiming` (Backward), `BackwardPassComplete`, `PolicySyncComplete`,
+    ///   `PolicyTemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
     /// - 1 `TrainingFinished`
     ///
     /// = 1 + 18 + 1 = 20 events.
@@ -1994,7 +1994,7 @@ mod tests {
         // 1 TrainingStarted + 2*(9 per-iteration) + 1 TrainingFinished = 20
         // Per-iteration: WorkerTiming(Forward), ForwardPassComplete,
         //   ForwardSyncComplete, WorkerTiming(Backward), BackwardPassComplete,
-        //   CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary
+        //   PolicySyncComplete, PolicyTemplateBakeComplete, ConvergenceUpdate, IterationSummary
         assert_eq!(
             events.len(),
             20,
@@ -2038,10 +2038,13 @@ mod tests {
             events[5],
             TrainingEvent::BackwardPassComplete { .. }
         ));
-        assert!(matches!(events[6], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(
+            events[6],
+            TrainingEvent::PolicySyncComplete { .. }
+        ));
         assert!(matches!(
             events[7],
-            TrainingEvent::TemplateBakeComplete { .. }
+            TrainingEvent::PolicyTemplateBakeComplete { .. }
         ));
         assert!(matches!(events[8], TrainingEvent::ConvergenceUpdate { .. }));
         assert!(matches!(events[9], TrainingEvent::IterationSummary { .. }));
@@ -2073,10 +2076,13 @@ mod tests {
             events[14],
             TrainingEvent::BackwardPassComplete { .. }
         ));
-        assert!(matches!(events[15], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(
+            events[15],
+            TrainingEvent::PolicySyncComplete { .. }
+        ));
         assert!(matches!(
             events[16],
-            TrainingEvent::TemplateBakeComplete { .. }
+            TrainingEvent::PolicyTemplateBakeComplete { .. }
         ));
         assert!(matches!(
             events[17],
@@ -2093,7 +2099,7 @@ mod tests {
     #[test]
     fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
         use cobre_core::{
-            WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP, WorkerTimingPhase,
+            WorkerTimingPhase, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP,
         };
 
         let n_stages = 2;
@@ -2544,7 +2550,7 @@ mod tests {
     /// `cut_selection_none_skips_step`
     ///
     /// Given `train` with `cut_selection: None` running for 5 iterations, then
-    /// no `CutSelectionComplete` event is emitted.
+    /// no `PolicySelectionComplete` event is emitted.
     #[test]
     fn cut_selection_none_skips_step() {
         let n_stages = 2;
@@ -2635,12 +2641,12 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let cut_sel_count = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .count();
 
         assert_eq!(
             cut_sel_count, 0,
-            "expected no CutSelectionComplete events with cut_selection: None"
+            "expected no PolicySelectionComplete events with cut_selection: None"
         );
     }
 
@@ -2648,7 +2654,7 @@ mod tests {
     ///
     /// Given `train` with `cut_selection: Some(Level1 { threshold: 0,
     /// check_frequency: 3 })` running for 5 iterations, then
-    /// `CutSelectionComplete` is emitted exactly once (at iteration 3).
+    /// `PolicySelectionComplete` is emitted exactly once (at iteration 3).
     #[test]
     fn cut_selection_level1_runs_at_frequency() {
         use crate::cut_selection::CutSelectionStrategy;
@@ -2744,22 +2750,22 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let sel_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .collect();
 
         assert_eq!(
             sel_events.len(),
             1,
-            "expected exactly 1 CutSelectionComplete event for check_frequency=3 over 5 iterations"
+            "expected exactly 1 PolicySelectionComplete event for check_frequency=3 over 5 iterations"
         );
 
         // Verify the event was emitted at iteration 3.
-        let TrainingEvent::CutSelectionComplete { iteration, .. } = sel_events[0] else {
+        let TrainingEvent::PolicySelectionComplete { iteration, .. } = sel_events[0] else {
             panic!("wrong variant");
         };
         assert_eq!(
             *iteration, 3,
-            "CutSelectionComplete must fire at iteration 3"
+            "PolicySelectionComplete must fire at iteration 3"
         );
     }
 
@@ -2767,7 +2773,7 @@ mod tests {
     ///
     /// Stage 0 is exempt from cut selection because its cuts have no
     /// backward-pass activity tracking. With a 2-stage system, only stage 0
-    /// has cuts, so `cuts_deactivated` must be 0.
+    /// has cuts, so `rows_deactivated` must be 0.
     #[test]
     fn cut_selection_stage0_exempt_preserves_cuts() {
         use crate::cut_selection::CutSelectionStrategy;
@@ -2863,18 +2869,18 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let sel_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .collect();
 
         assert_eq!(
             sel_events.len(),
             1,
-            "expected exactly 1 CutSelectionComplete event at iteration 2"
+            "expected exactly 1 PolicySelectionComplete event at iteration 2"
         );
 
-        let TrainingEvent::CutSelectionComplete {
+        let TrainingEvent::PolicySelectionComplete {
             iteration,
-            cuts_deactivated,
+            rows_deactivated,
             per_stage,
             ..
         } = sel_events[0]
@@ -2884,7 +2890,7 @@ mod tests {
 
         assert_eq!(*iteration, 2, "selection must fire at iteration 2");
         assert_eq!(
-            *cuts_deactivated, 0,
+            *rows_deactivated, 0,
             "stage 0 is exempt from cut selection, so no cuts should be deactivated"
         );
         // Verify per-stage records are populated and stage 0 is exempt.
@@ -2894,7 +2900,7 @@ mod tests {
         );
         assert_eq!(per_stage[0].stage, 0, "first record must be stage 0");
         assert_eq!(
-            per_stage[0].cuts_deactivated, 0,
+            per_stage[0].rows_deactivated, 0,
             "stage 0 must have zero deactivations"
         );
     }
@@ -3896,9 +3902,9 @@ mod tests {
 
     /// AC: `template_bake_event_emitted`
     ///
-    /// Verify that `TemplateBakeComplete` is emitted exactly once per iteration
+    /// Verify that `PolicyTemplateBakeComplete` is emitted exactly once per iteration
     /// with the correct `stages_processed` count. Also verifies that
-    /// `total_cut_rows_baked > 0` on iteration 2 (because the backward pass on
+    /// `total_rows_baked > 0` on iteration 2 (because the backward pass on
     /// iteration 1 generates cuts before step 4c runs on that same iteration).
     #[test]
     fn template_bake_event_emitted() {
@@ -3990,23 +3996,23 @@ mod tests {
 
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-        // Collect all TemplateBakeComplete events.
+        // Collect all PolicyTemplateBakeComplete events.
         let bake_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::TemplateBakeComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicyTemplateBakeComplete { .. }))
             .collect();
 
         // Exactly one per iteration (2 iterations).
         assert_eq!(
             bake_events.len(),
             2,
-            "expected exactly 2 TemplateBakeComplete events, got {}",
+            "expected exactly 2 PolicyTemplateBakeComplete events, got {}",
             bake_events.len()
         );
 
         // Each event must report stages_processed == n_stages.
         for event in &bake_events {
-            let TrainingEvent::TemplateBakeComplete {
+            let TrainingEvent::PolicyTemplateBakeComplete {
                 stages_processed, ..
             } = event
             else {
@@ -4019,17 +4025,16 @@ mod tests {
         }
 
         // On iteration 2, the backward pass from iteration 1 will have added
-        // cuts, so total_cut_rows_baked must be > 0.
+        // cuts, so total_rows_baked must be > 0.
         let second_bake = bake_events[1];
-        let TrainingEvent::TemplateBakeComplete {
-            total_cut_rows_baked,
-            ..
+        let TrainingEvent::PolicyTemplateBakeComplete {
+            total_rows_baked, ..
         } = second_bake
         else {
             panic!("wrong variant")
         };
         assert!(
-            *total_cut_rows_baked > 0,
+            *total_rows_baked > 0,
             "iteration 2 bake must have baked at least one cut row (backward pass \
              generated cuts on iteration 1)"
         );

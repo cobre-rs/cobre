@@ -837,8 +837,8 @@ mod tests {
         },
     };
     use cobre_io::config::{
-        Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, RawClassConfigEntry, RawScenarioSourceConfig,
+        Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+        PolicyConfig, RawClassConfigEntry, RawScenarioSourceConfig, RowSelectionConfig,
         SimulationConfig as IoSimulationConfig, StoppingRuleConfig, TrainingConfig,
         TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
@@ -1099,7 +1099,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },
@@ -1798,9 +1798,9 @@ mod tests {
         use super::{DEFAULT_FORWARD_PASSES, DEFAULT_SEED, StudyParams};
         use crate::stopping_rule::StoppingMode;
         use cobre_io::config::{
-            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
-            TrainingSolverConfig, UpperBoundEvaluationConfig,
+            Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+            PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
+            TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
 
         let config = Config {
@@ -1819,7 +1819,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },
@@ -1875,8 +1875,8 @@ mod tests {
         use super::StudyParams;
         use crate::stopping_rule::{StoppingMode, StoppingRule};
         use cobre_io::config::{
-            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig,
+            Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+            PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
             StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
 
@@ -1899,7 +1899,7 @@ mod tests {
                 stopping_mode: "all".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },
@@ -1970,9 +1970,9 @@ mod tests {
     /// Build a minimal [`cobre_io::Config`] with no estimation or seed overrides.
     fn minimal_prepare_config() -> cobre_io::Config {
         use cobre_io::config::{
-            Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-            ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, TrainingConfig,
-            TrainingSolverConfig, UpperBoundEvaluationConfig,
+            Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+            PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
+            TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
 
         Config {
@@ -1991,7 +1991,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },

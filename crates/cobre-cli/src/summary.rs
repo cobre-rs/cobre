@@ -430,11 +430,11 @@ pub struct TrainingSummary {
     /// Relative gap between upper and lower bounds as a percentage.
     pub gap_percent: f64,
 
-    /// Number of Benders cuts active in the pool at the end of training.
-    pub total_cuts_active: u64,
+    /// Number of policy rows active in the pool at the end of training.
+    pub total_rows_active: u64,
 
-    /// Total number of Benders cuts generated over the entire training run.
-    pub total_cuts_generated: u64,
+    /// Total number of policy rows generated over the entire training run.
+    pub total_rows_generated: u64,
 
     /// Total number of LP solves across all ranks, stages, iterations, and
     /// passes.  Aggregated via `allreduce(Sum)` so that the reported value is
@@ -563,7 +563,7 @@ fn format_convergence_detail(converged: bool, converged_at: Option<u64>, reason:
 ///   Lower bound:  {lb} $/stage
 ///   Upper bound:  {ub} +/- {std} $/stage
 ///   Gap:          {gap}%
-///   Cuts:         {active} active / {generated} generated
+///   Policy rows:  {active} active / {generated} generated
 ///   LP solves:    {total_lp}
 ///
 /// Simulation complete ({scenarios} scenarios)
@@ -597,8 +597,8 @@ pub fn format_summary_string(summary: &RunSummary) -> String {
     ));
     lines.push(format!("  Gap:          {:.1}%", t.gap_percent));
     lines.push(format!(
-        "  Cuts:         {} active / {} generated",
-        t.total_cuts_active, t.total_cuts_generated
+        "  Policy rows:  {} active / {} generated",
+        t.total_rows_active, t.total_rows_generated
     ));
     lines.push(format!("  LP solves:    {}", t.total_lp_solves));
 
@@ -628,7 +628,7 @@ pub fn format_summary_string(summary: &RunSummary) -> String {
 
 /// Print the training completion summary to `stderr`.
 ///
-/// Rendered bold header with convergence metrics, bounds, cuts, and LP solves.
+/// Rendered bold header with convergence metrics, bounds, policy rows, and LP solves.
 /// Write errors are silently ignored (fire-and-forget).
 pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
     let duration = format_duration(t.total_time_ms);
@@ -650,8 +650,8 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
     ));
     let _ = stderr.write_line(&format!("  Gap:          {:.1}%", t.gap_percent));
     let _ = stderr.write_line(&format!(
-        "  Cuts:         {} active / {} generated",
-        t.total_cuts_active, t.total_cuts_generated
+        "  Policy rows:  {} active / {} generated",
+        t.total_rows_active, t.total_rows_generated
     ));
     if let (Some(first_try), Some(retried), Some(failed)) =
         (t.total_first_try, t.total_retried, t.total_failed)
@@ -813,8 +813,8 @@ mod tests {
             upper_bound: 105.0,
             upper_bound_std: 2.5,
             gap_percent: 4.8,
-            total_cuts_active: 480,
-            total_cuts_generated: 1200,
+            total_rows_active: 480,
+            total_rows_generated: 1200,
             total_lp_solves: 36_000,
             total_time_ms: 5_000,
             total_first_try: Some(35_900),
@@ -1021,11 +1021,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_summary_cut_stats() {
+    fn test_format_summary_row_stats() {
         let summary = RunSummary {
             training: TrainingSummary {
-                total_cuts_active: 480,
-                total_cuts_generated: 1200,
+                total_rows_active: 480,
+                total_rows_generated: 1200,
                 ..make_training_summary()
             },
             simulation: None,
@@ -1035,7 +1035,7 @@ mod tests {
 
         assert!(
             s.contains("480 active / 1200 generated"),
-            "summary must contain cut counts, got: {s}"
+            "summary must contain policy row counts, got: {s}"
         );
     }
 

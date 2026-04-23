@@ -161,7 +161,7 @@ account for the long-term future cost of water.
 1. **Run a monthly study** and produce a policy checkpoint (the "outer" model).
 2. **Run a weekly+monthly study** with `policy.boundary` pointing to the
    monthly checkpoint. Cobre loads cuts from the specified stage and injects
-   them into the terminal stage's cut pool as fixed boundary conditions.
+   them into the terminal stage's row pool as fixed boundary conditions.
 
 The imported boundary cuts are **not updated** by the SDDP training algorithm.
 They remain fixed throughout training and simulation, providing a floor on

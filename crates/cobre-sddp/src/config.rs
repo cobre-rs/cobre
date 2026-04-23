@@ -52,8 +52,8 @@
 //! assert_eq!(config.events.checkpoint_interval, Some(50));
 //! ```
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use cobre_core::TrainingEvent;
 
@@ -408,7 +408,7 @@ mod tests {
                     final_lb: 0.0,
                     final_ub: 1.0,
                     total_time_ms: 100,
-                    total_cuts: 4,
+                    total_rows: 4,
                 })
                 .unwrap();
         }

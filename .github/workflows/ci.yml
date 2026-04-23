@@ -143,6 +143,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Infra genericity gate
+        run: bash scripts/check-infra-genericity.sh
       - name: Check Python parity
         run: python3 scripts/check_python_parity.py --max 0
       - name: Check CLAUDE.md version

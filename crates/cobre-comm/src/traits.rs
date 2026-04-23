@@ -308,7 +308,7 @@ pub trait Communicator: Send + Sync {
     /// Ranks are numbered `0..size()`. This value is fixed at communicator
     /// initialization and never changes. Implementations must cache the value
     /// at construction time — `rank()` is called frequently per iteration for
-    /// distribution arithmetic, logging, and cut slot computation.
+    /// distribution arithmetic, logging, and row-slot computation.
     ///
     /// # Postconditions
     ///

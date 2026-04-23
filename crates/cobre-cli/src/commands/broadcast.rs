@@ -1,6 +1,6 @@
 //! Postcard-serializable types for MPI broadcast.
 //!
-//! Wraps SDDP configuration, stopping rules, cut selection, and opening tree
+//! Wraps SDDP configuration, stopping rules, row-selection strategy, and opening tree
 //! data for broadcast from rank 0 to all ranks.
 
 use cobre_core::scenario::ScenarioSource;
@@ -26,7 +26,7 @@ pub(crate) enum BroadcastStoppingMode {
     All,
 }
 
-/// Postcard-serializable cut selection strategy.
+/// Postcard-serializable row-selection strategy.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum BroadcastCutSelection {
     Disabled,
@@ -122,7 +122,7 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: cobre_io::PolicyMode,
     /// Whether the visited-states archive should be allocated for export.
     pub(crate) export_states: bool,
-    /// Maximum number of active cuts per stage (hard cap on LP size).
+    /// Maximum number of active rows per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
@@ -455,9 +455,9 @@ mod tests {
         );
     }
 
-    /// Postcard serialization round-trip after deletion of `warm_start_basis_mode`.
+    /// Postcard serialization round-trip for `BroadcastConfig`.
     #[test]
-    fn broadcast_config_roundtrips_via_postcard_after_warm_start_basis_mode_deletion() {
+    fn broadcast_config_roundtrips_via_postcard() {
         use cobre_core::scenario::{SamplingScheme, ScenarioSource};
 
         use super::BroadcastConfig;
@@ -501,12 +501,9 @@ mod tests {
         );
     }
 
-    /// Confirms the `BroadcastConfig` wire does not carry any previously
-    /// deleted fields.
+    /// Guardrail: `BroadcastConfig` postcard bytes exclude stale field names.
     ///
-    /// Postcard encodes fields by declaration order (no field names in the binary),
-    /// so the string check is a guardrail: if a future author switches to a
-    /// named-field serializer, stale field names would appear and this test fails.
+    /// If a future serializer switches to named fields, this catches regressions.
     #[test]
     fn broadcast_config_wire_excludes_deleted_fields() {
         use super::BroadcastConfig;
@@ -523,11 +520,6 @@ mod tests {
         let bcast = BroadcastConfig::from_config(&config).unwrap();
         let bytes = postcard::to_allocvec(&bcast).expect("postcard serialization must succeed");
 
-        // Postcard is binary, but struct field names are not serialized
-        // by default (fields are identified by declaration order). This
-        // test is a guardrail: if any future author switches to a
-        // named-field serializer (serde_json, bincode-named, etc.), the
-        // test would start catching stale field names.
         let as_string = String::from_utf8_lossy(&bytes);
         for stale in [
             "warm_start_basis_mode",

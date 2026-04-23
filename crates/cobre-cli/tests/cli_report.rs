@@ -64,7 +64,7 @@ const TRAINING_METADATA_JSON: &str = r#"{
         "final_gap_percent": 0.45,
         "termination_reason": "bound_stalling"
     },
-    "cuts": {
+    "row_pool": {
         "total_generated": 1250000,
         "total_active": 980000,
         "peak_active": 1100000

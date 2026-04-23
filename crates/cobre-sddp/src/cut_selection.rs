@@ -427,7 +427,7 @@ fn select_dominated(
 // Config parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a [`cobre_io::config::CutSelectionConfig`] into an optional
+/// Parse a [`cobre_io::config::RowSelectionConfig`] into an optional
 /// [`CutSelectionStrategy`].
 ///
 /// Returns `None` when disabled (default). Returns `Err` when explicitly
@@ -441,7 +441,7 @@ fn select_dominated(
 /// when the `method` string is not a recognised variant, or when
 /// `check_frequency = 0`.
 pub fn parse_cut_selection_config(
-    config: &cobre_io::config::CutSelectionConfig,
+    config: &cobre_io::config::RowSelectionConfig,
 ) -> Result<Option<CutSelectionStrategy>, String> {
     let enabled = config.enabled.unwrap_or(false);
     if !enabled {
@@ -494,7 +494,7 @@ mod tests {
     use super::parse_cut_selection_config;
     use super::{CutMetadata, CutSelectionStrategy, DeactivationSet};
     use crate::cut::CutPool;
-    use cobre_io::config::CutSelectionConfig;
+    use cobre_io::config::RowSelectionConfig;
 
     fn make_meta(active_count: u64, last_active_iter: u64) -> CutMetadata {
         CutMetadata {
@@ -780,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_parse_disabled_default() {
-        let cfg = CutSelectionConfig::default();
+        let cfg = RowSelectionConfig::default();
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
         assert!(
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_parse_level1() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: Some(0),
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_parse_lml1() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("lml1".to_string()),
             threshold: None,
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_parse_domination() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("domination".to_string()),
             threshold: Some(0),
@@ -880,7 +880,7 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_method() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("bogus".to_string()),
             threshold: None,
@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn test_parse_enabled_without_method() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: None,
             threshold: None,
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_parse_enabled_false_with_method_returns_none() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(false),
             method: Some("level1".to_string()),
             threshold: None,
@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn test_parse_zero_check_frequency() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: None,

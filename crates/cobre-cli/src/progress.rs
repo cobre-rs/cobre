@@ -349,10 +349,10 @@ impl BarRenderer {
             TrainingEvent::ForwardPassComplete { .. }
             | TrainingEvent::ForwardSyncComplete { .. }
             | TrainingEvent::BackwardPassComplete { .. }
-            | TrainingEvent::CutSyncComplete { .. }
-            | TrainingEvent::CutSelectionComplete { .. }
-            | TrainingEvent::BudgetEnforcementComplete { .. }
-            | TrainingEvent::TemplateBakeComplete { .. }
+            | TrainingEvent::PolicySyncComplete { .. }
+            | TrainingEvent::PolicySelectionComplete { .. }
+            | TrainingEvent::PolicyBudgetEnforcementComplete { .. }
+            | TrainingEvent::PolicyTemplateBakeComplete { .. }
             | TrainingEvent::ConvergenceUpdate { .. }
             | TrainingEvent::CheckpointComplete { .. }
             | TrainingEvent::WorkerTiming { .. } => {}
@@ -488,10 +488,10 @@ impl LineRenderer {
             | TrainingEvent::ForwardPassComplete { .. }
             | TrainingEvent::ForwardSyncComplete { .. }
             | TrainingEvent::BackwardPassComplete { .. }
-            | TrainingEvent::CutSyncComplete { .. }
-            | TrainingEvent::CutSelectionComplete { .. }
-            | TrainingEvent::BudgetEnforcementComplete { .. }
-            | TrainingEvent::TemplateBakeComplete { .. }
+            | TrainingEvent::PolicySyncComplete { .. }
+            | TrainingEvent::PolicySelectionComplete { .. }
+            | TrainingEvent::PolicyBudgetEnforcementComplete { .. }
+            | TrainingEvent::PolicyTemplateBakeComplete { .. }
             | TrainingEvent::ConvergenceUpdate { .. }
             | TrainingEvent::CheckpointComplete { .. }
             | TrainingEvent::WorkerTiming { .. } => {}
@@ -505,7 +505,7 @@ mod tests {
 
     use cobre_core::TrainingEvent;
 
-    use super::{RenderMode, run_progress_thread};
+    use super::{run_progress_thread, RenderMode};
 
     #[allow(clippy::cast_precision_loss)]
     fn make_iteration_summary(iteration: u64) -> TrainingEvent {
@@ -534,7 +534,7 @@ mod tests {
             final_lb: 105.0,
             final_ub: 106.0,
             total_time_ms: 600,
-            total_cuts: 144,
+            total_rows: 144,
         }
     }
 
@@ -765,11 +765,11 @@ mod tests {
         .unwrap();
         tx.send(TrainingEvent::BackwardPassComplete {
             iteration: 1,
-            cuts_generated: 48,
+            rows_generated: 48,
             stages_processed: 12,
             elapsed_ms: 87,
             state_exchange_time_ms: 0,
-            cut_batch_build_time_ms: 0,
+            row_batch_build_time_ms: 0,
             setup_time_ms: 0,
             load_imbalance_ms: 0,
             scheduling_overhead_ms: 0,

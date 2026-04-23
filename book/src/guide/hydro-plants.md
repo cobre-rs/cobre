@@ -211,11 +211,11 @@ production function converts flow to power.
 
 ### Available Production Function Models
 
-| Model                 | `model` value             | Status            | Description                                                                                                                                          |
-| --------------------- | ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Constant productivity | `"constant_productivity"` | Available         | `power = productivity * turbined_flow`. Independent of reservoir head. Requires only `productivity_mw_per_m3s`.                                      |
-| FPHA                  | `"fpha"`                  | Available         | Piecewise-linear outer approximation of the nonlinear production function. Head-dependent. Configured via `hydro_production_models.json`. See below. |
-| Linearized head       | `"linearized_head"`       | Not yet available | Head-dependent productivity linearized around an operating point at each stage. Will be documented when released.                                    |
+| Model                 | `model` value             | Status            | Description                                                                                                                               |
+| --------------------- | ------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Constant productivity | `"constant_productivity"` | Available         | `power = productivity * turbined_flow`. Independent of reservoir head. Requires only `productivity_mw_per_m3s`.                           |
+| FPHA                  | `"fpha"`                  | Available         | Piecewise-linear envelope of the nonlinear production function. Head-dependent. Configured via `hydro_production_models.json`. See below. |
+| Linearized head       | `"linearized_head"`       | Not yet available | Head-dependent productivity linearized around an operating point at each stage. Will be documented when released.                         |
 
 For the `1dtoy` example and for most initial studies, `constant_productivity` is
 the correct choice. The `productivity_mw_per_m3s` factor encodes the plant's
@@ -229,7 +229,7 @@ MW/(m³/s).
 
 The FPHA (Forebay-Height Production Approximation) model represents the nonlinear
 relationship between reservoir volume, turbined flow, spillage, and electrical
-generation as a piecewise-linear outer approximation. It captures the head
+generation as a piecewise-linear envelope. It captures the head
 dependence of hydro production — plants with high reservoir levels generate more
 power for the same turbined flow.
 
@@ -346,7 +346,7 @@ non-null value.
 Hyperplanes are fitted at runtime from the plant's physical geometry. Cobre reads
 the VHA (Volume-Height-Area) curve from `system/hydro_geometry.parquet`, evaluates
 the production function `phi(v, q, s)` over a discretization grid, and fits a
-piecewise-linear outer approximation.
+piecewise-linear envelope.
 
 This source requires:
 
@@ -401,8 +401,7 @@ limit — the validator will reject the configuration.
 
 ### Kappa Correction Factor
 
-The FPHA envelope is an outer approximation: by construction it never underestimates
-generation. To ensure the LP does not systematically overestimate production, a
+The FPHA piecewise-linear envelope never underestimates generation by construction. To ensure the LP does not systematically overestimate production, a
 correction factor kappa (κ) is applied to each hyperplane's intercept:
 
 ```

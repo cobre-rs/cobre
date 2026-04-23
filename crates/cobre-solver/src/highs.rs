@@ -972,27 +972,27 @@ impl SolverInterface for HighsSolver {
         self.stats.load_model_count += 1;
     }
 
-    fn add_rows(&mut self, cuts: &RowBatch) {
+    fn add_rows(&mut self, rows: &RowBatch) {
         assert!(
-            i32::try_from(cuts.num_rows).is_ok(),
-            "cuts.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
-            cuts.num_rows
+            i32::try_from(rows.num_rows).is_ok(),
+            "rows.num_rows {} overflows i32: RowBatch exceeds HiGHS API limit",
+            rows.num_rows
         );
         assert!(
-            i32::try_from(cuts.col_indices.len()).is_ok(),
-            "cuts nnz {} overflows i32: RowBatch exceeds HiGHS API limit",
-            cuts.col_indices.len()
+            i32::try_from(rows.col_indices.len()).is_ok(),
+            "rows nnz {} overflows i32: RowBatch exceeds HiGHS API limit",
+            rows.col_indices.len()
         );
         // SAFETY: Both values have been asserted to fit in i32 above.
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let num_new_row = cuts.num_rows as i32;
+        let num_new_row = rows.num_rows as i32;
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let num_new_nz = cuts.col_indices.len() as i32;
+        let num_new_nz = rows.col_indices.len() as i32;
 
         // SAFETY:
         // - `self.handle` is a valid, non-null HiGHS pointer.
         // - All pointer arguments point into owned data alive for the duration of this call.
-        // - `cuts.row_starts` and `cuts.col_indices` are `Vec<i32>` owned by the RowBatch,
+        // - `rows.row_starts` and `rows.col_indices` are `Vec<i32>` owned by the RowBatch,
         //   alive for the duration of this borrow.
         // - Slice lengths: `num_rows + 1` for starts, total nnz for index and value,
         //   `num_rows` for lower/upper bounds.
@@ -1000,12 +1000,12 @@ impl SolverInterface for HighsSolver {
             ffi::cobre_highs_add_rows(
                 self.handle,
                 num_new_row,
-                cuts.row_lower.as_ptr(),
-                cuts.row_upper.as_ptr(),
+                rows.row_lower.as_ptr(),
+                rows.row_upper.as_ptr(),
                 num_new_nz,
-                cuts.row_starts.as_ptr(),
-                cuts.col_indices.as_ptr(),
-                cuts.values.as_ptr(),
+                rows.row_starts.as_ptr(),
+                rows.col_indices.as_ptr(),
+                rows.values.as_ptr(),
             )
         };
 
@@ -1015,7 +1015,7 @@ impl SolverInterface for HighsSolver {
             "cobre_highs_add_rows failed with status {status}"
         );
 
-        self.num_rows += cuts.num_rows;
+        self.num_rows += rows.num_rows;
 
         // Grow row-indexed solution extraction buffers to cover the new rows.
         self.row_value.resize(self.num_rows, 0.0);
@@ -1305,9 +1305,9 @@ mod tests {
         }
     }
 
-    // Benders cut fixture from Solver Interface Testing SS1.2:
-    // Cut 1: -5*x0 + x1 >= 20  (col_indices [0,1], values [-5, 1])
-    // Cut 2:  3*x0 + x1 >= 80  (col_indices [0,1], values [ 3, 1])
+    // Valid-inequality fixture from Solver Interface Testing SS1.2:
+    // Row 1: -5*x0 + x1 >= 20  (col_indices [0,1], values [-5, 1])
+    // Row 2:  3*x0 + x1 >= 80  (col_indices [0,1], values [ 3, 1])
     fn make_fixture_row_batch() -> RowBatch {
         RowBatch {
             num_rows: 2,
@@ -1384,7 +1384,7 @@ mod tests {
         solver.load_model(&template);
         solver.add_rows(&cuts);
 
-        // 2 structural rows + 2 cut rows = 4
+        // 2 structural rows + 2 appended rows = 4
         assert_eq!(solver.num_rows, 4, "num_rows must be 4 after add_rows");
         assert_eq!(
             solver.row_dual.len(),
@@ -1466,7 +1466,7 @@ mod tests {
         );
     }
 
-    /// SS1.2: after adding two Benders cuts to SS1.1, optimal objective = 162.
+    /// SS1.2: after adding two valid inequalities to SS1.1, optimal objective = 162.
     /// Cuts: -5*x0+x1>=20 and 3*x0+x1>=80. With x0=6: x1>=max(50,62)=62.
     /// Obj = 0*6 + 1*62 + 50*2 = 162.
     #[test]

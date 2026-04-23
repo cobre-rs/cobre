@@ -82,30 +82,30 @@ pub struct StoppingRuleResult {
     pub detail: String,
 }
 
-/// Per-stage cut selection statistics for one iteration.
+/// Per-stage row-selection statistics for one iteration.
 ///
-/// Each instance describes the cut lifecycle at a single stage after a
-/// selection step: how many cuts existed, how many were active before
+/// Each instance describes the row-selection lifecycle at a single stage after a
+/// selection step: how many rows existed, how many were active before
 /// selection, how many were deactivated, and how many remain active.
 ///
 /// The two optional fields capture the budget-enforcement pipeline state:
 /// `budget_evicted` and `active_after_budget` are set after Step 4b (budget
 /// enforcement). Both are `None` when budget enforcement is disabled.
 #[derive(Debug, Clone)]
-pub struct StageSelectionRecord {
+pub struct StageRowSelectionRecord {
     /// 0-based stage index.
     pub stage: u32,
-    /// Total cuts ever generated at this stage (high-water mark).
-    pub cuts_populated: u32,
-    /// Active cuts before selection ran.
-    pub cuts_active_before: u32,
-    /// Cuts deactivated by selection at this stage.
-    pub cuts_deactivated: u32,
-    /// Active cuts after selection.
-    pub cuts_active_after: u32,
+    /// Total rows ever generated at this stage (high-water mark).
+    pub rows_populated: u32,
+    /// Active rows before selection ran.
+    pub rows_active_before: u32,
+    /// Rows deactivated by selection at this stage.
+    pub rows_deactivated: u32,
+    /// Active rows after selection.
+    pub rows_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
-    /// Cuts evicted by budget enforcement (Step 4b) at this stage.
+    /// Rows evicted by budget enforcement (Step 4b) at this stage.
     ///
     /// `None` when budget enforcement is disabled.
     pub budget_evicted: Option<u32>,
@@ -128,10 +128,10 @@ pub struct StageSelectionRecord {
 /// | 1    | [`Self::ForwardPassComplete`]  | Local forward pass done                                |
 /// | 2    | [`Self::ForwardSyncComplete`]  | Global allreduce of bounds done                        |
 /// | 3    | [`Self::BackwardPassComplete`] | Backward sweep done                                    |
-/// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
-/// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
-/// | 4b   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
-/// | 4c   | [`Self::TemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
+/// | 4    | [`Self::PolicySyncComplete`]      | Row-sync allgatherv done                                    |
+/// | 4a   | [`Self::PolicySelectionComplete`] | Row-selection done (conditional on `should_run`)       |
+/// | 4b   | [`Self::PolicyBudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
+/// | 4c   | [`Self::PolicyTemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
@@ -179,13 +179,13 @@ pub enum TrainingEvent {
 
     /// Step 3: Backward pass completed for this iteration.
     ///
-    /// Emitted after the full backward sweep that generates new cuts for each
+    /// Emitted after the full backward sweep that generates new rows for each
     /// stage.
     BackwardPassComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of new cuts generated across all stages.
-        cuts_generated: u32,
+        /// Number of new rows generated across all stages.
+        rows_generated: u32,
         /// Number of stages processed in the backward sweep.
         stages_processed: u32,
         /// Wall-clock time for the backward pass, in milliseconds.
@@ -193,9 +193,9 @@ pub enum TrainingEvent {
         /// Wall-clock time for state exchange (`allgatherv`) across all stages,
         /// in milliseconds.
         state_exchange_time_ms: u64,
-        /// Wall-clock time for cut batch assembly (`build_cut_row_batch_into`)
+        /// Wall-clock time for row-batch assembly (`build_row_batch_into`)
         /// across all stages, in milliseconds.
-        cut_batch_build_time_ms: u64,
+        row_batch_build_time_ms: u64,
         /// Aggregate non-solve work inside the parallel region accumulated across
         /// all stages and all workers, in milliseconds.
         ///
@@ -213,55 +213,55 @@ pub enum TrainingEvent {
         scheduling_overhead_ms: u64,
     },
 
-    /// Step 4: Cut synchronization (allgatherv) completed.
+    /// Step 4: Policy row synchronization (allgatherv) completed.
     ///
-    /// Emitted after new cuts from all ranks have been gathered and distributed
+    /// Emitted after new rows from all ranks have been gathered and distributed
     /// to every rank via allgatherv.
-    CutSyncComplete {
+    PolicySyncComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of cuts distributed to all ranks via allgatherv.
-        cuts_distributed: u32,
-        /// Total number of active cuts in the approximation after synchronization.
-        cuts_active: u32,
-        /// Number of cuts removed during synchronization.
-        cuts_removed: u32,
+        /// Number of rows distributed to all ranks via allgatherv.
+        rows_distributed: u32,
+        /// Total number of active rows in the approximation after synchronization.
+        rows_active: u32,
+        /// Number of rows removed during synchronization.
+        rows_removed: u32,
         /// Wall-clock time for the synchronization, in milliseconds.
         sync_time_ms: u64,
     },
 
-    /// Step 4a: Cut selection completed.
+    /// Step 4a: Policy row selection completed.
     ///
-    /// Only emitted on iterations where cut selection runs (i.e., when
+    /// Only emitted on iterations where row selection runs (i.e., when
     /// `should_run(iteration)` returns `true`). On non-selection iterations
     /// this variant is skipped entirely.
-    CutSelectionComplete {
+    PolicySelectionComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of cuts deactivated across all stages.
-        cuts_deactivated: u32,
-        /// Number of stages processed during cut selection.
+        /// Number of rows deactivated across all stages.
+        rows_deactivated: u32,
+        /// Number of stages processed during row selection.
         stages_processed: u32,
-        /// Wall-clock time for the local cut selection phase, in milliseconds.
+        /// Wall-clock time for the local row-selection phase, in milliseconds.
         selection_time_ms: u64,
         /// Wall-clock time for the allgatherv deactivation-set exchange, in
         /// milliseconds.
         allgatherv_time_ms: u64,
         /// Per-stage breakdown of selection results.
-        per_stage: Vec<StageSelectionRecord>,
+        per_stage: Vec<StageRowSelectionRecord>,
     },
 
-    /// Step 4b: Active-cut budget enforcement completed.
+    /// Step 4b: Active-row budget enforcement completed.
     ///
     /// Emitted every iteration when `budget` is set in `TrainingConfig`.
     /// When `budget` is `None`, this variant is never emitted. Unlike Step
     /// 4a, budget enforcement is not gated by `check_frequency` because the
     /// budget is a hard cap that must be maintained at all times.
-    BudgetEnforcementComplete {
+    PolicyBudgetEnforcementComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Total number of cuts evicted across all stages in this iteration.
-        cuts_evicted: u32,
+        /// Total number of rows evicted across all stages in this iteration.
+        rows_evicted: u32,
         /// Number of stages processed during budget enforcement.
         stages_processed: u32,
         /// Wall-clock time for the budget enforcement pass, in milliseconds.
@@ -271,18 +271,18 @@ pub enum TrainingEvent {
     /// Step 4c: Template baking completed.
     ///
     /// Emitted every iteration after all per-stage baked templates have been
-    /// rebuilt from the current active cut set (after Steps 4a and 4b). Baking
+    /// rebuilt from the current active row set (after Steps 4a and 4b). Baking
     /// runs sequentially over stages and is outside the forward/backward hot
     /// paths. The baked templates are consumed by the forward and backward
     /// passes in the *next* iteration.
-    TemplateBakeComplete {
+    PolicyTemplateBakeComplete {
         /// Iteration number (1-based).
         iteration: u64,
         /// Number of stages for which baked templates were rebuilt.
         stages_processed: u32,
-        /// Total number of cut rows baked across all stages
+        /// Total number of rows baked across all stages
         /// (sum of `active_count()` over all stage pools at the emit instant).
-        total_cut_rows_baked: u64,
+        total_rows_baked: u64,
         /// Wall-clock time for the baking pass across all stages, in milliseconds.
         bake_time_ms: u64,
     },
@@ -399,8 +399,8 @@ pub enum TrainingEvent {
         final_ub: f64,
         /// Total wall-clock time for the training run, in milliseconds.
         total_time_ms: u64,
-        /// Total number of cuts in the approximation at termination.
-        total_cuts: u64,
+        /// Total number of rows in the approximation at termination.
+        total_rows: u64,
     },
 
     /// Emitted periodically during policy simulation (not during training).
@@ -496,7 +496,10 @@ pub enum TrainingEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_COUNT, WorkerTimingPhase};
+    use super::{
+        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WorkerTimingPhase,
+        WORKER_TIMING_SLOT_COUNT,
+    };
 
     // Helper: build one of each variant with representative values.
     fn make_all_variants() -> Vec<TrainingEvent> {
@@ -516,40 +519,40 @@ mod tests {
             },
             TrainingEvent::BackwardPassComplete {
                 iteration: 1,
-                cuts_generated: 48,
+                rows_generated: 48,
                 stages_processed: 12,
                 elapsed_ms: 87,
                 state_exchange_time_ms: 0,
-                cut_batch_build_time_ms: 0,
+                row_batch_build_time_ms: 0,
                 setup_time_ms: 0,
                 load_imbalance_ms: 0,
                 scheduling_overhead_ms: 0,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 48,
-                cuts_active: 200,
-                cuts_removed: 0,
+                rows_distributed: 48,
+                rows_active: 200,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 10,
-                cuts_deactivated: 15,
+                rows_deactivated: 15,
                 stages_processed: 12,
                 selection_time_ms: 20,
                 allgatherv_time_ms: 1,
                 per_stage: vec![],
             },
-            TrainingEvent::BudgetEnforcementComplete {
+            TrainingEvent::PolicyBudgetEnforcementComplete {
                 iteration: 10,
-                cuts_evicted: 2,
+                rows_evicted: 2,
                 stages_processed: 12,
                 enforcement_time_ms: 1,
             },
-            TrainingEvent::TemplateBakeComplete {
+            TrainingEvent::PolicyTemplateBakeComplete {
                 iteration: 10,
                 stages_processed: 12,
-                total_cut_rows_baked: 48,
+                total_rows_baked: 48,
                 bake_time_ms: 2,
             },
             TrainingEvent::ConvergenceUpdate {
@@ -600,7 +603,7 @@ mod tests {
                 final_lb: 105.0,
                 final_ub: 106.0,
                 total_time_ms: 300_000,
-                total_cuts: 2400,
+                total_rows: 2400,
             },
             TrainingEvent::SimulationProgress {
                 scenarios_complete: 50,
@@ -739,18 +742,18 @@ mod tests {
     }
 
     #[test]
-    fn cut_selection_complete_fields_accessible() {
-        let event = TrainingEvent::CutSelectionComplete {
+    fn policy_selection_complete_fields_accessible() {
+        let event = TrainingEvent::PolicySelectionComplete {
             iteration: 10,
-            cuts_deactivated: 30,
+            rows_deactivated: 30,
             stages_processed: 12,
             selection_time_ms: 25,
             allgatherv_time_ms: 2,
             per_stage: vec![],
         };
-        let TrainingEvent::CutSelectionComplete {
+        let TrainingEvent::PolicySelectionComplete {
             iteration,
-            cuts_deactivated,
+            rows_deactivated,
             stages_processed,
             selection_time_ms,
             allgatherv_time_ms,
@@ -760,7 +763,7 @@ mod tests {
             panic!("wrong variant")
         };
         assert_eq!(iteration, 10);
-        assert_eq!(cuts_deactivated, 30);
+        assert_eq!(rows_deactivated, 30);
         assert_eq!(stages_processed, 12);
         assert_eq!(selection_time_ms, 25);
         assert_eq!(allgatherv_time_ms, 2);
@@ -828,16 +831,16 @@ mod tests {
     }
 
     #[test]
-    fn budget_enforcement_complete_fields_accessible() {
-        let event = TrainingEvent::BudgetEnforcementComplete {
+    fn policy_budget_enforcement_complete_fields_accessible() {
+        let event = TrainingEvent::PolicyBudgetEnforcementComplete {
             iteration: 7,
-            cuts_evicted: 5,
+            rows_evicted: 5,
             stages_processed: 12,
             enforcement_time_ms: 3,
         };
-        let TrainingEvent::BudgetEnforcementComplete {
+        let TrainingEvent::PolicyBudgetEnforcementComplete {
             iteration,
-            cuts_evicted,
+            rows_evicted,
             stages_processed,
             enforcement_time_ms,
         } = event
@@ -845,7 +848,7 @@ mod tests {
             panic!("wrong variant")
         };
         assert_eq!(iteration, 7);
-        assert_eq!(cuts_evicted, 5);
+        assert_eq!(rows_evicted, 5);
         assert_eq!(stages_processed, 12);
         assert_eq!(enforcement_time_ms, 3);
     }
@@ -897,17 +900,17 @@ mod tests {
     }
 
     #[test]
-    fn template_bake_complete_fields_accessible() {
-        let event = TrainingEvent::TemplateBakeComplete {
+    fn policy_template_bake_complete_fields_accessible() {
+        let event = TrainingEvent::PolicyTemplateBakeComplete {
             iteration: 5,
             stages_processed: 12,
-            total_cut_rows_baked: 96,
+            total_rows_baked: 96,
             bake_time_ms: 3,
         };
-        let TrainingEvent::TemplateBakeComplete {
+        let TrainingEvent::PolicyTemplateBakeComplete {
             iteration,
             stages_processed,
-            total_cut_rows_baked,
+            total_rows_baked,
             bake_time_ms,
         } = event
         else {
@@ -915,7 +918,29 @@ mod tests {
         };
         assert_eq!(iteration, 5);
         assert_eq!(stages_processed, 12);
-        assert_eq!(total_cut_rows_baked, 96);
+        assert_eq!(total_rows_baked, 96);
         assert_eq!(bake_time_ms, 3);
+    }
+
+    #[test]
+    fn stage_row_selection_record_fields_accessible() {
+        let record = StageRowSelectionRecord {
+            stage: 3,
+            rows_populated: 100,
+            rows_active_before: 80,
+            rows_deactivated: 10,
+            rows_active_after: 70,
+            selection_time_ms: 1.5,
+            budget_evicted: Some(5),
+            active_after_budget: Some(65),
+        };
+        assert_eq!(record.stage, 3);
+        assert_eq!(record.rows_populated, 100);
+        assert_eq!(record.rows_active_before, 80);
+        assert_eq!(record.rows_deactivated, 10);
+        assert_eq!(record.rows_active_after, 70);
+        assert!((record.selection_time_ms - 1.5).abs() < f64::EPSILON);
+        assert_eq!(record.budget_evicted, Some(5));
+        assert_eq!(record.active_after_budget, Some(65));
     }
 }

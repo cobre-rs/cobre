@@ -266,7 +266,7 @@ pub struct StageTemplate {
     /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable
     /// constraint rows are structural and not included in the dual-relevant set.
     ///
-    /// Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
+    /// Gradient coefficients are extracted from `dual[0..n_dual_relevant]`.
     pub n_dual_relevant: usize,
 
     /// Number of operating hydros at this stage.
@@ -304,18 +304,18 @@ pub struct StageTemplate {
 
 /// Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
 ///
-/// Assembled from the cut pool activity bitmap before each LP rebuild
+/// Assembled from the row-pool activity bitmap before each LP rebuild
 /// and passed to [`crate::SolverInterface::add_rows`] for a single batch call.
-/// Cuts are appended at the bottom of the constraint matrix in the dynamic
+/// Rows are appended at the bottom of the constraint matrix in the dynamic
 /// constraint region per
 /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
 ///
 /// See [Solver Interface Trait SS4.5](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md)
-/// and the cut pool assembly protocol in
+/// and the row-pool assembly protocol in
 /// [Solver Abstraction SS5.4](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
 #[derive(Debug, Clone)]
 pub struct RowBatch {
-    /// Number of active constraint rows (cuts) in this batch.
+    /// Number of active constraint rows in this batch.
     pub num_rows: usize,
 
     /// CSR row start offsets (`i32` for `HiGHS` FFI compatibility).
@@ -337,15 +337,14 @@ pub struct RowBatch {
     /// coefficient at column `col_indices[k]` in its row.
     pub values: Vec<f64>,
 
-    /// Row lower bounds (cut intercepts for cutting-plane cuts).
+    /// Row lower bounds (RHS lower bounds for `>=` constraints).
     ///
-    /// Length: `num_rows`. For `>=` cuts, this is the RHS lower bound.
+    /// Length: `num_rows`. For `>=` constraints, this is the RHS lower bound.
     pub row_lower: Vec<f64>,
 
     /// Row upper bounds.
     ///
-    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` cuts (cutting-plane cuts
-    /// have no finite upper bound).
+    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` constraints (no finite upper bound).
     pub row_upper: Vec<f64>,
 }
 

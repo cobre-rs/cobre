@@ -34,10 +34,10 @@ without rebuilding the structural model. A `CutRowMap` provides O(1)
 slot-to-row lookup so the incremental append skips cuts that are already
 present.
 
-The LB LP is strictly append-only: cuts generated during training are
+The LB LP is strictly append-only: rows generated during training are
 appended and never removed, which keeps the lower bound monotonically
-non-decreasing across iterations. Cut selection in the shared cut pool
-still affects the forward and backward passes — pool-deactivated cuts
+non-decreasing across iterations. Row selection in the shared row pool
+still affects the forward and backward passes — pool-deactivated rows
 remain as LP rows in the LB solver but are not re-evaluated, so they
 contribute only their binding value at the trial point.
 
@@ -152,8 +152,8 @@ and after scaling for each stage.
 
 ## Cut Management Pipeline
 
-As training progresses, the cut pool grows and LP solve times increase.
-Cobre provides a two-stage cut management pipeline to control this
+As training progresses, the row pool grows and LP solve times increase.
+Cobre provides a two-stage row management pipeline to control this
 growth while preserving convergence guarantees.
 
 The pipeline runs after each iteration's backward pass and cut
@@ -173,17 +173,17 @@ Three strategies are available, configured via
 
 | Strategy     | Deactivation Condition                             | Aggressiveness |
 | ------------ | -------------------------------------------------- | -------------- |
-| `level1`     | `active_count <= threshold` (never-binding cuts)   | Least          |
+| `level1`     | `active_count <= threshold` (never-binding rows)   | Least          |
 | `lml1`       | `iteration - last_active_iter > memory_window`     | Medium         |
 | `domination` | Dominated at all visited forward-pass trial points | Most           |
 
 All strategies respect `check_frequency`: selection runs only at
 iterations that are multiples of `check_frequency`. Stage 0 is always
-exempt (its cuts drive the lower bound and are never backward-pass
+exempt (its rows drive the lower bound and are never backward-pass
 successors). Selection runs in parallel across stages via `rayon`.
 
-**Dominated** selection performs `O(|active cuts| x |visited states|)` work
-per stage per check. It deactivates cuts that are pointwise dominated
+**Dominated** selection performs `O(|active rows| x |visited states|)` work
+per stage per check. It deactivates rows that are pointwise dominated
 at every visited forward-pass state, using the visited-states archive
 that is always collected during training. The `domination_epsilon`
 parameter controls the tolerance for domination comparisons.
@@ -191,9 +191,9 @@ parameter controls the tolerance for domination comparisons.
 ### Stage 2: Budget Enforcement
 
 A hard-cap safety net on LP size, enabled via `max_active_per_stage`.
-When the number of active cuts exceeds the budget after Stage 1, the
-pool evicts cuts sorted by staleness (`last_active_iter` ascending,
-then `active_count` ascending). Cuts from the current iteration are
+When the number of active rows exceeds the budget after Stage 1, the
+pool evicts rows sorted by staleness (`last_active_iter` ascending,
+then `active_count` ascending). Rows from the current iteration are
 always protected.
 
 Unlike Stage 1, budget enforcement runs **every iteration** (not gated
@@ -217,27 +217,27 @@ by `check_frequency`).
 
 **Why it matters:** Empirical data from a 118-stage case (2 ranks x 3
 threads) shows that high-parallelism configurations (50 forward passes x
-5 iterations) accumulate 4.7x more active cuts than low-parallelism
+5 iterations) accumulate 4.7x more active rows than low-parallelism
 configurations (5 forward passes x 50 iterations), making each backward
 LP solve 72% more expensive. Bounding LP size makes high-parallelism
 configurations viable.
 
 ### Observability
 
-The cut management pipeline writes per-stage statistics to
+The row management pipeline writes per-stage statistics to
 `training/cut_selection/iterations.parquet` with 9 columns:
 
 | Column                | Description                                  |
 | --------------------- | -------------------------------------------- |
 | `iteration`           | Training iteration                           |
 | `stage`               | Stage index                                  |
-| `cuts_populated`      | Total slots with cuts                        |
-| `cuts_active_before`  | Active cuts before selection                 |
-| `cuts_deactivated`    | Cuts deactivated by Stage 1                  |
-| `cuts_active_after`   | Active cuts after Stage 1                    |
+| `cuts_populated`      | Total row slots populated                    |
+| `cuts_active_before`  | Active rows before selection                 |
+| `cuts_deactivated`    | Rows deactivated by Stage 1                  |
+| `cuts_active_after`   | Active rows after Stage 1                    |
 | `selection_time_ms`   | Wall-clock time for the selection            |
-| `budget_evicted`      | Cuts evicted by Stage 2 (null if disabled)   |
-| `active_after_budget` | Active cuts after Stage 2 (null if disabled) |
+| `budget_evicted`      | Rows evicted by Stage 2 (null if disabled)   |
+| `active_after_budget` | Active rows after Stage 2 (null if disabled) |
 
 ---
 
@@ -267,28 +267,28 @@ simulation from the same LP vertex, regardless of rank count.
 
 Each stored warm-start basis is wrapped in a `CapturedBasis { basis,
 base_row_count, cut_row_slots, state_at_capture }` struct that records
-the LP row count and the ordered list of cut pool slot indices at
+the LP row count and the ordered list of row-pool slot indices at
 capture time, alongside the state vector at which the basis was
 captured. The `reconstruct_basis` function in
 `cobre-sddp::basis_reconstruct` is the sole entry point for applying a
-stored basis across cut-set churn on the forward pass, backward pass,
+stored basis across row-set churn on the forward pass, backward pass,
 and simulation pipeline.
 
-When a stored basis is applied to an LP whose cut rows have changed,
-`reconstruct_basis` walks the current LP's cut rows, looks each slot
+When a stored basis is applied to an LP whose appended rows have changed,
+`reconstruct_basis` walks the current LP's appended rows, looks each slot
 up in an O(1) scratch map built from `cut_row_slots`, and classifies
 each row into one of two paths:
 
 - **Preserved** (slot present in the stored basis): the original status
   is copied verbatim.
-- **New** (slot not present — a cut added since capture): the classifier
-  consults the cut's sliding bitmap of recent binding observations. If
-  any bit within the `basis_activity_window` mask is set, or if the cut
+- **New** (slot not present — a row added since capture): the classifier
+  consults the row's sliding bitmap of recent binding observations. If
+  any bit within the `basis_activity_window` mask is set, or if the row
   was generated in the current iteration, the row is assigned
   `NONBASIC_LOWER` (tight guess); otherwise `BASIC` (slack guess).
 
-Each `NONBASIC_LOWER` classification on a new cut requires a
-compensating demotion on a preserved cut to keep HiGHS's
+Each `NONBASIC_LOWER` classification on a new row requires a
+compensating demotion on a preserved row to keep HiGHS's
 column-basic + row-basic invariant. The stalest preserved-`LOWER`
 candidate is promoted, ranked lexicographically by recent-activity
 popcount, last-active iteration, and insertion order. When
@@ -314,7 +314,7 @@ cached basis instead of falling back to the forward-pass `BasisStore`.
 The first iteration has no backward cache yet, so it uses the forward
 cache exclusively.
 
-The backward cache matters because cuts added earlier in the current
+The backward cache matters because rows added earlier in the current
 iteration's backward walk are **new** relative to the previous
 iteration's stored basis — so the classifier fires frequently on
 backward solves, while the forward pass sees mostly preserved slots
@@ -333,7 +333,7 @@ counter work-stealing: each worker claims the next available trial-point
 index via `AtomicUsize::fetch_add(1, Relaxed)`. This keeps all threads
 busy even when trial points solve in variable time.
 
-After the parallel region, staged cuts are sorted by `trial_point_idx`
+After the parallel region, staged rows are sorted by `trial_point_idx`
 and inserted into the FCF in deterministic order, guaranteeing bit-for-bit
 identical results regardless of thread count or completion order.
 
@@ -367,21 +367,21 @@ and shared read-only.
 The training loop makes no heap allocations on the hot path inside the
 iteration loop. All workspace buffers are allocated once before the loop:
 
-| Buffer                               | Size                                                        |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `TrajectoryRecord` flat vec          | `forward_passes x num_stages` records                       |
-| `PatchBuffer`                        | `N*(2+L) + M*max_blocks` entries                            |
-| `ExchangeBuffers` (state allgatherv) | `local_count x num_ranks x n_state` floats                  |
-| `CutSyncBuffers` (cut allgatherv)    | `max_cuts_per_rank x num_ranks x cut_wire_size` bytes       |
-| `ScratchBuffers` per worker          | noise, inflow, lag matrix, PAR, eta, load, z-inflow buffers |
-| `Basis` per worker                   | pre-allocated with `template_rows + max_cut_rows` entries   |
+| Buffer                                 | Size                                                        |
+| -------------------------------------- | ----------------------------------------------------------- |
+| `TrajectoryRecord` flat vec            | `forward_passes x num_stages` records                       |
+| `PatchBuffer`                          | `N*(2+L) + M*max_blocks` entries                            |
+| `ExchangeBuffers` (state allgatherv)   | `local_count x num_ranks x n_state` floats                  |
+| `CutSyncBuffers` (row-sync allgatherv) | `max_cuts_per_rank x num_ranks x cut_wire_size` bytes       |
+| `ScratchBuffers` per worker            | noise, inflow, lag matrix, PAR, eta, load, z-inflow buffers |
+| `Basis` per worker                     | pre-allocated with `template_rows + max_cut_rows` entries   |
 
 ### CutPool Flat Coefficient Storage
 
-Cut coefficients are stored as a single contiguous `Vec<f64>` of size
+Row coefficients are stored as a single contiguous `Vec<f64>` of size
 `capacity x state_dimension` rather than a `Vec<Vec<f64>>`. This provides
-cache-friendly sequential access during batch iteration (cut evaluation,
-dominance checks) and eliminates per-cut heap allocation.
+cache-friendly sequential access during batch iteration (row evaluation,
+dominance checks) and eliminates per-row heap allocation.
 
 ### Lazy FCF Growth
 
@@ -391,7 +391,7 @@ maximum capacity. This prevents memory exhaustion on pathological parameter
 combinations (e.g., 1000 iterations x 1000 forward passes x 50 states x
 120 stages would require 48 GB with eager pre-allocation).
 
-### O(1) Active Cut Count
+### O(1) Active Row Count
 
 `CutPool` maintains a `cached_active_count` that is updated incrementally
 on each activation/deactivation, making `active_count()` O(1) instead of
@@ -408,7 +408,7 @@ millions of LP solves occur per training run.
 
 ## See Also
 
-- [Configuration](./configuration.md#cut_selection) — cut selection and cut management configuration
-- [Output Format](../reference/output-format.md) — timing, solver statistics, and cut selection output schemas
+- [Configuration](./configuration.md#cut_selection) — row-selection and row management configuration
+- [Output Format](../reference/output-format.md) — timing, solver statistics, and row-selection output schemas
 - [cobre-solver](../crates/solver.md) — solver interface and retry escalation details
 - [cobre-sddp](../crates/sddp.md) — training loop architecture and data structures

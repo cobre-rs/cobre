@@ -173,11 +173,11 @@ combine:
 
 Controls the optional post-training simulation phase.
 
-| Field           | Type      | Default   | Description                                                                       |
-| --------------- | --------- | --------- | --------------------------------------------------------------------------------- |
-| `enabled`       | boolean   | `false`   | Enable the simulation phase after training.                                       |
-| `num_scenarios` | integer   | `2000`    | Number of independent Monte Carlo simulation scenarios to evaluate.               |
-| `policy_type`   | `"outer"` | `"outer"` | Policy representation for simulation. `"outer"` uses the cut pool (Benders cuts). |
+| Field           | Type      | Default   | Description                                                                                    |
+| --------------- | --------- | --------- | ---------------------------------------------------------------------------------------------- |
+| `enabled`       | boolean   | `false`   | Enable the simulation phase after training.                                                    |
+| `num_scenarios` | integer   | `2000`    | Number of independent Monte Carlo simulation scenarios to evaluate.                            |
+| `policy_type`   | `"outer"` | `"outer"` | Policy representation for simulation. `"outer"` uses the piecewise-linear envelope (row pool). |
 
 When `simulation.enabled` is `false` or `num_scenarios` is `0`, the simulation
 phase is skipped entirely.
@@ -274,10 +274,10 @@ Example:
 
 ## `cut_selection`
 
-Controls the cut management pipeline for managing cut pool growth. The
+Controls the row management pipeline for managing row pool growth. The
 pipeline has up to two stages: strategy-based selection and budget
-enforcement. Cut management periodically scans the cut pool and
-deactivates cuts that are unlikely to improve the policy, reducing LP
+enforcement. Row management periodically scans the row pool and
+deactivates rows that are unlikely to improve the policy, reducing LP
 size without sacrificing convergence quality. For a detailed explanation
 of each stage, see
 [Performance Accelerators](./performance-accelerators.md#cut-management-pipeline).
@@ -286,25 +286,25 @@ of each stage, see
 
 | Field                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                             |
 | ------------------------ | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                | boolean | `false` | Enable cut pruning.                                                                                                                                                                                                                                                                                                                     |
+| `enabled`                | boolean | `false` | Enable row pruning.                                                                                                                                                                                                                                                                                                                     |
 | `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                                                                                                                                                                                                                                              |
-| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                                                                                                                                                                                                                                                        |
-| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.                                                                                                                                                                                                                                 |
+| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate rows with `active_count <= threshold`.                                                                                                                                                                                                                                                        |
+| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate rows not active within this many iterations. Overrides `threshold`.                                                                                                                                                                                                                                 |
 | `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                                                                                                                                                                                                                                                |
 | `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stage 1).                                                                                                                                                                                                                                                                                            |
-| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                                                                                                                                                                                                                                                  |
-| `basis_activity_window`  | integer | `5`     | Sliding-window size (1-31 iterations) for tracking recent cut binding activity. Controls the warm-start classifier: cuts bound within the last `basis_activity_window` iterations are guessed tight on basis reconstruction. See [Performance Accelerators — Basis Reconstruction](./performance-accelerators.md#basis-reconstruction). |
-| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 2 budget enforcement). `null` = no budget.                                                                                                                                                                                                                                                     |
+| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a row to count as binding.                                                                                                                                                                                                                                                                                  |
+| `basis_activity_window`  | integer | `5`     | Sliding-window size (1-31 iterations) for tracking recent row binding activity. Controls the warm-start classifier: rows bound within the last `basis_activity_window` iterations are guessed tight on basis reconstruction. See [Performance Accelerators — Basis Reconstruction](./performance-accelerators.md#basis-reconstruction). |
+| `max_active_per_stage`   | integer | `null`  | Hard cap on active rows per stage (Stage 2 budget enforcement). `null` = no budget.                                                                                                                                                                                                                                                     |
 
 **Methods:**
 
-- `"level1"` -- deactivates cuts that have never been binding (cumulative
+- `"level1"` -- deactivates rows that have never been binding (cumulative
   binding count at or below `threshold`). Least aggressive; preserves
   convergence guarantee.
-- `"lml1"` -- deactivates cuts that have not been binding within a sliding
+- `"lml1"` -- deactivates rows that have not been binding within a sliding
   window of `memory_window` iterations (falls back to `threshold` if
   `memory_window` is not set).
-- `"domination"` -- deactivates cuts that are dominated at every visited
+- `"domination"` -- deactivates rows that are dominated at every visited
   forward-pass trial point. Most aggressive; requires the visited-states
   archive (always collected during training). The `domination_epsilon`
   parameter controls the tolerance for domination comparisons.
@@ -523,7 +523,7 @@ Controls which outputs are written to the results directory.
 | Field             | Type                           | Default | Description                                                                     |
 | ----------------- | ------------------------------ | ------- | ------------------------------------------------------------------------------- |
 | `training`        | boolean                        | `true`  | Write training convergence data (Parquet).                                      |
-| `cuts`            | boolean                        | `true`  | Write the cut pool (FlatBuffers).                                               |
+| `cuts`            | boolean                        | `true`  | Write the row pool (FlatBuffers).                                               |
 | `states`          | boolean                        | `false` | Write visited forward-pass trial points to the policy checkpoint (FlatBuffers). |
 | `vertices`        | boolean                        | `true`  | Write inner approximation vertices when applicable (Parquet).                   |
 | `simulation`      | boolean                        | `true`  | Write per-entity simulation results (Parquet).                                  |

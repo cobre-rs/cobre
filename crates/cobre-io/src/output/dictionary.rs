@@ -24,10 +24,10 @@ use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
-    buses_schema, contracts_schema, convergence_schema, costs_schema, cut_selection_schema,
-    exchanges_schema, generic_violations_schema, hydros_schema, inflow_lags_schema,
-    iteration_timing_schema, non_controllables_schema, pumping_stations_schema, rank_timing_schema,
-    retry_histogram_schema, solver_iterations_schema, thermals_schema,
+    buses_schema, contracts_schema, convergence_schema, costs_schema, exchanges_schema,
+    generic_violations_schema, hydros_schema, inflow_lags_schema, iteration_timing_schema,
+    non_controllables_schema, pumping_stations_schema, rank_timing_schema, retry_histogram_schema,
+    row_selection_schema, solver_iterations_schema, thermals_schema,
 };
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
@@ -279,7 +279,7 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
         ("convergence", convergence_schema()),
         ("iteration_timing", iteration_timing_schema()),
         ("rank_timing", rank_timing_schema()),
-        ("cut_selection", cut_selection_schema()),
+        ("cut_selection", row_selection_schema()),
         ("solver_iterations", solver_iterations_schema()),
         ("retry_histogram", retry_histogram_schema()),
     ];
@@ -459,7 +459,7 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("costs", "block_id") => "Block index within stage (nullable)",
         ("costs", "total_cost") => "Total stage cost",
         ("costs", "immediate_cost") => "Immediate (operation) cost",
-        ("costs", "future_cost") => "Expected future cost (cut value)",
+        ("costs", "future_cost") => "Expected future cost (envelope value)",
         ("costs", "discount_factor") => "Discount factor applied to this stage",
         ("costs", "thermal_cost") => "Total thermal generation cost",
         ("costs", "contract_cost") => "Total contract cost",
@@ -618,12 +618,12 @@ fn description_for(file: &str, column: &str) -> &'static str {
         }
         ("iteration_timing", "forward_wall_ms") => "Forward pass wall-clock time",
         ("iteration_timing", "backward_wall_ms") => "Backward pass wall-clock time",
-        ("iteration_timing", "cut_selection_ms") => "Cut selection time",
+        ("iteration_timing", "cut_selection_ms") => "Row-selection time",
         ("iteration_timing", "mpi_allreduce_ms") => "MPI allreduce time",
-        ("iteration_timing", "cut_sync_ms") => "Per-stage cut sync allgatherv time",
+        ("iteration_timing", "cut_sync_ms") => "Per-stage row-sync allgatherv time",
         ("iteration_timing", "lower_bound_ms") => "Lower bound evaluation time",
         ("iteration_timing", "state_exchange_ms") => "State exchange allgatherv time",
-        ("iteration_timing", "cut_batch_build_ms") => "Cut batch assembly time",
+        ("iteration_timing", "cut_batch_build_ms") => "Row-batch assembly time",
         ("iteration_timing", "bwd_setup_ms") => "Thread-pool setup time before backward pass",
         ("iteration_timing", "bwd_load_imbalance_ms") => {
             "Estimated load imbalance across backward pass worker threads"

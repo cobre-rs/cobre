@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use cobre_core::TrainingEvent;
-use cobre_io::{CutSelectionRecord, CutStatistics, IterationRecord, TrainingOutput};
+use cobre_io::{IterationRecord, RowPoolStatistics, RowSelectionRecord, TrainingOutput};
 
 use crate::{FutureCostFunction, TrainingResult};
 
@@ -45,9 +45,9 @@ struct PartialRecord {
     forward_passes: u32,
     /// Cuts generated from [`TrainingEvent::BackwardPassComplete`].
     cuts_added: u32,
-    /// Cuts removed from [`TrainingEvent::CutSyncComplete`].
+    /// Rows removed from [`TrainingEvent::PolicySyncComplete`].
     cuts_removed: u32,
-    /// Active cuts from [`TrainingEvent::CutSyncComplete`].
+    /// Active rows from [`TrainingEvent::PolicySyncComplete`].
     cuts_active: u32,
     /// Wall-clock time for the `allreduce` bound-statistic reduction
     /// from [`TrainingEvent::ForwardSyncComplete`] (ms).
@@ -55,11 +55,11 @@ struct PartialRecord {
     /// Note: the forward-pass scenario exchange uses `allgatherv`, not
     /// `allreduce`. This field tracks only the scalar bound reduction.
     forward_sync_ms: u64,
-    /// Cut sync allgatherv time from [`TrainingEvent::CutSyncComplete`] (ms).
+    /// Policy sync allgatherv time from [`TrainingEvent::PolicySyncComplete`] (ms).
     cut_sync_ms: u64,
-    /// Local cut selection time from [`TrainingEvent::CutSelectionComplete`] (ms).
+    /// Local row selection time from [`TrainingEvent::PolicySelectionComplete`] (ms).
     cut_selection_ms: u64,
-    /// Allgatherv time from [`TrainingEvent::CutSelectionComplete`] (ms).
+    /// Allgatherv time from [`TrainingEvent::PolicySelectionComplete`] (ms).
     cut_selection_allgatherv_ms: u64,
     /// Cumulative LP solve wall-clock time for this iteration (ms).
     solve_time_ms: f64,
@@ -149,40 +149,40 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
 
             TrainingEvent::BackwardPassComplete {
                 iteration,
-                cuts_generated,
+                rows_generated,
                 state_exchange_time_ms,
-                cut_batch_build_time_ms,
+                row_batch_build_time_ms,
                 setup_time_ms,
                 load_imbalance_ms,
                 scheduling_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
-                record.cuts_added = *cuts_generated;
+                record.cuts_added = *rows_generated;
                 record.state_exchange_ms = *state_exchange_time_ms;
-                record.cut_batch_build_ms = *cut_batch_build_time_ms;
+                record.cut_batch_build_ms = *row_batch_build_time_ms;
                 record.bwd_setup_ms = *setup_time_ms;
                 record.bwd_load_imbalance_ms = *load_imbalance_ms;
                 record.bwd_scheduling_overhead_ms = *scheduling_overhead_ms;
             }
 
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration,
-                cuts_active,
-                cuts_removed,
+                rows_active,
+                rows_removed,
                 sync_time_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
-                record.cuts_active = *cuts_active;
-                record.cuts_removed = *cuts_removed;
+                record.cuts_active = *rows_active;
+                record.cuts_removed = *rows_removed;
                 record.cut_sync_ms = *sync_time_ms;
-                peak_active = peak_active.max(u64::from(*cuts_active));
+                peak_active = peak_active.max(u64::from(*rows_active));
             }
 
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration,
-                cuts_deactivated,
+                rows_deactivated,
                 selection_time_ms,
                 allgatherv_time_ms,
                 ..
@@ -191,7 +191,7 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.cut_selection_ms = *selection_time_ms;
                 record.cut_selection_allgatherv_ms = *allgatherv_time_ms;
                 // Adjust cuts_active to reflect the post-selection count.
-                record.cuts_active = record.cuts_active.saturating_sub(*cuts_deactivated);
+                record.cuts_active = record.cuts_active.saturating_sub(*rows_deactivated);
             }
 
             _ => {}
@@ -338,7 +338,7 @@ pub fn build_training_output(
         .map(|(iter, partial)| partial_to_iteration_record(iter, &partial))
         .collect();
 
-    let cut_stats = CutStatistics {
+    let cut_stats = RowPoolStatistics {
         total_generated: fcf.pools.iter().map(|p| p.populated_count as u64).sum(),
         total_active: fcf.total_active_cuts() as u64,
         peak_active,
@@ -357,22 +357,22 @@ pub fn build_training_output(
     let iterations_completed = result.iterations as u32;
 
     #[allow(clippy::cast_possible_truncation)]
-    let cut_selection_records: Vec<CutSelectionRecord> = events
+    let cut_selection_records: Vec<RowSelectionRecord> = events
         .iter()
         .filter_map(|event| {
-            if let TrainingEvent::CutSelectionComplete {
+            if let TrainingEvent::PolicySelectionComplete {
                 iteration,
                 per_stage,
                 ..
             } = event
             {
-                Some(per_stage.iter().map(move |rec| CutSelectionRecord {
+                Some(per_stage.iter().map(move |rec| RowSelectionRecord {
                     iteration: *iteration as u32,
                     stage: rec.stage,
-                    cuts_populated: rec.cuts_populated,
-                    cuts_active_before: rec.cuts_active_before,
-                    cuts_deactivated: rec.cuts_deactivated,
-                    cuts_active_after: rec.cuts_active_after,
+                    cuts_populated: rec.rows_populated,
+                    cuts_active_before: rec.rows_active_before,
+                    cuts_deactivated: rec.rows_deactivated,
+                    cuts_active_after: rec.rows_active_after,
                     selection_time_ms: rec.selection_time_ms,
                     budget_evicted: rec.budget_evicted,
                     active_after_budget: rec.active_after_budget,
@@ -735,20 +735,20 @@ mod tests {
             make_iteration_summary(1, 100.0, 110.0, 0.1),
             TrainingEvent::BackwardPassComplete {
                 iteration: 1,
-                cuts_generated: 12,
+                rows_generated: 12,
                 stages_processed: 3,
                 elapsed_ms: 80,
                 state_exchange_time_ms: 0,
-                cut_batch_build_time_ms: 0,
+                row_batch_build_time_ms: 0,
                 setup_time_ms: 0,
                 load_imbalance_ms: 0,
                 scheduling_overhead_ms: 0,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 12,
-                cuts_active: 24,
-                cuts_removed: 2,
+                rows_distributed: 12,
+                rows_active: 24,
+                rows_removed: 2,
                 sync_time_ms: 4,
             },
         ];
@@ -767,27 +767,27 @@ mod tests {
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 3);
         let events = vec![
             make_iteration_summary(1, 95.0, 112.0, 0.15),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
             make_iteration_summary(2, 98.0, 111.0, 0.12),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 2,
-                cuts_distributed: 10,
-                cuts_active: 20,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 20,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
             make_iteration_summary(3, 100.0, 110.0, 0.1),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 3,
-                cuts_distributed: 5,
-                cuts_active: 18, // peak was 20 in iteration 2
-                cuts_removed: 7,
+                rows_distributed: 5,
+                rows_active: 18, // peak was 20 in iteration 2
+                rows_removed: 7,
                 sync_time_ms: 2,
             },
         ];
@@ -844,16 +844,16 @@ mod tests {
                 global_ub_std: 2.0,
                 sync_time_ms: 7,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 5,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 1,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
@@ -879,11 +879,11 @@ mod tests {
         );
         assert_eq!(
             rec.time_cut_sync_ms, 5,
-            "cut_sync must come from CutSyncComplete"
+            "cut_sync must come from PolicySyncComplete"
         );
         assert_eq!(
             rec.time_cut_selection_ms, 8,
-            "selection must come from CutSelectionComplete"
+            "selection must come from PolicySelectionComplete"
         );
     }
 
@@ -921,16 +921,16 @@ mod tests {
                 global_ub_std: 2.0,
                 sync_time_ms: 7,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 5,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 1,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
@@ -985,36 +985,36 @@ mod tests {
 
     #[test]
     fn cut_selection_records_extracted_from_events() {
-        use cobre_core::StageSelectionRecord;
+        use cobre_core::StageRowSelectionRecord;
 
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 3);
         let events = vec![
             make_iteration_summary(1, 95.0, 112.0, 0.15),
             make_iteration_summary(2, 98.0, 111.0, 0.12),
             make_iteration_summary(3, 100.0, 110.0, 0.1),
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 2,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 10,
                 allgatherv_time_ms: 0,
                 per_stage: vec![
-                    StageSelectionRecord {
+                    StageRowSelectionRecord {
                         stage: 0,
-                        cuts_populated: 5,
-                        cuts_active_before: 5,
-                        cuts_deactivated: 0,
-                        cuts_active_after: 5,
+                        rows_populated: 5,
+                        rows_active_before: 5,
+                        rows_deactivated: 0,
+                        rows_active_after: 5,
                         selection_time_ms: 0.0,
                         budget_evicted: None,
                         active_after_budget: None,
                     },
-                    StageSelectionRecord {
+                    StageRowSelectionRecord {
                         stage: 1,
-                        cuts_populated: 8,
-                        cuts_active_before: 8,
-                        cuts_deactivated: 3,
-                        cuts_active_after: 5,
+                        rows_populated: 8,
+                        rows_active_before: 8,
+                        rows_deactivated: 3,
+                        rows_active_after: 5,
                         selection_time_ms: 2.5,
                         budget_evicted: None,
                         active_after_budget: None,

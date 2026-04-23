@@ -242,7 +242,7 @@ Each entry has a `"type"` discriminator. Valid types:
 | Field             | Type           | Default | Description                                                        |
 | ----------------- | -------------- | ------- | ------------------------------------------------------------------ |
 | `training`        | boolean        | `true`  | Export training summary metrics                                    |
-| `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)                              |
+| `cuts`            | boolean        | `true`  | Export row pool (piecewise-linear envelope)                        |
 | `states`          | boolean        | `false` | Export visited states                                              |
 | `vertices`        | boolean        | `true`  | Export inner approximation vertices                                |
 | `simulation`      | boolean        | `true`  | Export simulation results                                          |
@@ -365,21 +365,21 @@ The optional `season_definitions` object maps season IDs to calendar periods for
 When absent, Cobre infers 12 monthly seasons from stage dates. When present, it controls
 how `season_id` values on stages translate to stochastic parameters.
 
-| Field        | Required | Description                                            |
-| ------------ | -------- | ------------------------------------------------------ |
-| `cycle_type` | Yes      | `"monthly"`, `"weekly"`, or `"custom"`                 |
-| `seasons`    | Yes      | Array of season entries (see below)                    |
+| Field        | Required | Description                            |
+| ------------ | -------- | -------------------------------------- |
+| `cycle_type` | Yes      | `"monthly"`, `"weekly"`, or `"custom"` |
+| `seasons`    | Yes      | Array of season entries (see below)    |
 
 **`season_definitions.seasons[]` entry fields:**
 
-| Field         | Required              | Description                                                                     |
-| ------------- | --------------------- | ------------------------------------------------------------------------------- |
-| `id`          | Yes                   | Season identifier (0-based integer, unique within the season map)               |
-| `label`       | Yes                   | Human-readable label (e.g., `"January"`, `"Q1"`, `"Wet Season"`)               |
-| `month_start` | Yes                   | Calendar month where the season starts (1–12)                                   |
-| `day_start`   | Custom only           | Calendar day where the season starts (1–31). Required for `custom` cycle type.  |
-| `month_end`   | Custom only           | Calendar month where the season ends (1–12). Required for `custom` cycle type.  |
-| `day_end`     | Custom only           | Calendar day where the season ends (1–31). Required for `custom` cycle type.    |
+| Field         | Required    | Description                                                                    |
+| ------------- | ----------- | ------------------------------------------------------------------------------ |
+| `id`          | Yes         | Season identifier (0-based integer, unique within the season map)              |
+| `label`       | Yes         | Human-readable label (e.g., `"January"`, `"Q1"`, `"Wet Season"`)               |
+| `month_start` | Yes         | Calendar month where the season starts (1–12)                                  |
+| `day_start`   | Custom only | Calendar day where the season starts (1–31). Required for `custom` cycle type. |
+| `month_end`   | Custom only | Calendar month where the season ends (1–12). Required for `custom` cycle type. |
+| `day_end`     | Custom only | Calendar day where the season ends (1–31). Required for `custom` cycle type.   |
 
 **Cycle types:**
 
@@ -398,13 +398,62 @@ how `season_id` values on stages translate to stochastic parameters.
   "season_definitions": {
     "cycle_type": "custom",
     "seasons": [
-      { "id": 0,  "label": "January",   "month_start": 1,  "day_start": 1, "month_end": 2,  "day_end": 1 },
-      { "id": 1,  "label": "February",  "month_start": 2,  "day_start": 1, "month_end": 3,  "day_end": 1 },
-      { "id": 11, "label": "December",  "month_start": 12, "day_start": 1, "month_end": 1,  "day_end": 1 },
-      { "id": 12, "label": "Q1",        "month_start": 1,  "day_start": 1, "month_end": 4,  "day_end": 1 },
-      { "id": 13, "label": "Q2",        "month_start": 4,  "day_start": 1, "month_end": 7,  "day_end": 1 },
-      { "id": 14, "label": "Q3",        "month_start": 7,  "day_start": 1, "month_end": 10, "day_end": 1 },
-      { "id": 15, "label": "Q4",        "month_start": 10, "day_start": 1, "month_end": 1,  "day_end": 1 }
+      {
+        "id": 0,
+        "label": "January",
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 2,
+        "day_end": 1
+      },
+      {
+        "id": 1,
+        "label": "February",
+        "month_start": 2,
+        "day_start": 1,
+        "month_end": 3,
+        "day_end": 1
+      },
+      {
+        "id": 11,
+        "label": "December",
+        "month_start": 12,
+        "day_start": 1,
+        "month_end": 1,
+        "day_end": 1
+      },
+      {
+        "id": 12,
+        "label": "Q1",
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 4,
+        "day_end": 1
+      },
+      {
+        "id": 13,
+        "label": "Q2",
+        "month_start": 4,
+        "day_start": 1,
+        "month_end": 7,
+        "day_end": 1
+      },
+      {
+        "id": 14,
+        "label": "Q3",
+        "month_start": 7,
+        "day_start": 1,
+        "month_end": 10,
+        "day_end": 1
+      },
+      {
+        "id": 15,
+        "label": "Q4",
+        "month_start": 10,
+        "day_start": 1,
+        "month_end": 1,
+        "day_end": 1
+      }
     ]
   }
 }

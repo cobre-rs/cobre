@@ -4,7 +4,7 @@
 //! training run:
 //!
 //! - `training/convergence.parquet` — one row per iteration, capturing
-//!   bounds, gap, cut pool statistics, timing, and resource usage.
+//!   bounds, gap, row-pool statistics, timing, and resource usage.
 //! - `training/timing/iterations.parquet` — per-iteration timing breakdown
 //!   (currently placeholder zeros — per-phase timing is not yet collected).
 //!
@@ -33,7 +33,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::{TrainingOutput, CutStatistics, ParquetWriterConfig};
+/// use cobre_io::{TrainingOutput, RowPoolStatistics, ParquetWriterConfig};
 /// use cobre_io::output::training_writer::TrainingParquetWriter;
 /// use std::path::Path;
 ///
@@ -49,7 +49,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 ///     converged: false,
 ///     termination_reason: "iteration limit".to_string(),
 ///     total_time_ms: 0,
-///     cut_stats: CutStatistics {
+///     cut_stats: RowPoolStatistics {
 ///         total_generated: 0,
 ///         total_active: 0,
 ///         peak_active: 0,
@@ -286,7 +286,7 @@ fn build_iteration_timing_batch(
     .map_err(|e| OutputError::serialization("iteration_timing", e.to_string()))
 }
 
-/// Write `training/cut_selection/iterations.parquet` from cut selection records.
+/// Write `training/cut_selection/iterations.parquet` from row-selection records.
 ///
 /// Creates the `training/cut_selection/` directory if it does not exist.
 /// Does nothing if `records` is empty.
@@ -294,9 +294,9 @@ fn build_iteration_timing_batch(
 /// # Errors
 ///
 /// Returns [`OutputError`] on filesystem or serialization failures.
-pub fn write_cut_selection_records(
+pub fn write_row_selection_records(
     output_dir: &Path,
-    records: &[super::CutSelectionRecord],
+    records: &[super::RowSelectionRecord],
     config: &ParquetWriterConfig,
 ) -> Result<(), OutputError> {
     if records.is_empty() {
@@ -306,7 +306,7 @@ pub fn write_cut_selection_records(
     let dir = output_dir.join("training/cut_selection");
     std::fs::create_dir_all(&dir).map_err(|e| OutputError::io(&dir, e))?;
 
-    let schema = Arc::new(super::schemas::cut_selection_schema());
+    let schema = Arc::new(super::schemas::row_selection_schema());
 
     let n = records.len();
     let mut iteration_builder = Int32Builder::with_capacity(n);
@@ -398,7 +398,7 @@ fn write_parquet(
 )]
 mod tests {
     use super::*;
-    use crate::output::{CutStatistics, TrainingOutput};
+    use crate::output::{RowPoolStatistics, TrainingOutput};
 
     fn make_record(iteration: u32, gap: Option<f64>) -> IterationRecord {
         IterationRecord {
@@ -444,7 +444,7 @@ mod tests {
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
             total_time_ms: 5_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 200,
                 total_active: 80,
                 peak_active: 95,
@@ -621,19 +621,12 @@ mod tests {
         let batch = reader.next().expect("must have rows").expect("batch Ok");
 
         assert_eq!(batch.num_rows(), 3);
-        assert_eq!(batch.num_columns(), 18, "must have 18 columns (post-T007)");
+        assert_eq!(batch.num_columns(), 18);
 
-        // Verify that old column names are absent.
-        assert!(
-            batch.column_by_name("bwd_rayon_overhead_ms").is_none(),
-            "bwd_rayon_overhead_ms must not exist"
-        );
-        assert!(
-            batch.column_by_name("fwd_rayon_overhead_ms").is_none(),
-            "fwd_rayon_overhead_ms must not exist"
-        );
+        // Old column names should not be present.
+        assert!(batch.column_by_name("bwd_rayon_overhead_ms").is_none());
+        assert!(batch.column_by_name("fwd_rayon_overhead_ms").is_none());
 
-        // Verify that all six new columns are present with Int64 type and correct values.
         let expected_schema = iteration_timing_schema();
         assert_eq!(
             batch.schema().fields(),
@@ -903,14 +896,14 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // write_cut_selection_records tests
+    // write_row_selection_records tests
     // -------------------------------------------------------------------------
 
     #[test]
     fn write_cut_selection_empty_is_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
-        write_cut_selection_records(tmp.path(), &[], &config).unwrap();
+        write_row_selection_records(tmp.path(), &[], &config).unwrap();
         assert!(
             !tmp.path()
                 .join("training/cut_selection/iterations.parquet")
@@ -920,12 +913,12 @@ mod tests {
 
     #[test]
     fn write_cut_selection_roundtrip() {
-        use super::super::CutSelectionRecord;
+        use super::super::RowSelectionRecord;
 
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
         let records = vec![
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 3,
                 stage: 0,
                 cuts_populated: 10,
@@ -936,7 +929,7 @@ mod tests {
                 budget_evicted: None,
                 active_after_budget: None,
             },
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 3,
                 stage: 1,
                 cuts_populated: 8,
@@ -948,7 +941,7 @@ mod tests {
                 active_after_budget: None,
             },
         ];
-        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        write_row_selection_records(tmp.path(), &records, &config).unwrap();
         let path = tmp.path().join("training/cut_selection/iterations.parquet");
         assert!(path.exists());
 
@@ -964,14 +957,14 @@ mod tests {
 
     #[test]
     fn write_cut_selection_with_budget_columns_roundtrip() {
-        use super::super::CutSelectionRecord;
+        use super::super::RowSelectionRecord;
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
         let records = vec![
             // Record with all budget columns populated (budget enabled).
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 5,
                 stage: 0,
                 cuts_populated: 20,
@@ -983,7 +976,7 @@ mod tests {
                 active_after_budget: Some(15),
             },
             // Record with all budget columns None (budget disabled).
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 5,
                 stage: 1,
                 cuts_populated: 15,
@@ -995,7 +988,7 @@ mod tests {
                 active_after_budget: None,
             },
         ];
-        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        write_row_selection_records(tmp.path(), &records, &config).unwrap();
         let path = tmp.path().join("training/cut_selection/iterations.parquet");
         assert!(path.exists());
 

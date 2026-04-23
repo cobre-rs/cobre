@@ -256,9 +256,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use cobre_io::config::{
-        Config, CutSelectionConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+        PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
+        StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
 
     use super::StudyParams;
@@ -282,9 +282,9 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig {
+                cut_selection: RowSelectionConfig {
                     basis_activity_window: window,
-                    ..CutSelectionConfig::default()
+                    ..RowSelectionConfig::default()
                 },
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,

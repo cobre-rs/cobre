@@ -364,9 +364,10 @@ impl Fixture {
 
 fn make_config() -> Config {
     use cobre_io::config::{
-        CheckpointingConfig, CutSelectionConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig as IoTrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        CheckpointingConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+        PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
+        StoppingRuleConfig, TrainingConfig as IoTrainingConfig, TrainingSolverConfig,
+        UpperBoundEvaluationConfig,
     };
     Config {
         schema: None,
@@ -381,7 +382,7 @@ fn make_config() -> Config {
             stopping_mode: "any".to_string(),
             cut_formulation: None,
             forward_pass: None,
-            cut_selection: CutSelectionConfig::default(),
+            cut_selection: RowSelectionConfig::default(),
             solver: TrainingSolverConfig::default(),
             scenario_source: None,
         },

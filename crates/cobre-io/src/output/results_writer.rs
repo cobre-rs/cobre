@@ -16,9 +16,9 @@ use cobre_core::System;
 use super::dictionary::write_dictionaries;
 use super::error::OutputError;
 use super::manifest::{
-    MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
-    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
-    TrainingMetadata, write_simulation_metadata, write_training_metadata,
+    MetadataConfiguration, MetadataConvergence, MetadataIterations, MetadataProblemDimensions,
+    MetadataRowPool, MetadataScenarios, OutputContext, SimulationMetadata, TrainingMetadata,
+    write_simulation_metadata, write_training_metadata,
 };
 use super::parquet_config::ParquetWriterConfig;
 use super::training_writer::TrainingParquetWriter;
@@ -95,7 +95,7 @@ pub fn write_training_results(
             final_gap_percent: training_output.final_gap_percent,
             termination_reason: training_output.termination_reason.clone(),
         },
-        cuts: MetadataCuts {
+        row_pool: MetadataRowPool {
             total_generated: training_output.cut_stats.total_generated,
             total_active: training_output.cut_stats.total_active,
             peak_active: training_output.cut_stats.peak_active,
@@ -197,7 +197,7 @@ fn extract_max_iterations(config: &Config) -> Option<u32> {
 )]
 mod tests {
     use super::*;
-    use crate::output::{CutStatistics, IterationRecord, TrainingOutput};
+    use crate::output::{IterationRecord, RowPoolStatistics, TrainingOutput};
 
     fn make_iteration_record(iteration: u32) -> IterationRecord {
         IterationRecord {
@@ -244,7 +244,7 @@ mod tests {
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
             total_time_ms: 5_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 200,
                 total_active: 80,
                 peak_active: 95,
@@ -262,8 +262,8 @@ mod tests {
 
     fn make_config() -> crate::Config {
         use crate::config::{
-            CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
-            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
+            CheckpointingConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, PolicyMode, RowSelectionConfig, SimulationConfig,
             StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
         crate::Config {
@@ -279,7 +279,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },

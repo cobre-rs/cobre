@@ -1,14 +1,14 @@
 {
   "$defs": {
     "BoundaryPolicy": {
-      "description": "Boundary-cut configuration for terminal-stage FCF coupling.\n\nWhen present, the solver loads cuts from a source Cobre policy\ncheckpoint and injects them as fixed boundary conditions at the\nterminal stage of the current study.",
+      "description": "Boundary-row configuration for terminal-stage FCF coupling.\n\nWhen present, the solver loads rows from a source Cobre policy\ncheckpoint and injects them as fixed boundary conditions at the\nterminal stage of the current study.",
       "properties": {
         "path": {
           "description": "Path to the source policy checkpoint directory.",
           "type": "string"
         },
         "source_stage": {
-          "description": "0-based stage index in the source checkpoint to load cuts from.",
+          "description": "0-based stage index in the source checkpoint to load rows from.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -71,11 +71,11 @@
       "type": "object"
     },
     "CutSelectionConfig": {
-      "description": "Cut selection settings (`config.json → training.cut_selection`).",
+      "description": "Row-selection settings (`config.json → training.row_selection`).",
       "properties": {
         "basis_activity_window": {
           "default": null,
-          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `active_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
+          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `activity_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -95,7 +95,7 @@
         },
         "cut_activity_tolerance": {
           "default": null,
-          "description": "Minimum dual multiplier for a cut to count as binding.",
+          "description": "Minimum dual multiplier for a row to count as binding.",
           "format": "double",
           "type": [
             "number",
@@ -113,7 +113,7 @@
         },
         "enabled": {
           "default": null,
-          "description": "Enable cut pruning.",
+          "description": "Enable row pruning.",
           "type": [
             "boolean",
             "null"
@@ -121,7 +121,7 @@
         },
         "max_active_per_stage": {
           "default": null,
-          "description": "Maximum number of active cuts per stage (stage 2 of the cut selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active cuts\nper stage after strategy selection has completed. Cuts are evicted in\norder of staleness (`last_active_iter` ascending), tie-broken by usage\nfrequency (`active_count` ascending). Cuts generated in the current\niteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
+          "description": "Maximum number of active rows per stage (stage 2 of the row-selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active rows\nper stage after strategy selection has completed. Rows are evicted in\norder of staleness (`last_active_iter` ascending), tie-broken by usage\nfrequency (`active_count` ascending). Rows generated in the current\niteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -212,7 +212,7 @@
         },
         "cuts": {
           "default": true,
-          "description": "Export cut pool (outer approximation).",
+          "description": "Export row pool (piecewise-linear envelope).",
           "type": "boolean"
         },
         "forward_detail": {
@@ -347,7 +347,7 @@
             }
           ],
           "default": null,
-          "description": "Optional boundary-cut policy for terminal-stage coupling."
+          "description": "Optional boundary-row policy for terminal-stage coupling."
         },
         "checkpointing": {
           "$ref": "#/$defs/CheckpointingConfig",
@@ -367,7 +367,7 @@
         },
         "path": {
           "default": "./policy",
-          "description": "Directory for policy data (cuts, states, vertices, basis).",
+          "description": "Directory for policy data (rows, states, vertices, basis).",
           "type": "string"
         },
         "validate_compatibility": {
@@ -379,7 +379,7 @@
       "type": "object"
     },
     "PolicyMode": {
-      "description": "Policy initialization mode (`config.json → policy.mode`).\n\nControls whether the training phase starts from scratch, warm-starts from\na prior policy's cuts, or resumes a checkpointed training run.",
+      "description": "Policy initialization mode (`config.json → policy.mode`).\n\nControls whether the training phase starts from scratch, warm-starts from\na prior policy's rows, or resumes a checkpointed training run.",
       "oneOf": [
         {
           "const": "fresh",
@@ -388,7 +388,7 @@
         },
         {
           "const": "warm_start",
-          "description": "Load cuts from a prior policy checkpoint and continue training.",
+          "description": "Load rows from a prior policy checkpoint and continue training.",
           "type": "string"
         },
         {
@@ -548,7 +548,7 @@
         },
         "policy_type": {
           "default": "outer",
-          "description": "Policy representation: `\"outer\"` (cuts) or `\"inner\"` (vertices).",
+          "description": "Policy representation: `\"outer\"` (envelope rows) or `\"inner\"` (vertices).",
           "type": "string"
         },
         "scenario_source": {
@@ -687,7 +687,7 @@
       "properties": {
         "cut_formulation": {
           "default": null,
-          "description": "Cut formulation: `\"single\"` or `\"multi\"`.",
+          "description": "Row formulation: `\"single\"` or `\"multi\"`.",
           "type": [
             "string",
             "null"
@@ -706,7 +706,7 @@
             "method": null,
             "threshold": null
           },
-          "description": "Cut selection settings."
+          "description": "Row-selection settings."
         },
         "enabled": {
           "default": true,

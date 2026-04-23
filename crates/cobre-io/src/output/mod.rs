@@ -28,10 +28,10 @@ pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
-    DistributionInfo, MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
-    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
-    TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
-    write_simulation_metadata, write_training_metadata,
+    DistributionInfo, MetadataConfiguration, MetadataConvergence, MetadataIterations,
+    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, OutputContext,
+    SimulationMetadata, TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata,
+    read_training_metadata, write_simulation_metadata, write_training_metadata,
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use provenance::write_provenance_report;
@@ -44,7 +44,7 @@ pub use stochastic::{
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
     write_load_seasonal_stats, write_noise_openings,
 };
-pub use training_writer::{TrainingParquetWriter, write_cut_selection_records};
+pub use training_writer::{TrainingParquetWriter, write_row_selection_records};
 
 /// One row of convergence data corresponding to a single training iteration.
 ///
@@ -69,13 +69,13 @@ pub struct IterationRecord {
     /// `None` when the lower bound is zero or negative (gap is ill-defined).
     pub gap_percent: Option<f64>,
 
-    /// Number of cuts added to the cut pool during this iteration.
+    /// Number of rows added to the row pool during this iteration.
     pub cuts_added: u32,
 
-    /// Number of cuts removed from the cut pool during this iteration.
+    /// Number of rows removed from the row pool during this iteration.
     pub cuts_removed: u32,
 
-    /// Total number of active cuts in the pool after this iteration.
+    /// Total number of active rows in the pool after this iteration.
     pub cuts_active: u32,
 
     /// Wall-clock time spent in the forward pass for this iteration (ms).
@@ -97,7 +97,7 @@ pub struct IterationRecord {
     /// Maps to `backward_wall_ms` in `training/timing/iterations.parquet`.
     pub time_backward_wall_ms: u64,
 
-    /// Wall-clock time for the cut selection phase (ms).
+    /// Wall-clock time for the row-selection phase (ms).
     ///
     /// Maps to `cut_selection_ms` in `training/timing/iterations.parquet`.
     pub time_cut_selection_ms: u64,
@@ -107,7 +107,7 @@ pub struct IterationRecord {
     /// Maps to `mpi_allreduce_ms` in `training/timing/iterations.parquet`.
     pub time_mpi_allreduce_ms: u64,
 
-    /// Wall-clock time for per-stage cut sync allgatherv (ms).
+    /// Wall-clock time for per-stage row-sync allgatherv (ms).
     ///
     /// Sub-component of the backward pass wall-clock.
     /// Maps to `cut_sync_ms` in `training/timing/iterations.parquet`.
@@ -124,7 +124,7 @@ pub struct IterationRecord {
     /// Maps to `state_exchange_ms` in `training/timing/iterations.parquet`.
     pub time_state_exchange_ms: u64,
 
-    /// Wall-clock time for cut batch assembly in the backward pass (ms).
+    /// Wall-clock time for row-batch assembly in the backward pass (ms).
     ///
     /// Sub-component of the backward pass wall-clock.
     /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
@@ -183,27 +183,27 @@ pub struct IterationRecord {
     pub solve_time_ms: f64,
 }
 
-/// Summary statistics for the cut pool at the end of a training run.
+/// Summary statistics for the row pool at the end of a training run.
 ///
 /// Carried inside [`TrainingOutput`] and written to `training/timing/cut_stats.parquet`.
 #[derive(Debug, Clone)]
-pub struct CutStatistics {
-    /// Total number of cuts generated over the entire training run.
+pub struct RowPoolStatistics {
+    /// Total number of rows generated over the entire training run.
     pub total_generated: u64,
 
-    /// Number of cuts still active in the pool at the end of training.
+    /// Number of rows still active in the pool at the end of training.
     pub total_active: u64,
 
-    /// Highest number of active cuts observed at any point during training.
+    /// Highest number of active rows observed at any point during training.
     pub peak_active: u64,
 }
 
 /// One row in `training/cut_selection/iterations.parquet`.
 ///
-/// Represents per-stage cut selection statistics for a single iteration.
-/// Only populated when cut selection is enabled.
+/// Represents per-stage row-selection statistics for a single iteration.
+/// Only populated when row selection is enabled.
 #[derive(Debug, Clone)]
-pub struct CutSelectionRecord {
+pub struct RowSelectionRecord {
     /// Iteration number (1-based).
     pub iteration: u32,
     /// 0-based stage index.
@@ -291,14 +291,14 @@ pub struct TrainingOutput {
     /// Total elapsed wall-clock time for the entire training run (ms).
     pub total_time_ms: u64,
 
-    /// Summary cut pool statistics for the run.
-    pub cut_stats: CutStatistics,
+    /// Summary row pool statistics for the run.
+    pub cut_stats: RowPoolStatistics,
 
-    /// Per-stage cut selection records for Parquet output.
+    /// Per-stage row-selection records for Parquet output.
     ///
-    /// Empty when cut selection is disabled. When non-empty, written to
+    /// Empty when row selection is disabled. When non-empty, written to
     /// `training/cut_selection/iterations.parquet`.
-    pub cut_selection_records: Vec<CutSelectionRecord>,
+    pub cut_selection_records: Vec<RowSelectionRecord>,
 
     /// Per-worker timing records for `training/timing/iterations.parquet`.
     ///
@@ -437,7 +437,7 @@ impl SimulationOutput {
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::{write_results, TrainingOutput, CutStatistics};
+/// use cobre_io::{write_results, TrainingOutput, RowPoolStatistics};
 /// use std::path::Path;
 ///
 /// # fn main() -> Result<(), cobre_io::OutputError> {
@@ -452,7 +452,7 @@ impl SimulationOutput {
 ///     converged: true,
 ///     termination_reason: "gap tolerance reached".to_string(),
 ///     total_time_ms: 3_000,
-///     cut_stats: CutStatistics {
+///     cut_stats: RowPoolStatistics {
 ///         total_generated: 200,
 ///         total_active: 80,
 ///         peak_active: 95,
@@ -518,7 +518,7 @@ mod tests {
             converged: true,
             termination_reason: "relative gap < 1%".to_string(),
             total_time_ms: 12_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 300,
                 total_active: 120,
                 peak_active: 150,
@@ -617,8 +617,8 @@ mod tests {
     }
 
     #[test]
-    fn cut_statistics_construction() {
-        let stats = CutStatistics {
+    fn row_pool_statistics_construction() {
+        let stats = RowPoolStatistics {
             total_generated: 500,
             total_active: 200,
             peak_active: 250,

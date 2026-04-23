@@ -339,12 +339,12 @@ pub(crate) fn retry_histogram_schema() -> Schema {
 }
 
 /// Schema for `training/cut_selection/iterations.parquet` — per-stage
-/// cut selection statistics.
+/// row-selection statistics.
 ///
 /// 9 fields. One row per (iteration, stage) pair. The two nullable Int32
 /// columns (`budget_evicted`, `active_after_budget`) are `None` when
 /// budget enforcement is disabled.
-pub(crate) fn cut_selection_schema() -> Schema {
+pub(crate) fn row_selection_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
         Field::new("stage", DataType::Int32, false),
@@ -787,8 +787,8 @@ mod tests {
     }
 
     #[test]
-    fn cut_selection_schema_field_count_and_types() {
-        let schema = cut_selection_schema();
+    fn row_selection_schema_field_count_and_types() {
+        let schema = row_selection_schema();
         assert_eq!(
             schema.fields().len(),
             9,
@@ -903,7 +903,7 @@ mod tests {
             (convergence_schema(), "convergence"),
             (iteration_timing_schema(), "iteration_timing"),
             (rank_timing_schema(), "rank_timing"),
-            (cut_selection_schema(), "cut_selection"),
+            (row_selection_schema(), "cut_selection"),
             (solver_iterations_schema(), "solver_iterations"),
             (retry_histogram_schema(), "retry_histogram"),
         ];

@@ -132,7 +132,7 @@ pub struct TrainingConfig {
     #[serde(default = "TrainingConfig::default_stopping_mode")]
     pub stopping_mode: String,
 
-    /// Cut formulation: `"single"` or `"multi"`.
+    /// Row formulation: `"single"` or `"multi"`.
     #[serde(default)]
     pub cut_formulation: Option<String>,
 
@@ -140,9 +140,9 @@ pub struct TrainingConfig {
     #[serde(default)]
     pub forward_pass: Option<ForwardPassConfig>,
 
-    /// Cut selection settings.
+    /// Row-selection settings.
     #[serde(default)]
-    pub cut_selection: CutSelectionConfig,
+    pub cut_selection: RowSelectionConfig,
 
     /// LP solver retry settings.
     #[serde(default)]
@@ -176,11 +176,11 @@ pub struct ForwardPassConfig {
     pub pass_type: String,
 }
 
-/// Cut selection settings (`config.json → training.cut_selection`).
+/// Row-selection settings (`config.json → training.cut_selection`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct CutSelectionConfig {
-    /// Enable cut pruning.
+pub struct RowSelectionConfig {
+    /// Enable row pruning.
     #[serde(default)]
     pub enabled: Option<bool>,
 
@@ -218,25 +218,25 @@ pub struct CutSelectionConfig {
     #[serde(default)]
     pub check_frequency: Option<u32>,
 
-    /// Minimum dual multiplier for a cut to count as binding.
+    /// Minimum dual multiplier for a row to count as binding.
     #[serde(default)]
     pub cut_activity_tolerance: Option<f64>,
 
     /// Activity-window size for the basis-reconstruction classifier and
-    /// Scheme 1 sort popcount. Bit `i` of `active_window` counts toward the
+    /// Scheme 1 sort popcount. Bit `i` of `activity_window` counts toward the
     /// classifier and popcount mask when `i < basis_activity_window`.
     ///
     /// Validated range: 1..=31. Default when absent: 5.
     #[serde(default)]
     pub basis_activity_window: Option<u32>,
 
-    /// Maximum number of active cuts per stage (stage 2 of the cut selection
+    /// Maximum number of active rows per stage (stage 2 of the row-selection
     /// pipeline — hard cap on LP size).
     ///
-    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
-    /// per stage after strategy selection has completed. Cuts are evicted in
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active rows
+    /// per stage after strategy selection has completed. Rows are evicted in
     /// order of staleness (`last_active_iter` ascending), tie-broken by usage
-    /// frequency (`active_count` ascending). Cuts generated in the current
+    /// frequency (`active_count` ascending). Rows generated in the current
     /// iteration are never evicted.
     ///
     /// When `None` (the default), no hard cap is enforced.
@@ -420,14 +420,14 @@ pub struct LipschitzConfig {
 /// Policy initialization mode (`config.json → policy.mode`).
 ///
 /// Controls whether the training phase starts from scratch, warm-starts from
-/// a prior policy's cuts, or resumes a checkpointed training run.
+/// a prior policy's rows, or resumes a checkpointed training run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PolicyMode {
     /// Start training from an empty future-cost function.
     Fresh,
-    /// Load cuts from a prior policy checkpoint and continue training.
+    /// Load rows from a prior policy checkpoint and continue training.
     WarmStart,
     /// Resume a previously interrupted training run from its checkpoint.
     Resume,
@@ -443,9 +443,9 @@ impl std::fmt::Display for PolicyMode {
     }
 }
 
-/// Boundary-cut configuration for terminal-stage FCF coupling.
+/// Boundary-row configuration for terminal-stage FCF coupling.
 ///
-/// When present, the solver loads cuts from a source Cobre policy
+/// When present, the solver loads rows from a source Cobre policy
 /// checkpoint and injects them as fixed boundary conditions at the
 /// terminal stage of the current study.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -453,7 +453,7 @@ impl std::fmt::Display for PolicyMode {
 pub struct BoundaryPolicy {
     /// Path to the source policy checkpoint directory.
     pub path: String,
-    /// 0-based stage index in the source checkpoint to load cuts from.
+    /// 0-based stage index in the source checkpoint to load rows from.
     pub source_stage: u32,
 }
 
@@ -462,7 +462,7 @@ pub struct BoundaryPolicy {
 #[serde(default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PolicyConfig {
-    /// Directory for policy data (cuts, states, vertices, basis).
+    /// Directory for policy data (rows, states, vertices, basis).
     pub path: String,
 
     /// Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
@@ -474,7 +474,7 @@ pub struct PolicyConfig {
     /// Checkpoint settings.
     pub checkpointing: CheckpointingConfig,
 
-    /// Optional boundary-cut policy for terminal-stage coupling.
+    /// Optional boundary-row policy for terminal-stage coupling.
     #[serde(default)]
     pub boundary: Option<BoundaryPolicy>,
 }
@@ -527,7 +527,7 @@ pub struct SimulationConfig {
     /// Number of simulation scenarios.
     pub num_scenarios: u32,
 
-    /// Policy representation: `"outer"` (cuts) or `"inner"` (vertices).
+    /// Policy representation: `"outer"` (envelope rows) or `"inner"` (vertices).
     pub policy_type: String,
 
     /// Directory for simulation output files.
@@ -646,7 +646,7 @@ pub struct ExportsConfig {
     /// Export training summary metrics.
     pub training: bool,
 
-    /// Export cut pool (outer approximation).
+    /// Export row pool (piecewise-linear envelope).
     pub cuts: bool,
 
     /// Export visited forward-pass trial points to the policy checkpoint.
@@ -1672,7 +1672,7 @@ mod tests {
     /// max_active_per_stage serde roundtrip: Some(100) serializes and deserializes correctly.
     #[test]
     fn max_active_per_stage_serde_roundtrip() {
-        let original = CutSelectionConfig {
+        let original = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: None,
@@ -1684,7 +1684,7 @@ mod tests {
             basis_activity_window: Some(7),
         };
         let json = serde_json::to_string(&original).unwrap();
-        let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();
+        let roundtripped: RowSelectionConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtripped.max_active_per_stage, Some(100));
         assert_eq!(roundtripped.enabled, Some(true));
         assert_eq!(roundtripped.method.as_deref(), Some("level1"));

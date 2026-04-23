@@ -617,7 +617,7 @@ mod tests {
             self.stats.load_model_count += 1;
         }
 
-        fn add_rows(&mut self, _cuts: &RowBatch) {}
+        fn add_rows(&mut self, _rows: &RowBatch) {}
 
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 

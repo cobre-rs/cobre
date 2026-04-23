@@ -139,7 +139,7 @@ silent misconfigurations.
 | Field                 | Type                            | Description                                               |
 | --------------------- | ------------------------------- | --------------------------------------------------------- |
 | `forward_passes`      | `u32`                           | Scenarios per rank per iteration (must be >= 1)           |
-| `max_iterations`      | `u64`                           | Safety bound on total iterations; also sizes the cut pool |
+| `max_iterations`      | `u64`                           | Safety bound on total iterations; also sizes the row pool |
 | `checkpoint_interval` | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled    |
 | `warm_start_cuts`     | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file        |
 | `event_sender`        | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
@@ -373,17 +373,17 @@ structured data for real-time display in the TUI or CLI layers.
 
 Key events emitted during training:
 
-| Event variant               | When emitted                                                  |
-| --------------------------- | ------------------------------------------------------------- |
-| `ForwardPassComplete`       | After step 1 completes for all local scenarios                |
-| `ForwardSyncComplete`       | After step 2 global UB statistics are merged                  |
-| `BackwardPassComplete`      | After step 4 cut generation for all trial points              |
-| `CutSyncComplete`           | After step 5 cut allgatherv                                   |
-| `CutSelectionComplete`      | After step 5a Stage 1 selection (when strategy is set)        |
-| `BudgetEnforcementComplete` | After step 5a Stage 2 budget enforcement (when budget is set) |
-| `ConvergenceUpdate`         | After step 6 stopping rules evaluated                         |
-| `IterationSummary`          | At the end of each iteration (LB, UB, gap, timing)            |
-| `TrainingFinished`          | When a stopping rule triggers                                 |
+| Event variant                     | When emitted                                                  |
+| --------------------------------- | ------------------------------------------------------------- |
+| `ForwardPassComplete`             | After step 1 completes for all local scenarios                |
+| `ForwardSyncComplete`             | After step 2 global UB statistics are merged                  |
+| `BackwardPassComplete`            | After step 4 row generation for all trial points              |
+| `PolicySyncComplete`              | After step 5 policy-row allgatherv                            |
+| `PolicySelectionComplete`         | After step 5a Stage 1 selection (when strategy is set)        |
+| `PolicyBudgetEnforcementComplete` | After step 5a Stage 2 budget enforcement (when budget is set) |
+| `ConvergenceUpdate`               | After step 6 stopping rules evaluated                         |
+| `IterationSummary`                | At the end of each iteration (LB, UB, gap, timing)            |
+| `TrainingFinished`                | When a stopping rule triggers                                 |
 
 ## Quick start (pseudocode)
 
@@ -491,8 +491,8 @@ region to preserve bit-for-bit determinism across thread counts.
 `CutRowMap` provides O(1) slot-to-row lookup for the persistent lower-bound
 LP so the append path skips cuts that are already present. The LB LP is
 strictly append-only: cuts are never removed from it, which keeps the lower
-bound monotonically non-decreasing. The shared cut pool's active/inactive
-bit is not propagated to the LB LP — pool-deactivated cuts remain as LP
+bound monotonically non-decreasing. The shared row pool's active/inactive
+bit is not propagated to the LB LP — pool-deactivated rows remain as LP
 rows in the LB solver.
 
 ### Cut wire format

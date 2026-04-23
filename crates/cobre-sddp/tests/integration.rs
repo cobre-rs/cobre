@@ -828,7 +828,7 @@ fn train_lb_monotonically_nondecreasing() {
 /// Verify the exact event sequence emitted by `train` for 3 iterations:
 /// 1 `TrainingStarted` + 3 * 7 per-iteration events + 1 `TrainingFinished` = 23 total.
 /// Per-iteration events: `ForwardPassComplete`, `ForwardSyncComplete`, `BackwardPassComplete`,
-/// `CutSyncComplete`, `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`.
+/// `PolicySyncComplete`, `TemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`.
 #[test]
 fn train_emits_correct_event_sequence() {
     let fx = Fixture::new(2);
@@ -911,7 +911,7 @@ fn train_emits_correct_event_sequence() {
     // 1 TrainingStarted + 3*(9 per-iteration) + 1 TrainingFinished = 29
     // Per-iteration: WorkerTiming(Forward), ForwardPassComplete,
     //   ForwardSyncComplete, WorkerTiming(Backward), BackwardPassComplete,
-    //   CutSyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary
+    //   PolicySyncComplete, TemplateBakeComplete, ConvergenceUpdate, IterationSummary
     assert_eq!(events.len(), 29);
     assert!(matches!(events[0], TrainingEvent::TrainingStarted { .. }));
     assert!(matches!(events[28], TrainingEvent::TrainingFinished { .. }));
@@ -922,8 +922,8 @@ fn train_emits_correct_event_sequence() {
         |e| matches!(e, TrainingEvent::ForwardSyncComplete { .. }),
         |e| matches!(e, TrainingEvent::WorkerTiming { .. }),
         |e| matches!(e, TrainingEvent::BackwardPassComplete { .. }),
-        |e| matches!(e, TrainingEvent::CutSyncComplete { .. }),
-        |e| matches!(e, TrainingEvent::TemplateBakeComplete { .. }),
+        |e| matches!(e, TrainingEvent::PolicySyncComplete { .. }),
+        |e| matches!(e, TrainingEvent::PolicyTemplateBakeComplete { .. }),
         |e| matches!(e, TrainingEvent::ConvergenceUpdate { .. }),
         |e| matches!(e, TrainingEvent::IterationSummary { .. }),
     ];
@@ -1201,7 +1201,7 @@ fn train_propagates_infeasible_error() {
 ///
 /// Checks:
 /// - Lower bound is monotone non-decreasing.
-/// - At least one `CutSelectionComplete` event with `cuts_deactivated > 0`.
+/// - At least one `PolicySelectionComplete` event with `rows_deactivated > 0`.
 /// - `active_count() < populated_count` for the stage-0 FCF pool.
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1316,15 +1316,15 @@ fn d17_level1_cut_selection_convergence() {
         );
     }
 
-    // AC3: At least one CutSelectionComplete event was emitted.
+    // AC3: At least one PolicySelectionComplete event was emitted.
     let sel_events: Vec<&TrainingEvent> = events
         .iter()
-        .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+        .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
         .collect();
 
     assert!(
         !sel_events.is_empty(),
-        "must have at least one CutSelectionComplete event"
+        "must have at least one PolicySelectionComplete event"
     );
 
     // AC4: Stage 0 is exempt from cut selection (no activity tracking).
@@ -1468,7 +1468,7 @@ fn d17_level1_cut_selection_reconstruction() {
 ///
 /// Checks:
 /// - Lower bound is monotone non-decreasing.
-/// - At least one `CutSelectionComplete` event with `cuts_deactivated > 0`.
+/// - At least one `PolicySelectionComplete` event with `rows_deactivated > 0`.
 /// - `active_count() < populated_count` for the stage-0 FCF pool.
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -1583,15 +1583,15 @@ fn d18_lml1_cut_selection_convergence() {
         );
     }
 
-    // AC3: At least one CutSelectionComplete event was emitted.
+    // AC3: At least one PolicySelectionComplete event was emitted.
     let sel_events: Vec<&TrainingEvent> = events
         .iter()
-        .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+        .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
         .collect();
 
     assert!(
         !sel_events.is_empty(),
-        "must have at least one CutSelectionComplete event"
+        "must have at least one PolicySelectionComplete event"
     );
 
     // AC4: Stage 0 is exempt from cut selection (no activity tracking).

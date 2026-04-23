@@ -130,8 +130,8 @@ fn build_training_summary(
         upper_bound: convergence.final_upper_bound_mean,
         upper_bound_std: convergence.final_upper_bound_std,
         gap_percent: convergence.final_gap_percent.unwrap_or(0.0),
-        total_cuts_active: metadata.cuts.total_active,
-        total_cuts_generated: metadata.cuts.total_generated,
+        total_rows_active: metadata.row_pool.total_active,
+        total_rows_generated: metadata.row_pool.total_generated,
         total_lp_solves: convergence.total_lp_solves,
         total_time_ms: convergence.total_time_ms,
         total_first_try: None,
@@ -190,7 +190,7 @@ mod tests {
 
     use cobre_io::{
         ConvergenceSummary, DistributionInfo, MetadataConfiguration, MetadataConvergence,
-        MetadataCuts, MetadataIterations, MetadataProblemDimensions, TrainingMetadata,
+        MetadataIterations, MetadataProblemDimensions, MetadataRowPool, TrainingMetadata,
     };
 
     use super::{SummaryArgs, build_training_summary, convergence_fallback};
@@ -228,7 +228,7 @@ mod tests {
                 final_gap_percent: Some(0.45),
                 termination_reason: "gap_tolerance".to_string(),
             },
-            cuts: MetadataCuts {
+            row_pool: MetadataRowPool {
                 total_generated: 1_250_000,
                 total_active: 980_000,
                 peak_active: 1_100_000,
@@ -281,8 +281,8 @@ mod tests {
         assert!((summary.upper_bound - 49_000.0).abs() < f64::EPSILON);
         assert!((summary.upper_bound_std - 250.0).abs() < f64::EPSILON);
         assert!((summary.gap_percent - 1.03).abs() < 1e-9);
-        assert_eq!(summary.total_cuts_active, 980_000);
-        assert_eq!(summary.total_cuts_generated, 1_250_000);
+        assert_eq!(summary.total_rows_active, 980_000);
+        assert_eq!(summary.total_rows_generated, 1_250_000);
         assert_eq!(summary.total_lp_solves, 84_000);
         assert_eq!(summary.total_time_ms, 12_345);
     }

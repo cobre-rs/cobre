@@ -198,7 +198,7 @@ fn accumulate_batch(batch: &RecordBatch, totals: &mut BatchTotals) -> Result<(),
 mod tests {
     use super::*;
     use crate::output::{
-        CutStatistics, IterationRecord, OutputContext, SimulationOutput, TrainingOutput,
+        IterationRecord, OutputContext, RowPoolStatistics, SimulationOutput, TrainingOutput,
         write_results,
     };
 
@@ -247,7 +247,7 @@ mod tests {
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
             total_time_ms: 5_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 200,
                 total_active: 80,
                 peak_active: 95,
@@ -265,8 +265,8 @@ mod tests {
 
     fn make_config() -> crate::Config {
         use crate::config::{
-            CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
-            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
+            CheckpointingConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, PolicyMode, RowSelectionConfig, SimulationConfig,
             StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
         crate::Config {
@@ -282,7 +282,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },

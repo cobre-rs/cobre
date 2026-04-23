@@ -68,7 +68,7 @@ pub trait SolverInterface: Send {
     /// Append constraint rows to the dynamic constraint region.
     ///
     /// Requires [`load_model`](Self::load_model) called first and
-    /// `cuts` to have valid CSR data with column indices in
+    /// `rows` to have valid CSR data with column indices in
     /// `[0, num_cols)` (panic on violation).
     ///
     /// # Caller patterns
@@ -93,7 +93,7 @@ pub trait SolverInterface: Send {
     ///    [`load_model`](Self::load_model) followed by `add_rows`.
     ///
     /// See Solver Interface Trait SS2.2.
-    fn add_rows(&mut self, cuts: &RowBatch);
+    fn add_rows(&mut self, rows: &RowBatch);
 
     /// Updates row bounds (step 3 of rebuild; patching for scenario realization).
     ///
@@ -244,7 +244,7 @@ mod tests {
     impl SolverInterface for NoopSolver {
         fn load_model(&mut self, _template: &crate::types::StageTemplate) {}
 
-        fn add_rows(&mut self, _cuts: &crate::types::RowBatch) {}
+        fn add_rows(&mut self, _rows: &crate::types::RowBatch) {}
 
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 

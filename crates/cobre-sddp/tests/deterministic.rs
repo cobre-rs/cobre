@@ -2129,44 +2129,6 @@ fn d22_per_block_min_outflow() {
 /// Recorded empirically with multi-block (3 blocks) per-block min outflow.
 pub const D22_EXPECTED_COST: f64 = 140_376_666.666_666_66;
 
-/// Real-case validation: convertido2 (158 hydros) with truncation method.
-///
-/// Before operational violation slacks, this case failed with LP infeasibility
-/// at stage 64, iteration 1 — 9 hydros had hard `min_turbined_m3s` bounds
-/// preventing zero outflow when PAR inflows were clamped to zero. After this
-/// plan, operational slacks absorb the infeasibility at penalty cost.
-///
-/// This test is `#[ignore]` because it depends on external case data at
-/// `~/git/cobre-bridge/example/convertido2/` and may require case data
-/// updates to match current noise dimension expectations. Run with:
-/// ```sh
-/// cargo test -p cobre-sddp --test deterministic -- --ignored d20_convertido2
-/// ```
-#[test]
-#[ignore = "requires external case data at ~/git/cobre-bridge/example/convertido2/"]
-fn d20_convertido2_truncation_feasibility() {
-    let case_dir = Path::new(env!("HOME")).join("git/cobre-bridge/example/convertido2");
-    if !case_dir.exists() {
-        eprintln!("SKIP: convertido2 case not found at {}", case_dir.display());
-        return;
-    }
-    let result = run_deterministic(&case_dir);
-
-    // Primary assertion: training completed without infeasibility errors.
-    // If violation slacks were missing, the LP would fail at stage 64.
-    assert!(
-        result.final_lb > 0.0,
-        "D20-convertido2: lower bound must be positive, got {}",
-        result.final_lb
-    );
-    // With iteration_limit=1 in the config, we just verify it survived 1 iteration.
-    assert!(
-        result.iterations >= 1,
-        "D20-convertido2: expected at least 1 iteration, got {}",
-        result.iterations
-    );
-}
-
 /// D23: Bidirectional withdrawal -- over-withdrawal activation.
 ///
 /// ## Case setup

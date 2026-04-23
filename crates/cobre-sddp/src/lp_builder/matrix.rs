@@ -8,10 +8,20 @@ use crate::indexer::StageIndexer;
 use super::layout::{StageLayout, TemplateBuildCtx};
 use super::{M3S_TO_HM3, Q_EV_SAFETY_MARGIN};
 
+/// Mutable column-bound and objective buffers shared by all fill helpers.
+///
+/// Passed by mutable reference to each `fill_*_columns` helper so that the
+/// orchestrator `fill_stage_columns` call sites stay on a single line each.
+/// This is an analogue of `LpMatrixBuffers` for the column-fill path.
+struct ColumnBufs<'a> {
+    col_lower: &'a mut [f64],
+    col_upper: &'a mut [f64],
+    objective: &'a mut [f64],
+}
+
 /// Fill column lower/upper bounds and objective coefficients for one stage.
 ///
 /// Returns `(col_lower, col_upper, objective)` vectors of length `layout.num_cols`.
-#[allow(clippy::too_many_lines)]
 pub(super) fn fill_stage_columns(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,
@@ -22,36 +32,87 @@ pub(super) fn fill_stage_columns(
     let mut col_lower = vec![0.0_f64; layout.num_cols];
     let mut col_upper = vec![f64::INFINITY; layout.num_cols];
     let mut objective = vec![0.0_f64; layout.num_cols];
+    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+    let b = &mut ColumnBufs {
+        col_lower: &mut col_lower,
+        col_upper: &mut col_upper,
+        objective: &mut objective,
+    };
 
-    // Outgoing and incoming storage columns.
-    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+    fill_storage_columns(ctx, stage_idx, &idx, layout, b);
+    fill_ar_lag_columns(&idx, b);
+    fill_theta_column(&idx, b);
+    fill_turbine_columns(ctx, stage, stage_idx, layout, b);
+    fill_spillage_columns(ctx, stage, stage_idx, layout, b);
+    fill_diversion_columns(ctx, stage, stage_idx, layout, b);
+    fill_thermal_columns(ctx, stage, stage_idx, layout, b);
+    fill_line_columns(ctx, stage, stage_idx, layout, b);
+    fill_deficit_and_excess_columns(ctx, stage, stage_idx, layout, b);
+    fill_inflow_slack_columns(ctx, stage_idx, layout, total_stage_hours, b);
+    fill_fpha_generation_columns(ctx, stage_idx, layout, b);
+    fill_evaporation_columns(ctx, stage_idx, layout, total_stage_hours, b);
+    fill_withdrawal_slack_columns(ctx, stage_idx, layout, total_stage_hours, b);
+    fill_operational_slack_columns(ctx, stage, stage_idx, layout, b);
+    fill_ncs_columns(ctx, stage, stage_idx, layout, b);
+    fill_z_inflow_columns(layout, b);
+
+    (col_lower, col_upper, objective)
+}
+
+/// Outgoing and incoming storage columns.
+///
+/// Outgoing storage `v_h` gets stage-specific bounds `[min_storage, max_storage]`.
+/// Incoming storage `v_in_h` is unconstrained (fixed at solve-time by the
+/// storage-fixing equality row).
+fn fill_storage_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    idx: &StageIndexer,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        col_lower[h_idx] = hb.min_storage_hm3;
-        col_upper[h_idx] = hb.max_storage_hm3;
-        col_lower[idx.storage_in.start + h_idx] = f64::NEG_INFINITY;
-        col_upper[idx.storage_in.start + h_idx] = f64::INFINITY;
+        bufs.col_lower[h_idx] = hb.min_storage_hm3;
+        bufs.col_upper[h_idx] = hb.max_storage_hm3;
+        bufs.col_lower[idx.storage_in.start + h_idx] = f64::NEG_INFINITY;
+        bufs.col_upper[idx.storage_in.start + h_idx] = f64::INFINITY;
     }
+}
 
-    // AR lag columns: unconstrained (signed).
+/// AR lag columns: unconstrained (signed).
+fn fill_ar_lag_columns(idx: &StageIndexer, bufs: &mut ColumnBufs<'_>) {
     for lag_col in idx.inflow_lags.clone() {
-        col_lower[lag_col] = f64::NEG_INFINITY;
-        col_upper[lag_col] = f64::INFINITY;
+        bufs.col_lower[lag_col] = f64::NEG_INFINITY;
+        bufs.col_upper[lag_col] = f64::INFINITY;
     }
+}
 
-    // Theta: bounded below by zero so iteration-1 LPs with empty cut pools
-    // are bounded rather than unbounded.
-    col_lower[idx.theta] = 0.0;
-    col_upper[idx.theta] = f64::INFINITY;
-    objective[idx.theta] = 1.0;
+/// Theta column: bounded below by zero so iteration-1 LPs with empty cut pools
+/// are bounded rather than unbounded.
+fn fill_theta_column(idx: &StageIndexer, bufs: &mut ColumnBufs<'_>) {
+    bufs.col_lower[idx.theta] = 0.0;
+    bufs.col_upper[idx.theta] = f64::INFINITY;
+    bufs.objective[idx.theta] = 1.0;
+}
 
-    // Turbine columns per hydro per block.
-    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+/// Turbine columns per hydro per block.
+///
+/// For constant-productivity hydros, caps turbine flow so that
+/// `productivity * turbined <= max_generation_mw` (derated capacity).
+/// For FPHA hydros, carries the `fpha_turbined_cost` in the objective.
+fn fill_turbine_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         let model = ctx.production_models.model(h_idx, stage_idx);
         let is_fpha = matches!(model, ResolvedProductionModel::Fpha { .. });
-        // For constant-productivity hydros, cap turbine flow so that
-        // productivity * turbined <= max_generation_mw (derated capacity).
         let turb_upper = match model {
             ResolvedProductionModel::ConstantProductivity { productivity }
                 if *productivity > 0.0 =>
@@ -62,84 +123,125 @@ pub(super) fn fill_stage_columns(
         };
         for blk in 0..layout.n_blks {
             let col = layout.col_turbine_start + h_idx * layout.n_blks + blk;
-            col_lower[col] = 0.0;
-            col_upper[col] = turb_upper;
+            bufs.col_lower[col] = 0.0;
+            bufs.col_upper[col] = turb_upper;
             if is_fpha {
                 let block_hours = stage.blocks[blk].duration_hours;
-                objective[col] = hp.fpha_turbined_cost * block_hours;
+                bufs.objective[col] = hp.fpha_turbined_cost * block_hours;
             }
         }
     }
+}
 
-    // Spillage columns per hydro per block.
-    for (h_idx, _hydro) in ctx.hydros.iter().enumerate() {
+/// Spillage columns per hydro per block.
+fn fill_spillage_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    for h_idx in 0..layout.n_h {
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_spillage_start + h_idx * layout.n_blks + blk;
-            col_upper[col] = f64::INFINITY;
+            bufs.col_upper[col] = f64::INFINITY;
             let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = hp.spillage_cost * block_hours;
+            bufs.objective[col] = hp.spillage_cost * block_hours;
         }
     }
+}
 
-    // Diversion columns per hydro per block.
-    // Dense allocation: all hydros get columns; those without diversion have
-    // bounds [0, 0] and are eliminated by presolve.
+/// Diversion columns per hydro per block.
+///
+/// Dense allocation: all hydros get columns; those without diversion have
+/// bounds `[0, 0]` and are eliminated by presolve.
+fn fill_diversion_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (h_idx, hydro) in ctx.hydros.iter().enumerate() {
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         let max_div = hydro.diversion.as_ref().map_or(0.0, |d| d.max_flow_m3s);
         for blk in 0..layout.n_blks {
             let col = layout.col_diversion_start + h_idx * layout.n_blks + blk;
-            col_lower[col] = 0.0;
-            col_upper[col] = max_div;
+            bufs.col_lower[col] = 0.0;
+            bufs.col_upper[col] = max_div;
             if max_div > 0.0 {
                 let block_hours = stage.blocks[blk].duration_hours;
-                objective[col] = hp.diversion_cost * block_hours;
+                bufs.objective[col] = hp.diversion_cost * block_hours;
             }
         }
     }
+}
 
-    // Thermal columns per thermal per block.
+/// Thermal columns per thermal per block.
+fn fill_thermal_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (t_idx, _thermal) in ctx.thermals.iter().enumerate() {
         let tb = ctx.bounds.thermal_bounds(t_idx, stage_idx);
         let marginal_cost_per_mwh = tb.cost_per_mwh;
         for blk in 0..layout.n_blks {
             let col = layout.col_thermal_start + t_idx * layout.n_blks + blk;
-            col_lower[col] = tb.min_generation_mw;
-            col_upper[col] = tb.max_generation_mw;
+            bufs.col_lower[col] = tb.min_generation_mw;
+            bufs.col_upper[col] = tb.max_generation_mw;
             let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = marginal_cost_per_mwh * block_hours;
+            bufs.objective[col] = marginal_cost_per_mwh * block_hours;
         }
     }
+}
 
-    // Line columns per line per block (forward and reverse).
-    // Exchange factors from `exchange_factors.json` scale the stage-level
-    // capacity bounds per block. Default factor is (1.0, 1.0) (no scaling).
-    for (l_idx, line) in ctx.lines.iter().enumerate() {
+/// Line columns per line per block (forward and reverse).
+///
+/// Exchange factors from `exchange_factors.json` scale the stage-level
+/// capacity bounds per block. Default factor is `(1.0, 1.0)` (no scaling).
+fn fill_line_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    for (l_idx, _line) in ctx.lines.iter().enumerate() {
         let lb = ctx.bounds.line_bounds(l_idx, stage_idx);
         let lp = ctx.penalties.line_penalties(l_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let (df, rf) = ctx.resolved_exchange_factors.factors(l_idx, stage_idx, blk);
             let col_fwd = layout.col_line_fwd_start + l_idx * layout.n_blks + blk;
             let col_rev = layout.col_line_rev_start + l_idx * layout.n_blks + blk;
-            col_upper[col_fwd] = lb.direct_mw * df;
-            col_upper[col_rev] = lb.reverse_mw * rf;
+            bufs.col_upper[col_fwd] = lb.direct_mw * df;
+            bufs.col_upper[col_rev] = lb.reverse_mw * rf;
             let block_hours = stage.blocks[blk].duration_hours;
-            objective[col_fwd] = lp.exchange_cost * block_hours;
-            objective[col_rev] = lp.exchange_cost * block_hours;
-            let _ = line;
+            bufs.objective[col_fwd] = lp.exchange_cost * block_hours;
+            bufs.objective[col_rev] = lp.exchange_cost * block_hours;
         }
     }
+}
 
-    // Deficit and excess columns per bus per block.
-    //
-    // The deficit region uses a uniform stride of `max_deficit_segments` segments
-    // per bus.  For bus `b_idx`, segment `seg_idx`, block `blk`:
-    //   col = col_deficit_start + b_idx * max_deficit_segments * n_blks + seg_idx * n_blks + blk
-    //
-    // Buses with fewer than `max_deficit_segments` segments leave the trailing
-    // slots at [lower=0, upper=0, objective=0] (from vec initialisation), which
-    // the HiGHS presolver eliminates before the simplex phase.
+/// Deficit and excess columns per bus per block.
+///
+/// The deficit region uses a uniform stride of `max_deficit_segments` segments
+/// per bus.  For bus `b_idx`, segment `seg_idx`, block `blk`:
+/// `col = col_deficit_start + b_idx * max_deficit_segments * n_blks + seg_idx * n_blks + blk`
+///
+/// Buses with fewer than `max_deficit_segments` segments leave the trailing
+/// slots at `[lower=0, upper=0, objective=0]` (from vec initialisation), which
+/// the `HiGHS` presolver eliminates before the simplex phase.
+fn fill_deficit_and_excess_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (b_idx, bus) in ctx.buses.iter().enumerate() {
         let bp = ctx.penalties.bus_penalties(b_idx, stage_idx);
         for (seg_idx, segment) in bus.deficit_segments.iter().enumerate() {
@@ -149,53 +251,77 @@ pub(super) fn fill_stage_columns(
                     + seg_idx * layout.n_blks
                     + blk;
                 let block_hours = stage.blocks[blk].duration_hours;
-                col_upper[col_def] = segment.depth_mw.unwrap_or(f64::INFINITY);
-                objective[col_def] = segment.cost_per_mwh * block_hours;
+                bufs.col_upper[col_def] = segment.depth_mw.unwrap_or(f64::INFINITY);
+                bufs.objective[col_def] = segment.cost_per_mwh * block_hours;
             }
         }
         for blk in 0..layout.n_blks {
             let col_exc = layout.col_excess_start + b_idx * layout.n_blks + blk;
             let block_hours = stage.blocks[blk].duration_hours;
-            col_upper[col_exc] = f64::INFINITY;
-            objective[col_exc] = bp.excess_cost * block_hours;
+            bufs.col_upper[col_exc] = f64::INFINITY;
+            bufs.objective[col_exc] = bp.excess_cost * block_hours;
         }
     }
+}
 
-    // Inflow non-negativity slack columns (sigma_inf_h), one per hydro.
-    // Bounds [0, +inf) come from vec initialisation; only objective needs writing.
-    // Per-plant cost from the penalty cascade (T-010).
+/// Inflow non-negativity slack columns (`sigma_inf_h`), one per hydro.
+///
+/// Bounds `[0, +inf)` come from vec initialisation; only objective needs writing.
+/// Per-plant cost from the penalty cascade.
+fn fill_inflow_slack_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    total_stage_hours: f64,
+    bufs: &mut ColumnBufs<'_>,
+) {
     if ctx.has_penalty {
-        let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
         for h_idx in 0..layout.n_h {
             let col = layout.col_inflow_slack_start + h_idx;
             let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-            objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
+            bufs.objective[col] = hp.inflow_nonnegativity_cost * total_stage_hours;
         }
     }
+}
 
-    // FPHA generation columns (g_{h,k}): one per FPHA hydro per block.
-    // Bounds: [0, max_generation_mw].  Objective: 0.0 (fpha_turbined_cost goes on
-    // the turbine column).
+/// FPHA generation columns (`g_{h,k}`): one per FPHA hydro per block.
+///
+/// Bounds: `[0, max_generation_mw]`.  Objective: `0.0` (`fpha_turbined_cost`
+/// goes on the turbine column).
+fn fill_fpha_generation_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (local_idx, &h_idx) in layout.fpha_hydro_indices.iter().enumerate() {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_generation_start + local_idx * layout.n_blks + blk;
-            col_lower[col] = 0.0;
-            col_upper[col] = hb.max_generation_mw;
+            bufs.col_lower[col] = 0.0;
+            bufs.col_upper[col] = hb.max_generation_mw;
         }
     }
+}
 
-    // Evaporation columns: 3 per evaporation hydro (stage-level, not per-block).
-    // Q_ev_h, f_evap_plus_h, f_evap_minus_h — all in [0, +inf).
-    // Q_ev carries zero objective cost (evaporation flow itself is not penalised).
-    // f_evap_plus and f_evap_minus carry evaporation_violation_cost * total_stage_hours
-    // so that the solver is penalised for violating the linearised evaporation constraint.
-    let total_stage_hours: f64 = stage.blocks.iter().map(|b| b.duration_hours).sum();
+/// Evaporation columns: 3 per evaporation hydro (`Q_ev`, `f_evap_plus`, `f_evap_minus`).
+///
+/// All columns are stage-level (not per-block) and lie in `[0, +inf)`.
+/// `Q_ev` carries zero objective cost (evaporation flow itself is not penalised).
+/// `f_evap_plus` and `f_evap_minus` carry `evaporation_violation_cost * total_stage_hours`
+/// so that the solver is penalised for violating the linearised evaporation constraint.
+fn fill_evaporation_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    total_stage_hours: f64,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (local_idx, &h_idx) in layout.evap_hydro_indices.iter().enumerate() {
         let col_q_ev = layout.col_evap_start + local_idx * 3;
         let col_f_plus = layout.col_evap_start + local_idx * 3 + 1;
         let col_f_minus = layout.col_evap_start + local_idx * 3 + 2;
-        col_lower[col_q_ev] = 0.0;
+        bufs.col_lower[col_q_ev] = 0.0;
         // Physical upper bound: linearized evaporation at maximum storage.
         // Q_ev_max = max(0, k_evap0 + k_evap_v * v_max) * safety_margin.
         // Negative coefficients (net condensation) are clamped to zero.
@@ -205,127 +331,197 @@ pub(super) fn fill_stage_columns(
             let coeff = &coefficients[stage_idx];
             let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
             let q_ev_max = (coeff.k_evap0 + coeff.k_evap_v * hb.max_storage_hm3).max(0.0);
-            col_upper[col_q_ev] = q_ev_max * Q_EV_SAFETY_MARGIN;
+            bufs.col_upper[col_q_ev] = q_ev_max * Q_EV_SAFETY_MARGIN;
         } else {
-            col_upper[col_q_ev] = 0.0;
+            bufs.col_upper[col_q_ev] = 0.0;
         }
-        col_lower[col_f_plus] = 0.0;
-        col_upper[col_f_plus] = f64::INFINITY;
-        col_lower[col_f_minus] = 0.0;
-        col_upper[col_f_minus] = f64::INFINITY;
+        bufs.col_lower[col_f_plus] = 0.0;
+        bufs.col_upper[col_f_plus] = f64::INFINITY;
+        bufs.col_lower[col_f_minus] = 0.0;
+        bufs.col_upper[col_f_minus] = f64::INFINITY;
         // Violation cost: read directional costs from resolved penalties.
         // Q_ev (offset 0) keeps objective = 0.0 (already the vec initialisation default).
         // f_evap_plus = under-evaporation (evaporated less than target).
         // f_evap_minus = over-evaporation (evaporated more than target).
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col_f_plus] = hp.evaporation_violation_neg_cost * total_stage_hours;
-        objective[col_f_minus] = hp.evaporation_violation_pos_cost * total_stage_hours;
+        bufs.objective[col_f_plus] = hp.evaporation_violation_neg_cost * total_stage_hours;
+        bufs.objective[col_f_minus] = hp.evaporation_violation_pos_cost * total_stage_hours;
     }
+}
 
-    // Withdrawal violation slack columns — neg (under-withdrawal), one per hydro.
-    // Bounds [0, +inf) when water_withdrawal_m3s > 0; pinned to [0, 0] otherwise.
-    // Pinning to zero when there is no scheduled withdrawal ensures the column has
-    // no LP effect (it is presolve-eliminated), preserving identical behaviour to
-    // the pre-withdrawal implementation for cases where withdrawal is absent.
+/// Withdrawal violation slack columns — neg (under-withdrawal) and pos (over-withdrawal).
+///
+/// One stage-level column per hydro for each direction.
+/// Bounds `[0, +inf)` when `water_withdrawal_m3s > 0`; pinned to `[0, 0]` otherwise.
+/// Pinning to zero when there is no scheduled withdrawal ensures the column has
+/// no LP effect (it is presolve-eliminated), preserving identical behaviour to
+/// the pre-withdrawal implementation for cases where withdrawal is absent.
+fn fill_withdrawal_slack_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage_idx: usize,
+    layout: &StageLayout,
+    total_stage_hours: f64,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    // Neg slacks (under-withdrawal).
     for h_idx in 0..layout.n_h {
         let col = layout.col_withdrawal_neg_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.water_withdrawal_m3s > 0.0 {
-            col_upper[col] = f64::INFINITY;
+        bufs.col_upper[col] = if hb.water_withdrawal_m3s > 0.0 {
+            f64::INFINITY
         } else {
-            col_upper[col] = 0.0;
-        }
+            0.0
+        };
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.water_withdrawal_violation_neg_cost * total_stage_hours;
+        bufs.objective[col] = hp.water_withdrawal_violation_neg_cost * total_stage_hours;
     }
-
-    // Withdrawal violation slack columns — pos (over-withdrawal), one per hydro.
-    // Same activation logic as neg: active only when withdrawal target > 0.
+    // Pos slacks (over-withdrawal).
     for h_idx in 0..layout.n_h {
         let col = layout.col_withdrawal_pos_start + h_idx;
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
-        if hb.water_withdrawal_m3s > 0.0 {
-            col_upper[col] = f64::INFINITY;
+        bufs.col_upper[col] = if hb.water_withdrawal_m3s > 0.0 {
+            f64::INFINITY
         } else {
-            col_upper[col] = 0.0;
-        }
+            0.0
+        };
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
-        objective[col] = hp.water_withdrawal_violation_pos_cost * total_stage_hours;
+        bufs.objective[col] = hp.water_withdrawal_violation_pos_cost * total_stage_hours;
     }
+}
 
-    // Operational violation slack columns: 4 regions of n_h * n_blks columns each.
-    // Bounds [0, +inf) when the corresponding bound is active (positive for
-    // min constraints, Some for max outflow); pinned to [0, 0] when inactive.
-    // Objective cost: resolved penalty * block_hours.
+/// Operational violation slack columns: 4 families of `n_h * n_blks` columns.
+///
+/// Delegates to one sub-helper per family; each sub-helper is independent
+/// and writes to a disjoint column range.
+fn fill_operational_slack_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
+    fill_outflow_below_columns(ctx, stage, stage_idx, layout, bufs);
+    fill_outflow_above_columns(ctx, stage, stage_idx, layout, bufs);
+    fill_turbine_below_columns(ctx, stage, stage_idx, layout, bufs);
+    fill_generation_below_columns(ctx, stage, stage_idx, layout, bufs);
+}
 
-    // Outflow-below-minimum slacks (sigma_outflow_below_{h,k}).
+/// Outflow-below-minimum slack columns (`sigma_outflow_below_{h,k}`).
+///
+/// Active (unbounded above) when `min_outflow_m3s > 0`; pinned to `[0, 0]` otherwise.
+fn fill_outflow_below_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_outflow_below_start + h_idx * layout.n_blks + blk;
-            if hb.min_outflow_m3s > 0.0 {
-                col_upper[col] = f64::INFINITY;
+            bufs.col_upper[col] = if hb.min_outflow_m3s > 0.0 {
+                f64::INFINITY
             } else {
-                col_upper[col] = 0.0;
-            }
-            let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = hp.outflow_violation_below_cost * block_hours;
+                0.0
+            };
+            bufs.objective[col] =
+                hp.outflow_violation_below_cost * stage.blocks[blk].duration_hours;
         }
     }
+}
 
-    // Outflow-above-maximum slacks (sigma_outflow_above_{h,k}).
+/// Outflow-above-maximum slack columns (`sigma_outflow_above_{h,k}`).
+///
+/// Active (unbounded above) when `max_outflow_m3s` is `Some`; pinned to `[0, 0]` otherwise.
+fn fill_outflow_above_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_outflow_above_start + h_idx * layout.n_blks + blk;
-            if hb.max_outflow_m3s.is_some() {
-                col_upper[col] = f64::INFINITY;
+            bufs.col_upper[col] = if hb.max_outflow_m3s.is_some() {
+                f64::INFINITY
             } else {
-                col_upper[col] = 0.0;
-            }
-            let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = hp.outflow_violation_above_cost * block_hours;
+                0.0
+            };
+            bufs.objective[col] =
+                hp.outflow_violation_above_cost * stage.blocks[blk].duration_hours;
         }
     }
+}
 
-    // Turbine-below-minimum slacks (sigma_turbine_below_{h,k}).
+/// Turbine-below-minimum slack columns (`sigma_turbine_below_{h,k}`).
+///
+/// Active (unbounded above) when `min_turbined_m3s > 0`; pinned to `[0, 0]` otherwise.
+fn fill_turbine_below_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_turbine_below_start + h_idx * layout.n_blks + blk;
-            if hb.min_turbined_m3s > 0.0 {
-                col_upper[col] = f64::INFINITY;
+            bufs.col_upper[col] = if hb.min_turbined_m3s > 0.0 {
+                f64::INFINITY
             } else {
-                col_upper[col] = 0.0;
-            }
-            let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = hp.turbined_violation_below_cost * block_hours;
+                0.0
+            };
+            bufs.objective[col] =
+                hp.turbined_violation_below_cost * stage.blocks[blk].duration_hours;
         }
     }
+}
 
-    // Generation-below-minimum slacks (sigma_generation_below_{h,k}).
+/// Generation-below-minimum slack columns (`sigma_generation_below_{h,k}`).
+///
+/// Active (unbounded above) when `min_generation_mw > 0`; pinned to `[0, 0]` otherwise.
+fn fill_generation_below_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for h_idx in 0..layout.n_h {
         let hb = ctx.bounds.hydro_bounds(h_idx, stage_idx);
         let hp = ctx.penalties.hydro_penalties(h_idx, stage_idx);
         for blk in 0..layout.n_blks {
             let col = layout.col_generation_below_start + h_idx * layout.n_blks + blk;
-            if hb.min_generation_mw > 0.0 {
-                col_upper[col] = f64::INFINITY;
+            bufs.col_upper[col] = if hb.min_generation_mw > 0.0 {
+                f64::INFINITY
             } else {
-                col_upper[col] = 0.0;
-            }
-            let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = hp.generation_violation_below_cost * block_hours;
+                0.0
+            };
+            bufs.objective[col] =
+                hp.generation_violation_below_cost * stage.blocks[blk].duration_hours;
         }
     }
+}
 
-    // NCS generation columns: one per active NCS per block.
-    // col_lower[col] = 0.0 (from vec initialisation).
-    // col_upper[col] = available_gen * ncs_factor.
-    // objective[col] = -curtailment_cost * block_hours (negative incentivises generation).
+/// NCS generation columns: one per active NCS per block.
+///
+/// `col_lower[col] = 0.0` (from vec initialisation).
+/// `col_upper[col] = available_gen * ncs_factor`.
+/// `objective[col] = -curtailment_cost * block_hours` (negative incentivises generation).
+fn fill_ncs_columns(
+    ctx: &TemplateBuildCtx<'_>,
+    stage: &Stage,
+    stage_idx: usize,
+    layout: &StageLayout,
+    bufs: &mut ColumnBufs<'_>,
+) {
     for (ncs_local, &ncs_sys_idx) in layout.active_ncs_indices.iter().enumerate() {
         let ncs = &ctx.non_controllable_sources[ncs_sys_idx];
         let avail_gen = ctx
@@ -334,22 +530,23 @@ pub(super) fn fill_stage_columns(
         for blk in 0..layout.n_blks {
             let col = layout.col_ncs_start + ncs_local * layout.n_blks + blk;
             let factor = ctx.resolved_ncs_factors.factor(ncs_sys_idx, stage_idx, blk);
-            col_upper[col] = avail_gen * factor;
+            bufs.col_upper[col] = avail_gen * factor;
             let block_hours = stage.blocks[blk].duration_hours;
-            objective[col] = -ncs.curtailment_cost * block_hours;
+            bufs.objective[col] = -ncs.curtailment_cost * block_hours;
         }
     }
+}
 
-    // Z-inflow columns: free variables for realized total inflow per hydro.
-    // col_lower = -inf, col_upper = +inf, objective = 0.0 (no direct cost).
+/// Z-inflow columns: free variables for realized total inflow per hydro.
+///
+/// `col_lower = -inf`, `col_upper = +inf`, `objective = 0.0` (no direct cost).
+fn fill_z_inflow_columns(layout: &StageLayout, bufs: &mut ColumnBufs<'_>) {
     for h_idx in 0..layout.n_h {
         let col = layout.col_z_inflow_start + h_idx;
-        col_lower[col] = f64::NEG_INFINITY;
-        col_upper[col] = f64::INFINITY;
+        bufs.col_lower[col] = f64::NEG_INFINITY;
+        bufs.col_upper[col] = f64::INFINITY;
         // objective[col] = 0.0 — already zero from vec initialisation.
     }
-
-    (col_lower, col_upper, objective)
 }
 
 /// Fill row lower/upper bounds for one stage.

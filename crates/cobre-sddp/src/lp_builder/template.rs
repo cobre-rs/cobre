@@ -8796,7 +8796,7 @@ mod tests {
 
     #[test]
     fn turbine_column_lower_bound_is_zero() {
-        // AD-5: turbine column lower bound must be 0.0, not min_turbined_m3s.
+        // turbine column lower bound must be 0.0, not min_turbined_m3s.
         let result = build_active_violations_template();
         let t = &result.templates[0];
         let indexer = StageIndexer::with_equipment(
@@ -8819,12 +8819,12 @@ mod tests {
         // Both turbine columns (block 0 and block 1) must have lower bound 0.0.
         assert_eq!(
             t.col_lower[indexer.turbine.start], 0.0,
-            "turbine blk0 lower bound must be 0.0 (AD-5)"
+            "turbine blk0 lower bound must be 0.0"
         );
         assert_eq!(
             t.col_lower[indexer.turbine.start + 1],
             0.0,
-            "turbine blk1 lower bound must be 0.0 (AD-5)"
+            "turbine blk1 lower bound must be 0.0"
         );
     }
 

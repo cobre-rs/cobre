@@ -528,8 +528,8 @@ fn resolve_backward_basis<'a>(
 ///
 /// Solves at each (scenario, opening) and accumulates duals into `per_opening_stats`.
 /// At ω=0, writes the post-solve basis into `basis_slice`; writes at ω>0 are
-/// forbidden per AD-2 (retained-LU corruption risk). Infeasibility at ω=0
-/// leaves the slot unchanged (AD-7).
+/// forbidden (retained-LU corruption risk). Infeasibility at ω=0
+/// leaves the slot unchanged
 #[allow(clippy::too_many_lines)]
 fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
@@ -684,7 +684,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             }
         }
 
-        // AD-2: write BasisStore[m, s] at ω=0 only (corruption risk at ω>0).
+        // write BasisStore[m, s] at ω=0 only (corruption risk at ω>0).
         // Reuse existing slot in-place; first iteration allocates, subsequent reuse.
         if omega == 0 {
             let num_cols = succ.baked_template.num_cols;
@@ -6272,8 +6272,8 @@ mod tests {
         // When: process_trial_point_backward runs at omega=0.
         // Then: BasisStore[0, 1] is Some(CapturedBasis) with state_at_capture == [5.0].
         //
-        // AD-2: write occurs only at omega=0 (this test has exactly 1 opening).
-        // AD-7: infeasibility guard is not triggered (solver succeeds).
+        // write occurs only at omega=0 (this test has exactly 1 opening).
+        // infeasibility guard is not triggered (solver succeeds).
         use crate::workspace::BasisStore;
 
         let mut basis_store = BasisStore::new(1, 2);
@@ -6306,7 +6306,7 @@ mod tests {
         // Then: run_backward_pass returns Err(SddpError::Infeasible) and
         //       BasisStore[0, 1] retains its original content.
         //
-        // AD-7: the write in process_trial_point_backward is guarded by `?`
+        // the write in process_trial_point_backward is guarded by `?`
         // immediately after run_stage_solve. An Infeasible error propagates
         // out of the function before reaching the BasisStore write site, so
         // the slot is unconditionally preserved on infeasibility.

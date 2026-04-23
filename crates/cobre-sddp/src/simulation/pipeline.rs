@@ -1014,7 +1014,7 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     // If the caller did not provide baked templates (e.g., checkpoint-loaded
     // simulation), re-bake them locally from the loaded FCF.  Cost is
     // O(num_stages * num_active_cuts), a one-time setup amortised across the
-    // simulation's per-scenario LP solves (AD-3 trade-off: N copies of
+    // simulation's per-scenario LP solves (trade-off: N copies of
     // Vec<StageTemplate> vs per-iteration Option<> runtime branching).
     let owned_baked: Option<Vec<StageTemplate>> = if baked_templates.is_none() {
         let mut owned = Vec::with_capacity(num_stages);

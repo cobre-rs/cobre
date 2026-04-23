@@ -21,7 +21,7 @@ use clap::Args;
 use console::Term;
 
 use cobre_comm::{
-    Communicator, ExecutionTopology, ReduceOp, TopologyProvider, create_communicator,
+    create_communicator, Communicator, ExecutionTopology, ReduceOp, TopologyProvider,
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
@@ -30,23 +30,23 @@ use cobre_io::output::{
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
-    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
+    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic, ConstructionConfig},
+    EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
-    OpeningTreeInputs, build_stochastic_context, context::OpeningTree,
-    provenance::ComponentProvenance,
+    build_stochastic_context, context::OpeningTree, provenance::ComponentProvenance,
+    OpeningTreeInputs,
 };
 
 use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    broadcast_value, stopping_rules_from_broadcast, BroadcastConfig, BroadcastCutSelection,
+    BroadcastOpeningTree,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -972,6 +972,12 @@ fn run_training_phase(
     })?;
 
     // Aggregate solver stats from the stats log and allreduce across ranks.
+    // Every rank's backward entries cover *all* ranks (allgatherv in backward.rs
+    // populates the full set so rank 0 can write them to parquet). Filter to this
+    // rank's own contribution here so the subsequent allreduce(Sum) produces
+    // correct global totals instead of multiplying backward by world_size.
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let my_rank = ctx.comm.rank() as i32;
     let (
         local_first_try,
         local_retried,
@@ -980,7 +986,7 @@ fn run_training_phase(
         local_basis_offered,
         local_basis_consistency_failures,
         local_simplex_iter,
-    ) = aggregate_solver_stats(&training_result.solver_stats_log);
+    ) = aggregate_solver_stats(&training_result.solver_stats_log, my_rank);
 
     #[allow(clippy::cast_precision_loss)]
     let send_stats = [
@@ -1054,7 +1060,14 @@ fn run_training_phase(
     })
 }
 
-/// Aggregate solver statistics from the training stats log.
+/// Aggregate this rank's own contribution from the training stats log.
+///
+/// Backward entries are replicated across ranks (allgatherv in `backward.rs`
+/// populates the full set on every rank so rank 0 can write them to parquet).
+/// Filtering by the entry's originating rank yields the per-rank local totals
+/// that can then be correctly summed across ranks via `allreduce(Sum)`.
+/// Forward and `lower_bound` entries carry this rank's MPI rank, so they pass
+/// through unchanged.
 fn aggregate_solver_stats(
     stats_log: &[(
         u64,
@@ -1065,6 +1078,7 @@ fn aggregate_solver_stats(
         i32,
         cobre_sddp::SolverStatsDelta,
     )],
+    my_rank: i32,
 ) -> (u64, u64, u64, f64, u64, u64, u64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
@@ -1073,9 +1087,10 @@ fn aggregate_solver_stats(
     let mut basis_offered = 0u64;
     let mut basis_consistency_failures = 0u64;
     let mut simplex = 0u64;
-    // Iterate over all entries, summing across all phases, openings, ranks, and workers.
-    // All dimensions are collapsed here: the CLI summary reports totals.
-    for (_, _, _, _, _, _, delta) in stats_log {
+    for (_, _, _, _, entry_rank, _, delta) in stats_log {
+        if *entry_rank != my_rank {
+            continue;
+        }
         first_try += delta.first_try_successes;
         retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
         failed += delta.lp_failures;

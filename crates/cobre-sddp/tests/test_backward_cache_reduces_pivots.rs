@@ -6,7 +6,7 @@
 //!
 //! ## Why this is a sanity test, not a performance test
 //!
-//! The master plan's original AD-3 hypothesis was that the cache would
+//! The master plan's original hypothesis was that the cache would
 //! reduce backward ω=0 pivots at iter ≥ 2 (state drift between iterations
 //! was predicted to be smaller than the forward basis's noise mismatch).
 //! The A/B measurements on convertido at varying cut densities falsified
@@ -40,7 +40,7 @@
 //! `simplex_iterations`: 2, mean = 2.0/18.0 ≈ 0.1111.
 //!
 //! The current assertion tolerates up to 20× the baseline mean, which is
-//! well above the observed ~4× regression from AD-3's state-drift warm-start
+//! well above the observed ~4× regression from state-drift warm-start
 //! while still catching ordere-of-magnitude-worse blowups.
 
 #![allow(
@@ -245,7 +245,7 @@ fn test_backward_cache_reduces_pivots() {
     let observed_mean = sum as f64 / n as f64;
 
     // Sanity bound: allow up to 20× the pre-plan baseline mean.  The cache's
-    // AD-3 state-drift warm-start is known to regress D03 ω=0 pivots by ~4×;
+    // state-drift warm-start is known to regress D03 ω=0 pivots by ~4×;
     // this bound tolerates that while still catching order-of-magnitude
     // failures (capture path never fires, basis rejected every iter, wire
     // format corruption).  See module-level docstring for rationale and the

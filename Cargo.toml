@@ -37,10 +37,15 @@ unsafe_code = "forbid"
 missing_docs = "warn"
 
 [profile.release]
-# Retain line-number debug info so DHAT and flamegraph profiles resolve to
-# source locations.  Does not change optimisation level but increases unstripped
-# binary size; [profile.dist] strips symbols for release artifacts.
+strip = "symbols"
+
+# Opt-in profile for flamegraph/DHAT — keeps line-number debug info so samples
+# resolve to source locations. Use with `cargo build --profile profiling` or
+# `cargo flamegraph --profile profiling`.
+[profile.profiling]
+inherits = "release"
 debug = 1
+strip = "none"
 
 [profile.dist]
 inherits = "release"

@@ -7,12 +7,15 @@
 //! # Usage
 //!
 //! ```text
-//! cargo run --example dhat_baseline --features dhat-heap -p cobre-sddp --release
+//! cargo run --example dhat_baseline --features dhat-heap -p cobre-sddp --profile profiling
 //! ```
 //!
-//! The `--release` flag is mandatory: debug builds have different allocation
-//! behaviour due to optimizer differences and are not representative of the
-//! production hot path.
+//! A `--release`-level optimisation profile is mandatory: debug builds have
+//! different allocation behaviour due to optimizer differences and are not
+//! representative of the production hot path. The `profiling` profile inherits
+//! `release` optimisations but retains line-number debug info so DHAT
+//! resolves allocation sites to source locations; plain `--release` strips
+//! symbols and the DHAT viewer will only show addresses.
 //!
 //! # Feature gate
 //!

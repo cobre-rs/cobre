@@ -333,7 +333,7 @@ pub(crate) struct BackwardAccumulators {
     /// tracks iteration-level activity across all stages.
     ///
     /// After the parallel region the sequential merge phase ORs contributions
-    /// across all workers into `metadata_sync_window_buf` (`BackwardPassSpec`),
+    /// across all workers into `metadata_sync_window_buf` (`BackwardPassState`),
     /// then an MPI `allreduce(BitwiseOr)` aggregates across ranks so any rank
     /// observing a cut binding globally sets bit 0 in the cut's `active_window`.
     pub(crate) metadata_sync_window_contribution: Vec<u32>,

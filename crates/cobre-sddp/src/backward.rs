@@ -75,32 +75,19 @@
 //! module; these are a fixed cost per trial point and are not considered
 //! hot-path allocations from Cobre's perspective.
 
-use std::sync::mpsc::Sender;
-use std::time::Instant;
-
-use cobre_comm::{Communicator, ReduceOp};
-use cobre_core::{
-    TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WorkerTimingPhase,
-};
-use cobre_solver::{RowBatch, SolverInterface, SolverStatistics, StageTemplate};
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
+use cobre_comm::Communicator;
+use cobre_solver::{RowBatch, SolverInterface};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
+    SddpError,
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
-    cut_sync::CutSyncBuffers,
-    forward::{build_delta_cut_row_batch_into, partition, write_capture_metadata},
+    forward::write_capture_metadata,
     noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
-    solver_stats::{
-        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
-        pack_worker_opening_stats, unpack_worker_opening_stats,
-    },
+    solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
-    workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
+    workspace::{BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
 
 /// Per-`(rank, worker_id, opening)` solver delta collected during a single
@@ -176,196 +163,20 @@ pub struct BackwardResult {
 /// writing directly into the [`FutureCostFunction`]. After the parallel region,
 /// staged cuts are sorted by `trial_point_idx` and merged into the FCF in
 /// deterministic order regardless of thread completion order.
-struct StagedCut {
+pub(crate) struct StagedCut {
     /// Local trial-point index within `0..local_work`. Used for deterministic
     /// merge ordering after the parallel region.
-    trial_point_idx: usize,
+    pub(crate) trial_point_idx: usize,
 
     /// Aggregated cut intercept (result of `RiskMeasure::aggregate_cut`).
-    intercept: f64,
+    pub(crate) intercept: f64,
 
     /// Aggregated cut coefficients (length = `n_state`).
-    coefficients: Vec<f64>,
+    pub(crate) coefficients: Vec<f64>,
 
     /// Global forward-pass index (`fwd_offset + m`), stored as `u32` for the
     /// FCF slot formula.
-    forward_pass_index: u32,
-}
-
-/// Inputs bundled from the training loop for the backward pass.
-///
-/// Groups the iteration-varying scalars and slices that would otherwise push
-/// the argument count of [`run_backward_pass`] beyond seven.
-pub struct BackwardPassSpec<'a> {
-    /// Exchange buffers for gathering trial-point states via `allgatherv`.
-    ///
-    /// When non-empty, populates exchange buffers per stage. When empty (test path),
-    /// the caller is responsible for pre-populating the exchange buffers.
-    pub exchange: &'a mut ExchangeBuffers,
-
-    /// Forward-pass trajectory records used to populate `exchange` per stage.
-    ///
-    /// Length must be `local_work * num_stages` when non-empty; pass `&[]` in
-    /// tests that pre-populate `exchange` directly.
-    pub records: &'a [TrajectoryRecord],
-
-    /// Current training iteration index (1-based), used for cut metadata.
-    pub iteration: u64,
-
-    /// Number of trial points assigned to this rank for the backward pass.
-    pub local_work: usize,
-
-    /// Global offset for this rank's trial points (`rank * fwd_per_rank`).
-    pub fwd_offset: usize,
-
-    /// Per-stage risk measures (length = `num_stages`). `risk_measures[t]`
-    /// is applied when aggregating cut outcomes at stage `t`.
-    pub risk_measures: &'a [RiskMeasure],
-
-    /// Minimum dual multiplier for a cut to count as binding (BUG-2 fix).
-    ///
-    /// Cuts with duals above this threshold are marked as binding during the
-    /// backward pass activity tracking. A value of `0.0` preserves the
-    /// original strict-positive behavior; a value like `1e-8` filters out
-    /// numerical noise from near-zero positive duals.
-    pub cut_activity_tolerance: f64,
-
-    /// Activity-window size for the basis-reconstruction classifier (1..=31).
-    ///
-    /// Forwarded verbatim from [`crate::config::CutManagementConfig::basis_activity_window`].
-    pub basis_activity_window: u32,
-
-    /// Pre-allocated cut synchronization buffers for per-stage `allgatherv`.
-    ///
-    /// After local cuts are inserted into the FCF at each stage, `sync_cuts`
-    /// is called to distribute cuts across all ranks. For single-rank runs
-    /// the `allgatherv` is a no-op and completes immediately.
-    pub cut_sync_bufs: &'a mut CutSyncBuffers,
-
-    /// Pre-allocated buffer for uniform opening probabilities. Reused per stage
-    /// via `clear()` + `resize()` to avoid per-stage allocation.
-    ///
-    /// Passed as a mutable reference to avoid `mem::take` capacity loss when
-    /// the training loop encounters an error before buffer recovery.
-    pub probabilities_buf: &'a mut Vec<f64>,
-
-    /// Pre-allocated buffer for successor active cut slot indices. Reused per
-    /// stage via `clear()` + `extend()` to avoid per-stage allocation.
-    ///
-    /// Passed as a mutable reference (same rationale as `probabilities_buf`).
-    pub successor_active_slots_buf: &'a mut Vec<usize>,
-
-    /// Optional visited-states archive for dominated cut selection.
-    ///
-    /// When `Some`, gathered states are archived after each per-stage exchange
-    /// so that the domination test has access to all forward-pass trial points.
-    /// Pass `None` when using `Level1`, `Lml1`, or no cut selection.
-    pub visited_archive: Option<&'a mut crate::visited_states::VisitedStatesArchive>,
-
-    /// Pre-allocated buffer for per-slot binding increment aggregation.
-    ///
-    /// Reused across stages to avoid per-stage allocation. Sized to
-    /// `fcf.pools[successor].metadata.len()` after each `sync_packed_cuts`
-    /// call. Used for the `allreduce(Sum)` that synchronises cut binding
-    /// metadata across MPI ranks so that `active_count` and
-    /// `last_active_iter` reflect trial points from ALL ranks, not just this
-    /// rank's local forward passes.
-    pub metadata_sync_buf: &'a mut Vec<u64>,
-
-    /// Pre-allocated receive buffer for the `allreduce(Sum)` that aggregates
-    /// per-slot binding increments across MPI ranks.
-    ///
-    /// Reused across stages to avoid per-stage allocation (F1-003 fix).
-    /// Resized to `pool_size` before each allreduce call.
-    pub global_increments_buf: &'a mut Vec<u64>,
-
-    /// Pre-allocated send buffer for the per-iteration `allreduce(BitwiseOr)`
-    /// that aggregates sliding-window binding-activity bitmaps across MPI ranks.
-    ///
-    /// Length equals the current pool population at the time of the reduce call.
-    /// Each element is a `u32` bitmask; bit 0 is set if any worker on this rank
-    /// observed a binding event for that cut slot during the current iteration
-    /// (across all stages). Cleared once per iteration at the start of
-    /// `run_backward_pass`.
-    pub metadata_sync_window_buf: &'a mut Vec<u32>,
-
-    /// Pre-allocated receive buffer for the per-iteration `allreduce(BitwiseOr)`.
-    ///
-    /// Receives the globally OR-reduced window bitmaps after the allreduce.
-    /// Resized to `pool_size` before the allreduce call. After the allreduce,
-    /// each element is `OR`-ed into the corresponding `CutMetadata::active_window`
-    /// and both buffers are cleared for the next iteration.
-    pub global_window_increments_buf: &'a mut Vec<u32>,
-
-    /// Pre-allocated buffer for packing real (non-padded) gathered state
-    /// vectors when archiving visited states for dominated cut selection.
-    ///
-    /// When `visited_archive` is `Some`, this buffer is filled by
-    /// [`ExchangeBuffers::pack_real_states_into`] before each
-    /// `archive_gathered_states` call so that zero-padded trailing entries
-    /// (from ranks with fewer forward passes in an uneven distribution) are
-    /// never archived. Pass `&mut Vec::new()` when `visited_archive` is
-    /// `None`.
-    pub real_states_buf: &'a mut Vec<f64>,
-
-    /// Per-(worker, opening) gather buffer for backward-pass solver stats.
-    ///
-    /// Shape: `n_workers_local × max_openings`. After the parallel region at
-    /// each stage, each worker's `per_opening_stats` slice is copied into this
-    /// buffer via `set(ws.worker_id, omega, ...)`.
-    ///
-    /// `reset()` is called at the **start of each stage** (inside the stage loop,
-    /// before the parallel region) so stale data from the previous stage never
-    /// accumulates.
-    ///
-    /// Allocated once at training setup; never reallocated on the hot path.
-    pub stage_worker_stats_buf: &'a mut StageWorkerStatsBuffer,
-
-    /// MPI send buffer for the per-`(worker, opening)` stats `allgatherv`.
-    ///
-    /// Length: `n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
-    /// Packed from `stage_worker_stats_buf` after each stage's parallel region via
-    /// `pack_worker_opening_stats`. Allocated once at training setup; never
-    /// reallocated on the hot path.
-    pub bwd_stats_send_buf: &'a mut Vec<f64>,
-
-    /// MPI receive buffer for the per-`(rank, worker, opening)` stats `allgatherv`.
-    ///
-    /// Length: `n_ranks * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
-    /// After `allgatherv`, rank 0 unpacks this into `bwd_stats_unpack_buf`. All ranks
-    /// allocate the same buffer size (allgatherv is all→all). Allocated once at training
-    /// setup; never reallocated on the hot path.
-    pub bwd_stats_recv_buf: &'a mut Vec<f64>,
-
-    /// Per-rank element counts for the `allgatherv` of backward stats.
-    ///
-    /// Each rank sends `n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`
-    /// `f64` values. All entries are equal (uniform partition). Length: `n_ranks`.
-    /// Allocated once at training setup; never reallocated on the hot path.
-    pub bwd_stats_counts: &'a [usize],
-
-    /// Displacement array for the `allgatherv` of backward stats.
-    ///
-    /// `displs[r] = r * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE`.
-    /// Length: `n_ranks`. Allocated once at training setup; never reallocated on the hot path.
-    pub bwd_stats_displs: &'a [usize],
-
-    /// Unpack destination buffer for the per-`(rank, worker, opening)` stats on rank 0.
-    ///
-    /// Length: `n_ranks * n_workers_local * bwd_max_openings` `SolverStatsDelta` entries.
-    /// Only rank 0 reads from this after unpacking; non-root ranks hold a pre-allocated
-    /// but unused buffer (allgatherv is all→all, so all ranks hold the recv buffer).
-    /// Allocated once at training setup; never reallocated on the hot path.
-    pub bwd_stats_unpack_buf: &'a mut Vec<SolverStatsDelta>,
-
-    /// Optional event channel for emitting [`TrainingEvent::WorkerTiming`] events.
-    ///
-    /// When `Some`, one `WorkerTiming { phase: Backward, .. }` event is emitted
-    /// per rayon worker per iteration after the parallel region completes. When
-    /// `None`, no events are emitted and no overhead is incurred. Send errors
-    /// (receiver dropped) are silently ignored, matching the existing `emit`
-    /// helper semantics.
-    pub event_sender: Option<&'a Sender<TrainingEvent>>,
+    pub(crate) forward_pass_index: u32,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
@@ -373,36 +184,36 @@ pub struct BackwardPassSpec<'a> {
 /// Groups the successor-specific arguments — including the stage index `t`,
 /// opening probabilities, pre-built cut batch, and cut activity metadata —
 /// to keep per-function argument counts at or below seven.
-struct SuccessorSpec<'a> {
+pub(crate) struct SuccessorSpec<'a> {
     /// Stage index being cut (the stage whose cost-to-go we are computing).
-    t: usize,
+    pub(crate) t: usize,
     /// Successor stage index (`t + 1`), where the LP is actually solved.
-    successor: usize,
+    pub(crate) successor: usize,
     /// This rank's MPI rank index (used to address exchange buffer state).
-    my_rank: usize,
+    pub(crate) my_rank: usize,
     /// Uniform opening probabilities for the successor stage.
-    probabilities: &'a [f64],
+    pub(crate) probabilities: &'a [f64],
     /// Pre-built cut rows to append to each successor LP.
     /// Delta batch when baking is active, full active-cut batch otherwise.
-    cut_batch: &'a RowBatch,
+    pub(crate) cut_batch: &'a RowBatch,
     /// Total number of active cuts at the successor stage for dual extraction.
     /// Includes both baked and delta cuts contiguous after `template_num_rows`.
-    num_cuts_at_successor: usize,
+    pub(crate) num_cuts_at_successor: usize,
     /// Base row count of the successor template (excludes cuts).
-    template_num_rows: usize,
+    pub(crate) template_num_rows: usize,
     /// Baked LP template for the successor stage. Always populated — baking
     /// is complete before the backward pass begins.
-    baked_template: &'a cobre_solver::StageTemplate,
+    pub(crate) baked_template: &'a cobre_solver::StageTemplate,
     /// Ordered slot indices of the active cuts at the successor stage.
-    successor_active_slots: &'a [usize],
+    pub(crate) successor_active_slots: &'a [usize],
     /// Minimum dual multiplier for a cut to count as binding.
-    cut_activity_tolerance: f64,
+    pub(crate) cut_activity_tolerance: f64,
     /// Activity-window size for the basis-reconstruction classifier (1..=31).
-    basis_activity_window: u32,
+    pub(crate) basis_activity_window: u32,
     /// Populated count of the successor's cut pool.
-    successor_populated_count: usize,
+    pub(crate) successor_populated_count: usize,
     /// Cut pool at the successor stage for binding-activity tracking.
-    successor_pool: &'a CutPool,
+    pub(crate) successor_pool: &'a CutPool,
 }
 
 /// Load the stage LP template and append delta cuts.
@@ -412,7 +223,7 @@ struct SuccessorSpec<'a> {
 /// that results do not depend on the scenario-to-worker partition. Within a
 /// trial point the LP structure is identical across openings — only the
 /// noise-dependent bounds change, so only bound patching happens per opening.
-fn load_backward_lp<S: SolverInterface + Send>(
+pub(crate) fn load_backward_lp<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     succ: &SuccessorSpec<'_>,
 ) {
@@ -532,20 +343,23 @@ fn resolve_backward_basis<'a>(
 /// At ω=0, writes the post-solve basis into `basis_slice`; writes at ω>0 are
 /// forbidden (retained-LU corruption risk). Infeasibility at ω=0
 /// leaves the slot unchanged
-#[allow(clippy::too_many_lines)]
-fn process_trial_point_backward<S: SolverInterface + Send>(
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    spec: &BackwardPassSpec<'_>,
+    exchange: &ExchangeBuffers,
+    fwd_offset: usize,
+    iteration: u64,
+    risk_measures: &[RiskMeasure],
     succ: &SuccessorSpec<'_>,
     basis_slice: &mut BasisStoreSliceMut<'_>,
     m: usize,
 ) -> Result<StagedCut, SddpError> {
     let indexer = training_ctx.indexer;
     let tree_view = training_ctx.stochastic.tree_view();
-    let x_hat = spec.exchange.state_at(succ.my_rank, m);
-    let scenario = spec.fwd_offset + m;
+    let x_hat = exchange.state_at(succ.my_rank, m);
+    let scenario = fwd_offset + m;
     let s = succ.successor;
 
     debug_assert_eq!(
@@ -576,7 +390,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
             baked_template: succ.baked_template,
             stage_index: s,
             scenario_index: scenario,
-            iteration: Some(spec.iteration),
+            iteration: Some(iteration),
             horizon_is_terminal: false,
             terminal_has_boundary_cuts: false,
             basis_activity_window: succ.basis_activity_window,
@@ -728,7 +542,7 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     // per trial point: the coefficients must outlive the parallel closure.
     let n_openings = succ.probabilities.len();
     let mut agg_intercept = 0.0_f64;
-    spec.risk_measures[succ.t].aggregate_cut_into(
+    risk_measures[succ.t].aggregate_cut_into(
         &ws.backward_accum.outcomes[..n_openings],
         succ.probabilities,
         &mut agg_intercept,
@@ -759,615 +573,37 @@ fn process_trial_point_backward<S: SolverInterface + Send>(
     })
 }
 
-/// Evaluate all trial points for a single backward stage, returning staged cuts.
-///
-/// Trials are statically partitioned (mirroring `run_forward_pass`) with each
-/// worker owning its scenario range and disjoint `BasisStoreSliceMut` sub-view
-/// for ω=0 basis writes. Staged cuts are returned unsorted; caller sorts by
-/// `trial_point_idx` before FCF insertion.
-#[allow(clippy::too_many_arguments)]
-fn process_stage_backward<S: SolverInterface + Send>(
-    workspaces: &mut [SolverWorkspace<S>],
-    ctx: &StageContext<'_>,
-    training_ctx: &TrainingContext<'_>,
-    local_work: usize,
-    spec: &BackwardPassSpec<'_>,
-    succ: &SuccessorSpec<'_>,
-    basis_slices: Vec<BasisStoreSliceMut<'_>>,
-) -> Vec<Result<Vec<StagedCut>, SddpError>> {
-    let n_openings = succ.probabilities.len();
-    let n_state = training_ctx.indexer.n_state;
-    let pop = succ.successor_populated_count;
-    let n_workers = workspaces.len().max(1);
-
-    workspaces
-        .par_iter_mut()
-        .zip(basis_slices.into_par_iter())
-        .enumerate()
-        .map(|(w, (ws, mut basis_slice))| {
-            // Load template and pre-allocate per-stage buffers.
-            load_backward_lp(ws, succ);
-            while ws.backward_accum.outcomes.len() < n_openings {
-                ws.backward_accum
-                    .outcomes
-                    .push(crate::risk_measure::BackwardOutcome {
-                        intercept: 0.0,
-                        coefficients: vec![0.0_f64; n_state],
-                        objective_value: 0.0,
-                    });
-            }
-            if ws.backward_accum.slot_increments.len() < pop {
-                ws.backward_accum.slot_increments.resize(pop, 0u64);
-            }
-            if ws.backward_accum.agg_coefficients.len() < n_state {
-                ws.backward_accum.agg_coefficients.resize(n_state, 0.0_f64);
-            }
-            if ws.backward_accum.metadata_sync_contribution.len() < pop {
-                ws.backward_accum
-                    .metadata_sync_contribution
-                    .resize(pop, 0u64);
-            }
-            ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
-            // Grow window contribution buffer monotonically (not cleared per-stage;
-            // cleared once per iteration at the start of run_backward_pass).
-            if ws.backward_accum.metadata_sync_window_contribution.len() < pop {
-                ws.backward_accum
-                    .metadata_sync_window_contribution
-                    .resize(pop, 0u32);
-            }
-            ws.backward_accum
-                .per_opening_stats
-                .resize_with(n_openings, SolverStatsDelta::default);
-            for slot in &mut ws.backward_accum.per_opening_stats[..n_openings] {
-                *slot = SolverStatsDelta::default();
-            }
-
-            // Static partition: assign scenarios to worker, matching basis_slice view.
-            let (start_m, end_m) = partition(local_work, n_workers, w);
-            let n_local = end_m - start_m;
-            let mut staged: Vec<StagedCut> = Vec::with_capacity(n_local.max(1));
-            let worker_stage_wall_start = Instant::now();
-
-            for m in start_m..end_m {
-                // Reload LP per trial point to reset HiGHS's internal simplex
-                // basis, factorization, and RNG position. Without this reset,
-                // state carried over from trial point m-1 makes results depend
-                // on the scenario-to-worker partition (i.e., on MPI rank count
-                // and thread count). Mirrors `run_forward_pass`, which reloads
-                // per scenario for the same reason.
-                load_backward_lp(ws, succ);
-                ws.backward_accum.slot_increments[..pop].fill(0);
-                staged.push(process_trial_point_backward(
-                    ws,
-                    ctx,
-                    training_ctx,
-                    spec,
-                    succ,
-                    &mut basis_slice,
-                    m,
-                )?);
-            }
-
-            // Accumulate per-worker elapsed into the iteration-level timing buffer.
-            // Slot 1 = backward_wall_ms: sum across stages for this worker.
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_WALL] +=
-                worker_stage_wall_start.elapsed().as_secs_f64() * 1_000.0;
-
-            Ok(staged)
-        })
-        .collect()
-}
-
 /// Execute the backward pass for one training iteration on this rank.
 ///
-/// Sweeps stages from `num_stages - 2` down to `0`. For each stage, trial-point
-/// loop is parallelised with static scenario partitioning. Each worker generates
-/// cuts into a thread-local buffer, sorted by trial-point index before FCF insertion.
-/// The outer per-stage loop remains sequential (stage `t` depends on cuts at `t+1`).
-///
-/// ## Error handling
-///
-/// On `SolverError::Infeasible`, returns `SddpError::Infeasible` with the
-/// backward stage (0-based), iteration, and global trial point index.
-/// On any other `SolverError`, returns `SddpError::Solver`. On error, the
-/// FCF may be partially populated.
+/// Thin public shim — delegates entirely to [`BackwardPassState::run`].
+/// All owned scratch buffers are allocated here (test/standalone use) and
+/// discarded after the call. For the training-loop hot path, use
+/// [`BackwardPassState::run`] directly via `TrainingSession::bwd_state`.
 ///
 /// # Errors
 ///
 /// Returns `Err(SddpError::Infeasible { .. })` when a stage LP has no
 /// feasible solution during the backward sweep. Returns
 /// `Err(SddpError::Solver(_))` for all other terminal LP solver failures.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if any of the following debug preconditions are violated:
-///
-/// - `ctx.templates.len() != num_stages`
-/// - `ctx.base_rows.len() != num_stages`
-/// - `spec.risk_measures.len() != num_stages`
-/// - `baked.len() != num_stages`
-///
-/// Structurally independent parameters: `workspaces` / `basis_store` are per-rank mutable buffers,
-/// `ctx`/`baked`/`fcf`/`cut_batches` are per-stage read/write state, `training_ctx` is study-level,
-/// `spec` is backward-specific config, `comm` is the communicator. All 5 context structs listed in
-/// `.claude/architecture-rules.md` are already in use.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
 pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
-    workspaces: &mut [SolverWorkspace<S>],
-    basis_store: &mut BasisStore,
-    ctx: &StageContext<'_>,
-    baked: &[StageTemplate],
-    fcf: &mut FutureCostFunction,
-    cut_batches: &mut [RowBatch],
-    training_ctx: &TrainingContext<'_>,
-    spec: &mut BackwardPassSpec<'_>,
-    comm: &C,
+    inputs: &mut crate::backward_pass_state::BackwardPassInputs<'_, S, C>,
 ) -> Result<BackwardResult, SddpError> {
-    let TrainingContext {
-        horizon,
-        indexer,
-        stochastic,
-        ..
-    } = training_ctx;
-    let num_stages = horizon.num_stages();
-    let my_rank = comm.rank();
-
-    debug_assert_eq!(ctx.templates.len(), num_stages);
-    debug_assert_eq!(ctx.base_rows.len(), num_stages);
-    debug_assert_eq!(spec.risk_measures.len(), num_stages);
-    debug_assert_eq!(baked.len(), num_stages, "baked.len() must equal num_stages");
-
-    let start = Instant::now();
-    let solves_before: u64 = workspaces
-        .iter()
-        .map(|ws| ws.solver.statistics().solve_count)
-        .sum();
-    let mut cuts_generated: usize = 0;
-    let mut stage_stats: Vec<(usize, Vec<StageWorkerOpeningDelta>)> = Vec::new();
-    let n_workers_local = workspaces.len();
-    let n_ranks = comm.size();
-    let bwd_max_openings =
-        spec.bwd_stats_send_buf.len() / n_workers_local.max(1) / WORKER_STATS_ENTRY_STRIDE;
-    let mut state_exchange_ms: u64 = 0;
-    let mut cut_batch_build_ms: u64 = 0;
-    let mut setup_ms: u64 = 0;
-    let mut imbalance_ms: u64 = 0;
-    let mut scheduling_ms: u64 = 0;
-    let mut cut_sync_ms: u64 = 0;
-    #[allow(clippy::cast_precision_loss)]
-    let n_workers = workspaces.len() as f64;
-    let tree_view = stochastic.tree_view();
-    let mut staged_cuts_buf: Vec<StagedCut> = Vec::new();
-    // Pre-allocate per-worker snapshot buffers; reused across all stage iterations.
-    let mut worker_stats_before: Vec<SolverStatistics> = Vec::with_capacity(workspaces.len());
-    let mut worker_stats_after: Vec<SolverStatistics> = Vec::with_capacity(workspaces.len());
-    // Pre-allocate per-worker delta and total buffers; reused via clear()+extend() each stage.
-    let mut worker_deltas: Vec<SolverStatsDelta> = Vec::with_capacity(workspaces.len());
-    let mut worker_totals: Vec<f64> = Vec::with_capacity(workspaces.len());
-
-    // Reset per-worker timing buffers to zero at the iteration boundary so that
-    // the accumulation across stages starts clean. Slots are zeroed individually;
-    // the whole [f64; 16] is stack-resident Copy, so fill(0.0) is a write of 128 bytes.
-    for ws in workspaces.iter_mut() {
-        ws.worker_timing_buf.fill(0.0);
-    }
-
-    // Clear iteration-scoped window contribution buffers. These buffers accumulate
-    // binding-activity across ALL stages of this iteration (not per-stage), so they
-    // must be zeroed once here, not inside the stage loop.
-    for ws in workspaces.iter_mut() {
-        ws.backward_accum.metadata_sync_window_contribution.fill(0);
-    }
-    spec.metadata_sync_window_buf.fill(0);
-    spec.global_window_increments_buf.fill(0);
-
-    for t in (0..num_stages.saturating_sub(1)).rev() {
-        // When the caller supplies forward-pass records, perform the per-stage
-        // allgatherv here so that `exchange.state_at(rank, m)` returns the
-        // state for stage `t` (the state entering stage `t+1`). When records
-        // is empty the caller has pre-populated the exchange buffers (test path).
-        if !spec.records.is_empty() {
-            let exch_start = Instant::now();
-            spec.exchange.exchange(spec.records, t, num_stages, comm)?;
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                state_exchange_ms += exch_start.elapsed().as_millis() as u64;
-            }
-        }
-
-        // Archive gathered states for dominated cut selection (if active).
-        // Use pack_real_states_into so that zero-padded trailing entries from
-        // ranks with fewer forward passes in an uneven distribution are never
-        // archived.
-        if let Some(ref mut archive) = spec.visited_archive {
-            let total_fwd = spec.exchange.real_total_scenarios();
-            spec.exchange.pack_real_states_into(spec.real_states_buf);
-            archive.archive_gathered_states(t, spec.real_states_buf, total_fwd);
-        }
-
-        let successor = t + 1;
-
-        // Collect per-worker snapshots before solves (needed for overhead decomposition).
-        worker_stats_before.clear();
-        worker_stats_before.extend(workspaces.iter().map(|w| w.solver.statistics()));
-
-        let n_openings = tree_view.n_openings(successor);
-        spec.probabilities_buf.clear();
-        #[allow(clippy::cast_precision_loss)]
-        spec.probabilities_buf
-            .resize(n_openings, 1.0_f64 / n_openings as f64);
-
-        let batch_start = Instant::now();
-        // Build the delta-only cut batch for the baked path.
-        let template_num_rows = ctx.templates[successor].num_rows;
-        build_delta_cut_row_batch_into(
-            &mut cut_batches[successor],
-            fcf,
-            successor,
-            indexer,
-            &ctx.templates[successor].col_scale,
-            spec.iteration,
-        );
-        let baked_tmpl = &baked[successor];
-        let baked_num_rows = baked_tmpl.num_rows;
-        let num_delta = cut_batches[successor].num_rows;
-        // Total cuts = baked cut rows (beyond base template) + delta rows.
-        let num_cuts_at_successor = (baked_num_rows - template_num_rows) + num_delta;
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            cut_batch_build_ms += batch_start.elapsed().as_millis() as u64;
-        }
-        spec.successor_active_slots_buf.clear();
-        spec.successor_active_slots_buf
-            .extend(fcf.active_cuts(successor).map(|(slot, _, _)| slot));
-
-        let local_work = spec.local_work;
-
-        let succ_spec = SuccessorSpec {
-            t,
-            successor,
-            my_rank,
-            probabilities: spec.probabilities_buf,
-            cut_batch: &cut_batches[successor],
-            num_cuts_at_successor,
-            template_num_rows,
-            baked_template: baked_tmpl,
-            successor_active_slots: spec.successor_active_slots_buf,
-            cut_activity_tolerance: spec.cut_activity_tolerance,
-            basis_activity_window: spec.basis_activity_window,
-            successor_populated_count: fcf.pools[successor].populated_count,
-            successor_pool: &fcf.pools[successor],
-        };
-
-        // Split BasisStore into disjoint per-worker sub-views for ω=0 writes.
-        let basis_slices = basis_store.split_workers_mut(n_workers_local.max(1));
-
-        let process_start = Instant::now();
-        let worker_staged = process_stage_backward(
-            workspaces,
-            ctx,
-            training_ctx,
-            local_work,
-            spec,
-            &succ_spec,
-            basis_slices,
-        );
-        // Capture wall-clock before sequential post-processing to avoid
-        // inflating the parallel region time with merge, sync, and metadata work.
-        #[allow(clippy::cast_possible_truncation)]
-        let parallel_wall_ms = process_start.elapsed().as_millis() as u64;
-
-        staged_cuts_buf.clear();
-        for worker_result in worker_staged {
-            staged_cuts_buf.extend(worker_result?);
-        }
-        // Sort by trial_point_idx for deterministic FCF insertion order.
-        staged_cuts_buf.sort_by_key(|cut| cut.trial_point_idx);
-        debug_assert_eq!(staged_cuts_buf.len(), spec.local_work);
-
-        for cut in &staged_cuts_buf {
-            fcf.add_cut(
-                t,
-                spec.iteration,
-                cut.forward_pass_index,
-                cut.intercept,
-                &cut.coefficients,
-            );
-            cuts_generated += 1;
-        }
-
-        // Per-stage cut sync: allgatherv distributes this stage's local cuts
-        // to all ranks so every rank sees the same FCF before the next stage.
-        let sync_start = Instant::now();
-        let n_local = spec.cut_sync_bufs.pack_local_cuts(fcf, t, spec.iteration);
-        spec.cut_sync_bufs.sync_packed_cuts(t, n_local, fcf, comm)?;
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            cut_sync_ms += sync_start.elapsed().as_millis() as u64;
-        }
-
-        // Metadata sync: allreduce(Sum) the per-slot binding increment counts
-        // so that `active_count` and `last_active_iter` reflect trial points
-        // from ALL ranks, not just this rank's local forward passes.
-        //
-        // The pool size is read AFTER sync_packed_cuts so that remote cuts
-        // added by the allgatherv are included in the slot range.
-        let pool_size = fcf.pools[successor].metadata.len();
-        if pool_size > 0 {
-            // Build the local increment buffer by summing per-worker contributions.
-            spec.metadata_sync_buf.clear();
-            spec.metadata_sync_buf.resize(pool_size, 0u64);
-            for ws in workspaces.iter() {
-                for (slot, &inc) in ws
-                    .backward_accum
-                    .metadata_sync_contribution
-                    .iter()
-                    .enumerate()
-                    .take(pool_size)
-                {
-                    spec.metadata_sync_buf[slot] += inc;
-                }
-            }
-
-            // Allreduce(Sum): every rank contributes its local increments and
-            // receives the global sum. For a single rank (LocalBackend) this
-            // is an identity copy — no behavior change.
-            spec.global_increments_buf.clear();
-            spec.global_increments_buf.resize(pool_size, 0u64);
-            comm.allreduce(
-                spec.metadata_sync_buf,
-                spec.global_increments_buf,
-                ReduceOp::Sum,
-            )
-            .map_err(SddpError::from)?;
-
-            // Apply global increments: slots with any increment from any rank
-            // have their active_count increased and last_active_iter updated.
-            for (slot, &inc) in spec.global_increments_buf.iter().enumerate() {
-                if inc > 0 {
-                    fcf.pools[successor].metadata[slot].active_count += inc;
-                    fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
-                }
-            }
-
-            // Allreduce(BitwiseOr): aggregate sliding-window binding activity
-            // across ranks so that any rank observing a cut binding this stage
-            // globally sets bit 0 in that cut's active_window.
-            //
-            // Build the local OR buffer by OR-ing per-worker contributions.
-            spec.metadata_sync_window_buf.resize(pool_size, 0u32);
-            for ws in workspaces.iter() {
-                for (slot, &bit) in ws
-                    .backward_accum
-                    .metadata_sync_window_contribution
-                    .iter()
-                    .enumerate()
-                    .take(pool_size)
-                {
-                    spec.metadata_sync_window_buf[slot] |= bit;
-                }
-            }
-
-            // Allreduce(BitwiseOr): OR-reduce across ranks. For a single rank
-            // (LocalBackend) this is an identity copy — no behavior change.
-            spec.global_window_increments_buf.resize(pool_size, 0u32);
-            comm.allreduce(
-                spec.metadata_sync_window_buf,
-                spec.global_window_increments_buf,
-                ReduceOp::BitwiseOr,
-            )
-            .map_err(SddpError::from)?;
-
-            // Apply global window bits: any slot where bit 0 is set globally
-            // gets bit 0 ORed into its active_window. This records "this cut
-            // was binding on at least one rank during this iteration".
-            for (slot, &bits) in spec.global_window_increments_buf.iter().enumerate() {
-                if bits & 1 != 0 {
-                    fcf.pools[successor].metadata[slot].active_window |= 1u32;
-                }
-            }
-
-            // Clear the window buffers for the next stage's accumulation.
-            spec.metadata_sync_window_buf.fill(0);
-            spec.global_window_increments_buf.fill(0);
-        }
-
-        // Collect per-worker statistics snapshots after this stage's solves.
-        worker_stats_after.clear();
-        worker_stats_after.extend(workspaces.iter().map(|w| w.solver.statistics()));
-
-        // Compute per-worker deltas and decompose parallel overhead.
-        // Reuse pre-allocated buffers (clear+extend avoids per-stage allocation on the hot path).
-        worker_deltas.clear();
-        worker_deltas.extend(
-            worker_stats_before
-                .iter()
-                .zip(&worker_stats_after)
-                .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after)),
-        );
-
-        // setup_time_ms: total non-solve work (load_model + set_bounds + basis_set).
-        let stage_setup_ms: f64 = worker_deltas
-            .iter()
-            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
-            .sum();
-
-        // Accumulate per-worker setup contribution into worker_timing_buf[BWD_SETUP]
-        // (slot 8). Summed across all stages so the per-iteration emission in
-        // `run_backward_pass` (after the stage loop) carries the full iteration total.
-        for (ws, delta) in workspaces.iter_mut().zip(&worker_deltas) {
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_SETUP] +=
-                delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
-        }
-
-        // Per-worker elapsed: solve + setup phases.
-        // Reuse pre-allocated buffer (clear+extend avoids per-stage allocation on the hot path).
-        worker_totals.clear();
-        worker_totals.extend(worker_deltas.iter().map(|d| {
-            d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
-        }));
-
-        let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
-        let avg_worker_ms = if worker_totals.is_empty() {
-            0.0_f64
-        } else {
-            worker_totals.iter().sum::<f64>() / n_workers
-        };
-
-        // load_imbalance_ms: slowest worker minus average.
-        let stage_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
-        // scheduling_overhead_ms: residual wall time beyond slowest worker.
-        #[allow(
-            clippy::cast_precision_loss,      // parallel_wall_ms as f64: safe at HPC scale
-            clippy::cast_possible_truncation, // f64 as u64: clamped non-negative
-            clippy::cast_sign_loss            // f64 as u64: clamped non-negative
-        )]
-        let stage_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
-
-        #[allow(
-            clippy::cast_possible_truncation, // f64 as u64: clamped non-negative
-            clippy::cast_sign_loss            // f64 as u64: clamped non-negative
-        )]
-        {
-            setup_ms += stage_setup_ms as u64;
-            imbalance_ms += stage_imbalance_ms as u64;
-            scheduling_ms += stage_scheduling_ms as u64;
-        }
-
-        // Gather per-worker per_opening_stats into the local StageWorkerStatsBuffer
-        // (T003). Reset first so stale data from the previous stage never accumulates.
-        spec.stage_worker_stats_buf.reset();
-        for ws in workspaces.iter() {
-            debug_assert_eq!(
-                ws.backward_accum.per_opening_stats.len(),
-                n_openings,
-                "per_opening_stats length must equal n_openings on every worker"
-            );
-            #[allow(clippy::cast_sign_loss)]
-            let wid = ws.worker_id as usize;
-            for omega in 0..n_openings {
-                spec.stage_worker_stats_buf.set(
-                    wid,
-                    omega,
-                    ws.backward_accum.per_opening_stats[omega].clone(),
-                );
-            }
-        }
-
-        // Pack the local worker stats into the MPI send buffer (T004 layout).
-        pack_worker_opening_stats(
-            spec.bwd_stats_send_buf,
-            spec.stage_worker_stats_buf.as_slice(),
-            n_workers_local,
-            bwd_max_openings,
-        );
-
-        // Gather per-worker stats from all ranks (T005).
-        // allgatherv collects n_workers_local * bwd_max_openings * STRIDE f64s from
-        // every rank into a rank-major receive buffer. The LocalBackend (np=1) treats
-        // this as an identity copy — no branch needed.
-        comm.allgatherv(
-            spec.bwd_stats_send_buf,
-            spec.bwd_stats_recv_buf,
-            spec.bwd_stats_counts,
-            spec.bwd_stats_displs,
-        )
-        .map_err(SddpError::Communication)?;
-
-        // Rank 0 (and all ranks — allgatherv is all→all) unpacks the receive buffer
-        // into per-(rank, worker_id, opening) SolverStatsDelta entries.
-        // Only rank 0 uses these for parquet output; other ranks hold the buffer
-        // for potential future use (zero extra allocation).
-        debug_assert_eq!(
-            spec.bwd_stats_recv_buf.len(),
-            n_ranks * n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE,
-            "recv buffer length must equal n_ranks * n_workers_local * bwd_max_openings * STRIDE"
-        );
-        unpack_worker_opening_stats(
-            spec.bwd_stats_recv_buf,
-            spec.bwd_stats_unpack_buf,
-            n_ranks * n_workers_local,
-            bwd_max_openings,
-        );
-
-        // Build the per-(rank, worker_id, opening) stage_stats entries.
-        // Skip padded slots (omega >= n_openings) and zero-solve slots unless omega == 0
-        // (the omega=0 sentinel preserves "stage was visited" semantics).
-        let mut stage_entries: Vec<StageWorkerOpeningDelta> = Vec::new();
-        for r in 0..n_ranks {
-            let rank_i32 = i32::try_from(r).map_err(|_| {
-                SddpError::Validation(format!(
-                    "MPI rank count {r} overflows i32 (max {})",
-                    i32::MAX
-                ))
-            })?;
-            for w in 0..n_workers_local {
-                let wid_i32 = i32::try_from(w).map_err(|_| {
-                    SddpError::Validation(format!(
-                        "worker count {w} overflows i32 (max {})",
-                        i32::MAX
-                    ))
-                })?;
-                for omega in 0..n_openings {
-                    let flat = (r * n_workers_local + w) * bwd_max_openings + omega;
-                    let delta = spec.bwd_stats_unpack_buf[flat].clone();
-                    if delta.lp_solves > 0 || omega == 0 {
-                        stage_entries.push((rank_i32, wid_i32, omega, delta));
-                    }
-                }
-            }
-        }
-
-        stage_stats.push((successor, stage_entries));
-    }
-
-    // Clear per-worker window contribution buffers after all stages are done.
-    // These accumulate across stages per iteration; they were consumed by the
-    // per-stage allreduce(BitwiseOr) above and must be zeroed for next iteration.
-    for ws in workspaces.iter_mut() {
-        ws.backward_accum.metadata_sync_window_contribution.fill(0);
-    }
-
-    // Emit one WorkerTiming { phase: Backward } event per worker, carrying the
-    // per-iteration totals accumulated across all stages. The rank-level
-    // BackwardPassComplete event (emitted by the training loop caller) is unaffected.
-    //
-    // Slots populated per worker:
-    //   [1]  backward_wall_ms  — accumulated in process_stage_backward per stage
-    //   [8]  bwd_setup_ms      — accumulated after worker_deltas per stage above
-    // All other slots remain 0 on Backward WorkerTiming events (rank-only fields).
-    if let Some(sender) = spec.event_sender {
-        for ws in workspaces.iter() {
-            let _ = sender.send(TrainingEvent::WorkerTiming {
-                rank: ws.rank,
-                worker_id: ws.worker_id,
-                iteration: spec.iteration,
-                phase: WorkerTimingPhase::Backward,
-                timings: ws.worker_timing_buf,
-            });
-        }
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    let solves_after: u64 = workspaces
-        .iter()
-        .map(|ws| ws.solver.statistics().solve_count)
-        .sum();
-
-    Ok(BackwardResult {
-        cuts_generated,
-        elapsed_ms,
-        lp_solves: solves_after - solves_before,
-        stage_stats,
-        state_exchange_time_ms: state_exchange_ms,
-        cut_batch_build_time_ms: cut_batch_build_ms,
-        setup_time_ms: setup_ms,
-        load_imbalance_ms: imbalance_ms,
-        scheduling_overhead_ms: scheduling_ms,
-        cut_sync_time_ms: cut_sync_ms,
-    })
+    let n_workers_local = inputs.workspaces.len();
+    let n_ranks = inputs.comm.size();
+    let num_stages = inputs.training_ctx.horizon.num_stages();
+    let bwd_max_openings = (0..num_stages)
+        .map(|t| inputs.training_ctx.stochastic.opening_tree().n_openings(t))
+        .max()
+        .unwrap_or(0);
+    let real_states_capacity =
+        inputs.exchange.real_total_scenarios() * inputs.training_ctx.indexer.n_state;
+    let mut bwd_state = crate::backward_pass_state::BackwardPassState::new(
+        n_workers_local,
+        n_ranks,
+        bwd_max_openings,
+        real_states_capacity,
+    );
+    bwd_state.run(inputs)
 }
 
 #[cfg(test)]
@@ -1379,13 +615,13 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{BackwardResult, run_backward_pass};
     use crate::{
         ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
         StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
         cut_sync::CutSyncBuffers,
-        solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE},
+        solver_stats::SolverStatsDelta,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -1962,10 +1198,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1981,10 +1217,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2001,34 +1237,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         assert_eq!(result.cuts_generated, 0);
@@ -2070,10 +1291,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2089,10 +1310,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2109,34 +1330,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 2 trial points × 1 stage with a successor = 2 cuts at stage 0.
@@ -2178,10 +1384,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2197,10 +1403,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2217,34 +1423,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 2,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 2,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Trial point m=1: slot = 0 + 2*3 + 1 = 7
@@ -2282,10 +1473,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2301,10 +1492,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2321,34 +1512,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 1 trial point × 4 stages with successors = 4 cuts total.
@@ -2386,10 +1562,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2405,10 +1581,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2425,34 +1601,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // elapsed_ms is u64, so it is always >= 0.
@@ -2488,10 +1649,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2507,10 +1668,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2527,34 +1688,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        );
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
 
         assert!(
             matches!(result, Err(crate::SddpError::Infeasible { .. })),
@@ -2635,10 +1781,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2654,10 +1800,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2674,34 +1820,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -2760,10 +1891,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2779,10 +1910,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2799,34 +1930,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -2890,10 +2006,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2909,10 +2025,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2929,34 +2045,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -3006,10 +2107,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3025,10 +2126,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3045,34 +2146,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 3-stage system: cuts at stages 0 and 1; 2 trial points each.
@@ -3132,10 +2218,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3151,10 +2237,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3171,34 +2257,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 2,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 2,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // m=5: slot = warm_start(0) + 2*6 + 5 = 17
@@ -3253,10 +2324,10 @@ mod tests {
             basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3272,10 +2343,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3292,34 +2363,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
@@ -3367,10 +2423,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3386,10 +2442,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3406,34 +2462,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // P3b optimization: opening 0 cold-starts (no basis in store),
@@ -3489,10 +2530,10 @@ mod tests {
             basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3508,10 +2549,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3528,34 +2569,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        );
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
 
         assert!(
             matches!(result, Err(crate::SddpError::Infeasible { .. })),
@@ -3665,14 +2691,14 @@ mod tests {
             downstream_par_order: 0,
         };
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces_1,
-            &mut basis_store_1,
-            &ctx,
-            &templates,
-            &mut fcf_1,
-            &mut empty_cut_batches(n_stages),
-            &TrainingContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces_1,
+            basis_store: &mut basis_store_1,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &mut fcf_1,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3689,34 +2715,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // --- Run with 4 workspaces ---
@@ -3761,14 +2772,14 @@ mod tests {
             .collect();
         let mut basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces_4,
-            &mut basis_store_4,
-            &ctx,
-            &templates,
-            &mut fcf_4,
-            &mut empty_cut_batches(n_stages),
-            &TrainingContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces_4,
+            basis_store: &mut basis_store_4,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &mut fcf_4,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3785,34 +2796,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // --- Verify identical FCF contents for all non-last stages ---
@@ -4135,10 +3131,10 @@ mod tests {
         let block_counts_per_stage = vec![1_usize; n_stages];
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -4154,10 +3150,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4174,34 +3170,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // After the backward pass, load_rhs_buf must have been populated with a
@@ -4309,10 +3290,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -4328,10 +3309,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4348,34 +3329,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // With n_load_buses=0, forward_patch_count = N*(2+L) + z_inflow = 1*(2+0)+1 = 3.
@@ -4488,10 +3454,10 @@ mod tests {
         let block_counts_per_stage = vec![1_usize; n_stages];
 
         let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -4507,10 +3473,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4527,34 +3493,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Exactly 1 cut generated (1 trial point × 1 stage with a successor).
@@ -4620,10 +3571,10 @@ mod tests {
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, forward_passes as usize, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -4639,10 +3590,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4659,34 +3610,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 4-stage system: cuts at stages 0, 1, 2; 3 trial points each.
@@ -4761,10 +3697,10 @@ mod tests {
         // Run a single backward iteration. The backward loop visits t=1
         // (cuts go to pool[1]), then t=0 (cuts go to pool[0], binding
         // checked against pool[1]).
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -4780,10 +3716,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4800,34 +3736,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 3 stages × (n_stages-1=2 non-terminal) × 3 trial points = 6 cuts.
@@ -5046,10 +3967,10 @@ mod tests {
         // because the exchange has 3 trial points but forward_passes=1.
         let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
 
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -5065,10 +3986,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -5085,34 +4006,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: local_count,
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: local_count,
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // The cuts in pool[1] were generated at t=1, then evaluated as binding
@@ -5173,10 +4079,10 @@ mod tests {
         let mut basis_store = empty_basis_store(local_count, n_stages);
         let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
 
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -5192,10 +4098,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -5212,34 +4118,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: local_count,
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(8, 32),
-                bwd_stats_send_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_recv_buf: &mut vec![0.0; 8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_counts: &[8 * 32 * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); 8 * 32],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: local_count,
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // After run_backward_pass returns, all per-worker window contribution
@@ -5342,10 +4233,10 @@ mod tests {
         let comm = StubComm;
         let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
 
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -5361,10 +4252,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -5381,43 +4272,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
-                bwd_stats_send_buf: &mut vec![
-                    0.0;
-                    n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE
-                ],
-                bwd_stats_recv_buf: &mut vec![
-                    0.0;
-                    n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE
-                ],
-                bwd_stats_counts: &[n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![
-                    SolverStatsDelta::default();
-                    n_workers * n_openings
-                ],
-                event_sender: None,
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Confirm all 6 trial points produced cuts at stage 0.
@@ -5723,12 +4590,11 @@ mod tests {
         let mut fcf =
             FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
         let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
-        let send_sz = n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE;
 
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -5744,10 +4610,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -5764,38 +4630,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
-                bwd_stats_send_buf: &mut vec![0.0; send_sz],
-                // np=1: recv == send (StubComm echoes)
-                bwd_stats_recv_buf: &mut vec![0.0; send_sz],
-                bwd_stats_counts: &[send_sz],
-                bwd_stats_displs: &[0],
-                bwd_stats_unpack_buf: &mut vec![
-                    SolverStatsDelta::default();
-                    n_workers * n_openings
-                ],
-                event_sender: None,
-            },
-            &StubComm,
-        )
+            comm: &StubComm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .expect("single-rank 2-worker backward must not error");
 
         // The 2-stage system has 1 backward stage (t=0, successor=1).
@@ -5903,7 +4750,6 @@ mod tests {
         let n_stages = 2_usize;
         let n_openings = 2_usize;
         let n_workers = 1_usize;
-        let n_ranks = 2_usize;
         let local_work = 2_usize;
         let stochastic = make_stochastic_context(n_stages, n_openings);
         let indexer = StageIndexer::new(1, 0);
@@ -5962,12 +4808,11 @@ mod tests {
         let mut fcf =
             FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
         let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
-        let send_sz = n_workers * n_openings * WORKER_STATS_ENTRY_STRIDE;
 
-        let result = run_backward_pass(
-            &mut workspaces,
-            &mut basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -5983,10 +4828,10 @@ mod tests {
                 noise_group_ids: &[],
                 downstream_par_order: 0,
             },
-            &templates,
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -6003,38 +4848,19 @@ mod tests {
                 recent_accum_seed: &[],
                 recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                metadata_sync_window_buf: &mut Vec::new(),
-                global_window_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-                stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(n_workers, n_openings),
-                bwd_stats_send_buf: &mut vec![0.0; send_sz],
-                // np=2: recv holds two copies of the send block.
-                bwd_stats_recv_buf: &mut vec![0.0; n_ranks * send_sz],
-                bwd_stats_counts: &[send_sz, send_sz],
-                bwd_stats_displs: &[0, send_sz],
-                bwd_stats_unpack_buf: &mut vec![
-                    SolverStatsDelta::default();
-                    n_ranks * n_workers * n_openings
-                ],
-                event_sender: None,
-            },
-            &DualRankStubComm,
-        )
+            comm: &DualRankStubComm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .expect("dual-rank stub backward must not error");
 
         // With np=2, stage_stats for successor=1 must contain entries from
@@ -6096,7 +4922,7 @@ mod tests {
             .push(SolverStatsDelta::default());
         ws.backward_accum.agg_coefficients.resize(n_state, 0.0);
 
-        let mut exchange = exchange_with_states(n_state, vec![vec![5.0]]);
+        let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
 
         let templates: &'static _ = Box::leak(Box::new(vec![
             minimal_template_1_0(),
@@ -6142,43 +4968,11 @@ mod tests {
             recent_weight_seed: 0.0,
         };
 
-        let mut probabilities_buf = vec![1.0_f64; n_openings];
+        let iteration: u64 = 1;
+        let fwd_offset: usize = 0;
         let succ_probabilities = vec![1.0_f64; n_openings];
         let successor_active_slots: Vec<usize> = vec![];
         let baked_template = minimal_template_1_0();
-        let mut csb = CutSyncBuffers::new(1, 64, 1);
-        let mut metadata_sync_buf = Vec::new();
-        let mut global_increments_buf = Vec::new();
-        let mut metadata_sync_window_buf = Vec::new();
-        let mut global_window_increments_buf = Vec::new();
-        let mut real_states_buf = Vec::new();
-        let bwd_stride = WORKER_STATS_ENTRY_STRIDE;
-        let spec = BackwardPassSpec {
-            records: &[],
-            iteration: 1,
-            local_work: 1,
-            fwd_offset: 0,
-            risk_measures: &risk_measures,
-            exchange: &mut exchange,
-            cut_activity_tolerance: 0.0,
-            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
-            cut_sync_bufs: &mut csb,
-            probabilities_buf: &mut probabilities_buf,
-            successor_active_slots_buf: &mut Vec::new(),
-            visited_archive: None,
-            metadata_sync_buf: &mut metadata_sync_buf,
-            global_increments_buf: &mut global_increments_buf,
-            metadata_sync_window_buf: &mut metadata_sync_window_buf,
-            global_window_increments_buf: &mut global_window_increments_buf,
-            real_states_buf: &mut real_states_buf,
-            stage_worker_stats_buf: &mut StageWorkerStatsBuffer::new(1, n_openings),
-            bwd_stats_send_buf: &mut vec![0.0; n_openings * bwd_stride],
-            bwd_stats_recv_buf: &mut vec![0.0; n_openings * bwd_stride],
-            bwd_stats_counts: &[n_openings * bwd_stride],
-            bwd_stats_displs: &[0],
-            bwd_stats_unpack_buf: &mut vec![SolverStatsDelta::default(); n_openings],
-            event_sender: None,
-        };
 
         let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0u32; n_stages]);
         let empty_cut_batch = RowBatch {
@@ -6225,7 +5019,10 @@ mod tests {
             ws,
             &ctx,
             &training_ctx,
-            &spec,
+            &exchange,
+            fwd_offset,
+            iteration,
+            &risk_measures,
             &succ_spec,
             &mut basis_slice,
             0,

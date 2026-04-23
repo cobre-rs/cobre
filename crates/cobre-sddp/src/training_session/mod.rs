@@ -13,20 +13,16 @@
 //!
 //! - Five `&'a`-bounded references (`solver`, `fcf`, `stage_ctx`,
 //!   `training_ctx`, `comm`) are held for the duration of the session.
-//! - All scratch buffers (`fwd_pool`, `basis_store`, `bwd_*_buf`, …) are
+//! - All scratch buffers (`fwd_pool`, `basis_store`, `bwd_state`, …) are
 //!   owned by the session and reused across iterations — zero hot-path
 //!   allocation.
 //! - `finalize` / `finalize_with_error` consume `self` so that
 //!   [`TrainingOutcome`] can take ownership of `visited_archive`,
 //!   `solver_stats_log`, and `baked_templates` without cloning.
 //!
-//! ## Ticket scope
-//!
-//! This module is introduced by ticket-001 and is the anchor pattern for the
-//! subsequent `BackwardPassState` (ticket-002) and `ForwardPassState`
-//! (ticket-003) decompositions. The backward-pass buffers (`bwd_*_buf` fields)
-//! are kept flat here as a deliberate transition step; ticket-002 will absorb
-//! them into a dedicated `BackwardPassState` struct.
+//! Backward-pass scratch is fully encapsulated in [`BackwardPassState`]
+//! (owned by `bwd_state`); per-call inputs are bundled in [`BackwardPassInputs`].
+//! Forward-pass scratch decomposition remains for ticket-003.
 
 pub(crate) mod iteration_scratch;
 pub(crate) mod rank_distribution;
@@ -48,7 +44,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     SddpError, TrainingConfig,
-    backward::run_backward_pass,
+    backward_pass_state::{BackwardPassInputs, BackwardPassState},
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
@@ -57,10 +53,7 @@ use crate::{
     evaluate_lower_bound,
     forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
-    solver_stats::{
-        SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
-        aggregate_solver_statistics,
-    },
+    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
     training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
@@ -109,9 +102,7 @@ pub(crate) enum IterationOutcome {
 /// for the duration of the training run. All methods that call into the
 /// forward / backward passes require only `&mut self` because the session IS
 /// the holder of all required references.
-// Several fields are intentional transition placeholders that will be consumed
-// by ticket-002 (`BackwardPassState`) and ticket-003 (`ForwardPassState`).
-#[allow(dead_code)]
+// `ForwardPassState` decomposition remains for ticket-003.
 pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator> {
     // ── Borrowed inputs (live for 'a) ─────────────────────────────────────
     solver: &'a mut S,
@@ -138,21 +129,8 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     scratch: IterationScratch,
     convergence_monitor: ConvergenceMonitor,
 
-    // ── Backward-pass scratch (will move to BackwardPassState in ticket-002;
-    //    kept flat here as a transition step) ──────────────────────────────
-    bwd_probabilities_buf: Vec<f64>,
-    bwd_successor_active_slots_buf: Vec<usize>,
-    bwd_metadata_sync_buf: Vec<u64>,
-    bwd_global_increments_buf: Vec<u64>,
-    bwd_metadata_sync_window_buf: Vec<u32>,
-    bwd_global_window_increments_buf: Vec<u32>,
-    bwd_real_states_buf: Vec<f64>,
-    bwd_stage_worker_stats_buf: StageWorkerStatsBuffer,
-    bwd_stats_send_buf: Vec<f64>,
-    bwd_stats_recv_buf: Vec<f64>,
-    bwd_stats_counts: Vec<usize>,
-    bwd_stats_displs: Vec<usize>,
-    bwd_stats_unpack_buf: Vec<SolverStatsDelta>,
+    // ── Backward-pass owned scratch (ticket-002) ──────────────────────────
+    bwd_state: BackwardPassState,
 
     // ── Result accumulators (updated each iteration; finalized in finalize()) ─
     results: TrainingResults,
@@ -165,8 +143,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// rank math, `fwd_pool` construction and pre-sizing, `basis_store`,
     /// `patch_buf`, `convergence_monitor`, `exchange_bufs`, `cut_sync_bufs`,
     /// `visited_archive`, result accumulators, `cut_batches`, `lb_cut_batch`,
-    /// `baked_templates`, `bake_row_batches`, `lb_cut_row_map`, all `bwd_*_buf`
-    /// allocations, and the `TrainingStarted` event emission.
+    /// `baked_templates`, `bake_row_batches`, `lb_cut_row_map`,
+    /// `bwd_state` allocation, and the `TrainingStarted` event emission.
     ///
     /// # Errors
     ///
@@ -313,32 +291,20 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         );
 
         // ── Backward-pass scratch buffers ─────────────────────────────────
-        // All declared outside the loop body — zero per-iteration allocation.
-        let bwd_probabilities_buf: Vec<f64> = Vec::new();
-        let bwd_successor_active_slots_buf: Vec<usize> = Vec::new();
-        let bwd_metadata_sync_buf: Vec<u64> = Vec::new();
-        let bwd_global_increments_buf: Vec<u64> = Vec::new();
-        let bwd_metadata_sync_window_buf: Vec<u32> = Vec::new();
-        let bwd_global_window_increments_buf: Vec<u32> = Vec::new();
-        let bwd_real_states_buf: Vec<f64> =
-            Vec::with_capacity(exchange_bufs.real_total_scenarios() * ranks.n_state);
-
+        // All allocated once in BackwardPassState::new; reused across iterations.
         let bwd_max_openings = (0..ranks.num_stages)
             .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
             .max()
             .unwrap_or(0);
-        let bwd_stage_worker_stats_buf =
-            StageWorkerStatsBuffer::new(fwd_pool.workspaces.len(), bwd_max_openings);
-
         let n_workers_local = fwd_pool.workspaces.len();
         let n_ranks = comm.size();
-        let send_stride = n_workers_local * bwd_max_openings * WORKER_STATS_ENTRY_STRIDE;
-        let bwd_stats_send_buf: Vec<f64> = vec![0.0; send_stride];
-        let bwd_stats_recv_buf: Vec<f64> = vec![0.0; n_ranks * send_stride];
-        let bwd_stats_counts: Vec<usize> = vec![send_stride; n_ranks];
-        let bwd_stats_displs: Vec<usize> = (0..n_ranks).map(|r| r * send_stride).collect();
-        let bwd_stats_unpack_buf: Vec<SolverStatsDelta> =
-            vec![SolverStatsDelta::default(); n_ranks * n_workers_local * bwd_max_openings];
+        let real_states_capacity = exchange_bufs.real_total_scenarios() * ranks.n_state;
+        let bwd_state = BackwardPassState::new(
+            n_workers_local,
+            n_ranks,
+            bwd_max_openings,
+            real_states_capacity,
+        );
 
         Ok(Self {
             solver,
@@ -356,19 +322,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             visited_archive,
             scratch,
             convergence_monitor,
-            bwd_probabilities_buf,
-            bwd_successor_active_slots_buf,
-            bwd_metadata_sync_buf,
-            bwd_global_increments_buf,
-            bwd_metadata_sync_window_buf,
-            bwd_global_window_increments_buf,
-            bwd_real_states_buf,
-            bwd_stage_worker_stats_buf,
-            bwd_stats_send_buf,
-            bwd_stats_recv_buf,
-            bwd_stats_counts,
-            bwd_stats_displs,
-            bwd_stats_unpack_buf,
+            bwd_state,
             results,
         })
     }
@@ -716,44 +670,26 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         &mut self,
         iteration: u64,
     ) -> Result<(crate::backward::BackwardResult, f64), SddpError> {
-        let mut bwd_spec = crate::backward::BackwardPassSpec {
-            exchange: &mut self.exchange_bufs,
-            records: &self.scratch.records,
-            iteration,
-            local_work: self.ranks.my_actual_fwd,
-            fwd_offset: self.ranks.my_fwd_offset,
-            risk_measures: &self.config.cut_management.risk_measures,
-            cut_activity_tolerance: self.config.cut_management.cut_activity_tolerance,
-            basis_activity_window: self.config.cut_management.basis_activity_window,
-            cut_sync_bufs: &mut self.cut_sync_bufs,
-            probabilities_buf: &mut self.bwd_probabilities_buf,
-            successor_active_slots_buf: &mut self.bwd_successor_active_slots_buf,
-            visited_archive: self.visited_archive.as_mut(),
-            metadata_sync_buf: &mut self.bwd_metadata_sync_buf,
-            global_increments_buf: &mut self.bwd_global_increments_buf,
-            metadata_sync_window_buf: &mut self.bwd_metadata_sync_window_buf,
-            global_window_increments_buf: &mut self.bwd_global_window_increments_buf,
-            real_states_buf: &mut self.bwd_real_states_buf,
-            stage_worker_stats_buf: &mut self.bwd_stage_worker_stats_buf,
-            bwd_stats_send_buf: &mut self.bwd_stats_send_buf,
-            bwd_stats_recv_buf: &mut self.bwd_stats_recv_buf,
-            bwd_stats_counts: &self.bwd_stats_counts,
-            bwd_stats_displs: &self.bwd_stats_displs,
-            bwd_stats_unpack_buf: &mut self.bwd_stats_unpack_buf,
-            event_sender: self.runtime.event_sender(),
-        };
-
-        let backward_result = run_backward_pass(
-            &mut self.fwd_pool.workspaces,
+        // Borrow bwd_state independently so the remaining fields can be
+        // passed to the factory without a whole-struct borrow conflict.
+        let bwd = &mut self.bwd_state;
+        let mut inputs = BackwardPassInputs::from_session_fields(
+            &mut self.fwd_pool,
             &mut self.basis_store,
             self.stage_ctx,
-            &self.scratch.baked_templates,
+            &mut self.scratch,
             self.fcf,
-            &mut self.scratch.cut_batches,
+            &mut self.exchange_bufs,
+            &mut self.cut_sync_bufs,
+            &mut self.visited_archive,
             self.training_ctx,
-            &mut bwd_spec,
             self.comm,
-        )?;
+            &self.config.cut_management,
+            &self.ranks,
+            &self.runtime,
+            iteration,
+        );
+        let backward_result = bwd.run(&mut inputs)?;
 
         let bwd_solve_time_ms = {
             let agg = SolverStatsDelta::aggregate(
@@ -1550,7 +1486,7 @@ mod tests {
         // n_fwd_threads=1 → n_workers_local=1; max_openings=1 for this fixture
         let expected_send_stride = crate::solver_stats::WORKER_STATS_ENTRY_STRIDE;
         assert_eq!(
-            session.bwd_stats_send_buf.len(),
+            session.bwd_state.bwd_stats_send_buf.len(),
             expected_send_stride,
             "bwd_stats_send_buf must equal send_stride"
         );

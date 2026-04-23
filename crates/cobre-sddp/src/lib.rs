@@ -35,6 +35,7 @@
 )]
 
 pub mod backward;
+pub(crate) mod backward_pass_state;
 pub mod basis_reconstruct;
 pub mod config;
 pub mod context;
@@ -75,7 +76,7 @@ pub mod trajectory;
 pub mod visited_states;
 pub mod workspace;
 
-pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
+pub use backward::{BackwardResult, run_backward_pass};
 pub use config::{CutManagementConfig, EventConfig, LoopConfig, LoopParams, TrainingConfig};
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;

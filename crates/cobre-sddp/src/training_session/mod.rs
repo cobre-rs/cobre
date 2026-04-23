@@ -28,9 +28,11 @@
 //! are kept flat here as a deliberate transition step; ticket-002 will absorb
 //! them into a dedicated `BackwardPassState` struct.
 
+pub(crate) mod iteration_scratch;
 pub(crate) mod rank_distribution;
 pub(crate) mod results;
 pub(crate) mod runtime;
+use self::iteration_scratch::IterationScratch;
 use self::rank_distribution::RankDistribution;
 use self::results::TrainingResults;
 use self::runtime::RuntimeHandles;
@@ -41,22 +43,20 @@ use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{StageRowSelectionRecord, TrainingEvent};
-use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
+use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, TrainingConfig, TrajectoryRecord,
+    SddpError, TrainingConfig,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
     forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
-    lp_builder::PatchBuffer,
     risk_measure::RiskMeasure,
     solver_stats::{
         SolverStatsDelta, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
@@ -144,16 +144,10 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     // ── Per-run scratch buffers (owned; reused across iterations) ─────────
     fwd_pool: WorkspacePool<S>,
     basis_store: BasisStore,
-    patch_buf: PatchBuffer,
     exchange_bufs: ExchangeBuffers,
     cut_sync_bufs: CutSyncBuffers,
     visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
-    records: Vec<TrajectoryRecord>,
-    cut_batches: Vec<RowBatch>,
-    lb_cut_batch: RowBatch,
-    baked_templates: Vec<StageTemplate>,
-    bake_row_batches: Vec<RowBatch>,
-    lb_cut_row_map: CutRowMap,
+    scratch: IterationScratch,
     convergence_monitor: ConvergenceMonitor,
 
     // ── Backward-pass scratch (will move to BackwardPassState in ticket-002;
@@ -210,14 +204,6 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let total_forward_passes = config.loop_config.forward_passes as usize;
         let ranks = RankDistribution::new(comm, num_stages, total_forward_passes, indexer.n_state);
 
-        let empty_record = TrajectoryRecord {
-            primal: vec![],
-            dual: vec![],
-            stage_cost: 0.0,
-            state: vec![0.0; ranks.n_state],
-        };
-        let records = vec![empty_record; ranks.max_local_fwd * ranks.num_stages];
-
         // ── Workspace pool ────────────────────────────────────────────────
         let n_threads = n_fwd_threads.max(1);
         let mut fwd_pool = WorkspacePool::try_new(
@@ -258,14 +244,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             .unwrap_or(0);
         fwd_pool.resize_scratch_bases(max_cols, max_rows);
 
-        // ── Basis store + patch buf ────────────────────────────────────────
+        // ── Basis store ───────────────────────────────────────────────────
         // Per-scenario, per-stage basis store. Sized for the maximum local
         // forward passes so that scenario indices are stable across iterations.
         let basis_store = BasisStore::new(ranks.max_local_fwd, ranks.num_stages);
-
-        // Standalone patch buffer for the lower bound evaluation which uses the
-        // single `solver` argument directly.
-        let patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
 
         // ── Exchange + cut-sync buffers ────────────────────────────────────
         let actual_per_rank = ranks.actual_per_rank(total_forward_passes);
@@ -354,55 +336,17 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // ── Result accumulators ────────────────────────────────────────────
         let results = TrainingResults::new(start_iteration);
 
-        // ── Cut row batch buffers (reused across iterations) ──────────────
-        let cut_batches: Vec<RowBatch> = (0..ranks.num_stages)
-            .map(|_| RowBatch {
-                num_rows: 0,
-                row_starts: Vec::new(),
-                col_indices: Vec::new(),
-                values: Vec::new(),
-                row_lower: Vec::new(),
-                row_upper: Vec::new(),
-            })
-            .collect();
-        let lb_cut_batch = RowBatch {
-            num_rows: 0,
-            row_starts: Vec::new(),
-            col_indices: Vec::new(),
-            values: Vec::new(),
-            row_lower: Vec::new(),
-            row_upper: Vec::new(),
-        };
-
-        // ── Template baking buffers ────────────────────────────────────────
-        let mut baked_templates: Vec<StageTemplate> = (0..ranks.num_stages)
-            .map(|_| StageTemplate::empty())
-            .collect();
-        let bake_row_batches: Vec<RowBatch> = (0..ranks.num_stages)
-            .map(|_| RowBatch {
-                num_rows: 0,
-                row_starts: Vec::new(),
-                col_indices: Vec::new(),
-                values: Vec::new(),
-                row_lower: Vec::new(),
-                row_upper: Vec::new(),
-            })
-            .collect();
-
-        // Pre-bake every stage template with an empty cut batch so that
-        // iteration 1's forward and backward passes can use the baked
-        // load path. Empty-batch bake is a structural copy of the base
-        // template.
-        for t in 0..ranks.num_stages {
-            cobre_solver::bake_rows_into_template(
-                &stage_ctx.templates[t],
-                &bake_row_batches[t],
-                &mut baked_templates[t],
-            );
-        }
-
-        // ── Lower-bound cut row map ────────────────────────────────────────
-        let lb_cut_row_map = CutRowMap::new(fcf.pools[0].capacity, stage_ctx.templates[0].num_rows);
+        // ── Iteration scratch (reused buffers for forward/backward/cut/lb) ──
+        let scratch = IterationScratch::new(
+            ranks.max_local_fwd,
+            ranks.num_stages,
+            ranks.n_state,
+            fcf.pools[0].capacity,
+            stage_ctx.templates[0].num_rows,
+            indexer.hydro_count,
+            indexer.max_par_order,
+            stage_ctx,
+        );
 
         // ── Backward-pass scratch buffers ─────────────────────────────────
         // All declared outside the loop body — zero per-iteration allocation.
@@ -454,16 +398,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             ranks,
             fwd_pool,
             basis_store,
-            patch_buf,
             exchange_bufs,
             cut_sync_bufs,
             visited_archive,
-            records,
-            cut_batches,
-            lb_cut_batch,
-            baked_templates,
-            bake_row_batches,
-            lb_cut_row_map,
+            scratch,
             convergence_monitor,
             bwd_probabilities_buf,
             bwd_successor_active_slots_buf,
@@ -603,7 +541,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         #[allow(clippy::cast_possible_truncation)]
         let total_time_ms = (self.results.start_time.elapsed().as_millis() as u64).max(1);
 
-        let baked_templates = self.baked_templates;
+        let baked_templates = self.scratch.baked_templates;
         let visited_archive = self.visited_archive;
         let TrainingResults {
             final_lb,
@@ -662,7 +600,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// Returns `Err(comm_err)` if `broadcast_basis_cache` itself fails (matching
     /// the original `on_error!` behavior at line 644).
     pub(crate) fn finalize_with_error(self, err: SddpError) -> Result<TrainingOutcome, SddpError> {
-        let baked_templates = self.baked_templates;
+        let baked_templates = self.scratch.baked_templates;
         let visited_archive = self.visited_archive;
         let TrainingResults {
             final_lb,
@@ -750,11 +688,11 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             &mut self.fwd_pool.workspaces,
             &mut self.basis_store,
             self.stage_ctx,
-            &self.baked_templates,
+            &self.scratch.baked_templates,
             self.fcf,
             self.training_ctx,
             &fwd_batch,
-            &mut self.records[..fwd_record_len],
+            &mut self.scratch.records[..fwd_record_len],
         )?;
 
         let fwd_solve_time_ms = {
@@ -823,7 +761,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     ) -> Result<(crate::backward::BackwardResult, f64), SddpError> {
         let mut bwd_spec = crate::backward::BackwardPassSpec {
             exchange: &mut self.exchange_bufs,
-            records: &self.records,
+            records: &self.scratch.records,
             iteration,
             local_work: self.ranks.my_actual_fwd,
             fwd_offset: self.ranks.my_fwd_offset,
@@ -852,9 +790,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             &mut self.fwd_pool.workspaces,
             &mut self.basis_store,
             self.stage_ctx,
-            &self.baked_templates,
+            &self.scratch.baked_templates,
             self.fcf,
-            &mut self.cut_batches,
+            &mut self.scratch.cut_batches,
             self.training_ctx,
             &mut bwd_spec,
             self.comm,
@@ -1072,7 +1010,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let indexer = self.training_ctx.indexer;
         for t in 0..self.ranks.num_stages {
             build_cut_row_batch_into(
-                &mut self.bake_row_batches[t],
+                &mut self.scratch.bake_row_batches[t],
                 self.fcf,
                 t,
                 indexer,
@@ -1080,12 +1018,12 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             );
             #[allow(clippy::cast_possible_truncation)]
             {
-                total_rows_baked += self.bake_row_batches[t].num_rows as u64;
+                total_rows_baked += self.scratch.bake_row_batches[t].num_rows as u64;
             }
             cobre_solver::bake_rows_into_template(
                 &self.stage_ctx.templates[t],
-                &self.bake_row_batches[t],
-                &mut self.baked_templates[t],
+                &self.scratch.bake_row_batches[t],
+                &mut self.scratch.baked_templates[t],
             );
         }
         #[allow(clippy::cast_possible_truncation)]
@@ -1128,11 +1066,11 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             self.fcf,
             self.training_ctx.initial_state,
             self.training_ctx.indexer,
-            &mut self.patch_buf,
-            &mut self.lb_cut_batch,
+            &mut self.scratch.patch_buf,
+            &mut self.scratch.lb_cut_batch,
             &lb_spec,
             self.comm,
-            Some(&mut self.lb_cut_row_map),
+            Some(&mut self.scratch.lb_cut_row_map),
         )?;
 
         let lb_stats_after = self.solver.statistics();
@@ -1634,17 +1572,17 @@ mod tests {
         // forward_passes=1, num_ranks=1 → max_local_fwd=1
         let max_local_fwd = 1usize;
         assert_eq!(
-            session.records.len(),
+            session.scratch.records.len(),
             max_local_fwd * n_stages,
             "records must be pre-sized to max_local_fwd * num_stages"
         );
         assert_eq!(
-            session.cut_batches.len(),
+            session.scratch.cut_batches.len(),
             n_stages,
             "cut_batches must have one RowBatch per stage"
         );
         assert_eq!(
-            session.baked_templates.len(),
+            session.scratch.baked_templates.len(),
             n_stages,
             "baked_templates must have one per stage"
         );

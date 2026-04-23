@@ -405,11 +405,13 @@ struct SuccessorSpec<'a> {
     successor_pool: &'a CutPool,
 }
 
-/// Load the stage LP template and append delta cuts once per trial point.
+/// Load the stage LP template and append delta cuts.
 ///
-/// Called once before the opening loop in [`process_trial_point_backward`].
-/// The LP structure (baked template + delta cuts) is identical across all
-/// openings for the same trial point — only the noise-dependent bounds change.
+/// Called at the top of every trial-point iteration in [`process_stage_backward`]
+/// to reset `HiGHS`'s retained simplex basis, factorization, and RNG position so
+/// that results do not depend on the scenario-to-worker partition. Within a
+/// trial point the LP structure is identical across openings — only the
+/// noise-dependent bounds change, so only bound patching happens per opening.
 fn load_backward_lp<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     succ: &SuccessorSpec<'_>,
@@ -827,6 +829,13 @@ fn process_stage_backward<S: SolverInterface + Send>(
             let worker_stage_wall_start = Instant::now();
 
             for m in start_m..end_m {
+                // Reload LP per trial point to reset HiGHS's internal simplex
+                // basis, factorization, and RNG position. Without this reset,
+                // state carried over from trial point m-1 makes results depend
+                // on the scenario-to-worker partition (i.e., on MPI rank count
+                // and thread count). Mirrors `run_forward_pass`, which reloads
+                // per scenario for the same reason.
+                load_backward_lp(ws, succ);
                 ws.backward_accum.slot_increments[..pop].fill(0);
                 staged.push(process_trial_point_backward(
                     ws,

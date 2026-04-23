@@ -294,10 +294,10 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
             });
         }
 
-        if setup.n_scenarios() > 0 {
+        if setup.simulation_config.n_scenarios > 0 {
             run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
         }
-    } else if setup.n_scenarios() > 0 {
+    } else if setup.simulation_config.n_scenarios > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(ctx, &system, &mut setup, root_config.as_ref())?;
@@ -334,7 +334,7 @@ fn load_and_validate_checkpoint(
             #[allow(clippy::cast_possible_truncation)]
             let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
             let state_dim =
-                u32::try_from(setup.fcf().state_dimension).map_err(|e| CliError::Internal {
+                u32::try_from(setup.fcf.state_dimension).map_err(|e| CliError::Internal {
                     message: format!("state_dimension overflows u32: {e}"),
                 })?;
             cobre_sddp::validate_policy_compatibility(&checkpoint.metadata, state_dim, n_stages)
@@ -355,7 +355,7 @@ fn apply_training_policy(
 ) -> Result<(), CliError> {
     match policy_mode {
         cobre_io::PolicyMode::WarmStart => {
-            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            let policy_dir = ctx.output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
                     message: format!(
@@ -374,20 +374,20 @@ fn apply_training_policy(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(CliError::from)?;
             setup.replace_fcf(warm_fcf);
             if ctx.is_root && !ctx.quiet {
-                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let warm_count = setup.fcf.pools[0].warm_start_count;
                 let _ = ctx.stderr.write_line(&format!(
                     "Warm-start: loaded {warm_count} cuts per stage from prior policy."
                 ));
             }
         }
         cobre_io::PolicyMode::Resume => {
-            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            let policy_dir = ctx.output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
                     message: format!(
@@ -404,24 +404,24 @@ fn apply_training_policy(
             }
             let checkpoint = load_and_validate_checkpoint(&policy_dir, system, setup, root_config)?;
             let completed = u64::from(checkpoint.metadata.completed_iterations);
-            if completed >= setup.max_iterations() && ctx.is_root && !ctx.quiet {
+            if completed >= setup.loop_params.max_iterations && ctx.is_root && !ctx.quiet {
                 let _ = ctx.stderr.write_line(&format!(
                     "WARNING: Checkpoint already completed {completed} iterations \
                      (max_iterations = {}). No additional training will occur.",
-                    setup.max_iterations()
+                    setup.loop_params.max_iterations
                 ));
             }
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(CliError::from)?;
             setup.replace_fcf(warm_fcf);
             setup.set_start_iteration(completed);
             if ctx.is_root && !ctx.quiet {
-                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let warm_count = setup.fcf.pools[0].warm_start_count;
                 let _ = ctx.stderr.write_line(&format!(
                     "Resume: loaded {warm_count} cuts per stage, \
                      resuming from iteration {completed}."
@@ -437,7 +437,7 @@ fn apply_training_policy(
     if let Some(bp) = root_config.and_then(|c| c.policy.boundary.as_ref()) {
         let boundary_path = ctx.output_dir.join(&bp.path);
         #[allow(clippy::cast_possible_truncation)]
-        let state_dim = setup.fcf().state_dimension as u32;
+        let state_dim = setup.fcf.state_dimension as u32;
         let boundary_records =
             cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
                 .map_err(CliError::from)?;
@@ -468,7 +468,7 @@ fn load_policy_for_simulation(
             .write_line("Training disabled. Loading policy for simulation-only mode...");
     }
 
-    let policy_dir = ctx.output_dir.join(setup.policy_path());
+    let policy_dir = ctx.output_dir.join(&setup.policy_path);
     if !policy_dir.exists() {
         return Err(CliError::Internal {
             message: format!(
@@ -485,8 +485,10 @@ fn load_policy_for_simulation(
         .map_err(CliError::from)?;
     setup.replace_fcf(loaded_fcf);
 
-    let basis_cache =
-        cobre_sddp::build_basis_cache_from_checkpoint(setup.num_stages(), &checkpoint.stage_bases);
+    let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
+        setup.stage_data.stage_templates.templates.len(),
+        &checkpoint.stage_bases,
+    );
 
     Ok(cobre_sddp::TrainingResult::new(
         checkpoint.metadata.final_lower_bound,
@@ -849,7 +851,7 @@ fn run_pre_training(
     root_estimation_path: Option<cobre_sddp::EstimationPath>,
 ) -> Result<(), CliError> {
     if !ctx.quiet && ctx.is_root {
-        let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
+        let hydro_summary = build_hydro_model_summary(&setup.hydro_models, system);
         crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
     }
 
@@ -859,7 +861,7 @@ fn run_pre_training(
             let provenance = cobre_sddp::build_provenance_report(
                 path,
                 root_estimation_report,
-                setup.stochastic().provenance(),
+                setup.stochastic.provenance(),
                 system.hydros().len(),
             );
             if !ctx.quiet {
@@ -877,7 +879,7 @@ fn run_pre_training(
     if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {
         export_stochastic_artifacts(
             &ctx.output_dir,
-            setup.stochastic(),
+            &setup.stochastic,
             system,
             root_estimation_report,
             ctx.quiet,
@@ -887,11 +889,11 @@ fn run_pre_training(
 
     if ctx.is_root {
         let scaling_path = ctx.output_dir.join("training/scaling_report.json");
-        cobre_io::write_scaling_report(&scaling_path, setup.scaling_report()).map_err(|e| {
-            CliError::Internal {
+        cobre_io::write_scaling_report(&scaling_path, &setup.stage_data.scaling_report).map_err(
+            |e| CliError::Internal {
                 message: format!("failed to write scaling report: {e}"),
-            }
-        })?;
+            },
+        )?;
     }
 
     ctx.comm.barrier().map_err(|e| CliError::Internal {
@@ -924,7 +926,7 @@ fn run_training_phase(
         Some(crate::progress::run_progress_thread(
             event_rx,
             ctx.render_mode,
-            setup.max_iterations(),
+            setup.loop_params.max_iterations,
             ctx.term_width,
         ))
     };
@@ -1119,7 +1121,7 @@ fn run_simulation_phase(
     hostname: &str,
 ) -> Result<(), CliError> {
     let solver_factory = || HighsSolver::new();
-    let n_scenarios = setup.n_scenarios();
+    let n_scenarios = setup.simulation_config.n_scenarios;
     let sim_config = setup.simulation_config();
 
     let mut sim_pool = setup
@@ -1211,7 +1213,7 @@ fn run_simulation_phase(
     // Aggregate simulation cost statistics across all MPI ranks so that
     // the printed mean/std/CI95 reflect ALL scenarios, not just rank 0's.
     let cost_summary =
-        cobre_sddp::aggregate_simulation(&sim_run_result.costs, &sim_config, &ctx.comm).map_err(
+        cobre_sddp::aggregate_simulation(&sim_run_result.costs, sim_config, &ctx.comm).map_err(
             |e| CliError::Internal {
                 message: format!("simulation cost aggregation error: {e}"),
             },
@@ -1572,15 +1574,15 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
     }
     let write_start = std::time::Instant::now();
 
-    let policy_dir = args.output_dir.join(args.setup.policy_path());
+    let policy_dir = args.output_dir.join(&args.setup.policy_path);
     crate::policy_io::write_checkpoint(
         &policy_dir,
-        args.setup.fcf(),
+        &args.setup.fcf,
         args.training_result,
         &crate::policy_io::CheckpointParams {
-            max_iterations: args.setup.max_iterations(),
-            forward_passes: args.setup.forward_passes(),
-            seed: args.setup.seed(),
+            max_iterations: args.setup.loop_params.max_iterations,
+            forward_passes: args.setup.loop_params.forward_passes,
+            seed: args.setup.loop_params.seed,
             export_states: args.config.exports.states,
         },
     )?;

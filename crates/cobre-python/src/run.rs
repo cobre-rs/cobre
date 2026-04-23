@@ -312,11 +312,11 @@ fn write_training_artifacts(
     n_threads: usize,
 ) -> Result<(), String> {
     write_policy_checkpoint(
-        &output_dir.join(setup.policy_path()),
-        setup.fcf(),
+        &output_dir.join(&setup.policy_path),
+        &setup.fcf,
         &training.result,
-        setup.max_iterations(),
-        setup.forward_passes(),
+        setup.loop_params.max_iterations,
+        setup.loop_params.forward_passes,
         seed,
         config.exports.states,
     )
@@ -523,21 +523,21 @@ fn run_inner(
     let provenance_report = build_provenance_report(
         estimation_path,
         estimation_report.as_ref(),
-        setup.stochastic().provenance(),
+        setup.stochastic.provenance(),
         system.hydros().len(),
     );
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(
             &output_dir,
-            setup.stochastic(),
+            &setup.stochastic,
             &system,
             estimation_report.as_ref(),
         );
     }
 
     let scaling_path = output_dir.join("training/scaling_report.json");
-    cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
+    cobre_io::write_scaling_report(&scaling_path, &setup.stage_data.scaling_report)
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
     let provenance_path = output_dir.join("training/model_provenance.json");
@@ -545,20 +545,16 @@ fn run_inner(
         eprintln!("cobre-python: provenance output warning: {e}");
     }
 
-    let stochastic_summary = build_stochastic_summary(
-        &system,
-        setup.stochastic(),
-        estimation_report.as_ref(),
-        seed,
-    );
-    let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
+    let stochastic_summary =
+        build_stochastic_summary(&system, &setup.stochastic, estimation_report.as_ref(), seed);
+    let hydro_models_summary = Some(build_hydro_model_summary(&setup.hydro_models, &system));
 
     let training_enabled = config.training.enabled;
 
     if training_enabled {
         // Warm-start: load prior policy and inject cuts before training.
         if config.policy.mode == cobre_io::PolicyMode::WarmStart {
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot warm-start \
@@ -574,7 +570,7 @@ fn run_inner(
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
                 #[allow(clippy::cast_possible_truncation)]
-                let state_dim = setup.fcf().state_dimension as u32;
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -586,13 +582,13 @@ fn run_inner(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(|e| format!("warm-start FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
         } else if config.policy.mode == cobre_io::PolicyMode::Resume {
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot resume \
@@ -608,7 +604,7 @@ fn run_inner(
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
                 #[allow(clippy::cast_possible_truncation)]
-                let state_dim = setup.fcf().state_dimension as u32;
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -622,8 +618,8 @@ fn run_inner(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(|e| format!("resume FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
@@ -636,7 +632,7 @@ fn run_inner(
         if let Some(ref bp) = config.policy.boundary {
             let boundary_path = output_dir.join(&bp.path);
             #[allow(clippy::cast_possible_truncation)]
-            let state_dim = setup.fcf().state_dimension as u32;
+            let state_dim = setup.fcf.state_dimension as u32;
             let boundary_records =
                 cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
                     .map_err(|e| format!("boundary cut error: {e}"))?;
@@ -691,7 +687,7 @@ fn run_inner(
         // Training disabled: check if simulation is requested.
         if should_simulate {
             // Simulation-only mode: load policy and run simulation.
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot run simulation-only \
@@ -708,7 +704,7 @@ fn run_inner(
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
                 #[allow(clippy::cast_possible_truncation)]
-                let state_dim = setup.fcf().state_dimension as u32;
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -725,7 +721,7 @@ fn run_inner(
 
             // Build basis cache from loaded checkpoint.
             let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
-                setup.num_stages(),
+                setup.stage_data.stage_templates.templates.len(),
                 &checkpoint.stage_bases,
             );
 

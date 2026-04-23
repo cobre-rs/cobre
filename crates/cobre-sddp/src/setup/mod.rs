@@ -22,21 +22,26 @@
 //! let stochastic = build_stochastic_context(system, 42, None, &[], &[], OpeningTreeInputs::default(), ClassSchemes { inflow: None, load: None, ncs: None })?;
 //! let hydro_models = PrepareHydroModelsResult::default_from_system(system);
 //! let setup = StudySetup::new(system, config, stochastic, hydro_models)?;
-//! assert!(!setup.stage_templates().is_empty());
+//! assert!(!setup.stage_data.stage_templates.templates.is_empty());
 //! # Ok(())
 //! # }
 //! ```
 
 mod accessors;
+pub(crate) mod methodology_config;
 mod orchestration;
 pub mod params;
 pub(crate) mod scenario_libraries;
+pub mod scenario_library_set;
+pub mod stage_data;
 pub mod stochastic_pipeline;
 pub(crate) mod template_postprocess;
 
 pub use params::{
     ConstructionConfig, DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, StudyParams,
 };
+pub use scenario_library_set::{PhaseLibraries, ScenarioLibraries};
+pub use stage_data::StageData;
 pub use stochastic_pipeline::{
     PrepareStochasticResult, build_ncs_factor_entries, load_load_factors_for_stochastic,
     prepare_stochastic,
@@ -48,14 +53,13 @@ use cobre_core::{
     EntityId, Stage, System,
     entities::hydro::HydroGenerationModel,
     scenario::{SamplingScheme, ScenarioSource},
-    temporal::StageLagTransition,
 };
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{
-    FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError,
-    StageIndexer, StageTemplates, build_stage_templates,
-    cut_selection::CutSelectionStrategy,
+    CutManagementConfig, FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
+    build_stage_templates,
+    config::EventParams,
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
     simulation::EntityCounts,
     stopping_rule::{StoppingRule, StoppingRuleSet},
@@ -75,132 +79,64 @@ use crate::{
 /// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {
-    pub(crate) stage_templates: StageTemplates,
+    /// Stage-indexed data: LP templates, indexer, stages, entity counts, blocks,
+    /// lag transitions, noise groups, and scaling report.
+    pub stage_data: stage_data::StageData,
 
-    pub(crate) stochastic: StochasticContext,
-    pub(crate) indexer: StageIndexer,
-    pub(crate) fcf: FutureCostFunction,
+    /// Stochastic context holding sampling distributions, libraries, and provenance.
+    pub stochastic: StochasticContext,
+    /// Future cost function (cut pool) updated by the backward pass during training.
+    pub fcf: FutureCostFunction,
     pub(crate) initial_state: Vec<f64>,
-    pub(crate) horizon: HorizonMode,
-    pub(crate) risk_measures: Vec<RiskMeasure>,
-    pub(crate) entity_counts: EntityCounts,
 
-    pub(crate) hydro_models: PrepareHydroModelsResult,
+    /// Pre-computed hydro production models (FPHA, turbine curves, etc.).
+    pub hydro_models: PrepareHydroModelsResult,
 
     pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,
     /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
     pub(crate) ncs_max_gen: Vec<f64>,
 
-    pub(crate) block_counts_per_stage: Vec<usize>,
-    pub(crate) max_blocks: usize,
+    /// Sampling schemes and pre-built libraries for training and simulation phases.
+    ///
+    /// Replaces the 14 flat `inflow_scheme` / `sim_inflow_scheme` / … fields.
+    /// Access via `scenario_libraries.training.<field>` or
+    /// `scenario_libraries.simulation.<field>`.
+    pub scenario_libraries: ScenarioLibraries,
 
-    pub(crate) scaling_report: crate::scaling_report::ScalingReport,
+    /// Iteration-loop parameters projected from [`LoopConfig`].
+    ///
+    /// Holds the five pure-data fields of [`LoopConfig`] that are stable
+    /// across training invocations. `n_fwd_threads` is excluded (derived
+    /// at runtime) and supplied as a per-call argument to [`StudySetup::train`].
+    pub loop_params: crate::config::LoopParams,
 
-    /// Forward-pass noise source scheme for the training inflow entity class.
-    pub(crate) inflow_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the training load entity class.
-    pub(crate) load_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the training NCS entity class.
-    pub(crate) ncs_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the simulation inflow entity class.
-    pub(crate) sim_inflow_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the simulation load entity class.
-    pub(crate) sim_load_scheme: SamplingScheme,
-    /// Forward-pass noise source scheme for the simulation NCS entity class.
-    pub(crate) sim_ncs_scheme: SamplingScheme,
-    /// Study stages (id >= 0) owned for the lifetime of this setup.
-    ///
-    /// Borrowed by [`TrainingContext`] so that [`cobre_stochastic::build_forward_sampler`]
-    /// can read per-stage noise methods when constructing an `OutOfSample` sampler.
-    pub(crate) stages: Vec<Stage>,
+    /// Simulation pipeline parameters, stored directly as [`SimulationConfig`].
+    pub simulation_config: crate::simulation::SimulationConfig,
 
-    /// Pre-standardized historical inflow windows library (training).
-    ///
-    /// `Some` when `inflow_scheme == SamplingScheme::Historical`, `None` otherwise.
-    pub(crate) historical_library: Option<HistoricalScenarioLibrary>,
-    /// Pre-standardized external inflow scenario library (training).
-    ///
-    /// `Some` when `inflow_scheme == SamplingScheme::External`, `None` otherwise.
-    pub(crate) external_inflow_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external load scenario library (training).
-    ///
-    /// `Some` when `load_scheme == SamplingScheme::External`, `None` otherwise.
-    pub(crate) external_load_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external NCS scenario library (training).
-    ///
-    /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
-    pub(crate) external_ncs_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized historical inflow windows library (simulation).
-    ///
-    /// `Some` when `sim_inflow_scheme == SamplingScheme::Historical` and the
-    /// simulation scheme differs from the training scheme. When the schemes are
-    /// identical this field is `None` and the training `historical_library` is
-    /// used instead.
-    pub(crate) sim_historical_library: Option<HistoricalScenarioLibrary>,
-    /// Pre-standardized external inflow scenario library (simulation).
-    ///
-    /// `Some` when `sim_inflow_scheme == SamplingScheme::External` and differs
-    /// from the training inflow scheme. Shares the training library otherwise.
-    pub(crate) sim_external_inflow_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external load scenario library (simulation).
-    ///
-    /// `Some` when `sim_load_scheme == SamplingScheme::External` and differs
-    /// from the training load scheme. Shares the training library otherwise.
-    pub(crate) sim_external_load_library: Option<ExternalScenarioLibrary>,
-    /// Pre-standardized external NCS scenario library (simulation).
-    ///
-    /// `Some` when `sim_ncs_scheme == SamplingScheme::External` and differs
-    /// from the training NCS scheme. Shares the training library otherwise.
-    pub(crate) sim_external_ncs_library: Option<ExternalScenarioLibrary>,
+    /// Relative path to the policy output directory (e.g. `"training/policy"`).
+    pub policy_path: String,
 
-    pub(crate) seed: u64,
-    pub(crate) forward_passes: u32,
-    pub(crate) max_iterations: u64,
-    pub(crate) start_iteration: u64,
-    pub(crate) n_scenarios: u32,
-    pub(crate) io_channel_capacity: usize,
-    pub(crate) policy_path: String,
-    pub(crate) inflow_method: InflowNonNegativityMethod,
-    pub(crate) cut_selection: Option<CutSelectionStrategy>,
-    pub(crate) cut_activity_tolerance: f64,
-    /// Activity-window size for the basis-reconstruction classifier.
+    /// Two-stage cut management pipeline configuration.
     ///
-    /// Validated range 1..=31. Default:
-    /// [`crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW`].
-    pub(crate) basis_activity_window: u32,
-    pub(crate) stopping_rule_set: StoppingRuleSet,
+    /// Holds cut selection, budget cap, activity tolerance, basis window, and
+    /// per-stage risk measures. Replaces the five former flat fields
+    /// (`cut_selection`, `cut_activity_tolerance`, `budget`,
+    /// `basis_activity_window`, `risk_measures`).
+    pub(crate) cut_management: CutManagementConfig,
 
-    /// Maximum number of active cuts per stage (hard cap on LP size).
+    /// Pure-data event parameters (output-side flags).
     ///
-    /// `None` means no cap is enforced. Set from
-    /// `config.training.cut_selection.max_active_per_stage` via `StudyParams`.
-    pub(crate) budget: Option<u32>,
+    /// Holds only the stable, serialisable event flags. Runtime handles
+    /// (`event_sender`, `shutdown_flag`) and deferred fields
+    /// (`checkpoint_interval`) are excluded and supplied per-call in
+    /// [`StudySetup::train`].
+    pub(crate) events: EventParams,
 
-    /// Whether the caller wants the visited-states archive for export.
+    /// Stochastic numerical methodology parameters.
     ///
-    /// When `true`, the archive is allocated during training regardless of the
-    /// cut selection strategy. Defaults to `false`; set by CLI/Python callers
-    /// based on `exports.states`.
-    pub(crate) export_states: bool,
-
-    /// Precomputed per-stage lag accumulation weights and period-finalization flags.
-    ///
-    /// Computed once at setup time by
-    /// [`crate::lag_transition::precompute_stage_lag_transitions`] from the study
-    /// stages and the policy-graph season map. Length equals the number of study
-    /// stages. Indexed by stage: `stage_lag_transitions[t]`.
-    ///
-    /// Exposed to the forward pass and simulation pipeline via [`StageContext`].
-    pub(crate) stage_lag_transitions: Vec<StageLagTransition>,
-
-    /// Pre-computed noise group assignments for noise sharing in Pattern C.
-    ///
-    /// Stages with the same `(season_id, year)` share a noise group, so weekly
-    /// stages within the same month share the same noise draw. Computed at setup
-    /// time by [`crate::lag_transition::precompute_noise_groups`]. Indexed by stage.
-    /// Consumed by `ForwardSampler`, `generate_opening_tree`, and
-    /// `StageContext` for per-stage noise group lookups.
-    pub(crate) noise_group_ids: Vec<u32>,
+    /// Groups `horizon` and `inflow_method`, which govern study horizon
+    /// treatment and inflow non-negativity enforcement respectively.
+    pub(crate) methodology: methodology_config::MethodologyConfig,
 
     /// Pre-computed lag accumulator seed from `initial_conditions.recent_observations`.
     ///
@@ -533,7 +469,8 @@ impl StudySetup {
 
         let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
 
-        let historical_library: Option<HistoricalScenarioLibrary> =
+        // Build training phase libraries.
+        let training_historical: Option<HistoricalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::Historical {
                 Some(scenario_libraries::build_historical_inflow_library(
                     system.inflow_history(),
@@ -548,7 +485,7 @@ impl StudySetup {
                 None
             };
 
-        let external_inflow_library: Option<ExternalScenarioLibrary> =
+        let training_external_inflow: Option<ExternalScenarioLibrary> =
             if inflow_scheme == SamplingScheme::External {
                 Some(scenario_libraries::build_external_inflow_library(
                     system.external_scenarios(),
@@ -563,8 +500,7 @@ impl StudySetup {
                 None
             };
 
-        // External load library (built when load_scheme == External).
-        let external_load_library: Option<ExternalScenarioLibrary> =
+        let training_external_load: Option<ExternalScenarioLibrary> =
             if load_scheme == SamplingScheme::External {
                 Some(scenario_libraries::build_external_load_library(
                     system.external_load_scenarios(),
@@ -576,8 +512,7 @@ impl StudySetup {
                 None
             };
 
-        // External NCS library (built when ncs_scheme == External).
-        let external_ncs_library: Option<ExternalScenarioLibrary> =
+        let training_external_ncs: Option<ExternalScenarioLibrary> =
             if ncs_scheme == SamplingScheme::External {
                 Some(scenario_libraries::build_external_ncs_library(
                     system.external_ncs_scenarios(),
@@ -591,11 +526,10 @@ impl StudySetup {
 
         // Build simulation-specific libraries when simulation schemes differ from
         // training schemes. When they are identical, simulation borrows from the
-        // training libraries (represented as `None` in the sim_* fields, with
+        // training libraries (represented as `None` in the simulation phase, with
         // `simulation_ctx()` falling back to the training library references).
 
-        // Simulation historical inflow library.
-        let sim_historical_library: Option<HistoricalScenarioLibrary> = if sim_inflow_scheme
+        let simulation_historical: Option<HistoricalScenarioLibrary> = if sim_inflow_scheme
             == SamplingScheme::Historical
             && sim_inflow_scheme != inflow_scheme
         {
@@ -612,7 +546,7 @@ impl StudySetup {
             None
         };
 
-        let sim_external_inflow_library: Option<ExternalScenarioLibrary> = if sim_inflow_scheme
+        let simulation_external_inflow: Option<ExternalScenarioLibrary> = if sim_inflow_scheme
             == SamplingScheme::External
             && sim_inflow_scheme != inflow_scheme
         {
@@ -629,8 +563,7 @@ impl StudySetup {
             None
         };
 
-        // Simulation external load library.
-        let sim_external_load_library: Option<ExternalScenarioLibrary> =
+        let simulation_external_load: Option<ExternalScenarioLibrary> =
             if sim_load_scheme == SamplingScheme::External && sim_load_scheme != load_scheme {
                 Some(scenario_libraries::build_external_load_library(
                     system.external_load_scenarios(),
@@ -642,8 +575,7 @@ impl StudySetup {
                 None
             };
 
-        // Simulation external NCS library.
-        let sim_external_ncs_library: Option<ExternalScenarioLibrary> =
+        let simulation_external_ncs: Option<ExternalScenarioLibrary> =
             if sim_ncs_scheme == SamplingScheme::External && sim_ncs_scheme != ncs_scheme {
                 Some(scenario_libraries::build_external_ncs_library(
                     system.external_ncs_scenarios(),
@@ -655,52 +587,72 @@ impl StudySetup {
                 None
             };
 
+        let scenario_libraries = ScenarioLibraries {
+            training: PhaseLibraries {
+                inflow_scheme,
+                load_scheme,
+                ncs_scheme,
+                historical: training_historical,
+                external_inflow: training_external_inflow,
+                external_load: training_external_load,
+                external_ncs: training_external_ncs,
+            },
+            simulation: PhaseLibraries {
+                inflow_scheme: sim_inflow_scheme,
+                load_scheme: sim_load_scheme,
+                ncs_scheme: sim_ncs_scheme,
+                historical: simulation_historical,
+                external_inflow: simulation_external_inflow,
+                external_load: simulation_external_load,
+                external_ncs: simulation_external_ncs,
+            },
+        };
+
         Ok(Self {
-            stage_templates,
+            stage_data: stage_data::StageData {
+                stage_templates,
+                indexer,
+                stages,
+                entity_counts,
+                block_counts_per_stage,
+                stage_lag_transitions,
+                noise_group_ids,
+                scaling_report,
+            },
             stochastic,
-            indexer,
             fcf,
             initial_state,
-            horizon,
-            risk_measures,
-            entity_counts,
             hydro_models,
             ncs_entity_ids_per_stage,
             ncs_max_gen,
-            block_counts_per_stage,
-            max_blocks,
-            scaling_report,
-            inflow_scheme,
-            load_scheme,
-            ncs_scheme,
-            sim_inflow_scheme,
-            sim_load_scheme,
-            sim_ncs_scheme,
-            stages,
-            historical_library,
-            external_inflow_library,
-            external_load_library,
-            external_ncs_library,
-            sim_historical_library,
-            sim_external_inflow_library,
-            sim_external_load_library,
-            sim_external_ncs_library,
-            seed,
-            forward_passes,
-            max_iterations,
-            start_iteration: 0,
-            n_scenarios,
-            io_channel_capacity,
+            scenario_libraries,
+            loop_params: crate::config::LoopParams {
+                seed,
+                forward_passes,
+                max_iterations,
+                start_iteration: 0,
+                max_blocks,
+                stopping_rules: stopping_rule_set,
+            },
+            simulation_config: crate::simulation::SimulationConfig {
+                n_scenarios,
+                io_channel_capacity,
+                basis_activity_window,
+            },
             policy_path,
-            inflow_method,
-            cut_selection,
-            cut_activity_tolerance,
-            basis_activity_window,
-            stopping_rule_set,
-            budget,
-            export_states,
-            stage_lag_transitions,
-            noise_group_ids,
+            cut_management: CutManagementConfig {
+                cut_selection,
+                budget,
+                cut_activity_tolerance,
+                basis_activity_window,
+                warm_start_cuts: 0,
+                risk_measures,
+            },
+            events: EventParams { export_states },
+            methodology: methodology_config::MethodologyConfig {
+                horizon,
+                inflow_method,
+            },
             recent_observation_seed,
             downstream_par_order,
         })
@@ -1175,7 +1127,7 @@ mod tests {
         );
         assert!(result.is_ok(), "expected Ok, got {result:?}");
         let setup = result.unwrap();
-        assert!(!setup.stage_templates().is_empty());
+        assert!(!setup.stage_data.stage_templates.templates.is_empty());
     }
 
     /// Given a system with zero study stages, when `StudySetup::new()` is
@@ -1244,32 +1196,32 @@ mod tests {
         .expect("setup");
 
         // Stage templates
-        assert_eq!(setup.stage_templates().len(), n_stages);
-        assert_eq!(setup.base_rows().len(), n_stages);
+        assert_eq!(setup.stage_data.stage_templates.templates.len(), n_stages);
+        assert_eq!(setup.stage_data.stage_templates.base_rows.len(), n_stages);
 
         // Config-derived scalars
-        assert_eq!(setup.seed(), 42);
-        assert_eq!(setup.forward_passes(), 2);
-        assert_eq!(setup.max_iterations(), 50);
-        assert_eq!(setup.n_scenarios(), 0); // simulation disabled by default
-        assert_eq!(setup.policy_path(), "./policy");
+        assert_eq!(setup.loop_params.seed, 42);
+        assert_eq!(setup.loop_params.forward_passes, 2);
+        assert_eq!(setup.loop_params.max_iterations, 50);
+        assert_eq!(setup.simulation_config.n_scenarios, 0); // simulation disabled by default
+        assert_eq!(setup.policy_path, "./policy");
 
         // Derived layout
-        assert_eq!(setup.block_counts_per_stage().len(), n_stages);
-        assert!(setup.max_blocks() > 0);
+        assert_eq!(setup.stage_data.block_counts_per_stage.len(), n_stages);
+        assert!(setup.loop_params.max_blocks > 0);
 
         // Horizon
-        assert_eq!(setup.horizon().num_stages(), n_stages);
+        assert_eq!(setup.methodology.horizon.num_stages(), n_stages);
 
         // Risk measures: one per study stage
-        assert_eq!(setup.risk_measures().len(), n_stages);
+        assert_eq!(setup.cut_management.risk_measures.len(), n_stages);
 
         // FCF: pools match stage count
-        assert_eq!(setup.fcf().pools.len(), n_stages);
+        assert_eq!(setup.fcf.pools.len(), n_stages);
 
         // Entity counts: 1 hydro, 1 thermal
-        assert_eq!(setup.entity_counts().hydro_ids.len(), 1);
-        assert_eq!(setup.entity_counts().thermal_ids.len(), 1);
+        assert_eq!(setup.stage_data.entity_counts.hydro_ids.len(), 1);
+        assert_eq!(setup.stage_data.entity_counts.thermal_ids.len(), 1);
     }
 
     /// FCF is accessible mutably via `fcf_mut()`.
@@ -1300,10 +1252,10 @@ mod tests {
         )
         .expect("setup");
 
-        let n_state = setup.indexer().n_state;
+        let n_state = setup.stage_data.indexer.n_state;
         let coefficients = vec![1.0_f64; n_state];
-        setup.fcf_mut().add_cut(0, 0, 0, 42.0, &coefficients);
-        assert_eq!(setup.fcf().total_active_cuts(), 1);
+        setup.fcf.add_cut(0, 0, 0, 42.0, &coefficients);
+        assert_eq!(setup.fcf.total_active_cuts(), 1);
     }
 
     /// `inflow_method()` reflects the config setting.
@@ -1338,7 +1290,10 @@ mod tests {
 
         // The minimal_config uses "penalty" — should not be None.
         assert!(
-            !matches!(setup.inflow_method(), InflowNonNegativityMethod::None),
+            !matches!(
+                setup.methodology.inflow_method,
+                InflowNonNegativityMethod::None
+            ),
             "expected penalty or truncation method"
         );
     }
@@ -1372,7 +1327,7 @@ mod tests {
         .expect("setup");
 
         assert!(
-            setup.cut_selection().is_none(),
+            setup.cut_management.cut_selection.is_none(),
             "cut_selection should be None when disabled"
         );
     }
@@ -1408,27 +1363,27 @@ mod tests {
 
         assert_eq!(
             ctx.templates.len(),
-            setup.stage_templates().len(),
+            setup.stage_data.stage_templates.templates.len(),
             "templates length mismatch"
         );
         assert_eq!(
             ctx.base_rows.len(),
-            setup.base_rows().len(),
+            setup.stage_data.stage_templates.base_rows.len(),
             "base_rows length mismatch"
         );
         assert_eq!(
             ctx.noise_scale.len(),
-            setup.noise_scale().len(),
+            setup.stage_data.stage_templates.noise_scale.len(),
             "noise_scale length mismatch"
         );
         assert_eq!(
             ctx.n_hydros,
-            setup.entity_counts().hydro_ids.len(),
+            setup.stage_data.entity_counts.hydro_ids.len(),
             "n_hydros mismatch"
         );
         assert_eq!(
             ctx.block_counts_per_stage.len(),
-            setup.block_counts_per_stage().len(),
+            setup.stage_data.block_counts_per_stage.len(),
             "block_counts_per_stage length mismatch"
         );
     }
@@ -1464,17 +1419,16 @@ mod tests {
 
         assert_eq!(
             ctx.horizon.num_stages(),
-            setup.horizon().num_stages(),
+            setup.methodology.horizon.num_stages(),
             "horizon num_stages mismatch"
         );
         assert_eq!(
-            ctx.indexer.n_state,
-            setup.indexer().n_state,
+            ctx.indexer.n_state, setup.stage_data.indexer.n_state,
             "indexer n_state mismatch"
         );
         assert_eq!(
             ctx.initial_state.len(),
-            setup.initial_state().len(),
+            setup.initial_state.len(),
             "initial_state length mismatch"
         );
     }
@@ -1569,7 +1523,7 @@ mod tests {
             .expect("train");
 
         assert!(
-            setup.fcf().pools[0].populated_count > 0,
+            setup.fcf.pools[0].populated_count > 0,
             "expected at least one cut in FCF pool[0] after training"
         );
     }
@@ -1614,8 +1568,11 @@ mod tests {
         .expect("setup");
 
         let sim_cfg = setup.simulation_config();
-        assert_eq!(sim_cfg.n_scenarios, setup.n_scenarios());
-        assert_eq!(sim_cfg.io_channel_capacity, setup.io_channel_capacity());
+        assert_eq!(sim_cfg.n_scenarios, setup.simulation_config.n_scenarios);
+        assert_eq!(
+            sim_cfg.io_channel_capacity,
+            setup.simulation_config.io_channel_capacity
+        );
     }
 
     /// `create_workspace_pool()` with `n_threads = 2` returns a pool whose
@@ -1768,7 +1725,7 @@ mod tests {
             .expect("sim pool");
 
         // Create the result channel and drain thread.
-        let io_capacity = setup.io_channel_capacity().max(1);
+        let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
         let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
@@ -2456,7 +2413,7 @@ mod tests {
 
         let setup = StudySetup::new(&system, &config, stochastic, hydro_result).expect("setup");
 
-        let models = setup.hydro_models();
+        let models = &setup.hydro_models;
         assert_eq!(
             models.provenance.production_sources.len(),
             system.hydros().len(),
@@ -2850,7 +2807,7 @@ mod tests {
         )
         .expect("setup with past_inflows");
 
-        let state = setup.initial_state();
+        let state = &setup.initial_state;
 
         // With 2 hydros (N=2) and max_par_order=2 (L=2), lag slots start at N=2.
         // Lag-major layout: slot = lag_start + lag * N + h.
@@ -2930,19 +2887,19 @@ mod tests {
         .expect("setup");
 
         assert!(
-            setup.historical_library().is_none(),
+            setup.scenario_libraries.training.historical.is_none(),
             "historical_library must be None for InSample scheme"
         );
         assert!(
-            setup.external_inflow_library().is_none(),
+            setup.scenario_libraries.training.external_inflow.is_none(),
             "external_inflow_library must be None for InSample scheme"
         );
         assert!(
-            setup.external_load_library().is_none(),
+            setup.scenario_libraries.training.external_load.is_none(),
             "external_load_library must be None for InSample load scheme"
         );
         assert!(
-            setup.external_ncs_library().is_none(),
+            setup.scenario_libraries.training.external_ncs.is_none(),
             "external_ncs_library must be None for InSample ncs scheme"
         );
     }
@@ -3225,7 +3182,10 @@ mod tests {
         .expect("setup");
 
         let lib = setup
-            .historical_library()
+            .scenario_libraries
+            .training
+            .historical
+            .as_ref()
             .expect("expected Some(HistoricalScenarioLibrary) for Historical scheme");
         assert!(
             lib.n_windows() > 0,
@@ -3499,7 +3459,10 @@ mod tests {
         .expect("setup");
 
         let lib = setup
-            .external_inflow_library()
+            .scenario_libraries
+            .training
+            .external_inflow
+            .as_ref()
             .expect("expected Some(ExternalScenarioLibrary) for External inflow scheme");
         assert!(
             lib.n_entities() > 0,
@@ -3765,7 +3728,10 @@ mod tests {
         .expect("setup");
 
         let lib = setup
-            .external_load_library()
+            .scenario_libraries
+            .training
+            .external_load
+            .as_ref()
             .expect("expected Some(ExternalScenarioLibrary) for External load scheme");
         assert!(
             lib.n_entities() > 0,
@@ -4059,7 +4025,10 @@ mod tests {
         .expect("setup");
 
         let lib = setup
-            .external_ncs_library()
+            .scenario_libraries
+            .training
+            .external_ncs
+            .as_ref()
             .expect("expected Some(ExternalScenarioLibrary) for External NCS scheme");
         assert!(
             lib.n_entities() > 0,

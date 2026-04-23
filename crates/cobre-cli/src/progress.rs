@@ -505,7 +505,7 @@ mod tests {
 
     use cobre_core::TrainingEvent;
 
-    use super::{run_progress_thread, RenderMode};
+    use super::{RenderMode, run_progress_thread};
 
     #[allow(clippy::cast_precision_loss)]
     fn make_iteration_summary(iteration: u64) -> TrainingEvent {

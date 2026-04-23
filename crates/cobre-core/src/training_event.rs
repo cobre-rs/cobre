@@ -497,8 +497,8 @@ pub enum TrainingEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WorkerTimingPhase,
-        WORKER_TIMING_SLOT_COUNT,
+        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_COUNT,
+        WorkerTimingPhase,
     };
 
     // Helper: build one of each variant with representative values.

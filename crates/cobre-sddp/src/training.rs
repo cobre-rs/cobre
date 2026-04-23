@@ -39,25 +39,25 @@ use cobre_solver::StageTemplate;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    SddpError, TrainingConfig, TrajectoryRecord,
     backward::run_backward_pass,
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
-    cut::fcf::FutureCostFunction,
     cut::CutRowMap,
+    cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
     evaluate_lower_bound,
-    forward::{build_cut_row_batch_into, run_forward_pass, sync_forward, ForwardPassBatch},
+    forward::{ForwardPassBatch, build_cut_row_batch_into, run_forward_pass, sync_forward},
     lower_bound::LbEvalSpec,
     lp_builder::PatchBuffer,
     solver_stats::{
-        aggregate_solver_statistics, SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer,
-        WORKER_STATS_ENTRY_STRIDE,
+        SolverStatsDelta, SolverStatsEntry, StageWorkerStatsBuffer, WORKER_STATS_ENTRY_STRIDE,
+        aggregate_solver_statistics,
     },
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_ITERATION_LIMIT,
     workspace::{BasisStore, CapturedBasis, WorkspacePool, WorkspaceSizing},
-    SddpError, TrainingConfig, TrajectoryRecord,
 };
 
 // ---------------------------------------------------------------------------
@@ -1284,6 +1284,7 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1292,23 +1293,22 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
     };
     use cobre_solver::{
         Basis, LpSolution, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
     };
 
     use super::train;
     use crate::{
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
-        solver_stats::SolverStatsDelta,
         CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
         RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
         TrainingConfig,
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
+        solver_stats::SolverStatsDelta,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -2099,7 +2099,7 @@ mod tests {
     #[test]
     fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
         use cobre_core::{
-            WorkerTimingPhase, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP,
+            WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP, WorkerTimingPhase,
         };
 
         let n_stages = 2;

@@ -22,7 +22,7 @@ Available context structs:
 | `ScratchBuffers`   | `cobre-sddp/src/workspace.rs`        | Per-worker noise/patch scratch space        | Mutable (`&mut`) |
 | `SolverWorkspace`  | `cobre-sddp/src/workspace.rs`        | Solver + scratch + patch buffer             | Mutable (`&mut`) |
 | `TrainingConfig`   | `cobre-sddp/src/training.rs`         | Forward passes, iteration limit, seed       | Owned (moved in) |
-| `SimulationConfig` | `cobre-sddp/src/simulation/types.rs` | Scenario count, channel capacity            | Immutable (`&`)  |
+| `SimulationConfig` | `cobre-sddp/src/simulation/config.rs` | Scenario count, channel capacity, basis window | Immutable (`&`)  |
 | `BackwardPassSpec` | `cobre-sddp/src/backward.rs`         | Risk measures, opening tree, cut selection  | Mutable (`&mut`) |
 | `ForwardPassBatch` | `cobre-sddp/src/forward.rs`          | Local pass count, iteration, offset         | Immutable (`&`)  |
 | `LbEvalSpec`       | `cobre-sddp/src/lower_bound.rs`      | Template, noise scale, opening tree         | Immutable (`&`)  |
@@ -36,6 +36,44 @@ Available context structs:
 5. Is it backward-pass-specific? → `BackwardPassSpec`
 6. Is it lower-bound-specific? → `LbEvalSpec`
 7. Does none of the above fit? → Create a new spec struct. Do NOT add a bare parameter.
+
+---
+
+## StudySetup Sub-Structs (Epic 02)
+
+`StudySetup` owns all pre-computed study state. After Epic 02 decomposition it
+has **16 top-level fields**: 7 cohesive sub-structs + 9 bare residuals.
+Context constructors (`stage_ctx`, `training_ctx`, `simulation_ctx`) borrow
+directly from these sub-structs.
+
+### Cohesive sub-structs
+
+| Struct               | File                                         | Purpose                                                                  | Visibility     | Reuse/Projection        |
+| -------------------- | -------------------------------------------- | ------------------------------------------------------------------------ | -------------- | ----------------------- |
+| `StageData`          | `cobre-sddp/src/setup/stage_data.rs`         | All stage-indexed data: templates, indexer, stages, entity counts, blocks, lag transitions, noise groups, scaling report | `pub`          | New sub-struct          |
+| `ScenarioLibraries`  | `cobre-sddp/src/setup/scenario_library_set.rs` | Training + simulation `PhaseLibraries` pair; eliminates 14 flat `sim_`-prefixed fields | `pub`      | New sub-struct          |
+| `PhaseLibraries`     | `cobre-sddp/src/setup/scenario_library_set.rs` | Sampling schemes and optional libraries for one phase (training or simulation) | `pub`     | New sub-struct          |
+| `MethodologyConfig`  | `cobre-sddp/src/setup/methodology_config.rs` | `horizon` + `inflow_method` — stochastic numerical methodology parameters | `pub(crate)`   | New sub-struct          |
+| `LoopParams`         | `cobre-sddp/src/config.rs`                   | Five pure-data fields projected from `LoopConfig` (`seed`, `forward_passes`, `max_iterations`, `start_iteration`, `max_blocks`, `stopping_rules`); excludes `n_fwd_threads` (runtime-derived) | `pub` | Projection of `LoopConfig` |
+| `SimulationConfig`   | `cobre-sddp/src/simulation/config.rs`        | `n_scenarios`, `io_channel_capacity`, `basis_activity_window` — stored **verbatim** (literal reuse) | `pub` | Literal reuse           |
+| `CutManagementConfig` | `cobre-sddp/src/config.rs`                  | Cut selection, budget cap, activity tolerance, basis window, warm-start cuts, per-stage risk measures — stored **verbatim** (literal reuse) | `pub(crate)` | Literal reuse           |
+| `EventParams`        | `cobre-sddp/src/config.rs`                   | `export_states` flag (output-side only); runtime handles excluded        | `pub(crate)`   | Projection of `EventConfig` |
+
+### Literal-reuse vs projection distinction
+
+- **Literal reuse**: `SimulationConfig` and `CutManagementConfig` are stored on
+  `StudySetup` without modification. Access is `setup.simulation_config.field`
+  or `setup.cut_management.field`.
+- **Projection**: `LoopParams` drops `n_fwd_threads` from `LoopConfig` (runtime
+  arg). `EventParams` drops runtime handles from `EventConfig`. These are
+  data-only siblings of their config counterparts.
+
+### Accessor collapse (Epic 02 result)
+
+`StudySetup` shrank from 41 accessor methods to **8** after Epic 02:
+`replace_fcf`, `set_start_iteration`, `set_export_states`, `set_budget`,
+`simulation_config` (read), `stage_ctx`, `training_ctx`, `simulation_ctx`.
+All other access uses direct field paths (`setup.sub_struct.field`).
 
 ---
 

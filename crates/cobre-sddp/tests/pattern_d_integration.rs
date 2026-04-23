@@ -202,7 +202,7 @@ fn pattern_d_structural_properties_and_training() {
     let mut setup = build_setup(&case_dir, &config);
 
     // AC: noise_group_ids must return exactly 10 elements (one per study stage).
-    let groups = setup.noise_group_ids();
+    let groups = &setup.stage_data.noise_group_ids;
     assert_eq!(
         groups.len(),
         10,
@@ -304,7 +304,7 @@ fn pattern_d_structural_properties_and_training() {
     let mut pool = setup
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("D30: workspace pool must build");
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
 
     // Drain the channel in a background thread to avoid blocking simulate().

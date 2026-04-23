@@ -75,7 +75,7 @@ pub mod visited_states;
 pub mod workspace;
 
 pub use backward::{BackwardPassSpec, BackwardResult, run_backward_pass};
-pub use config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
+pub use config::{CutManagementConfig, EventConfig, LoopConfig, LoopParams, TrainingConfig};
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;
 pub use cut::{CutPool, FutureCostFunction, WARM_START_ITERATION};
@@ -116,8 +116,9 @@ pub use provenance::{ModelProvenanceReport, ProvenanceSource, build_provenance_r
 pub use risk_measure::{BackwardOutcome, RiskMeasure};
 pub use scaling_report::ScalingReport;
 pub use setup::{
-    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PrepareStochasticResult,
-    StudyParams, StudySetup, prepare_stochastic,
+    DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PhaseLibraries,
+    PrepareStochasticResult, ScenarioLibraries, StageData, StudyParams, StudySetup,
+    prepare_stochastic,
 };
 pub use simulation::{
     CategoryCostStats, EntityCounts, ScenarioCategoryCosts, SimulationBusResult, SimulationConfig,

@@ -490,7 +490,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
     // Verify that phase 1 generated at least some cuts (otherwise the test
     // is degenerate and cannot exercise the full-churn path).
     let cuts_after_iter1: Vec<usize> = setup
-        .fcf()
+        .fcf
         .pools
         .iter()
         .map(cobre_sddp::CutPool::active_count)
@@ -504,7 +504,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
 
     // --- Direct pool mutation: deactivate ALL cuts in every stage pool ---
     {
-        let fcf = setup.fcf_mut();
+        let fcf = &mut setup.fcf;
         for (stage, pool) in fcf.pools.iter_mut().enumerate() {
             let active_indices: Vec<u32> = (0..pool.populated_count)
                 .filter(|&i| pool.active[i])
@@ -559,10 +559,10 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
         // Transplant the deactivated FCF from phase 1.
         // Read the metadata we need to construct the placeholder FCF before
         // taking the mutable borrow, to satisfy the borrow checker.
-        let n_stages = setup.fcf().pools.len();
-        let state_dim = setup.fcf().state_dimension;
-        let fwd_passes = setup.forward_passes();
-        let max_iters = setup.max_iterations();
+        let n_stages = setup.fcf.pools.len();
+        let state_dim = setup.fcf.state_dimension;
+        let fwd_passes = setup.loop_params.forward_passes;
+        let max_iters = setup.loop_params.max_iterations;
         let placeholder_fcf = cobre_sddp::FutureCostFunction::new(
             n_stages,
             state_dim,
@@ -570,7 +570,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
             max_iters,
             &vec![0u32; n_stages],
         );
-        let deactivated_fcf = std::mem::replace(setup.fcf_mut(), placeholder_fcf);
+        let deactivated_fcf = std::mem::replace(&mut setup.fcf, placeholder_fcf);
         setup2.replace_fcf(deactivated_fcf);
         setup2.set_start_iteration(1);
 
@@ -729,7 +729,7 @@ fn simulate_baked_path_zero_consistency_failures() {
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
 
     // Drain simulation results on a background thread to avoid channel backpressure.

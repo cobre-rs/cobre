@@ -92,7 +92,7 @@ fn write_test_checkpoint(
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
         build_stage_cuts_payloads, convert_basis_cache,
     };
-    let fcf = setup.fcf();
+    let fcf = &setup.fcf;
     let stage_records = build_stage_cut_records(fcf);
     let stage_active_indices = build_active_indices(&stage_records);
     let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
@@ -107,8 +107,8 @@ fn write_test_checkpoint(
         best_upper_bound: Some(result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: fcf.pools.len() as u32,
-        max_iterations: setup.max_iterations() as u32,
-        forward_passes: setup.forward_passes(),
+        max_iterations: setup.loop_params.max_iterations as u32,
+        forward_passes: setup.loop_params.forward_passes,
         warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
         warm_start_counts,
         rng_seed: seed,
@@ -159,7 +159,7 @@ fn boundary_cuts_improve_terminal_stage_objective() {
     let source_policy_dir = tmpdir.path().join("source_policy");
     write_test_checkpoint(&source_policy_dir, &setup_a, &outcome_a.result, 42);
 
-    let num_stages = setup_a.fcf().pools.len();
+    let num_stages = setup_a.fcf.pools.len();
     let source_stage = (num_stages - 2) as u32; // second-to-last stage has backward-pass cuts
 
     // --- Run B: consumer WITHOUT boundary cuts (baseline) ---
@@ -173,7 +173,7 @@ fn boundary_cuts_improve_terminal_stage_objective() {
 
     // --- Run C: consumer WITH boundary cuts ---
     let mut setup_c = build_setup(&case_dir, &config_5iter);
-    let state_dim = setup_c.fcf().state_dimension as u32;
+    let state_dim = setup_c.fcf.state_dimension as u32;
     let boundary_records =
         cobre_sddp::load_boundary_cuts(&source_policy_dir, source_stage, state_dim)
             .expect("load_boundary_cuts");
@@ -184,7 +184,7 @@ fn boundary_cuts_improve_terminal_stage_objective() {
     cobre_sddp::inject_boundary_cuts(&mut setup_c, &boundary_records);
 
     // Verify structural properties after injection.
-    let terminal_pool = &setup_c.fcf().pools[num_stages - 1];
+    let terminal_pool = &setup_c.fcf.pools[num_stages - 1];
     assert!(
         terminal_pool.warm_start_count > 0,
         "terminal pool must have boundary cuts"

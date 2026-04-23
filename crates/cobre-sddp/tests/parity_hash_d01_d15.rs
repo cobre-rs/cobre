@@ -162,7 +162,7 @@ fn compute_parity_hash(
     // Section 2: Active cuts per stage (ascending stage order, then slot
     //            order within each stage as reported by active_cuts())
     // ------------------------------------------------------------------
-    let fcf = setup.fcf();
+    let fcf = &setup.fcf;
     let num_stages = fcf.pools.len();
     for stage in 0..num_stages {
         for (_slot, intercept, coefficients) in fcf.active_cuts(stage) {
@@ -370,7 +370,7 @@ fn run_case(label: &str) {
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
@@ -389,7 +389,7 @@ fn run_case(label: &str) {
     let scenario_results = drain_handle.join().expect("drain thread must not panic");
 
     let sim_config = setup.simulation_config();
-    let _summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+    let _summary = aggregate_simulation(&local_costs.costs, sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     // Compute parity hash and compare/write baseline.

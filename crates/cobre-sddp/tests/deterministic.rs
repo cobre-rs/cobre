@@ -193,7 +193,7 @@ fn run_with_simulation(
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
 
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
@@ -213,7 +213,7 @@ fn run_with_simulation(
     let scenario_results = drain_handle.join().expect("drain thread must not panic");
 
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     (result, scenario_results, summary)
@@ -1022,7 +1022,7 @@ fn d12_checkpoint_round_trip() {
     let policy_dir = tmp.path().join("policy");
 
     // Access the FCF pools to construct StageCutsPayload references.
-    let fcf = setup.fcf();
+    let fcf = &setup.fcf;
 
     let cut_records_per_stage: Vec<Vec<PolicyCutRecord<'_>>> = fcf
         .pools
@@ -1132,7 +1132,7 @@ fn d12_checkpoint_round_trip() {
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
 
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
@@ -1154,7 +1154,7 @@ fn d12_checkpoint_round_trip() {
     // ── Step 9: compute mean simulation cost and compare to training LB ───────
 
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     assert_eq!(
@@ -2828,7 +2828,7 @@ fn d29_pattern_c_weekly_par() {
         StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
 
     // AC: All 4 weekly stages in January 2024 must share the same noise group ID.
-    let groups = setup.noise_group_ids();
+    let groups = &setup.stage_data.noise_group_ids;
     assert_eq!(groups.len(), 4, "expected 4 study stages");
     assert!(
         groups.iter().all(|&g| g == groups[0]),
@@ -2864,7 +2864,7 @@ fn d29_pattern_c_weekly_par() {
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity);
 
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
@@ -3025,7 +3025,7 @@ fn baked_vs_fallback_simulation_costs_are_identical() {
         .expect("simulation workspace pool must build");
 
     // ── Baked path ────────────────────────────────────────────────────────────
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (tx_baked, rx_baked) = mpsc::sync_channel(io_capacity);
     let drain_baked = std::thread::spawn(move || rx_baked.into_iter().collect::<Vec<_>>());
 

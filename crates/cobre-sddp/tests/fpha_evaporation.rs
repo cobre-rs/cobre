@@ -150,7 +150,7 @@ fn fpha_evaporation_case_converges() {
 
     // Acceptance criterion: templates for all 12 study stages.
     assert_eq!(
-        setup.stage_templates().len(),
+        setup.stage_data.stage_templates.templates.len(),
         12,
         "study setup must have 12 stage templates"
     );
@@ -177,7 +177,7 @@ fn fpha_evaporation_case_converges() {
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("simulation workspace pool must build");
 
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
 
     // Drain thread collects all SimulationScenarioResult items from the channel.
@@ -200,7 +200,7 @@ fn fpha_evaporation_case_converges() {
 
     // Aggregate to obtain SimulationSummary.
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, sim_config, &comm)
         .expect("aggregate_simulation must succeed");
 
     // Acceptance criterion: n_scenarios == 100 and mean_cost > 0.

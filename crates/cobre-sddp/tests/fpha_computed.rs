@@ -350,7 +350,7 @@ fn fpha_computed_case_converges() {
     let mut setup =
         StudySetup::new(&system, &config, stochastic, hydro_models).expect("StudySetup must build");
     assert_eq!(
-        setup.stage_templates().len(),
+        setup.stage_data.stage_templates.templates.len(),
         12,
         "must have 12 study stages"
     );
@@ -369,7 +369,7 @@ fn fpha_computed_case_converges() {
     let mut pool = setup
         .create_workspace_pool(&comm, 1, HighsSolver::new)
         .expect("workspace pool must build");
-    let io_capacity = setup.io_channel_capacity().max(1);
+    let io_capacity = setup.simulation_config.io_channel_capacity.max(1);
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(io_capacity);
     let drain_handle = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
     let local_costs = setup
@@ -386,7 +386,7 @@ fn fpha_computed_case_converges() {
     drop(drain_handle.join().expect("drain thread must not panic"));
 
     let sim_config = setup.simulation_config();
-    let summary = aggregate_simulation(&local_costs.costs, &sim_config, &comm)
+    let summary = aggregate_simulation(&local_costs.costs, sim_config, &comm)
         .expect("aggregate_simulation must succeed");
     assert_eq!(summary.n_scenarios, 100, "must simulate 100 scenarios");
     assert!(summary.mean_cost > 0.0, "mean cost must be positive");

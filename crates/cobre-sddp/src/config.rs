@@ -52,14 +52,47 @@
 //! assert_eq!(config.events.checkpoint_interval, Some(50));
 //! ```
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use cobre_core::TrainingEvent;
 
 use crate::cut_selection::CutSelectionStrategy;
 use crate::risk_measure::RiskMeasure;
 use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
+
+/// Pure-data iteration parameters stored on [`crate::setup::StudySetup`].
+///
+/// Projected subset of [`LoopConfig`] containing only the fields that are
+/// stable across training invocations. `n_fwd_threads` is excluded because
+/// it is derived at runtime from the `--threads` CLI flag and varies between
+/// invocations; it is supplied as a per-call argument to
+/// [`crate::setup::StudySetup::train`].
+///
+/// `max_blocks` is included here (not in `StageData`) because it is consumed
+/// by [`LoopConfig`] for LP buffer pre-sizing during training, making it
+/// semantically part of iteration configuration.
+///
+/// # Construction
+///
+/// Explicit construction only — no `Default` impl, to prevent silent
+/// misconfiguration.
+#[derive(Debug)]
+pub struct LoopParams {
+    /// Random seed for forward-pass stochastic trajectory generation.
+    pub seed: u64,
+    /// Number of forward-pass trajectories per training iteration.
+    pub forward_passes: u32,
+    /// Maximum iteration budget (also used for FCF cut-pool pre-sizing).
+    pub max_iterations: u64,
+    /// Starting iteration offset for resumed training runs.
+    pub(crate) start_iteration: u64,
+    /// Maximum number of demand blocks across all stages, used for
+    /// LP column pre-sizing and workspace buffer allocation.
+    pub(crate) max_blocks: usize,
+    /// Stopping rules controlling convergence.
+    pub(crate) stopping_rules: StoppingRuleSet,
+}
 
 /// Controls the iteration loop and convergence.
 ///
@@ -255,6 +288,25 @@ pub struct EventConfig {
     /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
     /// Default: `false`.
     pub export_states: bool,
+}
+
+/// Pure-data event parameters stored on [`crate::setup::StudySetup`].
+///
+/// Projected subset of [`EventConfig`] containing only the fields that are
+/// stable across training invocations and safe to persist on the setup struct.
+/// The following fields from [`EventConfig`] are deliberately excluded:
+///
+/// - `event_sender` — runtime handle; ownership transferred per training call.
+/// - `shutdown_flag` — runtime handle; varies per invocation.
+/// - `checkpoint_interval` — not yet wired into the setup layer; deferred.
+#[derive(Debug)]
+pub(crate) struct EventParams {
+    /// Whether to allocate the visited-states archive for state export.
+    ///
+    /// When `true`, the archive is allocated so forward-pass trial points are
+    /// recorded for checkpoint persistence. When `false`, the archive is only
+    /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
+    pub(crate) export_states: bool,
 }
 
 /// Parameters controlling the SDDP training loop.

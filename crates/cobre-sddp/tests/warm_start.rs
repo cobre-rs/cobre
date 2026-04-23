@@ -93,7 +93,7 @@ fn write_test_checkpoint(
         build_active_indices, build_stage_basis_records, build_stage_cut_records,
         build_stage_cuts_payloads, convert_basis_cache,
     };
-    let fcf = setup.fcf();
+    let fcf = &setup.fcf;
     let stage_records = build_stage_cut_records(fcf);
     let stage_active_indices = build_active_indices(&stage_records);
     let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
@@ -108,8 +108,8 @@ fn write_test_checkpoint(
         best_upper_bound: Some(result.final_ub),
         state_dimension: fcf.state_dimension as u32,
         num_stages: fcf.pools.len() as u32,
-        max_iterations: setup.max_iterations() as u32,
-        forward_passes: setup.forward_passes(),
+        max_iterations: setup.loop_params.max_iterations as u32,
+        forward_passes: setup.loop_params.forward_passes,
         warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
         warm_start_counts,
         rng_seed: seed,
@@ -171,8 +171,8 @@ fn resume_training_from_checkpoint() {
     // set the start iteration so the training loop begins at iteration 6.
     let warm_fcf = FutureCostFunction::new_with_warm_start(
         &checkpoint.stage_cuts,
-        setup_phase2.forward_passes(),
-        setup_phase2.max_iterations().saturating_add(1),
+        setup_phase2.loop_params.forward_passes,
+        setup_phase2.loop_params.max_iterations.saturating_add(1),
     )
     .expect("warm-start FCF");
     setup_phase2.replace_fcf(warm_fcf);
@@ -218,7 +218,7 @@ fn warm_start_training_preserves_cuts_and_trains_further() {
     assert!(fresh_outcome.error.is_none());
     let fresh_result = fresh_outcome.result;
     let fresh_lb = fresh_result.final_lb;
-    let fresh_active = setup_fresh.fcf().total_active_cuts();
+    let fresh_active = setup_fresh.fcf.total_active_cuts();
 
     // Write policy checkpoint.
     let tmpdir = tempfile::tempdir().expect("tempdir");
@@ -234,17 +234,17 @@ fn warm_start_training_preserves_cuts_and_trains_further() {
     // in from_broadcast_params (which does saturating_add(1)).
     let warm_fcf = FutureCostFunction::new_with_warm_start(
         &checkpoint.stage_cuts,
-        setup_warm.forward_passes(),
-        setup_warm.max_iterations().saturating_add(1),
+        setup_warm.loop_params.forward_passes,
+        setup_warm.loop_params.max_iterations.saturating_add(1),
     )
     .expect("warm-start FCF");
     setup_warm.replace_fcf(warm_fcf);
 
     // Verify warm-start state before training.
-    let warm_start_count = setup_warm.fcf().pools[0].warm_start_count;
+    let warm_start_count = setup_warm.fcf.pools[0].warm_start_count;
     assert!(warm_start_count > 0, "warm_start_count should be > 0");
     assert_eq!(
-        setup_warm.fcf().total_active_cuts(),
+        setup_warm.fcf.total_active_cuts(),
         fresh_active,
         "warm-start FCF should have same active cuts as fresh training"
     );
@@ -267,7 +267,7 @@ fn warm_start_training_preserves_cuts_and_trains_further() {
     );
 
     // Verify total cuts = warm_start_count + new training cuts.
-    let total_active_after = setup_warm.fcf().total_active_cuts();
+    let total_active_after = setup_warm.fcf.total_active_cuts();
     assert!(
         total_active_after > fresh_active,
         "warm-start training should produce more total cuts"

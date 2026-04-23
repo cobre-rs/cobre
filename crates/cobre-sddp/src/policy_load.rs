@@ -181,7 +181,7 @@ pub fn inject_boundary_cuts(
     setup: &mut StudySetup,
     boundary_records: &[cobre_io::OwnedPolicyCutRecord],
 ) {
-    let fcf = setup.fcf_mut();
+    let fcf = &mut setup.fcf;
     let terminal_idx = fcf.pools.len() - 1;
     let state_dimension = fcf.state_dimension;
     let forward_passes = fcf.forward_passes;

@@ -276,7 +276,7 @@ mod tests {
             SolverStatsRow {
                 iteration: 1,
                 phase: "forward".to_string(),
-                stage: 0, // ticket-011a: forward rows use real stage index, not -1
+                stage: 0,
                 opening: None,
                 rank: None,
                 worker_id: None,
@@ -409,7 +409,7 @@ mod tests {
             SolverStatsRow {
                 iteration: 1,
                 phase: "forward".to_string(),
-                stage: 0, // ticket-011a: forward rows use real stage index, not -1
+                stage: 0,
                 opening: None,
                 rank: None,
                 worker_id: None,

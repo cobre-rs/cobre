@@ -849,9 +849,8 @@ mod tests {
         );
     }
 
-    /// Filling storage value below dead volume is valid (ticket note: that is the
-    /// point of filling hydros). Only non-negativity is checked here; bounds
-    /// against dead volume are deferred to Layer 3.
+    /// Filling storage value below dead volume is valid . Only non-negativity is
+    /// checked here; bounds against dead volume are deferred to Layer 3.
     #[test]
     fn test_filling_storage_below_dead_volume_is_valid() {
         let json = r#"{

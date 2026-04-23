@@ -294,7 +294,7 @@ mod tests {
 
     // ── Tests ─────────────────────────────────────────────────────────────────
 
-    /// AC-4 (ticket): Valid 1 entry with 3 block factors.
+    /// Valid 1 entry with 3 block factors.
     #[test]
     fn test_parse_valid_single_entry_three_block_factors() {
         let f = write_json(VALID_JSON);

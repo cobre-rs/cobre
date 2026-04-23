@@ -149,6 +149,10 @@ struct RunContext<C: Communicator> {
     term_width: u16,
     /// Terminal handle for stderr output.
     stderr: Term,
+    /// Rendering strategy for progress events — chosen once at startup
+    /// from stderr's TTY status so non-TTY streams (mpirun pipes, log
+    /// files, CI) get append-only lines instead of cursor-driven bars.
+    render_mode: crate::progress::RenderMode,
     /// Execution topology gathered during communicator setup.
     topology: ExecutionTopology,
     /// Solver version string (e.g. `"1.8.0"`).
@@ -550,6 +554,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         .clone()
         .unwrap_or_else(|| args.case_dir.join("output"));
     let term_width = crate::progress::resolve_term_width();
+    let render_mode = crate::progress::RenderMode::auto();
 
     Ok(RunContext {
         comm,
@@ -559,6 +564,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         output_dir,
         term_width,
         stderr,
+        render_mode,
         topology,
         solver_version,
     })
@@ -917,6 +923,7 @@ fn run_training_phase(
         quiet_rx = None;
         Some(crate::progress::run_progress_thread(
             event_rx,
+            ctx.render_mode,
             setup.max_iterations(),
             ctx.term_width,
         ))
@@ -1113,6 +1120,7 @@ fn run_simulation_phase(
     } else {
         Some(crate::progress::run_progress_thread(
             sim_event_rx,
+            ctx.render_mode,
             u64::from(n_scenarios),
             ctx.term_width,
         ))

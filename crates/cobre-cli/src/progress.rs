@@ -1,29 +1,30 @@
-//! Progress bar rendering for training and simulation phases.
+//! Progress reporting for training and simulation phases.
 //!
-//! This module provides [`run_progress_thread`], which spawns a background thread
-//! that consumes [`TrainingEvent`] values from an `mpsc::Receiver`, drives
-//! [`indicatif::ProgressBar`] instances on stderr, and returns all collected events
-//! when the sender disconnects.
+//! [`run_progress_thread`] spawns a background thread that consumes
+//! [`TrainingEvent`] values from an `mpsc::Receiver` and reports progress
+//! through one of two [`RenderMode`] strategies:
 //!
-//! ## Design
+//! - [`RenderMode::Interactive`] — live-redrawn [`indicatif`] progress bars,
+//!   appropriate when stderr is a user-attended terminal.
+//! - [`RenderMode::Log`] — plain append-only log lines, appropriate for
+//!   non-TTY streams (pipes, log files, `mpirun` aggregators, CI). Bars
+//!   would otherwise degrade into streams of ANSI cursor escapes and
+//!   appear as duplicated lines in captured output.
 //!
-//! Training and simulation phases are sequential: the training bar is active during
-//! the training loop, the simulation bar during policy evaluation. Because only one
-//! bar is active at a time, [`indicatif::MultiProgress`] is not needed.
-//!
-//! The collected events are returned via [`ProgressHandle::join`] so the caller can
-//! pass them directly to the output pipeline without maintaining a separate consumer.
+//! Both strategies collect every received event verbatim and return the full
+//! sequence via [`ProgressHandle::join`], so the caller can feed the events
+//! into the output pipeline regardless of which strategy was used.
 //!
 //! ## Example
 //!
 //! ```rust,no_run
 //! use std::sync::mpsc;
 //! use cobre_core::TrainingEvent;
-//! use cobre_cli::progress::run_progress_thread;
+//! use cobre_cli::progress::{run_progress_thread, RenderMode};
 //!
 //! let (tx, rx) = mpsc::channel::<TrainingEvent>();
-//! let handle = run_progress_thread(rx, 100);
-//! drop(tx); // sender disconnects — thread exits
+//! let handle = run_progress_thread(rx, RenderMode::auto(), 100, 120);
+//! drop(tx);
 //! let events = handle.join();
 //! assert!(events.is_empty());
 //! ```
@@ -53,6 +54,39 @@ fn fmt_sci(v: f64) -> String {
     raw
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Rendering strategy for progress events.
+///
+/// Chosen once per run based on whether stderr is user-attended.
+#[derive(Debug, Clone, Copy)]
+pub enum RenderMode {
+    /// Live-redrawn [`indicatif`] bars. Correct when stderr is a TTY.
+    Interactive,
+    /// Plain append-only log lines. Correct for pipes, files, or
+    /// `mpirun` aggregators, where ANSI cursor escapes cannot be
+    /// interpreted live and would appear as duplicated output otherwise.
+    Log,
+}
+
+impl RenderMode {
+    /// Pick the mode from stderr's TTY status.
+    ///
+    /// [`RenderMode::Interactive`] when stderr is a terminal, otherwise
+    /// [`RenderMode::Log`].
+    #[must_use]
+    pub fn auto() -> Self {
+        if Term::stderr().is_term() {
+            Self::Interactive
+        } else {
+            Self::Log
+        }
+    }
+}
+
+/// Handle returned by [`run_progress_thread`].
 pub struct ProgressHandle {
     handle: thread::JoinHandle<Vec<TrainingEvent>>,
 }
@@ -60,25 +94,108 @@ pub struct ProgressHandle {
 impl ProgressHandle {
     /// Wait for the progress thread to finish and return all collected events.
     ///
-    /// The events are returned in the order they were received. The caller is
-    /// expected to pass them to the output pipeline (e.g., `build_training_output`).
+    /// Events are returned in receive order. The caller is expected to pass
+    /// them to the output pipeline (e.g., `build_training_output`).
     ///
     /// # Panics
     ///
-    /// Propagates a panic from the progress thread. If the thread panicked, this
-    /// method panics with the message `"progress thread panicked"`.
+    /// Propagates a panic from the progress thread. If the thread panicked,
+    /// this method panics with the message `"progress thread panicked"`.
     #[allow(clippy::expect_used)]
     pub fn join(self) -> Vec<TrainingEvent> {
-        // Intentional: a panic in the progress thread is a programming error,
-        // not a recoverable condition.
         self.handle.join().expect("progress thread panicked")
     }
 }
 
-/// Terminal wrapper that overrides the width reported to `indicatif`.
+/// Spawn a background thread that consumes events and renders progress
+/// according to `mode`.
 ///
-/// Under MPI, stderr is a non-TTY pipe, causing `indicatif`'s cursor math to
-/// overshoot. This wrapper preserves the real terminal width.
+/// `max_iterations` is used to size the training bar and to render the
+/// `iter/max` ratio in log lines. `term_width` is consulted only in
+/// [`RenderMode::Interactive`].
+pub fn run_progress_thread(
+    receiver: mpsc::Receiver<TrainingEvent>,
+    mode: RenderMode,
+    max_iterations: u64,
+    term_width: u16,
+) -> ProgressHandle {
+    let handle = thread::spawn(move || {
+        let mut renderer = ProgressRenderer::new(mode, max_iterations, term_width);
+        let mut events: Vec<TrainingEvent> = Vec::new();
+        for event in &receiver {
+            renderer.handle(&event);
+            events.push(event);
+        }
+        renderer.finish();
+        events
+    });
+    ProgressHandle { handle }
+}
+
+/// Resolve the terminal width for progress bar rendering.
+///
+/// Tries: `Term::stderr()` detection, `$COLUMNS` environment variable, then 120.
+pub fn resolve_term_width() -> u16 {
+    let term = Term::stderr();
+    if let Some((_, w)) = term.size_checked() {
+        return w;
+    }
+    if let Ok(val) = std::env::var("COLUMNS") {
+        if let Ok(w) = val.parse::<u16>() {
+            if w > 0 {
+                return w;
+            }
+        }
+    }
+    120
+}
+
+// ---------------------------------------------------------------------------
+// Internal dispatcher
+// ---------------------------------------------------------------------------
+
+/// Enum-dispatched renderer. Keeps the event loop in [`run_progress_thread`]
+/// free of dynamic dispatch while still letting each mode own its state.
+enum ProgressRenderer {
+    Interactive(BarRenderer),
+    Log(LineRenderer),
+}
+
+impl ProgressRenderer {
+    fn new(mode: RenderMode, max_iterations: u64, term_width: u16) -> Self {
+        match mode {
+            RenderMode::Interactive => {
+                Self::Interactive(BarRenderer::new(max_iterations, term_width))
+            }
+            RenderMode::Log => Self::Log(LineRenderer::new(max_iterations)),
+        }
+    }
+
+    fn handle(&mut self, event: &TrainingEvent) {
+        match self {
+            Self::Interactive(r) => r.handle(event),
+            Self::Log(r) => r.handle(event),
+        }
+    }
+
+    /// Flush any transient state when the event channel closes.
+    fn finish(&mut self) {
+        match self {
+            Self::Interactive(r) => r.finish(),
+            // Log mode keeps no transient state.
+            Self::Log(_) => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bar renderer (TTY)
+// ---------------------------------------------------------------------------
+
+/// [`TermLike`] wrapper that overrides the width reported to `indicatif`.
+///
+/// Under `mpirun`, stderr may not carry a width even when the end terminal
+/// is a TTY. This wrapper forwards every other operation to the real `Term`.
 #[derive(Debug)]
 struct MpiTerm {
     inner: Term,
@@ -123,150 +240,133 @@ impl TermLike for MpiTerm {
     }
 }
 
-/// Resolve the terminal width for progress bar rendering.
-///
-/// Tries: `Term::stderr()` detection, `$COLUMNS` environment variable, then 120.
-pub fn resolve_term_width() -> u16 {
-    let term = Term::stderr();
-    if let Some((_, w)) = term.size_checked() {
-        return w;
-    }
-    if let Ok(val) = std::env::var("COLUMNS") {
-        if let Ok(w) = val.parse::<u16>() {
-            if w > 0 {
-                return w;
-            }
-        }
-    }
-    120
-}
-
-/// Spawn a background thread that renders progress bars and collects events.
-#[allow(clippy::too_many_lines)]
-pub fn run_progress_thread(
-    receiver: mpsc::Receiver<TrainingEvent>,
+/// Drives [`indicatif`] progress bars on a user-attended terminal.
+struct BarRenderer {
     max_iterations: u64,
     term_width: u16,
-) -> ProgressHandle {
-    let handle = thread::spawn(move || {
-        let mut events: Vec<TrainingEvent> = Vec::new();
-        let mut training_bar: Option<ProgressBar> = None;
-        let mut simulation_bar: Option<ProgressBar> = None;
-        let mut sim_solve_time_ms: f64 = 0.0;
-        let mut sim_lp_count: u64 = 0;
-        loop {
-            if let Ok(event) = receiver.recv() {
-                events.push(event.clone());
-                match event {
-                    TrainingEvent::IterationSummary {
-                        iteration,
-                        lower_bound,
-                        upper_bound,
-                        gap,
-                        lp_solves,
-                        solve_time_ms,
-                        ..
-                    } => {
-                        let bar = training_bar
-                            .get_or_insert_with(|| create_training_bar(max_iterations, term_width));
-                        let gap_pct = gap * 100.0;
-                        bar.set_position(iteration);
-                        #[allow(clippy::cast_precision_loss)]
-                        let avg_lp = if lp_solves > 0 {
-                            format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
-                        } else {
-                            "LP: --".to_string()
-                        };
-                        bar.set_message(format!(
-                            "LB: {}  UB: {}  gap: {gap_pct:.1}%  {avg_lp}",
-                            fmt_sci(lower_bound),
-                            fmt_sci(upper_bound)
-                        ));
-                    }
+    training_bar: Option<ProgressBar>,
+    simulation_bar: Option<ProgressBar>,
+    sim_solve_time_ms: f64,
+    sim_lp_count: u64,
+}
 
-                    TrainingEvent::TrainingFinished {
-                        iterations,
-                        final_lb,
-                        final_ub,
-                        ..
-                    } => {
-                        if let Some(bar) = training_bar.take() {
-                            bar.set_position(iterations);
-                            bar.finish_with_message(format!(
-                                "LB: {}  UB: {}  done",
-                                fmt_sci(final_lb),
-                                fmt_sci(final_ub)
-                            ));
-                            // Force a newline after the finished bar so the
-                            // summary printed by the main thread starts on
-                            // a fresh line.
-                            let _ = Term::stderr().write_line("");
-                        }
-                    }
-
-                    TrainingEvent::SimulationProgress {
-                        scenarios_complete,
-                        scenarios_total,
-                        solve_time_ms,
-                        lp_solves,
-                        ..
-                    } => {
-                        let bar = simulation_bar.get_or_insert_with(|| {
-                            create_simulation_bar(u64::from(scenarios_total), term_width)
-                        });
-                        bar.set_position(u64::from(scenarios_complete));
-                        sim_solve_time_ms += solve_time_ms;
-                        sim_lp_count += lp_solves;
-                        #[allow(clippy::cast_precision_loss)]
-                        let msg = if sim_lp_count > 0 {
-                            format!("LP: {:.1}ms avg", sim_solve_time_ms / sim_lp_count as f64)
-                        } else {
-                            String::new()
-                        };
-                        bar.set_message(msg);
-                    }
-
-                    TrainingEvent::SimulationFinished { scenarios, .. } => {
-                        if let Some(bar) = simulation_bar.take() {
-                            bar.set_position(u64::from(scenarios));
-                            bar.finish_with_message("done");
-                            let _ = Term::stderr().write_line("");
-                        }
-                    }
-
-                    TrainingEvent::TrainingStarted { .. } => {
-                        let bar = training_bar
-                            .get_or_insert_with(|| create_training_bar(max_iterations, term_width));
-                        bar.set_position(0);
-                        bar.set_message("starting...");
-                    }
-
-                    TrainingEvent::ForwardPassComplete { .. }
-                    | TrainingEvent::ForwardSyncComplete { .. }
-                    | TrainingEvent::BackwardPassComplete { .. }
-                    | TrainingEvent::CutSyncComplete { .. }
-                    | TrainingEvent::CutSelectionComplete { .. }
-                    | TrainingEvent::BudgetEnforcementComplete { .. }
-                    | TrainingEvent::TemplateBakeComplete { .. }
-                    | TrainingEvent::ConvergenceUpdate { .. }
-                    | TrainingEvent::CheckpointComplete { .. }
-                    | TrainingEvent::WorkerTiming { .. } => {}
-                }
-            } else {
-                if let Some(bar) = training_bar.take() {
-                    bar.abandon();
-                }
-                if let Some(bar) = simulation_bar.take() {
-                    bar.abandon();
-                }
-                break;
-            }
+impl BarRenderer {
+    fn new(max_iterations: u64, term_width: u16) -> Self {
+        Self {
+            max_iterations,
+            term_width,
+            training_bar: None,
+            simulation_bar: None,
+            sim_solve_time_ms: 0.0,
+            sim_lp_count: 0,
         }
+    }
 
-        events
-    });
+    fn handle(&mut self, event: &TrainingEvent) {
+        match *event {
+            TrainingEvent::TrainingStarted { .. } => {
+                let bar = self.training_bar.get_or_insert_with(|| {
+                    create_training_bar(self.max_iterations, self.term_width)
+                });
+                bar.set_position(0);
+                bar.set_message("starting...");
+            }
+            TrainingEvent::IterationSummary {
+                iteration,
+                lower_bound,
+                upper_bound,
+                gap,
+                lp_solves,
+                solve_time_ms,
+                ..
+            } => {
+                let bar = self.training_bar.get_or_insert_with(|| {
+                    create_training_bar(self.max_iterations, self.term_width)
+                });
+                let gap_pct = gap * 100.0;
+                bar.set_position(iteration);
+                #[allow(clippy::cast_precision_loss)]
+                let avg_lp = if lp_solves > 0 {
+                    format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
+                } else {
+                    "LP: --".to_string()
+                };
+                bar.set_message(format!(
+                    "LB: {}  UB: {}  gap: {gap_pct:.1}%  {avg_lp}",
+                    fmt_sci(lower_bound),
+                    fmt_sci(upper_bound)
+                ));
+            }
+            TrainingEvent::TrainingFinished {
+                iterations,
+                final_lb,
+                final_ub,
+                ..
+            } => {
+                if let Some(bar) = self.training_bar.take() {
+                    bar.set_position(iterations);
+                    bar.finish_with_message(format!(
+                        "LB: {}  UB: {}  done",
+                        fmt_sci(final_lb),
+                        fmt_sci(final_ub)
+                    ));
+                    // Force a newline after the finished bar so the summary
+                    // printed by the main thread starts on a fresh line.
+                    let _ = Term::stderr().write_line("");
+                }
+            }
+            TrainingEvent::SimulationProgress {
+                scenarios_complete,
+                scenarios_total,
+                solve_time_ms,
+                lp_solves,
+                ..
+            } => {
+                let bar = self.simulation_bar.get_or_insert_with(|| {
+                    create_simulation_bar(u64::from(scenarios_total), self.term_width)
+                });
+                bar.set_position(u64::from(scenarios_complete));
+                self.sim_solve_time_ms += solve_time_ms;
+                self.sim_lp_count += lp_solves;
+                #[allow(clippy::cast_precision_loss)]
+                let msg = if self.sim_lp_count > 0 {
+                    format!(
+                        "LP: {:.1}ms avg",
+                        self.sim_solve_time_ms / self.sim_lp_count as f64
+                    )
+                } else {
+                    String::new()
+                };
+                bar.set_message(msg);
+            }
+            TrainingEvent::SimulationFinished { scenarios, .. } => {
+                if let Some(bar) = self.simulation_bar.take() {
+                    bar.set_position(u64::from(scenarios));
+                    bar.finish_with_message("done");
+                    let _ = Term::stderr().write_line("");
+                }
+            }
+            TrainingEvent::ForwardPassComplete { .. }
+            | TrainingEvent::ForwardSyncComplete { .. }
+            | TrainingEvent::BackwardPassComplete { .. }
+            | TrainingEvent::CutSyncComplete { .. }
+            | TrainingEvent::CutSelectionComplete { .. }
+            | TrainingEvent::BudgetEnforcementComplete { .. }
+            | TrainingEvent::TemplateBakeComplete { .. }
+            | TrainingEvent::ConvergenceUpdate { .. }
+            | TrainingEvent::CheckpointComplete { .. }
+            | TrainingEvent::WorkerTiming { .. } => {}
+        }
+    }
 
-    ProgressHandle { handle }
+    fn finish(&mut self) {
+        if let Some(bar) = self.training_bar.take() {
+            bar.abandon();
+        }
+        if let Some(bar) = self.simulation_bar.take() {
+            bar.abandon();
+        }
+    }
 }
 
 fn create_training_bar(max_iterations: u64, term_width: u16) -> ProgressBar {
@@ -299,13 +399,113 @@ fn create_simulation_bar(scenarios_total: u64, term_width: u16) -> ProgressBar {
     bar
 }
 
+// ---------------------------------------------------------------------------
+// Line renderer (non-TTY)
+// ---------------------------------------------------------------------------
+
+/// Emits one compact append-only line per training iteration and per
+/// simulation-progress event.
+///
+/// Output format mirrors the message portion of the interactive bars so
+/// monitoring workflows (`tail -f`, log scraping) see the same fields.
+/// Final training/simulation summaries are printed by the main thread, so
+/// `TrainingFinished` / `SimulationFinished` produce no output here.
+///
+/// Write errors are silently ignored, matching the fire-and-forget style of
+/// the banner and the bar renderer's trailing newlines.
+struct LineRenderer {
+    stderr: Term,
+    max_iterations: u64,
+    sim_solve_time_ms: f64,
+    sim_lp_count: u64,
+}
+
+impl LineRenderer {
+    fn new(max_iterations: u64) -> Self {
+        Self {
+            stderr: Term::stderr(),
+            max_iterations,
+            sim_solve_time_ms: 0.0,
+            sim_lp_count: 0,
+        }
+    }
+
+    fn handle(&mut self, event: &TrainingEvent) {
+        match *event {
+            TrainingEvent::TrainingStarted { .. } => {
+                let _ = self.stderr.write_line(&format!(
+                    "Training   starting... (max {} iterations)",
+                    self.max_iterations
+                ));
+            }
+            TrainingEvent::IterationSummary {
+                iteration,
+                lower_bound,
+                upper_bound,
+                gap,
+                lp_solves,
+                solve_time_ms,
+                ..
+            } => {
+                let gap_pct = gap * 100.0;
+                #[allow(clippy::cast_precision_loss)]
+                let avg_lp = if lp_solves > 0 {
+                    format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
+                } else {
+                    "LP: --".to_string()
+                };
+                let _ = self.stderr.write_line(&format!(
+                    "Training   {iteration}/{max} iter  LB: {lb}  UB: {ub}  gap: {gap_pct:.1}%  {avg_lp}",
+                    max = self.max_iterations,
+                    lb = fmt_sci(lower_bound),
+                    ub = fmt_sci(upper_bound),
+                ));
+            }
+            TrainingEvent::SimulationProgress {
+                scenarios_complete,
+                scenarios_total,
+                solve_time_ms,
+                lp_solves,
+                ..
+            } => {
+                self.sim_solve_time_ms += solve_time_ms;
+                self.sim_lp_count += lp_solves;
+                #[allow(clippy::cast_precision_loss)]
+                let avg_lp = if self.sim_lp_count > 0 {
+                    format!(
+                        "LP: {:.1}ms avg",
+                        self.sim_solve_time_ms / self.sim_lp_count as f64
+                    )
+                } else {
+                    String::new()
+                };
+                let _ = self.stderr.write_line(&format!(
+                    "Simulation {scenarios_complete}/{scenarios_total} scenarios  {avg_lp}"
+                ));
+            }
+            TrainingEvent::TrainingFinished { .. }
+            | TrainingEvent::SimulationFinished { .. }
+            | TrainingEvent::ForwardPassComplete { .. }
+            | TrainingEvent::ForwardSyncComplete { .. }
+            | TrainingEvent::BackwardPassComplete { .. }
+            | TrainingEvent::CutSyncComplete { .. }
+            | TrainingEvent::CutSelectionComplete { .. }
+            | TrainingEvent::BudgetEnforcementComplete { .. }
+            | TrainingEvent::TemplateBakeComplete { .. }
+            | TrainingEvent::ConvergenceUpdate { .. }
+            | TrainingEvent::CheckpointComplete { .. }
+            | TrainingEvent::WorkerTiming { .. } => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
 
     use cobre_core::TrainingEvent;
 
-    use super::run_progress_thread;
+    use super::{RenderMode, run_progress_thread};
 
     #[allow(clippy::cast_precision_loss)]
     fn make_iteration_summary(iteration: u64) -> TrainingEvent {
@@ -360,7 +560,7 @@ mod tests {
     #[test]
     fn test_progress_handle_training_events_returned() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(make_iteration_summary(1)).unwrap();
         tx.send(make_iteration_summary(2)).unwrap();
@@ -375,7 +575,7 @@ mod tests {
     #[test]
     fn test_progress_handle_simulation_events_returned() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(make_simulation_progress(50, 200)).unwrap();
         tx.send(make_simulation_progress(100, 200)).unwrap();
@@ -414,7 +614,7 @@ mod tests {
     #[test]
     fn test_progress_handle_returns_all_events() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(make_iteration_summary(1)).unwrap();
         tx.send(make_iteration_summary(2)).unwrap();
@@ -426,7 +626,6 @@ mod tests {
         let events = handle.join();
         assert_eq!(events.len(), 5, "expected 5 events, got {}", events.len());
 
-        // Verify ordering by checking variant sequence.
         assert!(matches!(
             events[0],
             TrainingEvent::IterationSummary { iteration: 1, .. }
@@ -449,7 +648,7 @@ mod tests {
     #[test]
     fn test_empty_channel_returns_empty_vec() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
         drop(tx);
 
         let events = handle.join();
@@ -463,7 +662,7 @@ mod tests {
     #[test]
     fn test_training_only_no_simulation_events() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         for i in 1..=5 {
             tx.send(make_iteration_summary(i)).unwrap();
@@ -491,7 +690,7 @@ mod tests {
     #[test]
     fn test_simulation_progress_message_with_statistics() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(TrainingEvent::SimulationProgress {
             scenarios_complete: 50,
@@ -523,7 +722,7 @@ mod tests {
     #[test]
     fn test_simulation_progress_message_single_scenario() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(TrainingEvent::SimulationProgress {
             scenarios_complete: 1,
@@ -554,7 +753,7 @@ mod tests {
     #[test]
     fn test_non_ui_events_are_collected() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         tx.send(TrainingEvent::ForwardPassComplete {
             iteration: 1,
@@ -595,7 +794,7 @@ mod tests {
     #[test]
     fn test_simulation_progress_five_events_no_panic() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
         let costs = [10_000.0_f64, 20_000.0, 30_000.0, 40_000.0, 50_000.0];
         for (i, &cost) in costs.iter().enumerate() {
@@ -634,9 +833,8 @@ mod tests {
     #[test]
     fn test_simulation_progress_accumulator_costs_collected_correctly() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
-        // Known costs: mean = 300.0, values = [100, 200, 300, 400, 500].
         let costs = [100.0_f64, 200.0, 300.0, 400.0, 500.0];
         for (i, &cost) in costs.iter().enumerate() {
             tx.send(TrainingEvent::SimulationProgress {
@@ -655,7 +853,6 @@ mod tests {
         let events = handle.join();
         assert_eq!(events.len(), 6, "expected 6 events");
 
-        // Extract and verify each scenario_cost was delivered unmodified.
         let collected_costs: Vec<f64> = events
             .iter()
             .filter_map(|e| {
@@ -675,8 +872,6 @@ mod tests {
             );
         }
 
-        // Independently verify WelfordAccumulator produces the correct mean
-        // for this known sequence (mean of [100, 200, 300, 400, 500] = 300.0).
         let mut acc = cobre_core::WelfordAccumulator::new();
         for &c in &costs {
             acc.update(c);
@@ -686,8 +881,6 @@ mod tests {
             "WelfordAccumulator mean must be 300.0 for [100..500], got {}",
             acc.mean()
         );
-        // WelfordAccumulator.std_dev() uses population variance (m2/n).
-        // Population std dev of [100, 200, 300, 400, 500] = sqrt(20000) ≈ 141.421.
         let expected_std = (((100.0_f64 - 300.0_f64).powi(2)
             + (200.0_f64 - 300.0_f64).powi(2)
             + (300.0_f64 - 300.0_f64).powi(2)
@@ -705,9 +898,8 @@ mod tests {
     #[test]
     fn test_simulation_progress_accumulator_three_events_no_panic() {
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
-        let handle = run_progress_thread(rx, 10, 120);
+        let handle = run_progress_thread(rx, RenderMode::Interactive, 10, 120);
 
-        // Send 3 events with known costs to exercise the >= 2 branch.
         tx.send(TrainingEvent::SimulationProgress {
             scenarios_complete: 1,
             scenarios_total: 200,
@@ -745,7 +937,6 @@ mod tests {
             "expected 4 events (3 progress + 1 finished)"
         );
 
-        // Verify all 3 SimulationProgress events were collected.
         let progress_events: Vec<_> = events
             .iter()
             .filter(|e| matches!(e, TrainingEvent::SimulationProgress { .. }))
@@ -755,5 +946,86 @@ mod tests {
             3,
             "all 3 SimulationProgress events must be collected"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Log mode coverage
+    // -------------------------------------------------------------------
+
+    /// Log mode must collect the same events as bar mode and not panic when
+    /// rendering writes to the (captured-in-tests) stderr.
+    #[test]
+    fn test_log_mode_training_events_round_trip() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, RenderMode::Log, 5, 120);
+
+        tx.send(TrainingEvent::TrainingStarted {
+            case_name: "test".to_string(),
+            stages: 12,
+            hydros: 4,
+            thermals: 126,
+            ranks: 1,
+            threads_per_rank: 1,
+            timestamp: "2026-04-22T00:00:00Z".to_string(),
+        })
+        .unwrap();
+        for i in 1..=5 {
+            tx.send(make_iteration_summary(i)).unwrap();
+        }
+        tx.send(make_training_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(
+            events.len(),
+            7,
+            "expected 7 events (started + 5 summaries + finished), got {}",
+            events.len()
+        );
+    }
+
+    #[test]
+    fn test_log_mode_simulation_events_round_trip() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, RenderMode::Log, 0, 120);
+
+        for i in 1..=3 {
+            tx.send(make_simulation_progress(i, 3)).unwrap();
+        }
+        tx.send(make_simulation_finished()).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 4, "expected 4 events, got {}", events.len());
+    }
+
+    #[test]
+    fn test_log_mode_ignores_non_ui_events_without_panic() {
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, RenderMode::Log, 2, 120);
+
+        tx.send(TrainingEvent::ForwardPassComplete {
+            iteration: 1,
+            scenarios: 10,
+            ub_mean: 110.0,
+            ub_std: 5.0,
+            elapsed_ms: 42,
+        })
+        .unwrap();
+        tx.send(make_iteration_summary(1)).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 2, "expected 2 events, got {}", events.len());
+    }
+
+    #[test]
+    fn test_render_mode_auto_returns_a_variant() {
+        // `is_term()` depends on the test runner; just assert we resolve to
+        // one of the two defined variants (the match is exhaustive, so a
+        // future variant would force this test to be updated).
+        match RenderMode::auto() {
+            RenderMode::Interactive | RenderMode::Log => {}
+        }
     }
 }

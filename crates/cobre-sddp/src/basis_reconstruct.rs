@@ -319,7 +319,6 @@ pub struct ReconstructionStats {
 /// and `promotion_scratch` has sufficient capacity.
 /// The growth path triggers a `debug_assert!(false)` to surface caller
 /// under-sizing, but does not panic in release.
-#[allow(clippy::too_many_lines)]
 pub fn reconstruct_basis<'a, I>(
     stored: &CapturedBasis,
     source: ReconstructionSource<'_>,
@@ -366,15 +365,61 @@ where
 
     let reconcilable_slots = stored.cut_row_slots.as_slice();
 
-    // (a) Column statuses — copy stored, then resize to target if lengths differ.
+    // Phase (a): column statuses.
+    reconstruct_col_statuses(stored, target, out);
+    // Phase (b): template row statuses.
+    reconstruct_template_row_statuses(stored, target, out);
+    // Phase (c): slot → reconcilable-position lookup.
+    build_slot_lookup(reconcilable_slots, slot_lookup);
+    // Phase (d): activity-driven cut-row classifier.
+    let mut stats = ReconstructionStats::default();
+    let lower_deficit = classify_cut_rows(
+        current_cut_rows,
+        stored,
+        target,
+        cut_metadata,
+        slot_lookup,
+        recent_window_bits,
+        promotion_scratch,
+        out,
+        &mut stats,
+    );
+    // Phase (e): Scheme 1 symmetric promotion + Scheme 2 tail fallback.
+    apply_promotion_and_tail_fallback(lower_deficit, promotion_scratch, target, out, &mut stats);
+
+    stats
+}
+
+// ---------------------------------------------------------------------------
+// Phase helpers (private — not part of the public API)
+// ---------------------------------------------------------------------------
+
+/// Phase (a): Copy column statuses from the stored basis, resizing to match
+/// the target column count.
+///
+/// Copies `stored.basis.col_status` verbatim into `out.col_status`, then
+/// extends or truncates to exactly `target.num_cols` entries, padding with
+/// `HIGHS_BASIS_STATUS_BASIC` if the target is wider than the stored basis.
+fn reconstruct_col_statuses(stored: &CapturedBasis, target: ReconstructionTarget, out: &mut Basis) {
     out.col_status.clear();
     out.col_status.extend_from_slice(&stored.basis.col_status);
     if out.col_status.len() != target.num_cols {
         out.col_status
             .resize(target.num_cols, HIGHS_BASIS_STATUS_BASIC);
     }
+}
 
-    // (b) Template row statuses — copy the first `target.base_row_count` entries.
+/// Phase (b): Copy the first `target.base_row_count` template row statuses
+/// from the stored basis.
+///
+/// If the stored basis has fewer template rows than `target.base_row_count`,
+/// missing rows are filled with `HIGHS_BASIS_STATUS_BASIC`. Cut rows (indices
+/// `>= base_row_count`) are not written here; they are assigned in phase (d).
+fn reconstruct_template_row_statuses(
+    stored: &CapturedBasis,
+    target: ReconstructionTarget,
+    out: &mut Basis,
+) {
     out.row_status.clear();
     if stored.basis.row_status.len() >= target.base_row_count {
         out.row_status
@@ -385,9 +430,15 @@ where
         out.row_status
             .resize(target.base_row_count, HIGHS_BASIS_STATUS_BASIC);
     }
+}
 
-    // (c) Build slot → reconcilable-position lookup.
-    //
+/// Phase (c): Build the slot → reconcilable-position lookup table.
+///
+/// Fills `slot_lookup` so that `slot_lookup[slot] = Some(position)` for each
+/// slot in `reconcilable_slots` (position is the 0-based index within that
+/// slice). Grows `slot_lookup` defensively if it is undersized (should not
+/// happen on the hot path when the caller pre-sizes via `ScratchBuffers`).
+fn build_slot_lookup(reconcilable_slots: &[u32], slot_lookup: &mut Vec<Option<u32>>) {
     // Grow the scratch if it is too small for the current stored slots.  In
     // normal operation the caller pre-sizes this to `initial_pool_capacity`
     // (via `ScratchBuffers`), so growth only occurs on cold paths.  When
@@ -414,22 +465,39 @@ where
     for (position, &slot) in reconcilable_slots.iter().enumerate() {
         slot_lookup[slot as usize] = Some(position as u32);
     }
+}
 
-    // (d) Walk current cut rows and assign statuses.
-    //
-    // Activity-driven classifier:
-    // - Preserved slots: copy stored status. If LOWER, push onto promotion
-    //   candidates for potential Scheme 1 symmetric promotion.
-    // - New slots: consult active_window bitmap. If any of the last
-    //   basis_activity_window bits are set → LOWER (tight guess, count new_tight).
-    //   Otherwise → BASIC (slack default, count new_slack).
-    //
-    // Scheme 1 symmetric promotion (after loop):
-    // for each LOWER-guessed new cut, promote one preserved-LOWER candidate
-    // (lowest popcount first) to BASIC to maintain basic_count == num_row.
-    // If the preserved-LOWER pool is exhausted (Scheme 2 tail), flip the
-    // latest activity-driven LOWER guesses back to BASIC instead.
-    let mut stats = ReconstructionStats::default();
+/// Phase (d): Walk current cut rows and assign row statuses using the
+/// activity-driven classifier.
+///
+/// For each cut row yielded by `current_cut_rows`:
+/// - **Preserved slot** (found in `slot_lookup`): copy the stored row status.
+///   If that status is `LOWER`, push the row onto `promotion_scratch.candidates`
+///   for potential Scheme 1 symmetric promotion in phase (e).
+/// - **New slot** (not in `slot_lookup`): consult `active_window` from
+///   `cut_metadata`. If any bit in `recent_window_bits | SEED_BIT` is set,
+///   classify `LOWER` (tight guess) and record in `promotion_scratch.new_lower_indices`.
+///   Otherwise classify `BASIC` (safe slack default).
+///
+/// Returns `lower_deficit`: the number of new cuts classified `LOWER` minus
+/// the number of Scheme 1 promotions that will be available (computed in phase (e)).
+/// Phase (e) uses this value to determine how many preserved-LOWER slots to
+/// promote and how many Scheme 2 tail overrides to apply.
+#[allow(clippy::too_many_arguments)]
+fn classify_cut_rows<'a, I>(
+    current_cut_rows: I,
+    stored: &CapturedBasis,
+    target: ReconstructionTarget,
+    cut_metadata: &[CutMetadata],
+    slot_lookup: &[Option<u32>],
+    recent_window_bits: u32,
+    promotion_scratch: &mut PromotionScratch,
+    out: &mut Basis,
+    stats: &mut ReconstructionStats,
+) -> usize
+where
+    I: Iterator<Item = (usize, f64, &'a [f64])>,
+{
     let mut lower_deficit: usize = 0;
 
     for (target_slot, intercept, coefficients) in current_cut_rows {
@@ -489,82 +557,99 @@ where
         out.row_status.push(row_status_byte);
     }
 
-    // (e) Scheme 1 symmetric promotion: restore basic_count == num_row.
+    lower_deficit
+}
+
+/// Phase (e): Scheme 1 symmetric promotion and Scheme 2 tail fallback.
+///
+/// Restores the `col_basic + row_basic == num_row` invariant after phase (d).
+///
+/// **Scheme 1**: For each new cut classified `LOWER` in phase (d), promote the
+/// preserved-LOWER candidate with the smallest lex key
+/// `(popcount, last_active_iter, insertion_idx)` to `BASIC`. The partial
+/// selection uses `select_nth_unstable_by_key` (O(n) average) — important at
+/// production scale with thousands of candidates and millions of
+/// reconstructions per run.
+///
+/// **Scheme 2 tail**: When the preserved-LOWER pool is exhausted (more new
+/// `LOWER` guesses than available candidates), override the most-recently-
+/// classified new `LOWER` cuts back to `BASIC` and adjust `stats` accordingly.
+fn apply_promotion_and_tail_fallback(
+    lower_deficit: usize,
+    promotion_scratch: &mut PromotionScratch,
+    target: ReconstructionTarget,
+    out: &mut Basis,
+    stats: &mut ReconstructionStats,
+) {
+    if lower_deficit == 0 {
+        return;
+    }
+
+    let available_candidates = promotion_scratch.candidates.len();
+    let scheme1_count = lower_deficit.min(available_candidates);
+
+    // Partial selection: we only need the `scheme1_count` smallest by the
+    // lex key (popcount, last_active_iter, insertion_idx). The tertiary
+    // `insertion_idx` is unique per candidate, so no key ties exist and the
+    // unstable algorithm is deterministic by construction.
     //
-    // Each LOWER-classified new cut reduced total_basic by 1 relative to
-    // the BASIC-default HiGHS dimension extension. Offset by promoting
-    // the preserved-LOWER candidate with the lowest recency-aware lex key
-    // (popcount, last_active_iter, insertion_idx) — least-active and most-stale
-    // first → safest to move into the basis as BASIC. Net change to
-    // total_basic: zero.
-    if lower_deficit > 0 {
-        let available_candidates = promotion_scratch.candidates.len();
-        let scheme1_count = lower_deficit.min(available_candidates);
+    // `select_nth_unstable_by_key` is O(n) average vs O(n log n) for a full
+    // sort — material at production scale (thousands of candidates,
+    // millions of reconstructions). At convertido scale it is a no-op on
+    // wall-time (~24 ms total across the run).
+    //
+    // Guard: skip when `scheme1_count == available_candidates` (all
+    // candidates will be promoted — no selection needed) or `scheme1_count
+    // == 0` (defensive; the outer `if lower_deficit > 0` already ensures
+    // scheme1_count ≥ 1 when available_candidates > 0).
+    if scheme1_count > 0 && scheme1_count < available_candidates {
+        promotion_scratch
+            .candidates
+            .select_nth_unstable_by_key(scheme1_count - 1, |&(_, popcount, last_active, idx)| {
+                (popcount, last_active, idx)
+            });
+    }
 
-        // Partial selection: we only need the `scheme1_count` smallest by the
-        // lex key (popcount, last_active_iter, insertion_idx). The tertiary
-        // `insertion_idx` is unique per candidate, so no key ties exist and the
-        // unstable algorithm is deterministic by construction.
-        //
-        // `select_nth_unstable_by_key` is O(n) average vs O(n log n) for a full
-        // sort — material at production scale (thousands of candidates,
-        // millions of reconstructions). At convertido scale it is a no-op on
-        // wall-time (~24 ms total across the run).
-        //
-        // Guard: skip when `scheme1_count == available_candidates` (all
-        // candidates will be promoted — no selection needed) or `scheme1_count
-        // == 0` (defensive; the outer `if lower_deficit > 0` already ensures
-        // scheme1_count ≥ 1 when available_candidates > 0).
-        if scheme1_count > 0 && scheme1_count < available_candidates {
-            promotion_scratch.candidates.select_nth_unstable_by_key(
-                scheme1_count - 1,
-                |&(_, popcount, last_active, idx)| (popcount, last_active, idx),
-            );
-        }
+    // The first `scheme1_count` entries now hold the smallest `scheme1_count`
+    // candidates by lex key (unordered internally — the SET is deterministic,
+    // which is all we need: promotion writes BASIC to distinct row indices).
+    for &(row_idx, _, _, _) in promotion_scratch.candidates.iter().take(scheme1_count) {
+        debug_assert!(
+            row_idx >= target.base_row_count,
+            "Scheme 1 promotion target row_idx {row_idx} must be >= base_row_count {}",
+            target.base_row_count,
+        );
+        debug_assert_eq!(
+            out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
+            "Scheme 1 promotion target must currently be LOWER",
+        );
+        out.row_status[row_idx] = HIGHS_BASIS_STATUS_BASIC;
+    }
 
-        // The first `scheme1_count` entries now hold the smallest `scheme1_count`
-        // candidates by lex key (unordered internally — the SET is deterministic,
-        // which is all we need: promotion writes BASIC to distinct row indices).
-        for &(row_idx, _, _, _) in promotion_scratch.candidates.iter().take(scheme1_count) {
-            debug_assert!(
-                row_idx >= target.base_row_count,
-                "Scheme 1 promotion target row_idx {row_idx} must be >= base_row_count {}",
-                target.base_row_count,
-            );
+    // Scheme 2 tail fallback: if more LOWER guesses than preserved-LOWER
+    // candidates, override the most-recently-classified new LOWER cuts
+    // back to BASIC. This keeps the invariant under adversarial inputs.
+    let remaining_deficit = lower_deficit - scheme1_count;
+    if remaining_deficit > 0 {
+        // Walk the new-LOWER indices from latest to earliest.
+        for &row_idx in promotion_scratch
+            .new_lower_indices
+            .iter()
+            .rev()
+            .take(remaining_deficit)
+        {
             debug_assert_eq!(
                 out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
-                "Scheme 1 promotion target must currently be LOWER",
+                "Scheme 2 override target must be LOWER",
             );
             out.row_status[row_idx] = HIGHS_BASIS_STATUS_BASIC;
         }
-
-        // Scheme 2 tail fallback: if more LOWER guesses than preserved-LOWER
-        // candidates, override the most-recently-classified new LOWER cuts
-        // back to BASIC. This keeps the invariant under adversarial inputs.
-        let remaining_deficit = lower_deficit - scheme1_count;
-        if remaining_deficit > 0 {
-            // Walk the new-LOWER indices from latest to earliest.
-            for &row_idx in promotion_scratch
-                .new_lower_indices
-                .iter()
-                .rev()
-                .take(remaining_deficit)
-            {
-                debug_assert_eq!(
-                    out.row_status[row_idx], HIGHS_BASIS_STATUS_LOWER,
-                    "Scheme 2 override target must be LOWER",
-                );
-                out.row_status[row_idx] = HIGHS_BASIS_STATUS_BASIC;
-            }
-            // Adjust telemetry to reflect the actual classifier outcome.
-            #[allow(clippy::cast_possible_truncation)]
-            let n = remaining_deficit as u32;
-            stats.new_tight -= n;
-            stats.new_slack += n;
-        }
+        // Adjust telemetry to reflect the actual classifier outcome.
+        #[allow(clippy::cast_possible_truncation)]
+        let n = remaining_deficit as u32;
+        stats.new_tight -= n;
+        stats.new_slack += n;
     }
-
-    stats
 }
 
 // ---------------------------------------------------------------------------
@@ -3347,5 +3432,79 @@ mod tests {
                 "window=10: new cut row must remain LOWER after Scheme 1"
             );
         }
+    }
+
+    /// Smoke test: verify the outer orchestrator still glues the 5 phase
+    /// helpers correctly.
+    ///
+    /// Input: stored basis with 2 template rows, 2 cut rows (slots 3 and 7,
+    /// statuses LOWER and BASIC), 4 columns.  Target LP introduces one
+    /// preserved cut (slot 3) and one new cut (slot 9, no activity window →
+    /// BASIC).  Expected: col_status copied and resized, template rows
+    /// preserved, slot-3 cut status copied (LOWER), new slot-9 cut assigned
+    /// BASIC, `stats.preserved == 1 && stats.new_slack == 1`.
+    #[test]
+    fn reconstruct_basis_phase_helpers_produce_same_result() {
+        // Stored: 2 template rows, 2 old cut rows (slots 3 LOWER, 7 BASIC), 4 cols.
+        let stored = make_stored_basis(2, 4, &[3, 7], &[L, B], &[0.5, 1.5]);
+
+        // Target LP: same 2 template rows, 4 cols, 2 cut rows (slot 3 preserved,
+        // slot 9 new — no activity metadata → BASIC).
+        let cuts: Vec<(usize, f64, Vec<f64>)> = vec![
+            (3, 2.0, vec![1.0, 0.0]), // slot 3 → preserved, LOWER
+            (9, 5.0, vec![0.0, 1.0]), // slot 9 → new, no activity → BASIC
+        ];
+        let mut out = Basis::new(0, 0);
+        let mut lookup: Vec<Option<u32>> = vec![None; 16];
+        let mut scratch = PromotionScratch::default();
+
+        let stats = reconstruct_basis(
+            &stored,
+            source_no_metadata(2, 4),
+            cuts.iter().map(|(s, i, c)| (*s, *i, c.as_slice())),
+            PaddingContext {
+                state: &[0.5, 1.5],
+                theta: 10.0,
+                tolerance: 1e-7,
+            },
+            &mut out,
+            &mut lookup,
+            &mut scratch,
+        );
+
+        // Column statuses: 4 cols, all BASIC from stored.
+        assert_eq!(
+            out.col_status.len(),
+            4,
+            "col count must equal target num_cols"
+        );
+        assert!(
+            out.col_status.iter().all(|&s| s == B),
+            "all cols must be BASIC"
+        );
+
+        // Row statuses: 2 template (BASIC) + 2 cut rows.
+        assert_eq!(
+            out.row_status.len(),
+            4,
+            "total row count = 2 template + 2 cut"
+        );
+        assert_eq!(out.row_status[0], B, "template row 0 must be BASIC");
+        assert_eq!(out.row_status[1], B, "template row 1 must be BASIC");
+        assert_eq!(out.row_status[2], L, "slot 3 (preserved) must be LOWER");
+        assert_eq!(
+            out.row_status[3], B,
+            "slot 9 (new, no activity) must be BASIC"
+        );
+
+        // Stats: 1 preserved, 0 new_tight, 1 new_slack.
+        assert_eq!(
+            stats,
+            ReconstructionStats {
+                preserved: 1,
+                new_tight: 0,
+                new_slack: 1
+            },
+        );
     }
 }

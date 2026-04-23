@@ -70,6 +70,7 @@ pub mod stochastic_summary;
 pub mod stopping_rule;
 pub mod training;
 pub mod training_output;
+pub(crate) mod training_session;
 pub mod trajectory;
 pub mod visited_states;
 pub mod workspace;

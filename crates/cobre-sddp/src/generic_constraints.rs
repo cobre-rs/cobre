@@ -493,7 +493,7 @@ mod tests {
 
     // ── ThermalGeneration tests ───────────────────────────────────────────────
 
-    /// AC from ticket: ThermalGeneration block_id=None at block 1 of 3.
+    /// ThermalGeneration block_id=None at block 1 of 3.
     ///
     /// thermal.start = 49, thermal_pos[5] = 0, n_blks = 3, block_idx = 1
     /// Expected column = 49 + 0 * 3 + 1 = 50
@@ -586,7 +586,7 @@ mod tests {
 
     // ── HydroStorage tests ────────────────────────────────────────────────────
 
-    /// AC from ticket: HydroStorage returns stage-level storage column.
+    /// HydroStorage returns stage-level storage column.
     ///
     /// storage.start = 0, hydro_pos[EntityId(10)] = 0
     /// Expected column = 0 + 0 = 0, regardless of block_idx.
@@ -635,7 +635,7 @@ mod tests {
 
     // ── HydroOutflow tests ────────────────────────────────────────────────────
 
-    /// AC from ticket: HydroOutflow returns 2 entries (turbine + spillage).
+    /// HydroOutflow returns 2 entries (turbine + spillage).
     ///
     /// hydro_pos[EntityId(40)] = 3 (position 3), block_id=None, block_idx=0
     /// turbine.start = 13, spillage.start = 25, n_blks = 3
@@ -700,7 +700,7 @@ mod tests {
 
     // ── HydroGeneration tests ─────────────────────────────────────────────────
 
-    /// AC from ticket: HydroGeneration for constant-productivity hydro returns
+    /// HydroGeneration for constant-productivity hydro returns
     /// turbine column with productivity multiplier.
     ///
     /// hydro_pos[EntityId(20)] = 1 → constant productivity 2.5
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(result, vec![(13 + 1 * 3 + 0, 2.5)]);
     }
 
-    /// AC from ticket: HydroGeneration for FPHA hydro returns generation column.
+    /// HydroGeneration for FPHA hydro returns generation column.
     ///
     /// hydro_pos[EntityId(10)] = 0 → FPHA (local FPHA index = 0)
     /// generation.start = 79, n_blks = 3, block_idx = 0
@@ -931,7 +931,7 @@ mod tests {
 
     // ── Stub entity tests ─────────────────────────────────────────────────────
 
-    /// AC from ticket: PumpingFlow returns empty vec.
+    /// PumpingFlow returns empty vec.
     #[test]
     fn pumping_flow_returns_empty() {
         let indexer = make_indexer();
@@ -1041,7 +1041,7 @@ mod tests {
 
     // ── Missing entity ID test ─────────────────────────────────────────────────
 
-    /// AC from ticket: missing entity ID returns empty vec (defense-in-depth).
+    /// missing entity ID returns empty vec (defense-in-depth).
     #[test]
     fn missing_entity_id_returns_empty() {
         let indexer = make_indexer();
@@ -1071,7 +1071,7 @@ mod tests {
 
     // ── BusDeficit tests ──────────────────────────────────────────────────────
 
-    /// AC from ticket: BusDeficit with S=2 deficit segments returns 2 column entries.
+    /// BusDeficit with S=2 deficit segments returns 2 column entries.
     ///
     /// bus_pos[EntityId(100)] = 0, deficit.start = 61, max_deficit_segments = 2,
     /// n_blks = 3, block_idx = 0

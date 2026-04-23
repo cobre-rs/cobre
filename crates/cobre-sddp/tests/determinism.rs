@@ -892,7 +892,7 @@ impl Communicator for MultiRankMockComm {
 /// ranks.
 ///
 /// This is the CI-compatible regression gate for the canonical upper bound
-/// summation fix (ticket-009). After that fix, `sync_forward` uses `allgatherv`
+/// summation fix. After that fix, `sync_forward` uses `allgatherv`
 /// to assemble a flat global cost vector in rank order, then sums it
 /// sequentially. The sequential summation order is identical regardless of how
 /// many ranks contribute (because the costs always appear in global scenario

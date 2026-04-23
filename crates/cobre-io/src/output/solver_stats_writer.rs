@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn test_solver_stats_row_builds_with_none_opening() {
         // Verify a row with opening=None can be written and read back without error.
-        // Uses stage=0 (real stage index) consistent with ticket-011a per-stage shape.
+        // Uses stage=0 (real stage index) consistent with per-stage shape.
         let dir = tempfile::TempDir::new().unwrap();
         let rows = vec![SolverStatsRow {
             iteration: 1,
@@ -596,7 +596,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let rows = vec![
             // Forward row (opening=None, stage=0): 50 lp_solves
-            // ticket-011a: forward rows use real stage index, not -1.
+            // forward rows use real stage index, not -1.
             SolverStatsRow {
                 iteration: 1,
                 phase: "forward".to_string(),
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(opening_col.value(3), 2, "backward opening[2] must be 2");
     }
 
-    /// ticket-011a: forward rows are per-stage (one row per stage, opening=NULL).
+    /// forward rows are per-stage (one row per stage, opening=NULL).
     ///
     /// Verifies that 3 forward rows for stages 0, 1, 2 produce a parquet with
     /// exactly 3 rows, each with opening=NULL and the correct per-stage stage index.
@@ -782,7 +782,7 @@ mod tests {
         let iter_path = dir.path().join("training/solver/iterations.parquet");
         let batch = read_parquet(&iter_path);
 
-        // ticket-011a AC: parquet has exactly num_stages rows for the forward phase.
+        // parquet has exactly num_stages rows for the forward phase.
         assert_eq!(batch.num_rows(), 3, "one forward row per stage");
 
         let opening_col = batch
@@ -820,7 +820,7 @@ mod tests {
             assert_ne!(
                 stage_col.value(row),
                 -1,
-                "forward rows must not use stage = -1 (ticket-011a)"
+                "forward rows must not use stage = -1"
             );
         }
 

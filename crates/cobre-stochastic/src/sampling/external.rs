@@ -327,7 +327,7 @@ pub fn standardize_external_inflow(
     //   raw[stage * n_scenarios * n_hydros + scenario * n_hydros + h_idx]
     //
     // External rows are sorted by (stage_id, scenario_id, hydro_id) per
-    // ticket-022 contract, but we use a HashMap for robustness.
+    // contract, but we use a HashMap for robustness.
     // -----------------------------------------------------------------------
     let mut raw_values = vec![0.0_f64; n_stages * n_scenarios * n_hydros].into_boxed_slice();
 
@@ -696,7 +696,7 @@ pub fn standardize_external_ncs(
 ///
 /// ## Pre-extracted metadata
 ///
-/// The caller (ticket-025) is responsible for extracting `row_entity_ids` and
+/// The caller is responsible for extracting `row_entity_ids` and
 /// `rows_per_stage` from the raw parsed rows before calling this function.
 ///
 /// - `row_entity_ids` — the set of entity IDs that appear in the raw rows
@@ -2002,7 +2002,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // ticket-010: relaxed V3.4, raw_scenarios_per_stage, pad_library_to_uniform
+    // relaxed V3.4, raw_scenarios_per_stage, pad_library_to_uniform
     // -----------------------------------------------------------------------
 
     use super::pad_library_to_uniform;

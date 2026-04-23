@@ -2379,7 +2379,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-024: load balance row starts, n_load_buses, load_bus_indices
+    // load balance row starts, n_load_buses, load_bus_indices
     // -------------------------------------------------------------------------
 
     /// Build a two-bus system with N hydros and K blocks per stage.
@@ -3411,7 +3411,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-009: FPHA LP integration tests (HiGHS end-to-end solve)
+    // FPHA LP integration tests (HiGHS end-to-end solve)
     // -------------------------------------------------------------------------
     //
     // These tests build an FPHA template, load it into HiGHS, patch the
@@ -3470,7 +3470,7 @@ mod tests {
         (system, production)
     }
 
-    /// AC (ticket-009): 1-FPHA-hydro LP solves to Optimal with generation > 0.
+    /// 1-FPHA-hydro LP solves to Optimal with generation > 0.
     ///
     /// Patches `v_in = 100 hm³` (row 0), then solves. Asserts:
     /// - status is `Ok` (no solver error)
@@ -3523,7 +3523,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-009): all hyperplane constraints hold within 1e-6 tolerance
+    /// all hyperplane constraints hold within 1e-6 tolerance
     /// after solving the 1-FPHA-hydro LP.
     ///
     /// For each plane p: `g <= intercept + gamma_v * v_avg + gamma_q * q + gamma_s * s`
@@ -3604,7 +3604,7 @@ mod tests {
         }
     }
 
-    /// AC (ticket-009): storage-fixing dual differs between FPHA and
+    /// storage-fixing dual differs between FPHA and
     /// constant-productivity for the same system entity.
     ///
     /// The FPHA model introduces `-gamma_v/2` entries on the `v_in` column
@@ -3738,7 +3738,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-009, mixed): 2-constant + 1-FPHA system solves to Optimal.
+    /// 2-constant + 1-FPHA system solves to Optimal.
     ///
     /// Verifies that generation variables for both types of hydros have
     /// correct values in the solution:
@@ -3815,7 +3815,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Evaporation variable tests (ticket-010)
+    // Evaporation variable tests
     // =========================================================================
 
     use cobre_solver::StageTemplate;
@@ -3859,7 +3859,7 @@ mod tests {
         EvaporationModelSet::new(models)
     }
 
-    /// AC (ticket-010): 0 evaporation hydros — `num_cols` and `num_rows` are unchanged.
+    /// 0 evaporation hydros — `num_cols` and `num_rows` are unchanged.
     ///
     /// A system with 1 hydro (L=0, T=0, B=1, K=1) and no evaporation:
     /// - Without evaporation: `num_cols` = N\*(2+L)+1 + N\*K\*2 + B\*K\*2 = 3+2+2 = 7
@@ -3899,7 +3899,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): 2 evaporation hydros + 1 block → `num_cols` += 6, `num_rows` += 2.
+    /// 2 evaporation hydros + 1 block → `num_cols` += 6, `num_rows` += 2.
     ///
     /// Uses a system with 2 hydros (L=0, T=0, B=1, K=1).
     /// Baseline (no evaporation):
@@ -3956,7 +3956,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): evaporation row bounds are equality: `row_lower == row_upper == k_evap0`.
+    /// evaporation row bounds are equality: `row_lower == row_upper == k_evap0`.
     ///
     /// Uses a 1-hydro system with `k_evap0 = 1.5` at stage 0.
     #[test]
@@ -3991,7 +3991,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): evaporation column bounds are [0, bound) and objective is 0.0.
+    /// evaporation column bounds are [0, bound) and objective is 0.0.
     /// Q_ev has a physical upper bound; f_plus and f_minus are unbounded.
     #[test]
     fn evap_col_bounds_and_objective() {
@@ -4025,7 +4025,7 @@ mod tests {
             );
             assert_eq!(
                 t.objective[col], 0.0,
-                "evap column {col} objective must be 0.0 (ticket-013 sets violation cost), got {}",
+                "evap column {col} objective must be 0.0, got {}",
                 t.objective[col]
             );
         }
@@ -4050,7 +4050,7 @@ mod tests {
     }
 
     // =========================================================================
-    // ticket-011: fill_evaporation_entries — CSC matrix entries
+    // fill_evaporation_entries — CSC matrix entries
     // =========================================================================
 
     /// Build an `EvaporationModelSet` where evaporation hydros have a specific
@@ -4095,14 +4095,14 @@ mod tests {
             .collect()
     }
 
-    /// AC (ticket-011): 1 evaporation hydro (`h_idx=0`) with `k_evap_v = 0.02` produces
+    /// 1 evaporation hydro (`h_idx=0`) with `k_evap_v = 0.02` produces
     /// the correct CSC entries at the evaporation row and water balance row.
     ///
     /// Expected entries on the evaporation constraint row:
     ///   `(Q_ev_col, +1.0)`, `(v_col, -0.01)`, `(v_in_col, -0.01)`,
     ///   `(f_plus_col, +1.0)`, `(f_minus_col, -1.0)`.
     ///
-    /// After ticket-012, the `Q_ev` column also has an entry in the water balance
+    /// After, the `Q_ev` column also has an entry in the water balance
     /// row with coefficient `+zeta`.
     #[test]
     fn evap_csc_entries_one_hydro_correct_coefficients() {
@@ -4141,7 +4141,7 @@ mod tests {
         let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
         let water_balance_row = 2_usize; // row_water_balance_start = n_state + n_hydros = 2
 
-        // After ticket-012, Q_ev has 2 entries: water balance row (+zeta) and
+        // Q_ev has 2 entries: water balance row (+zeta) and
         // evaporation constraint row (+1.0). Entries are sorted by row ascending.
         let zeta = 744.0 * (3_600.0 / 1_000_000.0);
         let entries_q_ev = entries_for_col(t, col_q_ev);
@@ -4227,7 +4227,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): coefficient value check with `k_evap_v = 0.04` → v and `v_in` entries are -0.02.
+    /// coefficient value check with `k_evap_v = 0.04` → v and `v_in` entries are -0.02.
     #[test]
     fn evap_csc_entries_coefficient_scaling() {
         let system = one_hydro_system(1, 0);
@@ -4271,7 +4271,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): 0 evaporation hydros — `fill_evaporation_entries` is a no-op;
+    /// 0 evaporation hydros — `fill_evaporation_entries` is a no-op;
     /// the evaporation columns do not exist and no extra non-zeros are added.
     #[test]
     fn evap_csc_entries_zero_hydros_no_op() {
@@ -4304,7 +4304,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): 2 evap hydros with distinct `k_evap_v` produce independent rows.
+    /// 2 evap hydros with distinct `k_evap_v` produce independent rows.
     #[test]
     fn evap_csc_entries_two_hydros_independent_rows() {
         let (system, production) = four_hydro_mixed_system();
@@ -4378,7 +4378,7 @@ mod tests {
         assert!((t.row_lower[evap_row_1] - 2.0).abs() < 1e-12);
     }
 
-    /// AC (ticket-011): `k_evap_v = 0.0` → v and `v_in` entries are 0.0;
+    /// `k_evap_v = 0.0` → v and `v_in` entries are 0.0;
     /// the constraint reduces to `Q_ev + f_plus - f_minus = k_evap0`.
     #[test]
     fn evap_csc_entries_zero_k_evap_v_produces_zero_volume_coefficients() {
@@ -4421,9 +4421,9 @@ mod tests {
         );
     }
 
-    // ── ticket-012: water balance entries for evaporation ────────────────────
+    // ── water balance entries for evaporation ────────────────────
 
-    /// AC-1 (ticket-012): 1 evaporation hydro (`h_idx=0`), 1 block of 744 hours.
+    /// 1 evaporation hydro (`h_idx=0`), 1 block of 744 hours.
     ///
     /// The `Q_ev_h` column must have an entry in the water balance row
     /// (`row = row_water_balance_start + 0`) with coefficient `+zeta`
@@ -4468,7 +4468,7 @@ mod tests {
         );
     }
 
-    /// AC-2 (ticket-012): 2 hydros where only hydro 1 has evaporation.
+    /// 2 hydros where only hydro 1 has evaporation.
     ///
     /// The `Q_ev` column for hydro 1 must have an entry in water balance row 1
     /// with coefficient `+zeta`. Hydro 0's water balance row must have no
@@ -4689,10 +4689,10 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-012): 0 evaporation hydros — no evaporation entries added.
+    /// 0 evaporation hydros — no evaporation entries added.
     ///
     /// The total non-zero count must be identical to a baseline with no
-    /// evaporation model (behaviour unchanged from before ticket-012).
+    /// evaporation model.
     #[test]
     fn evap_water_balance_zero_hydros_no_op() {
         let system = one_hydro_system(1, 0);
@@ -4725,7 +4725,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Evaporation violation cost tests (ticket-013)
+    // Evaporation violation cost tests
     // =========================================================================
 
     /// Build a 1-bus, 1-hydro system with evaporation and a custom
@@ -4935,7 +4935,7 @@ mod tests {
             .expect("evap_hydro_system_with_violation_cost: valid")
     }
 
-    /// AC-1 (ticket-013): `f_evap_plus` carries base violation cost;
+    /// `f_evap_plus` carries base violation cost;
     /// `f_evap_minus` carries 100x asymmetric over-evaporation penalty.
     ///
     /// System: 1 hydro with evaporation, `evaporation_violation_cost = 500.0`,
@@ -4985,7 +4985,7 @@ mod tests {
         );
     }
 
-    /// AC-2 (ticket-013): `Q_ev` column objective is 0.0 even when a
+    /// `Q_ev` column objective is 0.0 even when a
     /// non-zero `evaporation_violation_cost` is set.
     #[test]
     fn evap_q_ev_objective_is_zero() {
@@ -5013,7 +5013,7 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-013): LP with 1 evaporation hydro is solvable (`HiGHS` returns
+    /// LP with 1 evaporation hydro is solvable (`HiGHS` returns
     /// `Optimal`) and the `Q_ev` value is non-negative after fixing `v_in = 1000.0 hm3`.
     ///
     /// System: 1 bus, 1 hydro, `k_evap0 = 1.0`, `k_evap_v = 0.02`.
@@ -5069,7 +5069,7 @@ mod tests {
         );
     }
 
-    /// AC-4 (ticket-013): violation slacks are near zero when `v_in` is large
+    /// violation slacks are near zero when `v_in` is large
     /// enough for the linearised evaporation constraint to be satisfiable without
     /// artificial violation.
     ///
@@ -5130,7 +5130,7 @@ mod tests {
         );
     }
 
-    /// AC-5 (ticket-013): the storage-fixing dual for an evaporation hydro differs
+    /// the storage-fixing dual for an evaporation hydro differs
     /// from the no-evaporation case.
     ///
     /// When evaporation is active, higher `v_in` reduces evaporation volume
@@ -5695,7 +5695,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-003 C4): Bus with 2 deficit segments [{10MW, $500}, {None, $5000}] and 1 block.
+    /// Bus with 2 deficit segments [{10MW, $500}, {None, $5000}] and 1 block.
     /// Every deficit segment column for the bus/block must have exactly one entry in the
     /// load-balance row with coefficient +1.0.
     ///
@@ -5786,7 +5786,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-002: Water withdrawal LP wiring unit tests
+    // Water withdrawal LP wiring unit tests
     // -------------------------------------------------------------------------
 
     /// Build a `one_hydro_system` variant with a custom `water_withdrawal_m3s` and
@@ -6766,7 +6766,7 @@ mod tests {
         );
     }
 
-    // ── Generic constraint layout tests (ticket-002) ──────────────────────────
+    // ── Generic constraint layout tests ──────────────────────────
 
     /// Build a minimal one-bus, one-stage system for generic constraint tests.
     ///

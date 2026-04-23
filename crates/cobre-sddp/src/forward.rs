@@ -2734,7 +2734,7 @@ mod tests {
     /// `cost_sum` = 300, `cost_sum_sq` = 22700, N = 4, mean = 75.
     /// std = sqrt((22700 - 4*75^2) / 3) = sqrt(200/3) ≈ 8.165.
     #[test]
-    fn ac_ticket_acceptance_criterion_ub_mean() {
+    fn acceptance_criterion_ub_mean() {
         let local = ForwardResult {
             scenario_costs: vec![60.0, 70.0, 80.0, 90.0],
             elapsed_ms: 0,

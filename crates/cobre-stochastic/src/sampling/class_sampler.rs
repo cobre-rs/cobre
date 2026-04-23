@@ -3,7 +3,7 @@
 //! [`ClassSampler`] is a per-entity-class noise source that writes uncorrelated
 //! (or pre-correlated, for tree/library variants) noise into a caller-provided
 //! buffer. Three instances of this type -- one for inflow, one for load, one
-//! for NCS -- are combined by the composite `ForwardSampler` (ticket-027).
+//! for NCS -- are combined by the composite `ForwardSampler`.
 //!
 //! ## Correlation contract
 //!
@@ -58,7 +58,7 @@ pub struct ClassSampleRequest {
     ///
     /// Stages within the same `(season_id, year)` bucket share the same
     /// `noise_group_id` so that their `OutOfSample` noise draws are identical.
-    /// Until ticket-005 wires actual group IDs, callers supply `stage.id as u32`
+    /// Until wires actual group IDs, callers supply `stage.id as u32`
     /// to preserve current per-stage seed behaviour.
     pub noise_group_id: u32,
 }
@@ -72,7 +72,7 @@ pub struct ClassSampleRequest {
 /// Each variant draws noise from a different source. The `fill()` method
 /// writes exactly `output.len()` f64 values into the caller-provided buffer.
 ///
-/// Constructed by the composite `ForwardSampler` factory (ticket-027). Reused
+/// Constructed by the composite `ForwardSampler` factory. Reused
 /// across all `(iteration, scenario, stage)` calls without per-call allocation.
 pub enum ClassSampler<'a> {
     /// In-sample scheme: copies a segment from the pre-generated opening tree.
@@ -292,8 +292,8 @@ impl ClassSampler<'_> {
                     dim: *dim,
                     total_scenarios: req.total_scenarios,
                 };
-                // TODO(ticket-028): replace with fill_uncorrelated call once
-                // ticket-028 extracts this into a dedicated function.
+                // TODO: replace with fill_uncorrelated call once
+                // extracts this into a dedicated function.
                 fill_uncorrelated(spec, None, output, perm_scratch)?;
                 Ok(())
             }
@@ -964,10 +964,10 @@ mod tests {
         assert!(ext_debug.contains("External"));
     }
     // -----------------------------------------------------------------------
-    // AC (ticket-003): noise_group_id propagation tests
+    // noise_group_id propagation tests
     // -----------------------------------------------------------------------
 
-    /// AC: Two `OutOfSample::fill()` calls with the same `noise_group_id` but
+    /// Two `OutOfSample::fill()` calls with the same `noise_group_id` but
     /// different `stage` must produce identical noise.
     #[test]
     fn test_out_of_sample_same_group_produces_identical_noise() {

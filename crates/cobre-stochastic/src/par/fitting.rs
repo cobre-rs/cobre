@@ -3608,7 +3608,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // PACF analytical verification for 2-season PAR(2) (ticket-003, F2-004)
+    // PACF analytical verification for 2-season PAR(2)
     // -----------------------------------------------------------------------
 
     /// Generate 2-season PAR(2) observations using deterministic LCG (Box-Muller).

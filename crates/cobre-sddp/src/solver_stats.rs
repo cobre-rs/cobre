@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(*worker_id_lb, -1);
     }
 
-    /// ticket-011a: per-stage forward `stage_stats` summed element-wise across workers.
+    /// per-stage forward `stage_stats` summed element-wise across workers.
     ///
     /// Simulates 2 workers × 3 stages, verifying that the post-parallel reduction
     /// produces the correct element-wise sum without hot-path allocations.
@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(stage_stats[2].simplex_iterations, 550); // (30 + 25) * 10
 
         // Verify the log shape: one SolverStatsEntry per stage with stage index 0..3.
-        // (ticket-011a: forward rows use real stage index, opening sentinel -1 → NULL)
+        // forward rows use real stage index, opening sentinel -1 → NULL)
         // 7-tuple: (iter, phase, stage, opening, rank, worker_id, delta)
         // Forward rows carry rank = local rank, worker_id = -1 (no per-worker dimension).
         let log: Vec<SolverStatsEntry> = stage_stats

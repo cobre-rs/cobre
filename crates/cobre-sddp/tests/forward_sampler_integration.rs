@@ -690,7 +690,7 @@ fn out_of_sample_declaration_order_invariance() {
 }
 
 // ---------------------------------------------------------------------------
-// Historical / External / Mixed helpers and tests (tickets 032-034)
+// Historical / External / Mixed helpers and tests
 // ---------------------------------------------------------------------------
 
 /// Create a stage with distinct `season_id` (index % 4) and per-month dates.
@@ -1055,13 +1055,13 @@ fn build_mixed_system(
     (system, source)
 }
 
-// --- tickets 032-034: Convergence sweep (Historical, External inflow, Mixed schemes) ---
+// --- Convergence sweep (Historical, External inflow, Mixed schemes) ---
 
 // Original test names consolidated into this sweep:
-//   historical_convergence         (ticket-032)
-//   external_inflow_convergence    (ticket-033)
-//   mixed_scheme_convergence       (ticket-034, combo 1: inflow=InSample/load=OOS/ncs=InSample)
-//   mixed_scheme_convergence       (ticket-034, combo 2: inflow=OOS/load=InSample/ncs=InSample)
+//   historical_convergence
+//   external_inflow_convergence
+//   mixed_scheme_convergence
+//   mixed_scheme_convergence
 //
 // Cases (idx, desc):
 //   0: Historical inflow scheme — historical_library must be Some
@@ -1532,7 +1532,7 @@ fn build_monthly_unique_groups_system(
     (system, source)
 }
 
-/// Regression test for ticket-005: noise group wiring must be transparent for
+/// Regression test: noise group wiring must be transparent for
 /// monthly studies.
 ///
 /// A 12-stage monthly study where every stage has a unique `(season_id, year)`

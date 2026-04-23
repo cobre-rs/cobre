@@ -1883,7 +1883,7 @@ mod tests {
 // limits never fire. A 5-variable, 4-constraint "larger_lp" is required.
 #[cfg(test)]
 #[allow(clippy::doc_markdown)]
-mod research_tests_ticket_023 {
+mod research_tests {
     // LP used: 3-variable, 2-constraint fixture from SS1.1 (same as other tests).
     // This LP requires at least 2 simplex iterations, so iteration_limit=1 will
     // produce ITERATION_LIMIT.

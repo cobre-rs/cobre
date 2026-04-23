@@ -4706,7 +4706,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion C4 for ticket-002: within a single backward
+    /// Acceptance criterion: within a single backward
     /// iteration on a 3-stage system with `LocalBackend` (single-rank),
     /// cuts generated at stage t=1 are visible at stage t=0 and appear
     /// binding (mock returns positive cut duals). The metadata sync
@@ -5565,7 +5565,7 @@ mod tests {
     }
 
     /// Acceptance criterion: `setup_time_ms` is the sum of all workers' non-solve
-    /// work, matching the ticket spec example.
+    /// work.
     ///
     /// Workers have setup costs (load+add+bounds+basis): 20, 25, 15, 22 ms.
     /// Expected `setup_ms` = 20 + 25 + 15 + 22 = 82.
@@ -6050,7 +6050,7 @@ mod tests {
         );
     }
 
-    // ── Ticket-003: read-site prefer-with-fallback unit tests ────────────────
+    // ── read-site prefer-with-fallback unit tests ────────────────
 
     /// Run `process_trial_point_backward` for stage 0 → successor 1 with
     /// explicitly-provided backward and forward basis stores.

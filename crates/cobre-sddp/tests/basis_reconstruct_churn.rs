@@ -165,7 +165,7 @@ fn sum_forward_deltas(
 /// - `basis_consistency_failures == 0` (reconstruction must never produce an invalid
 ///   warm-start basis).
 ///
-/// ## Always-baked reconstruction (ticket-002)
+/// ## Always-baked reconstruction
 ///
 /// On the always-baked forward path, cuts are baked as structural rows into the
 /// stage template. `reconstruct_basis` is called once per warm-start solve, so
@@ -176,7 +176,7 @@ fn sum_forward_deltas(
 ///
 /// ## Sensitivity
 ///
-/// A regression that reverts `padding_state = x_hat` (ticket-004) will
+/// A regression that reverts `padding_state = x_hat` will
 /// increase `simplex_iterations` by roughly +6 %, which exceeds the ±5 %
 /// band and causes the test to fail.
 #[test]
@@ -262,7 +262,7 @@ fn basis_reconstruct_churn() {
     // Aggregate forward-pass stats across all iterations.
     let fwd = sum_forward_deltas(&result.solver_stats_log);
 
-    // AC-1: On the always-baked forward path (ticket-002), reconstruct_basis is
+    // AC-1: On the always-baked forward path, reconstruct_basis is
     // called once per warm-start solve. The counter must be non-zero across all
     // forward-pass log entries, confirming basis reconstruction is active.
     assert!(
@@ -306,7 +306,7 @@ fn basis_reconstruct_churn() {
 /// ## What this tests
 ///
 /// Verifies the no-churn happy path on the always-baked forward path
-/// (ticket-002). Cuts are baked as structural rows into the stage template;
+/// Cuts are baked as structural rows into the stage template;
 /// `reconstruct_basis` is called once per warm-start solve so
 /// `basis_reconstructions > 0` across all forward-pass log entries.
 /// Warm-start is effective via `load_model(baked_template)`.
@@ -374,7 +374,7 @@ fn test_basis_reconstruct_no_churn_full_preservation() {
     // Aggregate forward stats across all iterations.
     let fwd = sum_forward_deltas(&result.solver_stats_log);
 
-    // AC-A: On the always-baked forward path (ticket-002), reconstruct_basis is
+    // AC-A: On the always-baked forward path, reconstruct_basis is
     // called once per warm-start solve. The counter must be non-zero, confirming
     // basis reconstruction is active across all 3 iterations.
     assert!(

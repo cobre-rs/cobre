@@ -3,8 +3,8 @@
 //! [`run_stage_solve`] encapsulates basis reconstruction, invariant enforcement,
 //! and the solver call so that `forward.rs`, `backward.rs`, and
 //! `simulation/pipeline.rs` can delegate to a single implementation instead of
-//! each maintaining their own copy. The body is filled in ticket 002; this
-//! module freezes the public API shape that tickets 003–005 depend on.
+//! each maintaining their own copy. This
+//! module freezes the public API shape.
 
 use cobre_solver::{SolutionView, SolverInterface, StageTemplate};
 

@@ -10,7 +10,7 @@
 //! - Cases live under `examples/deterministic/<case-id>/` in the workspace root.
 //! - Every test calls `run_deterministic` with the case directory path and then
 //!   asserts on `TrainingResult.final_lb` and `TrainingResult.iterations`.
-//! - Expected costs are derived analytically in the ticket specification; the
+//! - Expected costs are derived analytically in the specification; the
 //!   derivation is documented in each test's doc comment.
 //! - `StubComm` provides a single-rank communicator that faithfully copies data
 //!   through `allgatherv` and `allreduce` so the pipeline runs without MPI.
@@ -2802,7 +2802,7 @@ fn d27_per_stage_thermal_cost() {
 /// - `recent_observations` in initial conditions
 ///
 /// The test only checks that training completes at least 1 iteration; no
-/// expected cost is asserted here — correctness is validated in ticket-017.
+/// expected cost is asserted here
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "slow: run with --features slow-tests"
@@ -2999,7 +2999,7 @@ fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
     );
 }
 
-// ── Ticket-009 integration test ──────────────────────────────────────────────
+// ── integration test ──────────────────────────────────────────────
 
 /// Verify that the baked-template simulation path produces bit-exactly identical
 /// per-scenario costs to the legacy (fallback) path.

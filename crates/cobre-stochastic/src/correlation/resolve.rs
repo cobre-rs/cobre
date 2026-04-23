@@ -38,7 +38,7 @@ pub struct GroupFactor {
     pub entity_ids: Vec<EntityId>,
     /// Entity type shared by all entities in this group (e.g., `"inflow"`, `"load"`,
     /// `"ncs"`). All entities in a group are guaranteed to be the same type after
-    /// ticket-008 validation in [`DecomposedCorrelation::build`].
+    /// validation in [`DecomposedCorrelation::build`].
     pub entity_type: String,
     /// Pre-computed positions of this group's entities within the canonical
     /// full entity order. Filled by [`DecomposedCorrelation::resolve_positions`].
@@ -852,7 +852,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Same-type entity validation tests (ticket-008)
+    // Same-type entity validation tests
     // -----------------------------------------------------------------------
 
     fn mixed_type_group(name: &str) -> CorrelationGroup {
@@ -931,7 +931,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // apply_correlation_for_class tests (ticket-009)
+    // apply_correlation_for_class tests
     // -----------------------------------------------------------------------
 
     #[test]

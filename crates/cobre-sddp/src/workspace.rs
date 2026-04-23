@@ -16,7 +16,7 @@ use crate::basis_reconstruct::PromotionScratch;
 /// warm-start reconstruction.
 ///
 /// `CapturedBasis` wraps a raw [`Basis`] and attaches two pieces of metadata
-/// that the reconstruction algorithm (tickets 002–004) needs:
+/// that the reconstruction algorithm needs:
 ///
 /// - `base_row_count`: the number of template (non-cut) rows in the LP when
 ///   the basis was captured.  Row statuses at indices `0..base_row_count`
@@ -26,7 +26,6 @@ use crate::basis_reconstruct::PromotionScratch;
 ///   slot it occupied at capture time.  Entry `i` corresponds to LP row
 ///   `base_row_count + i`.  Length must equal
 ///   `basis.row_status.len() - base_row_count` when both are populated;
-///   tickets 003 and 004 enforce this invariant — this ticket only declares it.
 ///
 /// - `state_at_capture`: the state vector `x_hat` at which the basis was
 ///   captured.  Used by the backward warm-start to evaluate newly added cuts
@@ -60,7 +59,6 @@ impl CapturedBasis {
     /// - `n_state`: pre-allocated capacity for `state_at_capture`.
     ///
     /// `cut_row_slots` and `state_at_capture` start empty (length 0);
-    /// tickets 003/004 push into them on the hot path without allocation.
     #[must_use]
     pub fn new(
         num_cols: usize,
@@ -1205,10 +1203,6 @@ mod tests {
         assert!(store.get(4, 0).is_none());
     }
 
-    // ---------------------------------------------------------------------------
-    // New unit tests for ticket-001
-    // ---------------------------------------------------------------------------
-
     #[test]
     fn test_captured_basis_new_capacities() {
         // AC: CapturedBasis::new(4, 6, 3, 10, 2) must produce:
@@ -1325,7 +1319,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // CapturedBasis wire-format round-trip tests (ticket-003)
+    // CapturedBasis wire-format round-trip tests
     // ---------------------------------------------------------------------------
 
     /// Round-trip test: single stage with fully populated metadata.

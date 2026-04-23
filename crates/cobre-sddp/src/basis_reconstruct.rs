@@ -174,7 +174,7 @@ pub struct ReconstructionSource<'a> {
 pub struct PaddingContext<'a> {
     /// State vector at which to evaluate newly-added cuts.
     /// Forward path: `ws.current_state[..n_state]`.
-    /// Backward path: `stored.state_at_capture` (the fix from ticket 004).
+    /// Backward path: `stored.state_at_capture`.
     pub state: &'a [f64],
     /// θ proxy used for the tight/slack decision.
     pub theta: f64,
@@ -296,8 +296,8 @@ pub struct ReconstructionStats {
 ///   `padding.state.len()`.
 /// - `padding` — state, θ proxy, and tolerance for evaluating new cut rows.
 ///   Forward path: `padding.state = ws.current_state[..n_state]`.
-///   Backward path: `padding.state = captured.state_at_capture` (the fix from
-///   ticket 004 — preserved rows were captured at that state so new rows must
+///   Backward path: `padding.state = captured.state_at_capture` (preserved rows
+///   were captured at that state so new rows must
 ///   be evaluated at the same state for a consistent basis).
 /// - `out` — destination basis (caller owns; cleared and refilled in place).
 /// - `slot_lookup` — scratch `Vec<Option<u32>>` pre-sized by the caller to
@@ -754,14 +754,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// AC1: empty stored basis + 3 new cuts — all classified BASIC regardless
-    /// of cut-value evaluation (ticket-008: unconditional-BASIC for new cuts).
+    /// of cut-value evaluation.
     #[test]
     fn test_empty_stored_all_new_cuts() {
         // stored: shim state — no cut rows, base_rows=2, num_cols=3.
         let stored = CapturedBasis::new(3, 2, 2, 0, 0);
 
         // Cuts at padding_state=[1.0, 2.0], theta=10.0, tolerance=1e-7.
-        // Post ticket-008: cut-value evaluation is no longer performed for new
+        // cut-value evaluation is no longer performed for new
         // cuts; all three slots are BASIC regardless of their slack/tightness.
         //   slot 5: would have been BASIC (slack=2)
         //   slot 6: would have been LOWER (tight, slack=0) — now BASIC
@@ -952,13 +952,13 @@ mod tests {
         );
     }
 
-    /// AC5: adds only — target has slots [10, 11, 12, 13]; 10 and 11 preserved,
-    /// 12 and 13 are new cuts classified BASIC unconditionally (ticket-008).
+    /// adds only — target has slots [10, 11, 12, 13]; 10 and 11 preserved,
+    /// 12 and 13 are new cuts classified BASIC unconditionally.
     #[test]
     fn test_adds_only() {
         // Stored has only slots 10 and 11.
         let stored = make_stored_basis(3, 4, &[10, 11], &[L, B], &[1.0, 2.0]);
-        // Post ticket-008: slots 12 and 13 are new; both get BASIC regardless of
+        // slots 12 and 13 are new; both get BASIC regardless of
         // cut-value evaluation (slot 12 would have been LOWER, slot 13 BASIC).
         let cuts: Vec<(usize, f64, Vec<f64>)> = vec![
             (10, 0.0, vec![0.0, 0.0]),
@@ -1116,15 +1116,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Integration: forward apply path with cut churn (ticket-003 AC #5)
+    // Integration: forward apply path with cut churn
     // -----------------------------------------------------------------------
 
-    /// AC #5 (ticket-003): a stored basis whose `cut_row_slots` are
+    /// a stored basis whose `cut_row_slots` are
     /// `[0, 1, 2]` and a current `pool.active_cuts()` that yields
     /// `[0, 2]` (slot 1 deactivated by cut selection) must reconstruct with
     /// `preserved == 2` and the preserved row statuses must match the stored
     /// basis at the right positions.  This mirrors the wiring in
-    /// `forward.rs::run_forward_stage` after ticket-003.
+    /// `forward.rs::run_forward_stage`.
     #[test]
     fn test_forward_reconstruct_preserves_slots_after_churn() {
         // Build a pool with three cuts at slots 0, 1, 2.
@@ -1186,7 +1186,7 @@ mod tests {
         assert_eq!(out.row_status[3], stored.basis.row_status[4], "slot 2");
     }
 
-    /// AC #6 (ticket-003): three new cuts at slots beyond the stored basis,
+    /// three new cuts at slots beyond the stored basis,
     /// all evaluating to slack at the padding state, must produce
     /// `stats.new_slack == 3`, `stats.new_tight == 0`, and the corresponding
     /// row statuses must all be `HIGHS_BASIS_STATUS_BASIC`.
@@ -1237,7 +1237,7 @@ mod tests {
         assert_eq!(out.row_status[6], B, "slot 22 new slack");
     }
 
-    /// AC #7 (ticket-003): the capture-site metadata writes must populate
+    /// the capture-site metadata writes must populate
     /// `cut_row_slots`, `state_at_capture`, and `base_row_count` so the next
     /// iteration's reconstruct sees a well-formed `CapturedBasis`.  This
     /// test exercises the same logic as `forward.rs::write_capture_metadata`
@@ -1298,7 +1298,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Ticket-008: basic-count invariant on the baked-template backward path
+    // basic-count invariant on the baked-template backward path
     //
     // HiGHS isBasisConsistent requires: basic_count == num_row, where
     //   basic_count = col_status.count(BASIC) + row_status.count(BASIC)
@@ -1388,7 +1388,7 @@ mod tests {
         let col_basic = stored.basis.col_status.iter().filter(|&&s| s == B).count();
 
         // 3 preserved slots + 2 new cuts (slot 200 would be tight by value, 201 slack).
-        // Both must become BASIC unconditionally (ticket-008 invariant).
+        // Both must become BASIC unconditionally
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> = vec![
             (100, 0.0, vec![0.0, 0.0, 0.0]),
             (101, 0.0, vec![0.0, 0.0, 0.0]),
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Ticket-009: basic-count invariant on the forward path
+    // basic-count invariant on the forward path
     //
     // On the forward path, cut selection can drop cuts whose stored status was
     // BASIC, causing col_basic + row_basic to exceed num_row after
@@ -1456,7 +1456,7 @@ mod tests {
     //   (a) all_preserved — no drops, delta == 0, demotions == 0
     //   (b) drops_with_lower — drops include LOWER statuses; only BASIC drops
     //       cause excess; demotions == dropped_basic
-    //   (c) new_cuts_after_drops — new cuts are always BASIC (ticket-008),
+    //   (c) new_cuts_after_drops — new cuts are always BASIC,
     //       so they never cause excess; only preserved BASIC drops do
     //
     // Setup for (a) and (b):
@@ -1545,7 +1545,7 @@ mod tests {
     // (b) Cuts dropped include LOWER statuses — excess equals count of dropped
     // BASIC cuts (not the LOWER drops), demotions restore the invariant.
     //
-    // Concrete working fixture (derived from ticket-009 algebraic proof):
+    // Concrete working fixture:
     //   base_rows=1, col=[B] => col_basic=1, row_basic_tmpl=1.
     //   stored: 4 cuts [10,11,12,13] statuses [B,B,L,B] (3 BASIC, 1 LOWER).
     //   stored LP: 1+1+3=5 == 1+4=5 (consistent)
@@ -1553,7 +1553,6 @@ mod tests {
     //   preserved: [B,B] => preserved_basic=2.
     //   col(1)+row(1+2)=4; num_row=1+2=3; excess=4-3=1.
     //   dropped_lower count = 1 (slot 12 was L), dropped_basic=1 (slot 13).
-    //   The ticket's proof: excess = dropped_lower = 1. demotions expected = 1.
     #[test]
     fn reconstructed_basis_preserves_basic_count_invariant_forward_drops_with_lower() {
         let base_rows = 1usize;
@@ -1583,7 +1582,7 @@ mod tests {
 
         // Target: only slots [10, 11] — slots 12 (L) and 13 (B) are dropped.
         // dropped_lower = 1 (slot 12), dropped_basic = 1 (slot 13).
-        // excess = dropped_lower = 1 by the ticket's proof.
+        // excess = dropped_lower = 1.
         let delta_cuts: Vec<(usize, f64, Vec<f64>)> =
             vec![(10, 0.0, vec![0.0]), (11, 0.0, vec![0.0])];
         let num_cut = delta_cuts.len();
@@ -1717,7 +1716,7 @@ mod tests {
 
     // (c) New cuts added after drops.
     //
-    // New cuts are always classified BASIC (ticket-008). They grow num_row by 1
+    // New cuts are always classified BASIC. They grow num_row by 1
     // each, so they cannot create excess — each new cut adds 1 to row_basic and
     // 1 to num_row simultaneously. Excess is derived solely from drops.
     //
@@ -1726,7 +1725,7 @@ mod tests {
     //   base_rows=1, col=[B], template=[B].
     //   stored: 4 cuts [10,11,12,13] statuses [B,B,L,B].
     //   Target: slots [10,11,20,21] — slots 12(L),13(B) dropped + 2 new.
-    //   preserved: [B,B], new: [B,B] (ticket-008 unconditional BASIC).
+    //   preserved: [B,B], new: [B,B]
     //   col(1)+row(1+2+2)=6; num_row=1+4=5; excess=6-5=1.
     //   demotions expected = 1 (new cuts do not contribute to excess).
     #[test]
@@ -2760,7 +2759,6 @@ mod tests {
     ///     candidate for Scheme 1).
     ///   add_cut(iter=1, fp=0, ...) → slot 3.  G1 seed: meta[3].active_window=SEED_BIT.
     ///   Stored basis (T3a-corrected): 1 base row, 1 col, slot 1 stored as LOWER
-    ///     (the promotion candidate; NOT BASIC as the pre-T3a ticket draft said).
     ///   active_cuts() yields slots 1 and 3 (in insertion order).
     ///
     /// Reconstruction walk:

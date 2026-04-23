@@ -219,7 +219,7 @@ mod tests {
     use cobre_solver::StageTemplate;
 
     // =========================================================================
-    // Row scaling tests (ticket E3-001)
+    // Row scaling tests
     // =========================================================================
 
     /// Build a minimal `StageTemplate` for row-scaling unit tests.

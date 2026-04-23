@@ -752,7 +752,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // Snapshot pool stats after forward pass and compute aggregate delta for timing.
         // The per-stage breakdown is carried by `forward_result.stage_stats`; the pool
         // snapshot here is kept solely to derive `fwd_solve_time_ms` for the timing
-        // summary at line 1176 (unchanged from pre-ticket behaviour).
+        // summary.
         let fwd_solve_time_ms = {
             let fwd_stats_after = aggregate_solver_statistics(
                 fwd_pool.workspaces.iter().map(|w| w.solver.statistics()),
@@ -1078,7 +1078,7 @@ pub fn train<S: SolverInterface + Send, C: Communicator>(
         // Step 4c: Template baking.
         // Rebuild per-stage baked templates from the current active cut set.
         // Iteration i+1's forward and backward passes will consume these
-        // baked templates (wired in tickets 010 and 011). Sequential over
+        // baked templates. Sequential over
         // stages: per-stage memory allocation is ~10s of MB and parallelism
         // here would contend with the solver workspace pools already in use
         // by the LB evaluation that follows.
@@ -2085,7 +2085,7 @@ mod tests {
         assert!(matches!(events[18], TrainingEvent::IterationSummary { .. }));
     }
 
-    /// AC C2 + C3 for ticket-006: with 4 workers and 1 iteration, exactly
+    /// with 4 workers and 1 iteration, exactly
     /// `2 * n_workers_local = 8` WorkerTiming events are emitted with `rank = 0`
     /// and `worker_id ∈ {0, 1, 2, 3}`; AND the sum of `timings[BWD_SETUP]` across
     /// the 4 backward emissions equals `BackwardPassComplete.setup_time_ms` for
@@ -2902,7 +2902,7 @@ mod tests {
     /// `existing_train_tests_pass_with_none`
     ///
     /// Verify backward compatibility: calling `train` with `cut_selection:
-    /// None` produces the same result as before this ticket. This is
+    /// None` produces the same result as before. This is
     /// implicitly verified by the existing `ac_train_completes_with_iteration_limit`
     /// test. This test is an explicit additional check with an explicit `None`.
     #[test]
@@ -3403,7 +3403,7 @@ mod tests {
         }
     }
 
-    /// AC ticket-010: `broadcast_basis_cache` with `comm.size() == 1` must clone
+    /// `broadcast_basis_cache` with `comm.size() == 1` must clone
     /// the full `CapturedBasis` including metadata (`cut_row_slots`,
     /// `state_at_capture`, `base_row_count`), not just the bare basis body.
     #[test]
@@ -3644,7 +3644,7 @@ mod tests {
         }
     }
 
-    /// AC ticket-017: `broadcast_basis_cache` with `size=2` must transmit the
+    /// `broadcast_basis_cache` with `size=2` must transmit the
     /// full `CapturedBasis` metadata (`cut_row_slots`, `state_at_capture`,
     /// `base_row_count`) to rank 1. The `MultiRankMockComm` pair records
     /// rank-0's four broadcasts and replays them exactly to rank 1.
@@ -3707,7 +3707,7 @@ mod tests {
         assert!(cache[1].is_none(), "stage 1 had no basis → None");
     }
 
-    /// AC ticket-017: When rank 0's `CapturedBasis` has an empty `cut_row_slots`
+    /// When rank 0's `CapturedBasis` has an empty `cut_row_slots`
     /// (legitimate for stages that never produced cuts), the round-trip must
     /// produce `cut_row_slots.is_empty()` on rank 1 without error.
     #[test]
@@ -3749,7 +3749,7 @@ mod tests {
         assert_eq!(cb.base_row_count, 1, "base_row_count must round-trip");
     }
 
-    /// AC ticket-017: When the i32 broadcast buffer is truncated mid-
+    /// When the i32 broadcast buffer is truncated mid-
     /// `cut_row_slots`, `broadcast_basis_cache` must return
     /// `SddpError::Validation` with a message containing "cut_row_slots" and
     /// the stage index.
@@ -3824,7 +3824,7 @@ mod tests {
         }
     }
 
-    /// AC ticket-017: When the f64 broadcast buffer is truncated mid-
+    /// When the f64 broadcast buffer is truncated mid-
     /// `state_at_capture`, `broadcast_basis_cache` must return
     /// `SddpError::Validation` with a message containing "state_at_capture"
     /// and the stage index.
@@ -4035,7 +4035,7 @@ mod tests {
         );
     }
 
-    /// AC ticket-001: `TrainingResult::new` assigns every field correctly.
+    /// `TrainingResult::new` assigns every field correctly.
     ///
     /// Calls the canonical constructor with 11 explicit, distinct values and
     /// asserts each field on the returned struct. The test fails at compile time

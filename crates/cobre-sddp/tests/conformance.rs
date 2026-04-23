@@ -228,7 +228,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
         },
         None,
         None,
-        None, // noise_group_ids: wired in ticket-005
+        None,
     )
     .unwrap()
 }

@@ -1007,7 +1007,7 @@ mod tests {
 
     // ── Test: acceptance criterion — hydro spillage_cost ─────────────────────
 
-    /// Acceptance criterion from ticket: 2 hydros, 3 stages, override row for
+    /// 2 hydros, 3 stages, override row for
     /// hydro_id=0, stage_id=1, spillage_cost=Some(0.05). Verifies exact cells.
     #[test]
     fn test_ac_hydro_spillage_cost_override() {
@@ -1033,7 +1033,7 @@ mod tests {
 
     // ── Test: acceptance criterion — bus excess_cost ───────────────────────────
 
-    /// Acceptance criterion from ticket: 1 bus with excess_cost=100.0, 2 stages,
+    /// 1 bus with excess_cost=100.0, 2 stages,
     /// override at stage 0 to 250.0. Verifies exact cells.
     #[test]
     fn test_ac_bus_excess_cost_override() {
@@ -1052,7 +1052,7 @@ mod tests {
 
     // ── Test: acceptance criterion — filling_target_violation_cost only ────────
 
-    /// Acceptance criterion from ticket: a hydro override where only
+    /// a hydro override where only
     /// filling_target_violation_cost is Some(99999.0) and all other 10 fields
     /// are None. Verifies only that field is updated.
     #[test]

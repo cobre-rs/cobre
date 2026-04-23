@@ -3234,7 +3234,7 @@ mod tests {
 
     // ── RawHyperplane and compute_tangent_plane tests ─────────────────────────
 
-    /// Helper: build the production function used for the ticket-005 acceptance criteria.
+    /// Helper: build the production function used for the acceptance criteria.
     ///
     /// Setup: sloped_forebay (h = 380 + v * 2e-3), linear tailrace (h = 5.5/3000 * q),
     /// constant hydraulic loss = 2.0 m, efficiency = 0.92.
@@ -3260,7 +3260,7 @@ mod tests {
     /// AC: compute_tangent_plane at (v=10000, q=3000, s=0) returns Some and all four
     /// coefficients match the analytical derivation.
     ///
-    /// Expected (from ticket-005 AC section with ke = 9.81e-3 * 0.92):
+    /// Expected (with ke = 9.81e-3 * 0.92):
     ///   phi = ke * 3000 * 392.5
     ///   gamma_v = ke * 3000 * 2e-3
     ///   gamma_q = ke * (392.5 - 5.5) = ke * 387.0

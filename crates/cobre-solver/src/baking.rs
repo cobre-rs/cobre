@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_bake_single_row_appends_correct_column_entries() {
-        // Fixture: 3-col, 2-row base as described in the ticket.
+        // Fixture: 3-col, 2-row base as described.
         // RowBatch: one row touching cols 0 and 2.
         let base = make_fixture_stage_template();
         let rows = RowBatch {
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(out.num_rows, 3);
         assert_eq!(out.num_nz, 5);
 
-        // Corrected col_starts (per ticket clarification): col 1 has 0 entries.
+        // Corrected col_starts: col 1 has 0 entries.
         assert_eq!(out.col_starts, vec![0_i32, 3, 3, 5]);
 
         // Column 0: base rows [0,1] then cut row [2]
@@ -709,7 +709,7 @@ mod tests {
     // `num_nz` while keeping the backing Vecs empty. In debug builds,
     // `debug_assert!(base.row_indices.len() == base.num_nz)` fires before the
     // overflow check, so the test is restricted to `#[cfg(not(debug_assertions))]`
-    // (i.e., `cargo test --release`). See ticket-007 §Error Handling.
+    // (i.e., `cargo test --release`).
     // -----------------------------------------------------------------------
 
     /// Verifies that `bake_rows_into_template` panics with the expected message

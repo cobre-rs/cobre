@@ -1898,7 +1898,7 @@ mod tests {
     /// Test 3: Uniform monthly study — empty downstream buffers, zero overhead.
     ///
     /// Calls `accumulate_and_shift_lag_state` with `downstream_accumulator = &mut []`.
-    /// The function must produce exactly the same result as before this ticket,
+    /// The function must produce exactly the same result,
     /// with no downstream fields accessed.
     #[test]
     fn test_no_downstream_for_uniform_monthly() {

@@ -1794,7 +1794,7 @@ mod tests {
 
     // ── Evaporation field tests ────────────────────────────────────────────
 
-    // AC (ticket-010): 0 evaporation hydros → evap_indices is empty.
+    // 0 evaporation hydros → evap_indices is empty.
     #[test]
     fn evap_no_hydros_indices_empty() {
         let idx = StageIndexer::with_equipment(&eq(3, 0, 1, 0, 1, 1, false), &fpha(vec![], vec![]));
@@ -1804,7 +1804,7 @@ mod tests {
         assert!(idx.evap_indices.is_empty());
     }
 
-    // AC (ticket-010): 1 evaporation hydro — verify column/row positions.
+    // 1 evaporation hydro — verify column/row positions.
     //
     // N=2, L=0, T=0, Ln=0, B=1, K=1, no penalty, no FPHA, 1 evap hydro.
     // theta = N*(3+L) = 2*(3+0) = 6
@@ -1845,7 +1845,7 @@ mod tests {
         assert_eq!(ei.evap_row, 7);
     }
 
-    // AC (ticket-010): 2 evaporation hydros — verify column/row ranges are
+    // 2 evaporation hydros — verify column/row ranges are
     // contiguous and non-overlapping with FPHA ranges.
     //
     // N=4, L=0, T=0, Ln=0, B=1, K=1, no penalty, 1 FPHA hydro (index 0, 3 planes),

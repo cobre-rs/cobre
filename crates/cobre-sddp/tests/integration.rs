@@ -1608,7 +1608,7 @@ fn d18_lml1_cut_selection_convergence() {
     );
 }
 
-/// AC #8 (ticket-003): D01 must produce a bit-identical lower bound after the
+/// D01 must produce a bit-identical lower bound after the
 /// forward path is rewired through `reconstruct_basis`.
 ///
 /// `reconstruct_basis` is a warm-start heuristic — it must not change the
@@ -1707,7 +1707,7 @@ fn test_forward_basis_reconstruct_bit_identical_d01() {
     );
 }
 
-/// AC (ticket-011): smoke test that the baked-template backward pass does not
+/// smoke test that the baked-template backward pass does not
 /// diverge or panic over multiple iterations.
 ///
 /// Smoke test: baking activates on iteration 2 and completes 5 iterations.

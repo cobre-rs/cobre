@@ -1,4 +1,4 @@
-"""Python parity tests for `training/solver/iterations.parquet` (ticket-009).
+"""Python parity tests for `training/solver/iterations.parquet`.
 
 Verifies that `cobre.run.run()` produces an identical per-opening solver-stats
 Parquet file to the `cobre` CLI for the D01 deterministic case.
@@ -35,18 +35,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-
 D01_CASE = "examples/deterministic/d01-thermal-dispatch"
 
 # Columns that record wall-clock time and will legitimately differ between runs.
-TIMING_COLS = frozenset(
-    {
-        "solve_time_ms",
-        "load_model_time_ms",
-        "set_bounds_time_ms",
-        "basis_set_time_ms",
-    }
-)
+TIMING_COLS = frozenset({
+    "solve_time_ms",
+    "load_model_time_ms",
+    "set_bounds_time_ms",
+    "basis_set_time_ms",
+})
 
 # Expected schema for training/solver/iterations.parquet.
 # rank and worker_id are present; add_rows_time_ms was removed;
@@ -137,7 +134,9 @@ def d01_python_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
 
 def test_python_writes_opening_column(d01_python_output: pathlib.Path) -> None:
     """Python run produces iterations.parquet with the `opening` column (Int32, nullable)."""
-    parquet_path = d01_python_output / "training" / "solver" / "iterations.parquet"
+    parquet_path = (
+        d01_python_output / "training" / "solver" / "iterations.parquet"
+    )
     assert parquet_path.exists(), (
         "training/solver/iterations.parquet must exist after Python run"
     )
@@ -251,7 +250,8 @@ def test_python_matches_cli_nontiming_columns(
             )
 
     assert not mismatches, (
-        "Non-timing column mismatch between CLI and Python:\n" + "\n".join(mismatches)
+        "Non-timing column mismatch between CLI and Python:\n"
+        + "\n".join(mismatches)
     )
 
 
@@ -273,7 +273,9 @@ def test_python_basis_reconstructions_column_shape(
     d01_python_output: pathlib.Path,
 ) -> None:
     """basis_reconstructions column is UInt64 non-nullable."""
-    parquet_path = d01_python_output / "training" / "solver" / "iterations.parquet"
+    parquet_path = (
+        d01_python_output / "training" / "solver" / "iterations.parquet"
+    )
     schema = pq.read_schema(parquet_path)
     field = schema.field("basis_reconstructions")
     assert pa.types.is_uint64(field.type), (

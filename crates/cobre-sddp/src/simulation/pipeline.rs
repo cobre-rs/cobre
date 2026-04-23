@@ -1865,7 +1865,7 @@ mod tests {
         }
     }
 
-    /// Acceptance criterion (exact ticket spec): solver infeasible at scenario 2, stage 3
+    /// solver infeasible at scenario 2, stage 3
     /// with 4 scenarios and 4 stages → `SimulationError::LpInfeasible { scenario_id: 2, stage_id: 3 }`.
     ///
     /// Solve call index for (scenario=2, stage=3) = 2*4 + 3 = 11 (0-based).
@@ -2792,7 +2792,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-017): `SimulationProgress` events are
+    /// `SimulationProgress` events are
     /// received in the channel BEFORE `simulate()` returns (during the
     /// parallel region).
     ///
@@ -3156,7 +3156,7 @@ mod tests {
 
     /// Acceptance criterion: each `SimulationProgress` event carries a finite,
     /// non-NaN `scenario_cost`. Statistics accumulation is deferred to the
-    /// progress thread (ticket-007); this test verifies the per-scenario cost
+    /// progress thread; this test verifies the per-scenario cost
     /// field is always valid.
     #[test]
     fn simulate_progress_scenario_cost_is_finite() {
@@ -3626,7 +3626,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-028): when `n_load_buses == 0`,
+    /// when `n_load_buses == 0`,
     /// `load_rhs_buf` remains empty and `forward_patch_count` equals
     /// `N*(2+L)` as with the training forward pass.
     ///
@@ -3730,7 +3730,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-028): when load noise is present,
+    /// When load noise is present,
     /// `noise_buf` still contains only inflow values (not contaminated by load noise).
     ///
     /// `noise_buf` contains inflow realizations for the `n_hydros` hydros.
@@ -4359,9 +4359,9 @@ mod tests {
         );
     }
 
-    // ── Ticket-009 baked-template acceptance tests ────────────────────────────
+    // ── baked-template acceptance tests ────────────────────────────
 
-    /// Acceptance criterion (ticket-009 AC #1): when `baked_templates` is `Some`,
+    /// When `baked_templates` is `Some`,
     /// `add_rows` is never called (zero `add_rows_count`) and `load_model` is
     /// called exactly `n_scenarios * n_stages` times.
     #[test]
@@ -4465,7 +4465,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-009 AC #2): when `baked_templates` is `None`
+    /// When `baked_templates` is `None`
     /// (fallback path), `add_rows` is called only when cuts exist.
     ///
     /// The FCF has 0 active cuts, so `cut_batch.num_rows == 0` for every stage,
@@ -4582,7 +4582,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-009 AC #3): when `baked_templates` is `Some`
+    /// When `baked_templates` is `Some`
     /// but the slice length differs from `num_stages`, `simulate` returns
     /// `SimulationError::InvalidConfiguration` whose message contains both lengths.
     #[test]
@@ -4682,9 +4682,9 @@ mod tests {
         }
     }
 
-    // ── Ticket-010 warm-start CapturedBasis acceptance tests ─────────────────
+    // ── Warm-start CapturedBasis acceptance tests ─────────────────
 
-    /// Acceptance criterion (ticket-010 AC #2): when `stage_bases` contains a
+    /// When `stage_bases` contains a
     /// `CapturedBasis` with known slots, the basis passed to `solve(Some(&basis))`
     /// has `row_status.len() == base_row_count + active_cuts_count` and the tail
     /// entries match the stored cut statuses verbatim (preservation path).
@@ -4870,7 +4870,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-010 AC #3): when `stage_bases` is `&[]`
+    /// When `stage_bases` is `&[]`
     /// (cold-start), every LP solve must go through `solver.solve(None)` and
     /// `solve(Some(&basis))` must never be called.
     ///

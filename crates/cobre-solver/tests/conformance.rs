@@ -540,7 +540,7 @@ fn test_solver_highs_dual_normalization_with_binding_cut() {
 
 /// SS1.9: solve twice, verify statistics are cumulative across solves.
 ///
-/// `reset()` was removed in ticket-003 — statistics are now always cumulative
+/// `reset()` was removed — statistics are now always cumulative
 /// and survive `load_model` calls.
 #[test]
 fn test_solver_highs_statistics_are_cumulative() {
@@ -1037,8 +1037,7 @@ fn test_solver_highs_restore_defaults_after_limit() {
 // and `restore_default_settings` are therefore covered indirectly:
 // `restore_default_settings` is exercised by `test_solver_highs_restore_defaults_after_limit`
 // (which verifies that cleanup after a limit error allows a subsequent optimal solve),
-// and the retry loop's coverage is deferred to a future ticket that adds a
-// controllable error injection mechanism.
+// and the retry loop's coverage is deferred
 //
 // Reference: research-edge-case-lps.md §3.3 "Retry Escalation" and §8 item 3.
 

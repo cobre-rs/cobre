@@ -2,8 +2,7 @@
 //!
 //! Exercises [`cobre_sddp::estimation::estimate_from_history`] end-to-end with a
 //! real temporary case directory, a synthetic `inflow_history.parquet`, and
-//! minimal supporting files. Covers acceptance criteria C2 (fixed-order) and
-//! C5 (AIC order selection) from ticket-036.
+//! minimal supporting files. Covers acceptance criteria C2 (fixed-order)
 //!
 //! ## Design constraints
 //!

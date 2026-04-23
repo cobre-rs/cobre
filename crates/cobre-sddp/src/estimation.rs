@@ -2371,7 +2371,7 @@ mod tests {
         // No inflow_ar_coefficients.parquet → PartialEstimation path.
     }
 
-    /// AC-T8-1: `PartialEstimation` preserves user-provided `mean_m3s` and
+    /// `PartialEstimation` preserves user-provided `mean_m3s` and
     /// `std_m3s` while estimating AR coefficients from history.
     ///
     /// Setup: system with known user stats (mean=100.0, std=10.0 for every
@@ -2435,7 +2435,7 @@ mod tests {
         }
     }
 
-    /// AC-T8-2: `PartialEstimation` returns a `Some(report)` with method "PACF"
+    /// `PartialEstimation` returns a `Some(report)` with method "PACF"
     /// and an entry for the single hydro plant.
     ///
     /// Same setup as `test_partial_estimation_preserves_user_stats`.
@@ -3856,7 +3856,7 @@ mod tests {
         assert!((prestudy_neg2.std_m3s - 22.0).abs() < f64::EPSILON);
     }
 
-    // ── ticket-003: PACF and contribution cascade tests ──────────────────────
+    // ── PACF and contribution cascade tests ──────────────────────
 
     /// Simulate a 2-season PAR(2) process using deterministic LCG (Box-Muller).
     /// Model: `z_t = phi_1 * z_{t-1} + phi_2 * z_{t-2} + noise_t`.
@@ -4738,7 +4738,7 @@ mod tests {
         );
     }
 
-    // ── Bidirectional coverage validation tests (ticket-010) ─────────────────
+    // ── Bidirectional coverage validation tests ─────────────────
 
     /// Build a minimal Hydro struct reusing the same penalty/generation defaults
     /// as the single-hydro helpers above.
@@ -4912,7 +4912,7 @@ mod tests {
         writer.close().expect("close writer");
     }
 
-    /// AC-T10-1: Direction A — AR estimated for hydro 2 but no user stats for it.
+    /// Direction A — AR estimated for hydro 2 but no user stats for it.
     ///
     /// Setup: system with hydros [1, 2], history for both [1, 2], but
     /// `inflow_seasonal_stats.parquet` provides stats only for hydro 1.
@@ -4961,7 +4961,7 @@ mod tests {
         );
     }
 
-    /// AC-T10-2: Direction B — user stats for hydro 2 but no history for it.
+    /// Direction B — user stats for hydro 2 but no history for it.
     ///
     /// Setup: system with hydros [1, 2] and stats for both, but history only
     /// for hydro 1.
@@ -5033,9 +5033,9 @@ mod tests {
         }
     }
 
-    /// AC-T10-3: Exact coverage — single hydro with matching history and stats.
+    /// Exact coverage — single hydro with matching history and stats.
     ///
-    /// Reuses the single-hydro setup from ticket-008. Asserts that
+    /// Reuses the single-hydro setup. Asserts that
     /// `white_noise_fallbacks` is empty on the returned report.
     #[test]
     fn test_partial_estimation_exact_coverage_no_fallback() {
@@ -5061,7 +5061,7 @@ mod tests {
         );
     }
 
-    /// AC-T10-4: `run_estimation` (FullEstimation path) never populates
+    /// `run_estimation` (FullEstimation path) never populates
     /// `white_noise_fallbacks` — it must be empty on the returned report.
     #[test]
     fn test_full_estimation_report_has_empty_fallbacks() {

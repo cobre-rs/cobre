@@ -3,7 +3,7 @@
 //! Runs all individual file parsers and collects every parse/schema error across
 //! the entire case directory before failing. This layer does **not** check
 //! cross-references, dimensional consistency, or semantic constraints — those are
-//! handled by later layers (tickets 030–033).
+//! handled by later layers.
 //!
 //! The primary entry point is `validate_schema`, which returns a `ParsedData`
 //! bundle holding every parsed output when all files parse cleanly, or `None`

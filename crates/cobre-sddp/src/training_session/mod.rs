@@ -28,7 +28,9 @@
 //! are kept flat here as a deliberate transition step; ticket-002 will absorb
 //! them into a dedicated `BackwardPassState` struct.
 
+pub(crate) mod rank_distribution;
 pub(crate) mod results;
+use self::rank_distribution::RankDistribution;
 use self::results::TrainingResults;
 
 use std::sync::Arc;
@@ -136,14 +138,7 @@ pub(crate) struct TrainingSession<'a, S: SolverInterface + Send, C: Communicator
     export_states: bool,
 
     // ── Rank math (constant for the run) ──────────────────────────────────
-    num_stages: usize,
-    num_ranks: usize,
-    my_rank: usize,
-    my_actual_fwd: usize,
-    my_fwd_offset: usize,
-    max_local_fwd: usize,
-    n_state: usize,
-    fwd_rank: i32,
+    ranks: RankDistribution,
 
     // ── Per-run scratch buffers (owned; reused across iterations) ─────────
     fwd_pool: WorkspacePool<S>,
@@ -211,47 +206,35 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let horizon = training_ctx.horizon;
         let indexer = training_ctx.indexer;
         let num_stages = horizon.num_stages();
-        let num_ranks = comm.size();
-        let my_rank = comm.rank();
         let total_forward_passes = config.loop_config.forward_passes as usize;
-        let n_state = indexer.n_state;
-
-        // forward_passes is the TOTAL across all ranks. Distribute with
-        // base/remainder: first `remainder` ranks get `base + 1`, rest get `base`.
-        let base_fwd = total_forward_passes / num_ranks;
-        let remainder_fwd = total_forward_passes % num_ranks;
-        let my_actual_fwd = base_fwd + usize::from(my_rank < remainder_fwd);
-        let my_fwd_offset = base_fwd * my_rank + my_rank.min(remainder_fwd);
-        // ExchangeBuffers requires uniform local_count — use the max across ranks.
-        let max_local_fwd = base_fwd + usize::from(remainder_fwd > 0);
+        let ranks = RankDistribution::new(comm, num_stages, total_forward_passes, indexer.n_state);
 
         let empty_record = TrajectoryRecord {
             primal: vec![],
             dual: vec![],
             stage_cost: 0.0,
-            state: vec![0.0; n_state],
+            state: vec![0.0; ranks.n_state],
         };
-        let records = vec![empty_record; max_local_fwd * num_stages];
+        let records = vec![empty_record; ranks.max_local_fwd * ranks.num_stages];
 
         // ── Workspace pool ────────────────────────────────────────────────
         let n_threads = n_fwd_threads.max(1);
-        let fwd_rank = i32::try_from(comm.rank()).expect("MPI rank fits in i32");
         let mut fwd_pool = WorkspacePool::try_new(
-            fwd_rank,
+            ranks.fwd_rank,
             n_threads,
-            n_state,
+            ranks.n_state,
             WorkspaceSizing {
                 hydro_count: indexer.hydro_count,
                 max_par_order: indexer.max_par_order,
                 n_load_buses: stage_ctx.n_load_buses,
                 max_blocks,
                 downstream_par_order: stage_ctx.downstream_par_order,
-                max_openings: (0..num_stages)
+                max_openings: (0..ranks.num_stages)
                     .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
                     .max()
                     .unwrap_or(0),
                 initial_pool_capacity: fcf.pools[0].capacity,
-                n_state,
+                n_state: ranks.n_state,
             },
             solver_factory,
         )
@@ -277,26 +260,24 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // ── Basis store + patch buf ────────────────────────────────────────
         // Per-scenario, per-stage basis store. Sized for the maximum local
         // forward passes so that scenario indices are stable across iterations.
-        let basis_store = BasisStore::new(max_local_fwd, num_stages);
+        let basis_store = BasisStore::new(ranks.max_local_fwd, ranks.num_stages);
 
         // Standalone patch buffer for the lower bound evaluation which uses the
         // single `solver` argument directly.
         let patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
 
         // ── Exchange + cut-sync buffers ────────────────────────────────────
-        let actual_per_rank: Vec<usize> = (0..num_ranks)
-            .map(|r| base_fwd + usize::from(r < remainder_fwd))
-            .collect();
+        let actual_per_rank = ranks.actual_per_rank(total_forward_passes);
         let exchange_bufs = ExchangeBuffers::with_actual_counts(
-            n_state,
-            max_local_fwd,
-            num_ranks,
+            ranks.n_state,
+            ranks.max_local_fwd,
+            ranks.num_ranks,
             &actual_per_rank,
         );
         let cut_sync_bufs = CutSyncBuffers::with_distribution(
-            n_state,
-            max_local_fwd,
-            num_ranks,
+            ranks.n_state,
+            ranks.max_local_fwd,
+            ranks.num_ranks,
             total_forward_passes,
         );
 
@@ -307,8 +288,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         ) || config.events.export_states;
         let visited_archive = if needs_archive {
             Some(crate::visited_states::VisitedStatesArchive::new(
-                num_stages,
-                n_state,
+                ranks.num_stages,
+                ranks.n_state,
                 config.loop_config.max_iterations,
                 total_forward_passes,
             ))
@@ -354,10 +335,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             event_sender.as_ref(),
             TrainingEvent::TrainingStarted {
                 case_name: String::new(),
-                stages: num_stages as u32,
+                stages: ranks.num_stages as u32,
                 hydros: indexer.hydro_count as u32,
                 thermals: 0,
-                ranks: num_ranks as u32,
+                ranks: ranks.num_ranks as u32,
                 #[allow(clippy::cast_possible_truncation)]
                 threads_per_rank: n_threads as u32,
                 timestamp: String::new(),
@@ -368,7 +349,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let results = TrainingResults::new(start_iteration);
 
         // ── Cut row batch buffers (reused across iterations) ──────────────
-        let cut_batches: Vec<RowBatch> = (0..num_stages)
+        let cut_batches: Vec<RowBatch> = (0..ranks.num_stages)
             .map(|_| RowBatch {
                 num_rows: 0,
                 row_starts: Vec::new(),
@@ -388,9 +369,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         };
 
         // ── Template baking buffers ────────────────────────────────────────
-        let mut baked_templates: Vec<StageTemplate> =
-            (0..num_stages).map(|_| StageTemplate::empty()).collect();
-        let bake_row_batches: Vec<RowBatch> = (0..num_stages)
+        let mut baked_templates: Vec<StageTemplate> = (0..ranks.num_stages)
+            .map(|_| StageTemplate::empty())
+            .collect();
+        let bake_row_batches: Vec<RowBatch> = (0..ranks.num_stages)
             .map(|_| RowBatch {
                 num_rows: 0,
                 row_starts: Vec::new(),
@@ -405,7 +387,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // iteration 1's forward and backward passes can use the baked
         // load path. Empty-batch bake is a structural copy of the base
         // template.
-        for t in 0..num_stages {
+        for t in 0..ranks.num_stages {
             cobre_solver::bake_rows_into_template(
                 &stage_ctx.templates[t],
                 &bake_row_batches[t],
@@ -425,9 +407,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let bwd_metadata_sync_window_buf: Vec<u32> = Vec::new();
         let bwd_global_window_increments_buf: Vec<u32> = Vec::new();
         let bwd_real_states_buf: Vec<f64> =
-            Vec::with_capacity(exchange_bufs.real_total_scenarios() * n_state);
+            Vec::with_capacity(exchange_bufs.real_total_scenarios() * ranks.n_state);
 
-        let bwd_max_openings = (0..num_stages)
+        let bwd_max_openings = (0..ranks.num_stages)
             .map(|t| training_ctx.stochastic.opening_tree().n_openings(t))
             .max()
             .unwrap_or(0);
@@ -465,14 +447,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             event_sender,
             shutdown_flag,
             export_states,
-            num_stages,
-            num_ranks,
-            my_rank,
-            my_actual_fwd,
-            my_fwd_offset,
-            max_local_fwd,
-            n_state,
-            fwd_rank,
+            ranks,
             fwd_pool,
             basis_store,
             patch_buf,
@@ -650,7 +625,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             },
         );
 
-        let basis_cache = broadcast_basis_cache(&self.basis_store, self.num_stages, self.comm)?;
+        let basis_cache =
+            broadcast_basis_cache(&self.basis_store, self.ranks.num_stages, self.comm)?;
 
         Ok(TrainingOutcome {
             result: TrainingResult::new(
@@ -712,7 +688,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             },
         );
 
-        let basis_cache = broadcast_basis_cache(&self.basis_store, self.num_stages, self.comm)?;
+        let basis_cache =
+            broadcast_basis_cache(&self.basis_store, self.ranks.num_stages, self.comm)?;
 
         Ok(TrainingOutcome {
             result: TrainingResult::new(
@@ -748,12 +725,12 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         ),
         SddpError,
     > {
-        let fwd_record_len = self.my_actual_fwd * self.num_stages;
+        let fwd_record_len = self.ranks.my_actual_fwd * self.ranks.num_stages;
         let fwd_batch = ForwardPassBatch {
-            local_forward_passes: self.my_actual_fwd,
+            local_forward_passes: self.ranks.my_actual_fwd,
             total_forward_passes: self.total_forward_passes,
             iteration,
-            fwd_offset: self.my_fwd_offset,
+            fwd_offset: self.ranks.my_fwd_offset,
             event_sender: self.event_sender.as_ref(),
             basis_activity_window: self.basis_activity_window,
         };
@@ -793,7 +770,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 "forward",
                 i32::try_from(stage_idx).unwrap_or(i32::MAX),
                 -1,
-                self.fwd_rank,
+                self.ranks.fwd_rank,
                 -1,
                 delta.clone(),
             ));
@@ -844,8 +821,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             exchange: &mut self.exchange_bufs,
             records: &self.records,
             iteration,
-            local_work: self.my_actual_fwd,
-            fwd_offset: self.my_fwd_offset,
+            local_work: self.ranks.my_actual_fwd,
+            fwd_offset: self.ranks.my_fwd_offset,
             risk_measures: &self.risk_measures,
             cut_activity_tolerance: self.cut_activity_tolerance,
             basis_activity_window: self.basis_activity_window,
@@ -910,7 +887,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             TrainingEvent::BackwardPassComplete {
                 iteration,
                 rows_generated: backward_result.cuts_generated as u32,
-                stages_processed: self.num_stages.saturating_sub(1) as u32,
+                stages_processed: self.ranks.num_stages.saturating_sub(1) as u32,
                 elapsed_ms: backward_result.elapsed_ms,
                 state_exchange_time_ms: backward_result.state_exchange_time_ms,
                 row_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
@@ -949,7 +926,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         if let Some(strategy) = self.cut_selection.as_ref() {
             if strategy.should_run(iteration) {
                 let sel_start = Instant::now();
-                let num_sel_stages = self.num_stages.saturating_sub(1);
+                let num_sel_stages = self.ranks.num_stages.saturating_sub(1);
                 let mut rows_deactivated = 0u32;
                 let mut per_stage = Vec::with_capacity(num_sel_stages);
 
@@ -1032,7 +1009,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         if let Some(b) = self.budget {
             let budget_start = Instant::now();
             let mut total_evicted = 0u32;
-            for stage in 0..self.num_stages {
+            for stage in 0..self.ranks.num_stages {
                 #[allow(clippy::cast_possible_truncation)]
                 let result =
                     self.fcf.pools[stage].enforce_budget(b, iteration, self.config_forward_passes);
@@ -1053,7 +1030,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 TrainingEvent::PolicyBudgetEnforcementComplete {
                     iteration,
                     rows_evicted: total_evicted,
-                    stages_processed: self.num_stages as u32,
+                    stages_processed: self.ranks.num_stages as u32,
                     enforcement_time_ms,
                 },
             );
@@ -1089,7 +1066,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         let bake_start = Instant::now();
         let mut total_rows_baked: u64 = 0;
         let indexer = self.training_ctx.indexer;
-        for t in 0..self.num_stages {
+        for t in 0..self.ranks.num_stages {
             build_cut_row_batch_into(
                 &mut self.bake_row_batches[t],
                 self.fcf,
@@ -1114,7 +1091,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             #[allow(clippy::cast_possible_truncation)]
             TrainingEvent::PolicyTemplateBakeComplete {
                 iteration,
-                stages_processed: self.num_stages as u32,
+                stages_processed: self.ranks.num_stages as u32,
                 total_rows_baked,
                 bake_time_ms,
             },
@@ -1163,7 +1140,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             "lower_bound",
             -1,
             -1,
-            self.fwd_rank,
+            self.ranks.fwd_rank,
             -1,
             lb_delta,
         ));

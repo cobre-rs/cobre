@@ -17,7 +17,6 @@ use cobre_comm::Communicator;
 pub(crate) struct RankDistribution {
     pub num_stages: usize,
     pub num_ranks: usize,
-    // Read by downstream tickets (ticket-002, run_lower_bound refactor).
     #[allow(dead_code)]
     pub my_rank: usize,
     pub my_actual_fwd: usize,

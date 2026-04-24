@@ -22,8 +22,6 @@ use cobre_core::TrainingEvent;
 pub(crate) struct RuntimeHandles {
     pub event_sender: Option<Sender<TrainingEvent>>,
     pub shutdown_flag: Option<Arc<AtomicBool>>,
-    // Read by downstream tickets (export-states wiring); kept flat here as a
-    // transition step mirroring the `my_rank` pattern in RankDistribution.
     #[allow(dead_code)]
     pub export_states: bool,
 }

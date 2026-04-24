@@ -10,6 +10,15 @@
 //! change between calls. Splitting ownership from per-call inputs removes all
 //! lifetime parameters from `ForwardPassState` and avoids variance gymnastics.
 //!
+//! [`ForwardWorkerParams`] bundles the read-only captures that every rayon
+//! worker thread reads from: sampler, contexts, scalars, and seeds. Passing
+//! `&ForwardWorkerParams` by shared reference allows rayon to fan out the
+//! struct across workers without cloning.
+//!
+//! [`ForwardWorkerResult`] is the named return bundle from
+//! [`run_forward_worker`], replacing the former anonymous 3-tuple and
+//! eliminating the `clippy::type_complexity` suppression.
+//!
 //! ## Hot-path allocation discipline
 //!
 //! All `Vec` fields in `ForwardPassState` are pre-sized in
@@ -26,18 +35,19 @@ use cobre_core::{
 use cobre_solver::{SolverInterface, SolverStatistics, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSamplerConfig, SampleRequest, build_forward_sampler,
+    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
+    build_forward_sampler,
 };
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
+    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
     forward::{ForwardResult, StageKey, partition, run_forward_stage},
     solver_stats::SolverStatsDelta,
-    workspace::{BasisStore, SolverWorkspace},
+    workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
 /// Per-iteration argument bundle for [`ForwardPassState::run`].
@@ -131,6 +141,87 @@ impl<'a, S: SolverInterface + Send> ForwardPassInputs<'a, S> {
     }
 }
 
+/// Read-only captures shared across all rayon workers in the forward pass.
+///
+/// Built once by [`ForwardPassState::run`] before the parallel region and
+/// passed by shared reference (`&ForwardWorkerParams`) to every
+/// [`run_forward_worker`] invocation. All fields are either scalars or
+/// immutable borrows; no field is mutated inside the worker.
+///
+/// The struct is not generic over the solver type `S` because no field holds an
+/// `S`-typed value. The `SolverWorkspace<S>` is passed as a separate `ws`
+/// argument to [`run_forward_worker`].
+pub(crate) struct ForwardWorkerParams<'a> {
+    /// Number of forward passes assigned to this rank (local partition size).
+    pub forward_passes: usize,
+    /// Total forward passes across all MPI ranks (for seed derivation).
+    pub total_forward_passes: usize,
+    /// Number of stages in the study horizon.
+    pub num_stages: usize,
+    /// Number of rayon worker threads on this rank.
+    pub n_workers: usize,
+    /// Current training iteration index (1-based).
+    pub iteration: u64,
+    /// Global index of this rank's first forward pass (for seed derivation).
+    pub fwd_offset: usize,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    pub basis_activity_window: u32,
+    /// True when the last stage has warm-start (boundary) cuts.
+    pub terminal_has_boundary_cuts: bool,
+    /// Noise dimension for worker-local sampling buffers (`OutOfSample` path).
+    pub noise_dim: usize,
+    /// Initial reservoir state shared across all workers.
+    pub initial_state: &'a [f64],
+    /// Lag-accumulator seed values at trajectory start (empty → zero-init).
+    pub recent_accum_seed: &'a [f64],
+    /// Lag-accumulator weight seed at trajectory start.
+    pub recent_weight_seed: f64,
+    /// Stage-dimension indexer (state, hydro, lag counts).
+    pub indexer: &'a StageIndexer,
+    /// Stage-level LP context (templates, row counts, noise scales).
+    pub ctx: &'a StageContext<'a>,
+    /// Baked LP templates including pre-appended prior-iteration cuts.
+    pub baked: &'a [StageTemplate],
+    /// Future-cost function — read-only for the forward pass.
+    pub fcf: &'a FutureCostFunction,
+    /// Study-level training context (horizon, indexer, stochastic model).
+    pub training_ctx: &'a TrainingContext<'a>,
+    /// Forward sampler that drives per-scenario-per-stage noise generation.
+    pub sampler: &'a ForwardSampler<'a>,
+}
+
+/// Return bundle from [`run_forward_worker`].
+///
+/// Replaces the anonymous 3-tuple `(Vec<f64>, u64, Vec<SolverStatsDelta>)`
+/// that previously required a `#[allow(clippy::type_complexity)]` annotation.
+pub(crate) struct ForwardWorkerResult {
+    /// Per-scenario trajectory costs for the local worker partition.
+    pub trajectory_costs: Vec<f64>,
+    /// Number of LP solves performed by this worker.
+    pub local_solves: u64,
+    /// Per-stage solver-stats accumulators for this worker.
+    pub per_stage_stats: Vec<SolverStatsDelta>,
+}
+
+/// Scalar context threaded from [`ForwardPassState::run`] into
+/// [`ForwardPassState::post_process_worker_results`].
+///
+/// Bundles the scalar values that are computed before the parallel region and
+/// consumed during sequential post-processing, keeping the post-process helper's
+/// argument count within the 8-parameter budget.
+struct PostProcessContext {
+    /// Total number of rayon workers used in the parallel region.
+    n_workers: usize,
+    /// Number of forward-pass scenarios on this rank.
+    forward_passes: usize,
+    /// Number of stages in the study horizon.
+    num_stages: usize,
+    /// Wall-clock duration of the parallel region in milliseconds.
+    parallel_wall_ms: u64,
+    /// `Instant` captured at the start of the entire `run()` call.
+    start: Instant,
+}
+
 /// Owned scratch buffers for the forward pass, allocated once and reused.
 ///
 /// `ForwardPassState` is constructed once by `TrainingSession::new` and stored
@@ -214,11 +305,6 @@ impl ForwardPassState {
     /// - `inputs.records.len() != inputs.local_forward_passes * num_stages`
     /// - `inputs.training_ctx.initial_state.len() != indexer.n_state`
     /// - `inputs.baked.len() != num_stages`
-    // RATIONALE: 273 lines — encapsulates the complete forward-pass rayon parallel region
-    // (sampler build, per-scenario stage loop, basis capture, cost accumulation). The body is
-    // a single indivisible parallel closure; extracting sub-sections would require passing all
-    // the same context objects and would not reduce the overall complexity.
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn run<S: SolverInterface + Send>(
         &mut self,
         inputs: &mut ForwardPassInputs<'_, S>,
@@ -280,7 +366,7 @@ impl ForwardPassState {
         }
         let basis_slices = inputs.basis_store.split_workers_mut(n_workers);
 
-        // Noise dimension for worker-local sampling buffers (OutOfSample path).
+        // Noise dimension for worker-local sampling buffers (`OutOfSample` path).
         let noise_dim = stochastic.dim();
 
         // True when the last study stage has warm-start (boundary) cuts.
@@ -312,12 +398,35 @@ impl ForwardPassState {
         let parallel_start = Instant::now();
         // Temporarily drain `worker_stage_stats` into a Vec consumed by the
         // parallel closure. After the closure completes we receive the updated
-        // stats back via the worker_results tuple.
+        // stats back via the ForwardWorkerResult.
         let worker_stage_stats_for_par: Vec<Vec<SolverStatsDelta>> =
             std::mem::take(&mut self.worker_stage_stats);
 
-        #[allow(clippy::type_complexity)]
-        let worker_results: Vec<Result<(Vec<f64>, u64, Vec<SolverStatsDelta>), SddpError>> = inputs
+        let params = ForwardWorkerParams {
+            forward_passes,
+            total_forward_passes: inputs.total_forward_passes,
+            num_stages,
+            n_workers,
+            iteration: inputs.iteration,
+            fwd_offset: inputs.fwd_offset,
+            basis_activity_window: inputs.basis_activity_window,
+            terminal_has_boundary_cuts,
+            noise_dim,
+            initial_state,
+            recent_accum_seed,
+            recent_weight_seed,
+            indexer,
+            ctx: inputs.ctx,
+            baked: inputs.baked,
+            fcf: inputs.fcf,
+            training_ctx,
+            sampler: &sampler,
+        };
+        // `params` is shared across all rayon workers via `&ForwardWorkerParams`.
+        // All fields are either `Copy` scalars or `&'a T` shared references, so
+        // `ForwardWorkerParams` is `Sync` by Rust's automatic derivation rules.
+
+        let worker_results: Vec<Result<ForwardWorkerResult, SddpError>> = inputs
             .workspaces
             .par_iter_mut()
             .zip(record_slices.par_iter_mut())
@@ -326,134 +435,14 @@ impl ForwardPassState {
             .enumerate()
             .map(
                 |(w, (((ws, worker_records), mut basis_slice), mut per_stage_stats))| {
-                    let worker_wall_start = Instant::now();
-                    let (start_m, end_m) = partition(forward_passes, n_workers, w);
-                    let n_local = end_m - start_m;
-                    let mut trajectory_costs = vec![0.0_f64; n_local];
-                    let local_solve_count_before = ws.solver.statistics().solve_count;
-                    // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
-                    // when run_forward_stage borrows ws while raw_noise is still live.
-                    let mut raw_noise_buf = vec![0.0_f64; noise_dim];
-                    #[allow(clippy::cast_possible_truncation)]
-                    let mut perm_scratch = vec![0_usize; (inputs.total_forward_passes).max(1)];
-                    #[allow(clippy::cast_possible_truncation)]
-                    let total_scenarios_u32 = inputs.total_forward_passes as u32;
-
-                    for t in 0..num_stages {
-                        let cum_d = inputs
-                            .ctx
-                            .cumulative_discount_factors
-                            .get(t)
-                            .copied()
-                            .unwrap_or(1.0);
-
-                        for (local_m, m) in (start_m..end_m).enumerate() {
-                            // Reload model per scenario to ensure deterministic LP state across
-                            // thread assignments.
-                            ws.solver.load_model(&inputs.baked[t]);
-                            ws.current_state.clear();
-                            let src: &[f64] = if t == 0 {
-                                initial_state
-                            } else {
-                                &worker_records[local_m * num_stages + (t - 1)].state
-                            };
-                            ws.current_state.extend_from_slice(src);
-
-                            // Seed (or zero) the lag accumulator at trajectory start.
-                            if t == 0 {
-                                if recent_accum_seed.is_empty() {
-                                    ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
-                                    ws.scratch.lag_weight_accum = 0.0;
-                                } else {
-                                    ws.scratch.lag_accumulator[..recent_accum_seed.len()]
-                                        .copy_from_slice(recent_accum_seed);
-                                    ws.scratch.lag_weight_accum = recent_weight_seed;
-                                }
-                                // Reset downstream accumulator at trajectory start.
-                                ws.scratch
-                                    .downstream_accumulator
-                                    .iter_mut()
-                                    .for_each(|v| *v = 0.0);
-                                ws.scratch.downstream_weight_accum = 0.0;
-                                ws.scratch
-                                    .downstream_completed_lags
-                                    .iter_mut()
-                                    .for_each(|v| *v = 0.0);
-                                ws.scratch.downstream_n_completed = 0;
-                            }
-
-                            let global_scenario = inputs.fwd_offset + m;
-                            #[allow(clippy::cast_possible_truncation)]
-                            let (i32, s32, t32) =
-                                (inputs.iteration as u32, global_scenario as u32, t as u32);
-
-                            if t == 0 {
-                                let class_req = ClassSampleRequest {
-                                    iteration: i32,
-                                    scenario: s32,
-                                    stage: 0,
-                                    stage_idx: 0,
-                                    total_scenarios: total_scenarios_u32,
-                                    noise_group_id: 0,
-                                };
-                                sampler.apply_initial_state(
-                                    &class_req,
-                                    &mut ws.current_state,
-                                    indexer.inflow_lags.start,
-                                );
-                            }
-                            let noise = sampler.sample(SampleRequest {
-                                iteration: i32,
-                                scenario: s32,
-                                stage: t32,
-                                stage_idx: t,
-                                noise_buf: &mut raw_noise_buf,
-                                perm_scratch: &mut perm_scratch,
-                                total_scenarios: total_scenarios_u32,
-                                noise_group_id: inputs.ctx.noise_group_id_at(t),
-                            })?;
-                            let raw_noise = noise.as_slice();
-                            let key = StageKey {
-                                t,
-                                m,
-                                local_m,
-                                num_stages,
-                                iteration: inputs.iteration,
-                                raw_noise,
-                                basis_row_capacity: inputs.baked[t].num_rows,
-                                terminal_has_boundary_cuts,
-                                pool: &inputs.fcf.pools[t],
-                                baked_template: &inputs.baked[t],
-                                basis_activity_window: inputs.basis_activity_window,
-                            };
-                            // Snapshot solver statistics before the stage solve so the
-                            // per-stage delta can be accumulated without hot-path allocation.
-                            let stats_before_stage = ws.solver.statistics();
-                            let stage_cost = run_forward_stage(
-                                ws,
-                                &mut basis_slice,
-                                inputs.ctx,
-                                training_ctx,
-                                &key,
-                                worker_records,
-                            )?;
-                            let stage_delta = SolverStatsDelta::from_snapshots(
-                                &stats_before_stage,
-                                &ws.solver.statistics(),
-                            );
-                            SolverStatsDelta::accumulate_into(
-                                &mut per_stage_stats[t],
-                                &stage_delta,
-                            );
-                            trajectory_costs[local_m] += cum_d * stage_cost;
-                        }
-                    }
-
-                    let local_solves =
-                        ws.solver.statistics().solve_count - local_solve_count_before;
-                    ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_WALL] +=
-                        worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
-                    Ok((trajectory_costs, local_solves, per_stage_stats))
+                    run_forward_worker(
+                        w,
+                        ws,
+                        worker_records,
+                        &mut basis_slice,
+                        &mut per_stage_stats,
+                        &params,
+                    )
                 },
             )
             .collect();
@@ -461,6 +450,39 @@ impl ForwardPassState {
         // Capture parallel region wall-clock before sequential post-processing.
         #[allow(clippy::cast_possible_truncation)]
         let parallel_wall_ms = parallel_start.elapsed().as_millis() as u64;
+
+        let ppc = PostProcessContext {
+            n_workers,
+            forward_passes,
+            num_stages,
+            parallel_wall_ms,
+            start,
+        };
+        self.post_process_worker_results(inputs, worker_results, &ppc)
+    }
+
+    /// Sequential post-processing after the rayon parallel region.
+    ///
+    /// Collects per-worker solver-statistic snapshots, decomposes timing
+    /// overhead, emits [`TrainingEvent::WorkerTiming`] events, and merges
+    /// per-worker cost vectors and stage stats into the final [`ForwardResult`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(SddpError::*)` if any worker result is an `Err`.
+    fn post_process_worker_results<S: SolverInterface + Send>(
+        &mut self,
+        inputs: &mut ForwardPassInputs<'_, S>,
+        worker_results: Vec<Result<ForwardWorkerResult, SddpError>>,
+        ppc: &PostProcessContext,
+    ) -> Result<ForwardResult, SddpError> {
+        let PostProcessContext {
+            n_workers,
+            forward_passes,
+            num_stages,
+            parallel_wall_ms,
+            start,
+        } = *ppc;
 
         // Collect per-worker snapshots after the parallel region and decompose overhead.
         self.worker_stats_after.clear();
@@ -531,7 +553,11 @@ impl ForwardPassState {
             .map(|_| SolverStatsDelta::default())
             .collect();
         for result in worker_results {
-            let (worker_costs, w_solves, worker_stage_stats) = result?;
+            let ForwardWorkerResult {
+                trajectory_costs: worker_costs,
+                local_solves: w_solves,
+                per_stage_stats: worker_stage_stats,
+            } = result?;
             scenario_costs.extend(worker_costs);
             lp_solves += w_solves;
             for (dst, src) in stage_stats.iter_mut().zip(&worker_stage_stats) {
@@ -553,6 +579,164 @@ impl ForwardPassState {
             stage_stats,
         })
     }
+}
+
+/// Execute the forward pass for one rayon worker's scenario partition.
+///
+/// This function is the extracted body of the anonymous closure that previously
+/// lived inside [`ForwardPassState::run`]. It processes `n_local` scenarios
+/// (the worker's slice of the global forward-pass batch) through every stage,
+/// accumulating trajectory costs and per-stage solver statistics.
+///
+/// # Parameters
+///
+/// - `w`: rayon worker index (0-based), used to derive the local scenario range
+///   via [`partition`].
+/// - `ws`: mutable reference to this worker's [`SolverWorkspace`].
+/// - `worker_records`: mutable slice of [`TrajectoryRecord`] for this worker's
+///   scenarios. Length is `n_local * num_stages`.
+/// - `basis_slice`: mutable view into the basis warm-start store for this worker.
+/// - `per_stage_stats`: mutable slice of per-stage [`SolverStatsDelta`]
+///   accumulators. Length is `num_stages`. Values are accumulated in-place.
+/// - `params`: shared read-only bundle of all captures for this parallel region.
+///
+/// # Errors
+///
+/// Propagates `Err(SddpError::Stochastic(_))` from `sampler.sample(...)` and
+/// `Err(SddpError::Infeasible/Solver(_))` from [`run_forward_stage`].
+pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
+    w: usize,
+    ws: &mut SolverWorkspace<S>,
+    worker_records: &mut [TrajectoryRecord],
+    basis_slice: &mut BasisStoreSliceMut<'_>,
+    per_stage_stats: &mut [SolverStatsDelta],
+    params: &ForwardWorkerParams<'_>,
+) -> Result<ForwardWorkerResult, SddpError> {
+    let worker_wall_start = Instant::now();
+    let (start_m, end_m) = partition(params.forward_passes, params.n_workers, w);
+    let n_local = end_m - start_m;
+    let mut trajectory_costs = vec![0.0_f64; n_local];
+    let local_solve_count_before = ws.solver.statistics().solve_count;
+    // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
+    // when run_forward_stage borrows ws while raw_noise is still live.
+    let mut raw_noise_buf = vec![0.0_f64; params.noise_dim];
+    #[allow(clippy::cast_possible_truncation)]
+    let mut perm_scratch = vec![0_usize; (params.total_forward_passes).max(1)];
+    #[allow(clippy::cast_possible_truncation)]
+    let total_scenarios_u32 = params.total_forward_passes as u32;
+
+    for t in 0..params.num_stages {
+        let cum_d = params
+            .ctx
+            .cumulative_discount_factors
+            .get(t)
+            .copied()
+            .unwrap_or(1.0);
+
+        for (local_m, m) in (start_m..end_m).enumerate() {
+            // Reload model per scenario to ensure deterministic LP state across
+            // thread assignments.
+            ws.solver.load_model(&params.baked[t]);
+            ws.current_state.clear();
+            let src: &[f64] = if t == 0 {
+                params.initial_state
+            } else {
+                &worker_records[local_m * params.num_stages + (t - 1)].state
+            };
+            ws.current_state.extend_from_slice(src);
+
+            // Seed (or zero) the lag accumulator at trajectory start.
+            if t == 0 {
+                if params.recent_accum_seed.is_empty() {
+                    ws.scratch.lag_accumulator.iter_mut().for_each(|v| *v = 0.0);
+                    ws.scratch.lag_weight_accum = 0.0;
+                } else {
+                    ws.scratch.lag_accumulator[..params.recent_accum_seed.len()]
+                        .copy_from_slice(params.recent_accum_seed);
+                    ws.scratch.lag_weight_accum = params.recent_weight_seed;
+                }
+                // Reset downstream accumulator at trajectory start.
+                ws.scratch
+                    .downstream_accumulator
+                    .iter_mut()
+                    .for_each(|v| *v = 0.0);
+                ws.scratch.downstream_weight_accum = 0.0;
+                ws.scratch
+                    .downstream_completed_lags
+                    .iter_mut()
+                    .for_each(|v| *v = 0.0);
+                ws.scratch.downstream_n_completed = 0;
+            }
+
+            let global_scenario = params.fwd_offset + m;
+            #[allow(clippy::cast_possible_truncation)]
+            let (i32, s32, t32) = (params.iteration as u32, global_scenario as u32, t as u32);
+
+            if t == 0 {
+                let class_req = ClassSampleRequest {
+                    iteration: i32,
+                    scenario: s32,
+                    stage: 0,
+                    stage_idx: 0,
+                    total_scenarios: total_scenarios_u32,
+                    noise_group_id: 0,
+                };
+                params.sampler.apply_initial_state(
+                    &class_req,
+                    &mut ws.current_state,
+                    params.indexer.inflow_lags.start,
+                );
+            }
+            let noise = params.sampler.sample(SampleRequest {
+                iteration: i32,
+                scenario: s32,
+                stage: t32,
+                stage_idx: t,
+                noise_buf: &mut raw_noise_buf,
+                perm_scratch: &mut perm_scratch,
+                total_scenarios: total_scenarios_u32,
+                noise_group_id: params.ctx.noise_group_id_at(t),
+            })?;
+            let raw_noise = noise.as_slice();
+            let key = StageKey {
+                t,
+                m,
+                local_m,
+                num_stages: params.num_stages,
+                iteration: params.iteration,
+                raw_noise,
+                basis_row_capacity: params.baked[t].num_rows,
+                terminal_has_boundary_cuts: params.terminal_has_boundary_cuts,
+                pool: &params.fcf.pools[t],
+                baked_template: &params.baked[t],
+                basis_activity_window: params.basis_activity_window,
+            };
+            // Snapshot solver statistics before the stage solve so the
+            // per-stage delta can be accumulated without hot-path allocation.
+            let stats_before_stage = ws.solver.statistics();
+            let stage_cost = run_forward_stage(
+                ws,
+                basis_slice,
+                params.ctx,
+                params.training_ctx,
+                &key,
+                worker_records,
+            )?;
+            let stage_delta =
+                SolverStatsDelta::from_snapshots(&stats_before_stage, &ws.solver.statistics());
+            SolverStatsDelta::accumulate_into(&mut per_stage_stats[t], &stage_delta);
+            trajectory_costs[local_m] += cum_d * stage_cost;
+        }
+    }
+
+    let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
+    ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_WALL] +=
+        worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
+    Ok(ForwardWorkerResult {
+        trajectory_costs,
+        local_solves,
+        per_stage_stats: per_stage_stats.to_vec(),
+    })
 }
 
 #[cfg(test)]
@@ -997,6 +1181,138 @@ mod tests {
             result.scenario_costs.len(),
             n_scenarios,
             "result must carry one cost per forward-pass scenario"
+        );
+    }
+
+    /// Verify that `run_forward_worker` produces exactly `n_local` trajectory
+    /// costs for the worker's scenario partition.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn run_forward_worker_produces_expected_trajectory_costs() {
+        let n_stages = 2_usize;
+        let n_scenarios = 2_usize;
+
+        let indexer = StageIndexer::new(1, 0);
+        let stochastic = make_stochastic_context_2_stages();
+        let stages = make_stages_2();
+
+        let solution = fixed_solution_1_0();
+        let solver = MockSolver::always_ok(solution);
+
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![0_usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let noise_scale = vec![0.0_f64; n_stages * indexer.hydro_count];
+
+        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 2, 10, &vec![0; n_stages]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &stages,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+        };
+
+        let sampler = build_forward_sampler(ForwardSamplerConfig {
+            class_schemes: ClassSchemes {
+                inflow: Some(SamplingScheme::InSample),
+                load: Some(SamplingScheme::InSample),
+                ncs: Some(SamplingScheme::InSample),
+            },
+            ctx: &stochastic,
+            stages: &stages,
+            dims: ClassDimensions {
+                n_hydros: stochastic.n_hydros(),
+                n_load_buses: stochastic.n_load_buses(),
+                n_ncs: stochastic.n_stochastic_ncs(),
+            },
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+        })
+        .expect("sampler build must not error");
+
+        let params = ForwardWorkerParams {
+            forward_passes: n_scenarios,
+            total_forward_passes: n_scenarios,
+            num_stages: n_stages,
+            n_workers: 1,
+            iteration: 1,
+            fwd_offset: 0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            terminal_has_boundary_cuts: false,
+            noise_dim: stochastic.dim(),
+            initial_state: &initial_state,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+            indexer: &indexer,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &fcf,
+            training_ctx: &training_ctx,
+            sampler: &sampler,
+        };
+
+        let mut ws = single_workspace(solver, &indexer);
+        let mut basis_store = BasisStore::new(n_scenarios, n_stages);
+        let mut basis_slices = basis_store.split_workers_mut(1);
+        let mut basis_slice = basis_slices.remove(0);
+        let mut records: Vec<TrajectoryRecord> = (0..n_scenarios * n_stages)
+            .map(|_| TrajectoryRecord {
+                primal: Vec::new(),
+                dual: Vec::new(),
+                stage_cost: 0.0,
+                state: Vec::new(),
+            })
+            .collect();
+        let mut per_stage_stats: Vec<SolverStatsDelta> =
+            (0..n_stages).map(|_| SolverStatsDelta::default()).collect();
+
+        let result = run_forward_worker(
+            0,
+            &mut ws,
+            &mut records,
+            &mut basis_slice,
+            &mut per_stage_stats,
+            &params,
+        )
+        .expect("run_forward_worker must not error");
+
+        assert_eq!(
+            result.trajectory_costs.len(),
+            n_scenarios,
+            "worker 0 owns all scenarios when n_workers=1; expected {n_scenarios} costs"
         );
     }
 }

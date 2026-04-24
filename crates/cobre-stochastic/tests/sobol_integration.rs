@@ -30,7 +30,7 @@ use cobre_core::{
         StageStateConfig,
     },
 };
-use cobre_stochastic::tree::generate::OpeningTreeInputs as GenerateInputs;
+use cobre_stochastic::tree::generate::OpeningTreeGenerationInputs;
 use cobre_stochastic::{
     ClassDimensions, ClassSchemes, OpeningTreeInputs, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
@@ -353,7 +353,7 @@ fn sobol_2d_star_discrepancy() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 
@@ -418,7 +418,7 @@ fn sobol_normal_statistics() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 
@@ -467,7 +467,7 @@ fn sobol_correlation_applied() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 

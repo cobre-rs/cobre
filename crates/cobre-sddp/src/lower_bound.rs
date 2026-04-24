@@ -592,7 +592,7 @@ mod tests {
                 n_load_buses: 0,
                 n_ncs: 0,
             },
-            &cobre_stochastic::tree::generate::OpeningTreeInputs::default(),
+            &cobre_stochastic::tree::generate::OpeningTreeGenerationInputs::default(),
         )
         .unwrap()
     }

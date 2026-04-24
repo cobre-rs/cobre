@@ -50,7 +50,7 @@ pub struct ClassDimensions {
 /// When all fields are `None` the opening tree is generated from SAA/LHS/QMC
 /// noise depending on each stage's `scenario_config.noise_method`.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct OpeningTreeInputs<'a> {
+pub struct OpeningTreeGenerationInputs<'a> {
     /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals)
     /// stages. Required when any study stage uses that noise method.
     pub historical_library: Option<&'a HistoricalScenarioLibrary>,
@@ -297,7 +297,7 @@ fn generate_saa(base_seed: u64, stage: &Stage, n_openings: usize, dim: usize, ou
 /// Panics (debug-only) if `noise_group_ids` is `Some` and its length differs
 /// from `stages.len()`.
 ///
-/// The optional inputs are bundled in the `inputs` [`OpeningTreeInputs`] parameter.
+/// The optional inputs are bundled in the `inputs` [`OpeningTreeGenerationInputs`] parameter.
 pub fn generate_opening_tree<'a>(
     base_seed: u64,
     stages: &'a [Stage],
@@ -305,7 +305,7 @@ pub fn generate_opening_tree<'a>(
     correlation: &'a DecomposedCorrelation,
     entity_order: &'a [EntityId],
     dims: ClassDimensions,
-    inputs: &OpeningTreeInputs<'a>,
+    inputs: &OpeningTreeGenerationInputs<'a>,
 ) -> Result<OpeningTree, StochasticError> {
     let historical_library = inputs.historical_library;
     let external_scenario_counts = inputs.external_scenario_counts;
@@ -413,7 +413,7 @@ mod tests {
         sampling::historical::HistoricalScenarioLibrary,
     };
 
-    use super::{ClassDimensions, OpeningTreeInputs, generate_opening_tree};
+    use super::{ClassDimensions, OpeningTreeGenerationInputs, generate_opening_tree};
 
     fn make_stage(index: usize, id: i32, branching_factor: usize) -> Stage {
         make_stage_with_method(index, id, branching_factor, NoiseMethod::Saa)
@@ -524,7 +524,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
         let tree2 = generate_opening_tree(
@@ -534,7 +534,7 @@ mod tests {
             &corr2,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -568,7 +568,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -598,7 +598,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
         let tree_b = generate_opening_tree(
@@ -608,7 +608,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -643,7 +643,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -676,7 +676,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -707,7 +707,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -754,7 +754,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -791,7 +791,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -846,7 +846,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -889,7 +889,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -949,7 +949,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         );
 
         match result {
@@ -990,7 +990,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1037,7 +1037,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1114,7 +1114,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1151,7 +1151,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         );
 
         match result {
@@ -1194,7 +1194,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1240,7 +1240,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1279,7 +1279,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1367,7 +1367,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1487,7 +1487,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1610,7 +1610,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1722,7 +1722,7 @@ mod tests {
             &corr_per_class,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -1825,7 +1825,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         );
 
         match result {
@@ -1877,9 +1877,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -1945,9 +1945,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -1996,9 +1996,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2040,9 +2040,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2053,9 +2053,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2098,9 +2098,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 external_scenario_counts: Some(&external_counts),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2130,7 +2130,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -2172,10 +2172,10 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 historical_library: Some(&lib),
                 external_scenario_counts: Some(&external_counts),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2210,9 +2210,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 external_scenario_counts: Some(&external_counts),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         );
     }
@@ -2247,7 +2247,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -2260,9 +2260,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 noise_group_ids: Some(&unique_ids),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2306,9 +2306,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 noise_group_ids: Some(&all_same_group),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2356,9 +2356,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 noise_group_ids: Some(&two_groups),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();
@@ -2414,7 +2414,7 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs::default(),
+            &OpeningTreeGenerationInputs::default(),
         )
         .unwrap();
 
@@ -2427,9 +2427,9 @@ mod tests {
             &corr,
             &entity_order,
             dims,
-            &OpeningTreeInputs {
+            &OpeningTreeGenerationInputs {
                 noise_group_ids: Some(&unique_ids),
-                ..OpeningTreeInputs::default()
+                ..OpeningTreeGenerationInputs::default()
             },
         )
         .unwrap();

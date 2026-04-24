@@ -153,6 +153,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// # Errors
     ///
     /// Returns `SddpError::Solver(e)` if the workspace pool cannot be constructed.
+    // RATIONALE: `i32::try_from(my_rank).expect(...)` is safe because MPI
+    // rank counts are bounded by `i32::MAX` by the MPI specification. A
+    // `?`-propagating variant would return `Result` for an invariant the
+    // caller cannot recover from and the runtime guarantees.
     #[allow(clippy::expect_used)]
     pub(crate) fn new(
         solver: &'a mut S,
@@ -670,6 +674,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// Run the backward pass for one iteration.
     ///
     /// Returns `(backward_result, bwd_solve_time_ms)`.
+    // RATIONALE: `i32::try_from(*omega).expect(...)` is safe because opening
+    // indices derive from `branching_factor: u16` and never approach
+    // `i32::MAX`. The expect documents an invariant of the study tree, not
+    // a recoverable runtime error.
     #[allow(clippy::expect_used)]
     fn run_backward_phase(
         &mut self,

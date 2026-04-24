@@ -29,7 +29,7 @@ use cobre_core::{
     scenario::{CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile},
     temporal::{BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig},
 };
-use cobre_stochastic::tree::generate::OpeningTreeInputs as GenerateInputs;
+use cobre_stochastic::tree::generate::OpeningTreeGenerationInputs;
 use cobre_stochastic::{
     ClassDimensions, correlation::resolve::DecomposedCorrelation, generate_opening_tree,
 };
@@ -139,7 +139,7 @@ fn saa_golden_value_regression() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .unwrap();
 

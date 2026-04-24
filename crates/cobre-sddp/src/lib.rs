@@ -77,7 +77,7 @@ pub mod trajectory;
 pub mod visited_states;
 pub mod workspace;
 
-pub use backward::{BackwardResult, run_backward_pass};
+pub use backward::BackwardResult;
 pub use config::{CutManagementConfig, EventConfig, LoopConfig, LoopParams, TrainingConfig};
 pub use context::{StageContext, TrainingContext};
 pub use convergence::ConvergenceMonitor;

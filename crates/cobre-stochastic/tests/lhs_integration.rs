@@ -31,7 +31,7 @@ use cobre_core::{
         StageStateConfig,
     },
 };
-use cobre_stochastic::tree::generate::OpeningTreeInputs as GenerateInputs;
+use cobre_stochastic::tree::generate::OpeningTreeGenerationInputs;
 use cobre_stochastic::{
     ClassDimensions, ClassSchemes, OpeningTreeInputs, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
@@ -353,7 +353,7 @@ fn lhs_marginal_uniformity() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 
@@ -405,7 +405,7 @@ fn lhs_no_stratum_collision() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 
@@ -455,7 +455,7 @@ fn lhs_normal_statistics() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 
@@ -504,7 +504,7 @@ fn lhs_correlation_applied() {
         &corr,
         &entity_order,
         dims,
-        &GenerateInputs::default(),
+        &OpeningTreeGenerationInputs::default(),
     )
     .expect("generate_opening_tree must succeed");
 

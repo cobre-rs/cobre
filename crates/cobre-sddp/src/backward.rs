@@ -75,6 +75,7 @@
 //! module; these are a fixed cost per trial point and are not considered
 //! hot-path allocations from Cobre's perspective.
 
+#[cfg(test)]
 use cobre_comm::Communicator;
 use cobre_solver::{RowBatch, SolverInterface};
 
@@ -578,19 +579,20 @@ pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
     })
 }
 
-/// Execute the backward pass for one training iteration on this rank.
+/// Test-only backward-pass shim that owns per-call scratch.
 ///
-/// Thin public shim — delegates entirely to [`BackwardPassState::run`].
-/// All owned scratch buffers are allocated here (test/standalone use) and
-/// discarded after the call. For the training-loop hot path, use
-/// [`BackwardPassState::run`] directly via `TrainingSession::bwd_state`.
+/// Production code drives the backward pass via [`BackwardPassState::run`]
+/// on the state struct held by `TrainingSession`. This shim exists so that
+/// the tests in this module can exercise `run_one_backward_stage` without
+/// threading a full `TrainingSession` through every fixture.
 ///
 /// # Errors
 ///
 /// Returns `Err(SddpError::Infeasible { .. })` when a stage LP has no
 /// feasible solution during the backward sweep. Returns
 /// `Err(SddpError::Solver(_))` for all other terminal LP solver failures.
-pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
+#[cfg(test)]
+fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
     inputs: &mut crate::backward_pass_state::BackwardPassInputs<'_, S, C>,
 ) -> Result<BackwardResult, SddpError> {
     let n_workers_local = inputs.workspaces.len();

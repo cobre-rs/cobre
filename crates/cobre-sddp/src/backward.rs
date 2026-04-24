@@ -83,7 +83,7 @@ use crate::{
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     forward::write_capture_metadata,
-    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
+    noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
     solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
@@ -266,8 +266,10 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     if n_stochastic_ncs > 0 {
         transform_ncs_noise(
             raw_noise,
-            ctx.n_hydros,
-            ctx.n_load_buses,
+            &NcsNoiseOffsets {
+                n_hydros: ctx.n_hydros,
+                n_load_buses: ctx.n_load_buses,
+            },
             training_ctx.stochastic,
             s,
             ctx.block_counts_per_stage[s],
@@ -343,7 +345,10 @@ fn resolve_backward_basis<'a>(
 /// At ω=0, writes the post-solve basis into `basis_slice`; writes at ω>0 are
 /// forbidden (retained-LU corruption risk). Infeasibility at ω=0
 /// leaves the slot unchanged
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+// RATIONALE: 10 args required — each is a disjoint borrow (ws, ctx, training_ctx, exchange,
+// succ, basis_slice) or a plain scalar (fwd_offset, iteration, m) or a risk slice.
+// Merging into a struct would add indirection without reducing the caller's borrow count.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,

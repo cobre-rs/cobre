@@ -135,6 +135,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> BackwardPassInputs<'a, S, C
     /// );
     /// bwd.run(&mut inputs)?;
     /// ```
+    // RATIONALE: 14 args are disjoint borrows of `TrainingSession` fields required because
+    // Rust NLL cannot split a single `&mut TrainingSession` borrow when `bwd_state` is also
+    // borrowed mutably. Grouping would either reintroduce the aliasing problem or add an
+    // extra indirection level that hides the borrow structure.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_session_fields(
         fwd_pool: &'a mut WorkspacePool<S>,
@@ -700,7 +704,6 @@ struct StageOutput {
 ///
 /// Returns a [`StageOutput`] accumulating all timing components and the cut
 /// entries for this stage.
-#[allow(clippy::too_many_lines)]
 fn run_one_backward_stage<S: SolverInterface + Send, C: Communicator>(
     state: &mut BackwardPassState,
     inputs: &mut BackwardPassInputs<'_, S, C>,
@@ -873,6 +876,9 @@ fn run_one_backward_stage<S: SolverInterface + Send, C: Communicator>(
 /// inside the rayon parallel region as individual parameters (rather than a
 /// `BackwardPassState` borrow) to avoid whole-struct borrow conflicts across the
 /// parallel closure boundary.
+// RATIONALE: 10 args are individually-borrowed slices passed through the rayon closure
+// boundary. Bundling them into a struct would require either cloning or an `Arc`, both of
+// which conflict with the zero-allocation HPC constraint for backward-pass hot code.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],

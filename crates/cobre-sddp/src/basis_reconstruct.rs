@@ -483,7 +483,6 @@ fn build_slot_lookup(reconcilable_slots: &[u32], slot_lookup: &mut Vec<Option<u3
 /// the number of Scheme 1 promotions that will be available (computed in phase (e)).
 /// Phase (e) uses this value to determine how many preserved-LOWER slots to
 /// promote and how many Scheme 2 tail overrides to apply.
-#[allow(clippy::too_many_arguments)]
 fn classify_cut_rows<'a, I>(
     current_cut_rows: I,
     stored: &CapturedBasis,

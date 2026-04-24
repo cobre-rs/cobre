@@ -129,9 +129,11 @@ impl TrainingResult {
     /// into a context struct would not reduce the argument count at the call
     /// sites, because each call site constructs the full `TrainingResult` as
     /// the terminal value — there is no shared upstream context to forward.
+    // RATIONALE: 11 args map 1-to-1 to distinct output fields of the training result.
+    // No shared context struct can be forwarded from the call sites; each call site
+    // is the terminal aggregation point that collects all training outputs.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::similar_names)]
+    #[allow(clippy::too_many_arguments, clippy::similar_names)]
     pub fn new(
         final_lb: f64,
         final_ub: f64,

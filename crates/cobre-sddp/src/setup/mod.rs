@@ -223,7 +223,11 @@ impl StudySetup {
     ///   the template list is empty ("system has no study stages").
     /// - [`SddpError::Solver`] — propagated from `build_stage_templates` on LP
     ///   construction failure.
-    #[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
+    // RATIONALE: from_broadcast_params initializes all 16 StudySetup fields from
+    // disjoint sources (system, stochastic, config, hydro_models, sources).
+    // Splitting into smaller functions would require passing the same borrowed data
+    // into multiple helpers without reducing conceptual complexity.
+    #[allow(clippy::missing_panics_doc, clippy::too_many_lines)]
     pub fn from_broadcast_params(
         system: &System,
         stochastic: StochasticContext,

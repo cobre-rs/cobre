@@ -153,7 +153,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     /// # Errors
     ///
     /// Returns `SddpError::Solver(e)` if the workspace pool cannot be constructed.
-    #[allow(clippy::too_many_lines, clippy::expect_used)]
+    #[allow(clippy::expect_used)]
     pub(crate) fn new(
         solver: &'a mut S,
         mut config: TrainingConfig,
@@ -756,6 +756,10 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
     ///
     /// All operations are O(active cuts) and perform no heap allocation when the
     /// cut pools have not grown since the previous iteration.
+    // RATIONALE: run_cut_management sequences 5 interleaved mutation phases on
+    // &mut self (selection, bitmap shift, budget cap, template bake, statistics).
+    // Each phase reads state written by the prior phase; splitting into helpers
+    // would require passing all 5 fields individually as &mut refs under NLL.
     #[allow(clippy::too_many_lines)]
     fn run_cut_management(&mut self, iteration: u64) {
         // Step 4a: Strategy-based cut selection.

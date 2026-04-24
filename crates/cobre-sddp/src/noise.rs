@@ -447,20 +447,27 @@ pub(crate) fn transform_load_noise(
     }
 }
 
+/// Noise-vector offsets needed to locate the NCS slice within the raw noise array.
+///
+/// The shared raw noise vector is laid out as `[hydro noise | load noise | NCS noise]`.
+/// `n_hydros + n_load_buses` gives the start offset of the NCS section.
+pub(crate) struct NcsNoiseOffsets {
+    /// Number of hydro entries that precede the load slice.
+    pub n_hydros: usize,
+    /// Number of load-bus entries that precede the NCS slice.
+    pub n_load_buses: usize,
+}
+
 /// Transform raw NCS noise into per-block column upper bound values.
 ///
 /// Computes `max_gen * clamp(mean + std * η, 0, 1) * block_factor` for each
 /// NCS entity and block, where `mean` and `std` are dimensionless factors.
 ///
-/// Structurally independent parameters: `raw_noise` is the shared noise vector,
-/// `n_hydros`/`n_load_buses`/`stage`/`block_count` are dimension offsets,
-/// `stochastic` is the NCS model, `ncs_max_gen` is the max-generation lookup,
-/// `ncs_col_upper_buf` is the output.
-#[allow(clippy::too_many_arguments)]
+/// The `offsets` bundle encodes the raw-noise vector layout (`n_hydros +
+/// n_load_buses` gives the start of the NCS slice).
 pub(crate) fn transform_ncs_noise(
     raw_noise: &[f64],
-    n_hydros: usize,
-    n_load_buses: usize,
+    offsets: &NcsNoiseOffsets,
     stochastic: &StochasticContext,
     stage: usize,
     block_count: usize,
@@ -473,7 +480,7 @@ pub(crate) fn transform_ncs_noise(
         return;
     }
     let ncs_lp = stochastic.ncs_normal();
-    let ncs_noise_start = n_hydros + n_load_buses;
+    let ncs_noise_start = offsets.n_hydros + offsets.n_load_buses;
     for ncs_idx in 0..n_stochastic_ncs {
         let eta = raw_noise[ncs_noise_start + ncs_idx];
         let mean = ncs_lp.mean(stage, ncs_idx);

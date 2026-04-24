@@ -576,6 +576,10 @@ fn build_template_build_ctx<'a>(
 /// `StageTemplates` struct returned by `build_stage_templates`.
 ///
 /// Called once, immediately after the per-stage loop completes.
+// RATIONALE: 15 args are the heterogeneous per-stage accumulator Vecs produced by the
+// per-stage build loop, each of a distinct type (templates, base_rows, ncs_col_starts, etc.).
+// They cannot be grouped into a context struct without either re-allocating them after the
+// loop or wrapping in Option, both of which add cost on this post-loop cold path.
 #[allow(clippy::too_many_arguments)]
 fn assemble_stage_templates_output(
     templates: Vec<cobre_solver::StageTemplate>,

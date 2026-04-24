@@ -86,7 +86,6 @@ impl<'a, S: SolverInterface + Send, C> SimulationInputs<'a, S, C> {
     ///
     /// Equivalent to constructing the struct literal directly, but usable from
     /// call sites that prefer a constructor to avoid a struct-literal import.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         workspaces: &'a mut [SolverWorkspace<S>],
         ctx: &'a StageContext<'a>,
@@ -322,6 +321,12 @@ fn debug_assert_inputs(
 ///
 /// Returns `(worker_costs, worker_stats)` for the worker's assigned scenarios,
 /// or a [`SimulationError`] if any scenario LP fails or the channel is closed.
+// RATIONALE: 16 args are passed through the rayon parallel closure boundary.
+// Each represents a distinct read-only data source (ctx, fcf, training_ctx, config,
+// stage_bases, baked_templates, sampler) or mutable accumulator (ws), or progress
+// tracking primitive (scenarios_complete, sim_start). Bundling into a struct would
+// require either cloning or wrapping in Arc — both incompatible with the zero-allocation
+// HPC constraint for the simulation hot path.
 #[allow(clippy::too_many_arguments)]
 fn run_worker_scenarios<S: SolverInterface + Send>(
     w: usize,

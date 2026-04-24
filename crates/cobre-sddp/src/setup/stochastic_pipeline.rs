@@ -158,18 +158,181 @@ pub fn load_load_factors_for_stochastic(
     cobre_io::scenarios::parse_load_factors(&path).map_err(SddpError::from)
 }
 
-/// Prepare the stochastic pipeline: PAR estimation, opening tree loading, and context build.
+/// Build the `HistoricalScenarioLibrary` for the opening tree when any stage
+/// uses `NoiseMethod::HistoricalResiduals`. Returns `None` when no stage
+/// needs historical draws.
+fn build_opening_tree_library(
+    system: &System,
+    training_source: &ScenarioSource,
+) -> Result<Option<cobre_stochastic::HistoricalScenarioLibrary>, SddpError> {
+    use cobre_core::temporal::NoiseMethod;
+    let needs_historical_tree = system
+        .stages()
+        .iter()
+        .any(|s| s.id >= 0 && s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals);
+    if !needs_historical_tree {
+        return Ok(None);
+    }
+    let study_stages: Vec<_> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+    let par =
+        cobre_stochastic::PrecomputedPar::build(system.inflow_models(), &study_stages, &hydro_ids)?;
+    let max_order = par.max_order();
+    let user_pool = training_source.historical_years.as_ref();
+    let window_years = cobre_stochastic::discover_historical_windows(
+        system.inflow_history(),
+        &hydro_ids,
+        &study_stages,
+        max_order,
+        user_pool,
+        system.policy_graph().season_map.as_ref(),
+        1,
+    )?;
+    let mut lib = cobre_stochastic::HistoricalScenarioLibrary::new(
+        window_years.len(),
+        study_stages.len(),
+        hydro_ids.len(),
+        max_order,
+        window_years.clone(),
+    );
+    cobre_stochastic::standardize_historical_windows(
+        &mut lib,
+        system.inflow_history(),
+        &hydro_ids,
+        &study_stages,
+        &par,
+        &window_years,
+        system.policy_graph().season_map.as_ref(),
+    );
+    Ok(Some(lib))
+}
+
+/// Compute per-stage external scenario counts for opening tree clamping.
 ///
-/// Estimates PAR from history if `inflow_history.parquet` is present and
-/// `inflow_seasonal_stats.parquet` is absent. Loads user opening tree from
-/// `scenarios/noise_openings.parquet` if present. Builds [`StochasticContext`].
-///
-/// **MPI note**: Call on rank 0 only; broadcast the opening tree to other ranks.
+/// When any entity class uses External sampling, the external library is padded
+/// to a uniform scenario count after loading. The opening tree generator must
+/// clamp per-stage openings to the pre-padding raw count. The element-wise
+/// minimum across entity classes is returned.
+fn compute_external_scenario_counts(
+    system: &System,
+    training_source: &ScenarioSource,
+) -> Option<Vec<usize>> {
+    let study_stages: Vec<_> = system
+        .stages()
+        .iter()
+        .filter(|s| s.id >= 0)
+        .cloned()
+        .collect();
+    let n_stages = study_stages.len();
+
+    let inflow_counts: Option<Vec<usize>> =
+        if training_source.inflow_scheme == SamplingScheme::External && n_stages > 0 {
+            let external_rows = system.external_scenarios();
+            let n_hydros = system.hydros().len();
+            let mut rows_per_stage = vec![0usize; n_stages];
+            #[allow(clippy::cast_sign_loss)]
+            for row in external_rows {
+                let s = row.stage_id as usize;
+                if s < n_stages {
+                    rows_per_stage[s] += 1;
+                }
+            }
+            Some(if n_hydros > 0 {
+                rows_per_stage.iter().map(|&r| r / n_hydros).collect()
+            } else {
+                vec![0usize; n_stages]
+            })
+        } else {
+            None
+        };
+
+    let load_counts: Option<Vec<usize>> =
+        if training_source.load_scheme == SamplingScheme::External && n_stages > 0 {
+            let external_rows = system.external_load_scenarios();
+            let mut bus_ids: Vec<EntityId> = system
+                .load_models()
+                .iter()
+                .filter(|m| m.std_mw > 0.0)
+                .map(|m| m.bus_id)
+                .collect();
+            bus_ids.sort_unstable_by_key(|id| id.0);
+            bus_ids.dedup();
+            let n_buses = bus_ids.len();
+            let mut rows_per_stage = vec![0usize; n_stages];
+            #[allow(clippy::cast_sign_loss)]
+            for row in external_rows {
+                let s = row.stage_id as usize;
+                if s < n_stages {
+                    rows_per_stage[s] += 1;
+                }
+            }
+            Some(if n_buses > 0 {
+                rows_per_stage.iter().map(|&r| r / n_buses).collect()
+            } else {
+                vec![0usize; n_stages]
+            })
+        } else {
+            None
+        };
+
+    let ncs_counts: Option<Vec<usize>> =
+        if training_source.ncs_scheme == SamplingScheme::External && n_stages > 0 {
+            let external_rows = system.external_ncs_scenarios();
+            let mut ncs_ids: Vec<EntityId> = system.ncs_models().iter().map(|m| m.ncs_id).collect();
+            ncs_ids.sort_unstable_by_key(|id| id.0);
+            ncs_ids.dedup();
+            let n_ncs = ncs_ids.len();
+            let mut rows_per_stage = vec![0usize; n_stages];
+            #[allow(clippy::cast_sign_loss)]
+            for row in external_rows {
+                let s = row.stage_id as usize;
+                if s < n_stages {
+                    rows_per_stage[s] += 1;
+                }
+            }
+            Some(if n_ncs > 0 {
+                rows_per_stage.iter().map(|&r| r / n_ncs).collect()
+            } else {
+                vec![0usize; n_stages]
+            })
+        } else {
+            None
+        };
+
+    match (inflow_counts, load_counts, ncs_counts) {
+        (None, None, None) => None,
+        (Some(a), None, None) => Some(a),
+        (None, Some(b), None) => Some(b),
+        (None, None, Some(c)) => Some(c),
+        (Some(a), Some(b), None) => Some(a.iter().zip(b.iter()).map(|(&x, &y)| x.min(y)).collect()),
+        (Some(a), None, Some(c)) => Some(a.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect()),
+        (None, Some(b), Some(c)) => Some(b.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect()),
+        (Some(a), Some(b), Some(c)) => Some(
+            a.iter()
+                .zip(b.iter())
+                .zip(c.iter())
+                .map(|((&x, &y), &z)| x.min(y).min(z))
+                .collect(),
+        ),
+    }
+}
+
+/// Run the stochastic preprocessing pipeline: PAR estimation, block factor
+/// loading, opening-tree library construction, and stochastic context build.
 ///
 /// # Errors
 ///
 /// Returns [`SddpError::Io`] on file read/parse/validation failure,
 /// or [`SddpError::Stochastic`] on PAR/decomposition failure.
+// RATIONALE: 214 lines — orchestrates the complete stochastic preprocessing pipeline
+// (estimation, block-factor loading, opening-tree library, and stochastic context
+// construction). Each phase is already delegated to a dedicated helper; the remaining
+// body is unavoidable sequential plumbing that connects those helpers.
 #[allow(clippy::too_many_lines)]
 pub fn prepare_stochastic(
     system: System,
@@ -183,13 +346,8 @@ pub fn prepare_stochastic(
 
     let user_opening_tree = load_user_opening_tree_inner(case_dir, &system)?;
 
-    // Load block-level load factors (optional). When present, these scale the
-    // stochastic noise realization per block, mirroring how the LP builder
-    // scales the deterministic load balance RHS.
+    // Load block-level load factors (optional).
     let load_factor_entries = load_load_factors_for_stochastic(case_dir)?;
-
-    // Convert LoadFactorEntry -> Vec<BlockFactorPair> per entry. The pairs
-    // vec must outlive the entity_factor_entries references.
     let block_pairs: Vec<Vec<cobre_stochastic::normal::precompute::BlockFactorPair>> =
         load_factor_entries
             .iter()
@@ -200,7 +358,6 @@ pub fn prepare_stochastic(
                     .collect()
             })
             .collect();
-
     let entity_factor_entries: Vec<cobre_stochastic::normal::precompute::EntityFactorEntry<'_>> =
         load_factor_entries
             .iter()
@@ -208,9 +365,6 @@ pub fn prepare_stochastic(
             .map(|(e, pairs)| (e.bus_id, e.stage_id, pairs.as_slice()))
             .collect();
 
-    // Build NCS block factor entries from ResolvedNcsFactors, mirroring the
-    // load factor conversion above. NCS entities consume their block factors
-    // from the resolved NCS factors table.
     let ncs_factor_entries = build_ncs_factor_entries(&system);
     let ncs_entity_factor_entries: Vec<
         cobre_stochastic::normal::precompute::EntityFactorEntry<'_>,
@@ -219,184 +373,8 @@ pub fn prepare_stochastic(
         .map(|(ncs_id, stage_id, pairs)| (*ncs_id, *stage_id, pairs.as_slice()))
         .collect();
 
-    // Build a HistoricalScenarioLibrary for the opening tree when any study
-    // stage uses NoiseMethod::HistoricalResiduals. This must be done before
-    // build_stochastic_context because generate_opening_tree consumes the
-    // library reference. The forward-pass Historical library (built in
-    // StudySetup::new) is separate and remains unchanged.
-    let opening_tree_library = {
-        use cobre_core::temporal::NoiseMethod;
-
-        let needs_historical_tree = system.stages().iter().any(|s| {
-            s.id >= 0 && s.scenario_config.noise_method == NoiseMethod::HistoricalResiduals
-        });
-
-        if needs_historical_tree {
-            let study_stages: Vec<_> = system
-                .stages()
-                .iter()
-                .filter(|s| s.id >= 0)
-                .cloned()
-                .collect();
-            let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-            // Build PAR cache directly — before the stochastic context exists.
-            let par = cobre_stochastic::PrecomputedPar::build(
-                system.inflow_models(),
-                &study_stages,
-                &hydro_ids,
-            )?;
-            let max_order = par.max_order();
-            let user_pool = training_source.historical_years.as_ref();
-            let window_years = cobre_stochastic::discover_historical_windows(
-                system.inflow_history(),
-                &hydro_ids,
-                &study_stages,
-                max_order,
-                user_pool,
-                system.policy_graph().season_map.as_ref(),
-                1, // forward_passes not relevant for opening tree windows
-            )?;
-            let mut lib = cobre_stochastic::HistoricalScenarioLibrary::new(
-                window_years.len(),
-                study_stages.len(),
-                hydro_ids.len(),
-                max_order,
-                window_years.clone(),
-            );
-            cobre_stochastic::standardize_historical_windows(
-                &mut lib,
-                system.inflow_history(),
-                &hydro_ids,
-                &study_stages,
-                &par,
-                &window_years,
-                system.policy_graph().season_map.as_ref(),
-            );
-            Some(lib)
-        } else {
-            None
-        }
-    };
-
-    // Compute per-stage external scenario counts for opening tree clamping.
-    //
-    // When any entity class uses External sampling, the external library is
-    // padded to a uniform scenario count after loading. The opening tree
-    // generator must clamp per-stage openings to the pre-padding raw count to
-    // avoid redundant LP solves for stages with fewer distinct scenarios.
-    //
-    // The raw count for inflow is `rows_per_stage / n_hydros`.
-    // For load it is `rows_per_stage / n_buses`.
-    // For ncs it is `rows_per_stage / n_ncs_entities`.
-    // When multiple classes use External, the element-wise minimum is used.
-    let external_scenario_counts: Option<Vec<usize>> = {
-        let study_stages: Vec<_> = system
-            .stages()
-            .iter()
-            .filter(|s| s.id >= 0)
-            .cloned()
-            .collect();
-        let n_stages = study_stages.len();
-
-        let inflow_counts: Option<Vec<usize>> =
-            if training_source.inflow_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_scenarios();
-                let n_hydros = system.hydros().len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_hydros > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_hydros).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        let load_counts: Option<Vec<usize>> =
-            if training_source.load_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_load_scenarios();
-                let mut bus_ids: Vec<EntityId> = system
-                    .load_models()
-                    .iter()
-                    .filter(|m| m.std_mw > 0.0)
-                    .map(|m| m.bus_id)
-                    .collect();
-                bus_ids.sort_unstable_by_key(|id| id.0);
-                bus_ids.dedup();
-                let n_buses = bus_ids.len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_buses > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_buses).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        let ncs_counts: Option<Vec<usize>> =
-            if training_source.ncs_scheme == SamplingScheme::External && n_stages > 0 {
-                let external_rows = system.external_ncs_scenarios();
-                let mut ncs_ids: Vec<EntityId> =
-                    system.ncs_models().iter().map(|m| m.ncs_id).collect();
-                ncs_ids.sort_unstable_by_key(|id| id.0);
-                ncs_ids.dedup();
-                let n_ncs = ncs_ids.len();
-                let mut rows_per_stage = vec![0usize; n_stages];
-                #[allow(clippy::cast_sign_loss)]
-                for row in external_rows {
-                    let s = row.stage_id as usize;
-                    if s < n_stages {
-                        rows_per_stage[s] += 1;
-                    }
-                }
-                Some(if n_ncs > 0 {
-                    rows_per_stage.iter().map(|&r| r / n_ncs).collect()
-                } else {
-                    vec![0usize; n_stages]
-                })
-            } else {
-                None
-            };
-
-        // Combine class counts via element-wise minimum.
-        match (inflow_counts, load_counts, ncs_counts) {
-            (None, None, None) => None,
-            (Some(a), None, None) => Some(a),
-            (None, Some(b), None) => Some(b),
-            (None, None, Some(c)) => Some(c),
-            (Some(a), Some(b), None) => {
-                Some(a.iter().zip(b.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (Some(a), None, Some(c)) => {
-                Some(a.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (None, Some(b), Some(c)) => {
-                Some(b.iter().zip(c.iter()).map(|(&x, &y)| x.min(y)).collect())
-            }
-            (Some(a), Some(b), Some(c)) => Some(
-                a.iter()
-                    .zip(b.iter())
-                    .zip(c.iter())
-                    .map(|((&x, &y), &z)| x.min(y).min(z))
-                    .collect(),
-            ),
-        }
-    };
+    let opening_tree_library = build_opening_tree_library(&system, training_source)?;
+    let external_scenario_counts = compute_external_scenario_counts(&system, training_source);
 
     // Compute noise group IDs for Pattern C noise sharing.
     // Groups stages with the same (season_id, year) so weekly stages within

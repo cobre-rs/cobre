@@ -51,7 +51,7 @@ use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
     lp_builder::COST_SCALE_FACTOR,
-    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
+    noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
@@ -192,7 +192,6 @@ pub(crate) struct ScenarioIds<'a> {
 /// `row_scale`, `scratch_buf`), load-RHS buffer (`load_rhs_buf`), and load-dimension
 /// indices (`n_load_buses`, `load_balance_row_start`, `n_blks`, `load_bus_indices`)
 /// are per-call scratch or lookup tables with no natural grouping.
-#[allow(clippy::too_many_arguments)]
 fn build_row_lower_unscaled<'a>(
     template_row_lower: &[f64],
     row_scale: &[f64],
@@ -331,6 +330,10 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 /// structural rows in the baked template; no `add_rows` call is needed.
 /// When `baked_templates` was `None` on `simulate` entry, the startup re-bake
 /// already produced a local `Vec<StageTemplate>` before this function is reached.
+// RATIONALE: solve_simulation_stage orchestrates the full per-stage simulation pipeline:
+// noise application, NCS patching, LP solve, result extraction, and output writing.
+// Each phase is a semantically distinct step; splitting further would fragment the
+// per-stage invariant tracking without reducing the total operations performed.
 #[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
@@ -803,8 +806,10 @@ pub(crate) fn process_scenario_stages<S: SolverInterface>(
         if n_stochastic_ncs > 0 {
             transform_ncs_noise(
                 raw_noise,
-                ctx.n_hydros,
-                ctx.n_load_buses,
+                &NcsNoiseOffsets {
+                    n_hydros: ctx.n_hydros,
+                    n_load_buses: ctx.n_load_buses,
+                },
                 stochastic,
                 t,
                 ctx.block_counts_per_stage[t],
@@ -913,7 +918,6 @@ pub(crate) fn dispatch_scenario_result(
 /// feasible solution, `Err(SimulationError::SolverError { .. })` for other
 /// terminal LP solver failures, and `Err(SimulationError::ChannelClosed)` when
 /// the channel receiver has been dropped.
-#[allow(clippy::too_many_arguments)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,

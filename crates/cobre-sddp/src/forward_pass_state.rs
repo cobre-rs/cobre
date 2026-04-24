@@ -95,6 +95,10 @@ impl<'a, S: SolverInterface + Send> ForwardPassInputs<'a, S> {
     /// );
     /// let forward_result = fwd.run(&mut inputs)?;
     /// ```
+    // RATIONALE: 10 args are disjoint borrows of `TrainingSession` fields required because
+    // Rust NLL cannot split a single `&mut TrainingSession` borrow when `fwd_state` is also
+    // borrowed mutably. Each arg maps to a distinct session field; no grouping is possible
+    // without adding indirection or invalidating the disjoint-borrow design.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_session_fields(
         fwd_pool: &'a mut crate::workspace::WorkspacePool<S>,
@@ -210,8 +214,10 @@ impl ForwardPassState {
     /// - `inputs.records.len() != inputs.local_forward_passes * num_stages`
     /// - `inputs.training_ctx.initial_state.len() != indexer.n_state`
     /// - `inputs.baked.len() != num_stages`
-    // The method body faithfully preserves the 140-line rayon closure body
-    // verbatim from the former free function; extraction is ticket-012.
+    // RATIONALE: 273 lines — encapsulates the complete forward-pass rayon parallel region
+    // (sampler build, per-scenario stage loop, basis capture, cost accumulation). The body is
+    // a single indivisible parallel closure; extracting sub-sections would require passing all
+    // the same context objects and would not reduce the overall complexity.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn run<S: SolverInterface + Send>(
         &mut self,

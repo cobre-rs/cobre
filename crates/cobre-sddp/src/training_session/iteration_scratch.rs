@@ -61,7 +61,6 @@ impl IterationScratch {
     /// * `hydro_count` — number of hydro plants (for `PatchBuffer`).
     /// * `max_par_order` — maximum PAR model order (for `PatchBuffer`).
     /// * `stage_ctx` — stage context providing base templates for the pre-bake loop.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         max_local_fwd: usize,
         num_stages: usize,

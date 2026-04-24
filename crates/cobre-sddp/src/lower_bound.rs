@@ -37,7 +37,7 @@ use crate::{
     StageIndexer,
     forward::build_cut_row_batch_into,
     lp_builder::COST_SCALE_FACTOR,
-    noise::{compute_effective_eta, transform_ncs_noise},
+    noise::{NcsNoiseOffsets, compute_effective_eta, transform_ncs_noise},
 };
 use cobre_solver::StageTemplate;
 
@@ -199,7 +199,6 @@ fn lb_init_rank0<S: SolverInterface>(
 // The per-opening loop body (noise build + NCS patch + solve) accounts for the
 // length; it cannot be meaningfully split without fragmenting correctness-critical
 // sequential steps (especially the NCS column-bound patch inside the opening loop).
-#[allow(clippy::too_many_lines)]
 fn lb_evaluate_stage_0<S: SolverInterface>(
     solver: &mut S,
     spec: &LbEvalSpec<'_>,
@@ -327,8 +326,10 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
             if n_stochastic_ncs > 0 && !spec.ncs_generation.is_empty() {
                 transform_ncs_noise(
                     raw_noise,
-                    n_hydros,
-                    spec.n_load_buses,
+                    &NcsNoiseOffsets {
+                        n_hydros,
+                        n_load_buses: spec.n_load_buses,
+                    },
                     stoch,
                     0,
                     spec.block_count,
@@ -418,7 +419,6 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
 /// `fcf`/`initial_state`/`indexer` are study-level reads, `patch_buf`/`lb_cut_batch`/
 /// `lb_cut_row_map` are per-evaluation mutable scratch, `spec` is the evaluation config,
 /// `comm` is the communicator.
-#[allow(clippy::too_many_arguments)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,

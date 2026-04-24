@@ -538,38 +538,18 @@ fn run_estimation(
 /// - **Fitting stats** (history-derived, step 4) are used for YW matrix construction.
 /// - **User stats** (from `system.inflow_models()`, step 7) are used for the final
 ///   `assemble_inflow_models` call that drives the scenario generator.
-#[allow(clippy::too_many_lines)]
 fn run_partial_estimation(
     system: System,
     case_dir: &Path,
     config: &Config,
     manifest: &FileManifest,
 ) -> Result<(System, EstimationReport), EstimationError> {
-    // ── Step 3: load inflow history ──────────────────────────────────────────
-    let history_path = case_dir.join("scenarios/inflow_history.parquet");
-    let history = parse_inflow_history(&history_path)?;
-
-    // ── Convert InflowHistoryRow to (EntityId, NaiveDate, f64) tuples ────────
-    let observations: Vec<(EntityId, NaiveDate, f64)> = history
-        .iter()
-        .map(|row| (row.hydro_id, row.date, row.value_m3s))
-        .collect();
-
-    // ── Collect hydro IDs from system (canonical sorted order) ───────────────
     let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
-
-    // ── Use stages already present in the system ─────────────────────────────
     let stages = system.stages();
-
-    // ── Extract season map for calendar-based date-to-season fallback ────────
     let season_map = system.policy_graph().season_map.as_ref();
 
-    // ── Step 3b: aggregate observations to season resolution ─────────────────
-    let observations = if let Some(sm) = season_map {
-        aggregate_observations_to_season(&observations, stages, sm)?
-    } else {
-        observations
-    };
+    // ── Steps 3-3b: load history and aggregate to season resolution ──────────
+    let observations = load_and_aggregate_observations(case_dir, stages, season_map)?;
 
     // ── Validate that user stats are present in the loaded system ────────────
     if system.inflow_models().is_empty() {
@@ -589,7 +569,7 @@ fn run_partial_estimation(
 
     // ── Step 5: estimate AR coefficients using fitting stats ─────────────────
     let max_order = config.estimation.max_order as usize;
-    let (ar_estimates, estimation_report) = estimate_ar_coefficients_with_selection(
+    let (ar_estimates, mut estimation_report) = estimate_ar_coefficients_with_selection(
         &observations,
         &fitting_stats,
         stages,
@@ -601,112 +581,9 @@ fn run_partial_estimation(
         },
     )?;
 
-    // ── Step 5b: bidirectional coverage validation (P2) ──────────────────────
-    // Use fitting_stats (history-derived) to identify which hydros had actual
-    // history data. ar_estimates includes white-noise entries for hydros with no
-    // history, so fitting_stats.entity_id is the correct "estimated" indicator.
-    let estimated_hydro_ids: HashSet<EntityId> =
-        fitting_stats.iter().map(|s| s.entity_id).collect();
-    let user_stats_hydro_ids: HashSet<EntityId> =
-        system.inflow_models().iter().map(|m| m.hydro_id).collect();
-
-    // Direction A: AR estimated but no user stats → hard error
-    let mut missing_stats: Vec<EntityId> = estimated_hydro_ids
-        .difference(&user_stats_hydro_ids)
-        .copied()
-        .collect();
-    missing_stats.sort();
-    if !missing_stats.is_empty() {
-        let ids: Vec<String> = missing_stats.iter().map(|id| id.0.to_string()).collect();
-        return Err(EstimationError::Load(
-            cobre_io::LoadError::ConstraintError {
-                description: format!(
-                    "partial estimation: AR coefficients were estimated for hydro(s) \
-                     [{ids}] but inflow_seasonal_stats.parquet has no entry for them; \
-                     all hydros with estimated AR must have user-provided stats",
-                    ids = ids.join(", ")
-                ),
-            },
-        ));
-    }
-
-    // Direction B: user stats but no AR estimated → white noise fallback
-    let mut white_noise_fallbacks: Vec<EntityId> = user_stats_hydro_ids
-        .difference(&estimated_hydro_ids)
-        .copied()
-        .collect();
-    white_noise_fallbacks.sort();
-
-    // ── Step 5c: initial lag / user stats scale mismatch check (P8) ──────────
-    // For each hydro that has BOTH a past_inflows entry AND fitting_stats AND
-    // user stats at stage_id == 0, check whether the lag-1 value is closer to
-    // the estimated mean than to the user mean. If so, emit an advisory warning.
-    // This check is purely informational and never alters control flow.
-    let lag_scale_warnings: Vec<LagScaleWarning> = {
-        // Build lookup: EntityId -> estimated mean at stage_id == 0.
-        let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
-            .iter()
-            .filter(|s| s.stage_id == 0)
-            .map(|s| (s.entity_id, s.mean))
-            .collect();
-
-        // Build lookup: EntityId -> user mean at stage_id == 0.
-        let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
-            .inflow_models()
-            .iter()
-            .filter(|m| m.stage_id == 0)
-            .map(|m| (m.hydro_id, m.mean_m3s))
-            .collect();
-
-        // Iterate past_inflows in sorted order for deterministic output.
-        let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
-            system.initial_conditions().past_inflows.iter().collect();
-        sorted_past_inflows.sort_by_key(|p| p.hydro_id);
-
-        let mut warnings: Vec<LagScaleWarning> = Vec::new();
-        for past in sorted_past_inflows {
-            // Skip hydros with no lag-1 value.
-            let Some(&lag_value) = past.values_m3s.first() else {
-                continue;
-            };
-            // Skip hydros missing either mean.
-            let Some(&estimated_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
-                continue;
-            };
-            let Some(&user_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
-                continue;
-            };
-            // Warn when lag-1 is closer to estimated mean than to user mean.
-            if (lag_value - estimated_mean).abs() < (lag_value - user_mean).abs() {
-                eprintln!(
-                    "warning: hydro {} initial lag ({:.1}) is closer to estimated mean \
-                     ({:.1}) than user mean ({:.1}) -- initial conditions may be at \
-                     historical scale",
-                    past.hydro_id.0, lag_value, estimated_mean, user_mean
-                );
-                warnings.push(LagScaleWarning {
-                    hydro_id: past.hydro_id,
-                    lag_value,
-                    user_mean,
-                    estimated_mean,
-                });
-            }
-        }
-        warnings
-    };
-
-    // ── Step 5d: cross-season std ratio divergence check (P9) ───────────────
-    // Compare consecutive-season std ratios between user and estimated profiles.
-    // Emits an advisory warning per flagged (hydro, season pair) and records the
-    // results in `std_ratio_warnings`. Never blocks execution.
-    let std_ratio_warnings = check_std_ratio_divergence(&system, &fitting_stats, stages);
-    for w in &std_ratio_warnings {
-        eprintln!(
-            "warning: hydro {} season {}->{} std ratio diverges {:.1}x between \
-             user ({:.2}) and estimated ({:.2})",
-            w.hydro_id.0, w.season_a, w.season_b, w.divergence, w.user_ratio, w.estimated_ratio
-        );
-    }
+    // ── Steps 5b-5d: coverage validation and advisory warnings ───────────────
+    let (white_noise_fallbacks, lag_scale_warnings, std_ratio_warnings) =
+        validate_partial_estimation_coverage(&system, &fitting_stats, stages)?;
 
     // ── Step 6: estimate or preserve correlation ─────────────────────────────
     let correlation = if manifest.scenarios_correlation_json {
@@ -727,10 +604,8 @@ fn run_partial_estimation(
     // User stats (mean_m3s, std_m3s from the input system) drive LP assembly.
     let user_stats_rows = user_stats_to_rows(&system);
     let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
-
     let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows)?;
 
-    let mut estimation_report = estimation_report;
     estimation_report.white_noise_fallbacks = white_noise_fallbacks;
     estimation_report.lag_scale_warnings = lag_scale_warnings;
     estimation_report.std_ratio_warnings = std_ratio_warnings;
@@ -739,6 +614,144 @@ fn run_partial_estimation(
         system.with_scenario_models(inflow_models, correlation),
         estimation_report,
     ))
+}
+
+/// Load inflow history from the case directory and aggregate observations to
+/// season resolution when a season map is present (steps 3–3b).
+fn load_and_aggregate_observations(
+    case_dir: &Path,
+    stages: &[cobre_core::temporal::Stage],
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
+) -> Result<Vec<(EntityId, NaiveDate, f64)>, EstimationError> {
+    let history_path = case_dir.join("scenarios/inflow_history.parquet");
+    let history = parse_inflow_history(&history_path)?;
+
+    let observations: Vec<(EntityId, NaiveDate, f64)> = history
+        .iter()
+        .map(|row| (row.hydro_id, row.date, row.value_m3s))
+        .collect();
+
+    if let Some(sm) = season_map {
+        Ok(aggregate_observations_to_season(&observations, stages, sm)?)
+    } else {
+        Ok(observations)
+    }
+}
+
+/// Return type of [`validate_partial_estimation_coverage`]:
+/// `(white_noise_fallbacks, lag_scale_warnings, std_ratio_warnings)`.
+type CoverageCheckResult = (Vec<EntityId>, Vec<LagScaleWarning>, Vec<StdRatioDivergence>);
+
+/// Validate bidirectional coverage and emit advisory warnings (steps 5b–5d).
+///
+/// Returns `(white_noise_fallbacks, lag_scale_warnings, std_ratio_warnings)`.
+/// Errors only on hard coverage failures (estimated hydro missing user stats).
+fn validate_partial_estimation_coverage(
+    system: &System,
+    fitting_stats: &[SeasonalStats],
+    stages: &[cobre_core::temporal::Stage],
+) -> Result<CoverageCheckResult, EstimationError> {
+    let estimated_hydro_ids: HashSet<EntityId> =
+        fitting_stats.iter().map(|s| s.entity_id).collect();
+    let user_stats_hydro_ids: HashSet<EntityId> =
+        system.inflow_models().iter().map(|m| m.hydro_id).collect();
+
+    // Direction A: AR estimated but no user stats → hard error.
+    let mut missing_stats: Vec<EntityId> = estimated_hydro_ids
+        .difference(&user_stats_hydro_ids)
+        .copied()
+        .collect();
+    missing_stats.sort();
+    if !missing_stats.is_empty() {
+        let ids: Vec<String> = missing_stats.iter().map(|id| id.0.to_string()).collect();
+        return Err(EstimationError::Load(
+            cobre_io::LoadError::ConstraintError {
+                description: format!(
+                    "partial estimation: AR coefficients were estimated for hydro(s) \
+                     [{ids}] but inflow_seasonal_stats.parquet has no entry for them; \
+                     all hydros with estimated AR must have user-provided stats",
+                    ids = ids.join(", ")
+                ),
+            },
+        ));
+    }
+
+    // Direction B: user stats but no AR estimated → white noise fallback.
+    let mut white_noise_fallbacks: Vec<EntityId> = user_stats_hydro_ids
+        .difference(&estimated_hydro_ids)
+        .copied()
+        .collect();
+    white_noise_fallbacks.sort();
+
+    // Step 5c: initial lag / user stats scale mismatch check (advisory only).
+    let lag_scale_warnings = check_lag_scale_warnings(system, fitting_stats);
+
+    // Step 5d: cross-season std ratio divergence check (advisory only).
+    let std_ratio_warnings = check_std_ratio_divergence(system, fitting_stats, stages);
+    for w in &std_ratio_warnings {
+        eprintln!(
+            "warning: hydro {} season {}->{} std ratio diverges {:.1}x between \
+             user ({:.2}) and estimated ({:.2})",
+            w.hydro_id.0, w.season_a, w.season_b, w.divergence, w.user_ratio, w.estimated_ratio
+        );
+    }
+
+    Ok((
+        white_noise_fallbacks,
+        lag_scale_warnings,
+        std_ratio_warnings,
+    ))
+}
+
+/// Check whether each hydro's lag-1 initial condition is closer to the
+/// history-estimated mean than the user-provided mean (step 5c, advisory).
+fn check_lag_scale_warnings(
+    system: &System,
+    fitting_stats: &[SeasonalStats],
+) -> Vec<LagScaleWarning> {
+    let estimated_mean_at_stage0: BTreeMap<EntityId, f64> = fitting_stats
+        .iter()
+        .filter(|s| s.stage_id == 0)
+        .map(|s| (s.entity_id, s.mean))
+        .collect();
+    let user_mean_at_stage0: BTreeMap<EntityId, f64> = system
+        .inflow_models()
+        .iter()
+        .filter(|m| m.stage_id == 0)
+        .map(|m| (m.hydro_id, m.mean_m3s))
+        .collect();
+
+    let mut sorted_past_inflows: Vec<&cobre_core::HydroPastInflows> =
+        system.initial_conditions().past_inflows.iter().collect();
+    sorted_past_inflows.sort_by_key(|p| p.hydro_id);
+
+    let mut warnings = Vec::new();
+    for past in sorted_past_inflows {
+        let Some(&lag_value) = past.values_m3s.first() else {
+            continue;
+        };
+        let Some(&estimated_mean) = estimated_mean_at_stage0.get(&past.hydro_id) else {
+            continue;
+        };
+        let Some(&user_mean) = user_mean_at_stage0.get(&past.hydro_id) else {
+            continue;
+        };
+        if (lag_value - estimated_mean).abs() < (lag_value - user_mean).abs() {
+            eprintln!(
+                "warning: hydro {} initial lag ({:.1}) is closer to estimated mean \
+                 ({:.1}) than user mean ({:.1}) -- initial conditions may be at \
+                 historical scale",
+                past.hydro_id.0, lag_value, estimated_mean, user_mean
+            );
+            warnings.push(LagScaleWarning {
+                hydro_id: past.hydro_id,
+                lag_value,
+                user_mean,
+                estimated_mean,
+            });
+        }
+    }
+    warnings
 }
 
 /// Inner function that runs the P7 (`UserArHistoryStats`) estimation pipeline.
@@ -1095,7 +1108,6 @@ fn estimate_ar_coefficients_with_selection(
 ///
 /// The periodic approach correctly accounts for the non-Toeplitz covariance
 /// structure of periodic autoregressive processes.
-#[allow(clippy::too_many_lines)]
 fn estimate_ar_with_pacf(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -1125,7 +1137,52 @@ fn estimate_ar_with_pacf(
         return Ok((estimates, report));
     }
 
-    // Build stage and stats lookups.
+    let (stage_index, stats_map, n_seasons) = build_pacf_stage_lookups(stages, seasonal_stats);
+    let group_obs = group_observations_by_season(observations, hydro_ids, &stage_index, season_map);
+
+    // 95% confidence z-score for the PACF significance threshold.
+    let z_alpha = 1.96_f64;
+
+    let mut estimates = estimate_all_hydro_ar_coefficients(
+        hydro_ids, &group_obs, &stats_map, n_seasons, max_order, z_alpha,
+    );
+
+    let reductions = iterative_pacf_reduction(
+        &mut estimates,
+        n_seasons,
+        hydro_ids,
+        &group_obs,
+        &stats_map,
+        &PacfReductionParams {
+            initial_max_order: max_order,
+            z_alpha,
+            max_coeff_magnitude,
+        },
+    );
+
+    let report = build_estimation_report(&estimates, n_seasons, &reductions, "PACF");
+    Ok((estimates, report))
+}
+
+/// Stage index entry: `(start_date, end_date, stage_id, season_id)`.
+type StageSeasonEntry = (chrono::NaiveDate, chrono::NaiveDate, i32, usize);
+
+/// Return type of [`build_pacf_stage_lookups`]:
+/// `(stage_index, stats_map, n_seasons)`.
+type PacfStageLookups<'a> = (
+    Vec<StageSeasonEntry>,
+    HashMap<(EntityId, usize), &'a SeasonalStats>,
+    usize,
+);
+
+/// Build the stage-season index, stats map, and season count for PACF estimation.
+///
+/// Returns `(stage_index, stats_map, n_seasons)` where `stage_index` is sorted
+/// by start date and `stats_map` keys are `(EntityId, season_id)`.
+fn build_pacf_stage_lookups<'a>(
+    stages: &[cobre_core::temporal::Stage],
+    seasonal_stats: &'a [SeasonalStats],
+) -> PacfStageLookups<'a> {
     let mut stage_index = stages
         .iter()
         .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
@@ -1145,24 +1202,29 @@ fn estimate_ar_with_pacf(
         })
         .collect();
 
-    let n_seasons: usize = {
-        let mut max_season = 0usize;
-        for &(_, _, _, season_id) in &stage_index {
-            if season_id >= max_season {
-                max_season = season_id + 1;
-            }
-        }
-        max_season
-    };
+    let n_seasons = stage_index
+        .iter()
+        .map(|&(_, _, _, season_id)| season_id + 1)
+        .max()
+        .unwrap_or(0);
 
-    // Group observations by (entity_id, season_id).
+    (stage_index, stats_map, n_seasons)
+}
+
+/// Group raw observations by `(EntityId, season_id)` for PACF fitting.
+fn group_observations_by_season(
+    observations: &[(EntityId, NaiveDate, f64)],
+    hydro_ids: &[EntityId],
+    stage_index: &[(chrono::NaiveDate, chrono::NaiveDate, i32, usize)],
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
+) -> HashMap<(EntityId, usize), Vec<f64>> {
     let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
     let mut group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
     for &(entity_id, date, value) in observations {
         if !entity_set.contains(&entity_id) {
             continue;
         }
-        let Some(season_id) = find_season_for_date(&stage_index, date)
+        let Some(season_id) = find_season_for_date(stage_index, date)
             .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
         else {
             continue;
@@ -1172,18 +1234,22 @@ fn estimate_ar_with_pacf(
             .or_default()
             .push(value);
     }
+    group_obs
+}
 
-    // 95% confidence z-score for the PACF significance threshold.
-    let z_alpha = 1.96_f64;
-
-    // Build estimates using periodic PACF and YW coefficient estimation.
+/// Build initial AR coefficient estimates for all hydros using periodic PACF + YW.
+fn estimate_all_hydro_ar_coefficients(
+    hydro_ids: &[EntityId],
+    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    n_seasons: usize,
+    max_order: usize,
+    z_alpha: f64,
+) -> Vec<ArCoefficientEstimate> {
     let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();
-
     for &hydro_id in hydro_ids {
-        // Build observations_by_season and stats_by_season for this entity.
         let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
         let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
-
         for season in 0..n_seasons {
             if let Some(obs) = group_obs.get(&(hydro_id, season)) {
                 obs_by_season[season].clone_from(obs);
@@ -1192,13 +1258,9 @@ fn estimate_ar_with_pacf(
                 stats_by_season[season] = (stats.mean, stats.std);
             }
         }
-
         let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
-
         for season in 0..n_seasons {
             let stats_s = stats_by_season[season];
-
-            // Skip seasons with zero std or insufficient data.
             if stats_s.1 == 0.0 || obs_by_season[season].len() < 2 {
                 estimates.push(ArCoefficientEstimate {
                     hydro_id,
@@ -1208,26 +1270,17 @@ fn estimate_ar_with_pacf(
                 });
                 continue;
             }
-
             let n_obs = obs_by_season[season].len();
-
-            // Compute periodic PACF for order selection.
             let pacf_values =
                 periodic_pacf(season, max_order, n_seasons, &obs_refs, &stats_by_season);
-
-            // Select order via significance test.
             let pacf_result = select_order_pacf(&pacf_values, n_obs, z_alpha);
-            let selected_order = pacf_result.selected_order;
-
-            // Estimate AR coefficients at the selected order using periodic YW.
             let yw_result = estimate_periodic_ar_coefficients(
                 season,
-                selected_order,
+                pacf_result.selected_order,
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
             );
-
             estimates.push(ArCoefficientEstimate {
                 hydro_id,
                 season_id: season,
@@ -1236,50 +1289,23 @@ fn estimate_ar_with_pacf(
             });
         }
     }
-
-    // === Iterative PACF reduction with contribution validation ===
-    let reductions = iterative_pacf_reduction(
-        &mut estimates,
-        n_seasons,
-        hydro_ids,
-        &group_obs,
-        &stats_map,
-        max_order,
-        z_alpha,
-        max_coeff_magnitude,
-    );
-
-    let report = build_estimation_report(&estimates, n_seasons, &reductions, "PACF");
-    Ok((estimates, report))
+    estimates
 }
 
-/// Iteratively reduce AR orders via PACF re-selection and contribution validation.
-///
-/// For each entity, maintains per-season `max_order` ceilings. When contribution
-/// analysis detects negative contributions for a season, reduces that season's
-/// ceiling by 1 and re-runs the full PACF selection + YW estimation + `phi_1`
-/// check + contribution validation cycle. Repeats until all seasons pass or
-/// their ceilings reach 0.
-///
-/// Structurally independent parameters: `estimates` is the in/out estimate vector,
-/// `n_seasons`/`hydro_ids` are dimension data, `group_obs`/`stats_map` are observation
-/// lookups, `initial_max_order`/`z_alpha`/`max_coeff_magnitude` are PAR-fit knobs.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-fn iterative_pacf_reduction(
-    estimates: &mut [ArCoefficientEstimate],
-    n_seasons: usize,
-    hydro_ids: &[EntityId],
-    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
-    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+/// PAR-fit knobs for `iterative_pacf_reduction` and its helpers.
+struct PacfReductionParams {
     initial_max_order: usize,
     z_alpha: f64,
     max_coeff_magnitude: Option<f64>,
-) -> HashMap<EntityId, Vec<ContributionReduction>> {
-    let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+}
 
-    // Pre-pass: magnitude bound safety check (same as apply_contribution_validation).
-    if let Some(threshold) = max_coeff_magnitude {
+/// Apply magnitude-bound and `phi_1` pre-passes, recording reductions in `all_reductions`.
+fn apply_prepass_reductions(
+    estimates: &mut [ArCoefficientEstimate],
+    params: &PacfReductionParams,
+    all_reductions: &mut HashMap<EntityId, Vec<ContributionReduction>>,
+) {
+    if let Some(threshold) = params.max_coeff_magnitude {
         for est in estimates.iter_mut() {
             let has_explosive = est.coefficients.iter().any(|c| c.abs() > threshold);
             if has_explosive {
@@ -1299,8 +1325,6 @@ fn iterative_pacf_reduction(
             }
         }
     }
-
-    // Pre-pass 2: phi_1 negativity rejection.
     for est in estimates.iter_mut() {
         if has_negative_phi1(&est.coefficients) {
             let original_order = est.coefficients.len();
@@ -1318,192 +1342,198 @@ fn iterative_pacf_reduction(
             est.residual_std_ratio = 1.0;
         }
     }
+}
 
-    // Group estimate indices by hydro_id for per-entity processing.
+/// Run the iterative PACF order-reduction loop for one entity.
+///
+/// Mutates `estimates` in-place for the seasons indexed by `indices` and appends
+/// `ContributionReduction` records to `all_reductions`.
+fn reduce_entity_orders(
+    estimates: &mut [ArCoefficientEstimate],
+    n_seasons: usize,
+    hydro_id: EntityId,
+    indices: &[usize],
+    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    params: &PacfReductionParams,
+    all_reductions: &mut HashMap<EntityId, Vec<ContributionReduction>>,
+) {
+    let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+    for season in 0..n_seasons {
+        if let Some(obs) = group_obs.get(&(hydro_id, season)) {
+            obs_by_season[season].clone_from(obs);
+        }
+        if let Some(stats) = stats_map.get(&(hydro_id, season)) {
+            stats_by_season[season] = (stats.mean, stats.std);
+        }
+    }
+    let std_by_season: Vec<f64> = (0..n_seasons)
+        .map(|sid| stats_map.get(&(hydro_id, sid)).map_or(0.0, |s| s.std))
+        .collect();
+    let mut max_orders: Vec<usize> = vec![params.initial_max_order; n_seasons];
+    let mut all_coeffs: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    for &idx in indices {
+        let est = &estimates[idx];
+        if est.season_id < n_seasons {
+            all_coeffs[est.season_id].clone_from(&est.coefficients);
+        }
+    }
+    let mut frozen: Vec<bool> = vec![false; n_seasons];
+    for &idx in indices {
+        let sid = estimates[idx].season_id;
+        if estimates[idx].coefficients.is_empty() {
+            frozen[sid] = true;
+        }
+    }
+    let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
+    loop {
+        let mut failing_seasons: Vec<usize> = Vec::new();
+        for &idx in indices {
+            let season_id = estimates[idx].season_id;
+            if frozen[season_id] || estimates[idx].coefficients.is_empty() {
+                continue;
+            }
+            let current_order = estimates[idx].coefficients.len();
+            let result = validate_order_contributions(
+                season_id,
+                n_seasons,
+                current_order,
+                &all_coeffs,
+                &std_by_season,
+            );
+            if !result.valid {
+                all_reductions
+                    .entry(hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id,
+                        original_order: estimates[idx].coefficients.len(),
+                        reduced_order: result.max_valid_order,
+                        contributions: result.contributions,
+                        reason: ReductionReason::NegativeContribution,
+                    });
+                failing_seasons.push(season_id);
+            }
+        }
+        if failing_seasons.is_empty() {
+            break;
+        }
+        let mut any_reselected = false;
+        for &season_id in &failing_seasons {
+            if max_orders[season_id] == 0 {
+                continue;
+            }
+            max_orders[season_id] -= 1;
+            if max_orders[season_id] == 0 {
+                for &idx in indices {
+                    if estimates[idx].season_id == season_id {
+                        estimates[idx].coefficients.clear();
+                        estimates[idx].residual_std_ratio = 1.0;
+                        all_coeffs[season_id].clear();
+                        frozen[season_id] = true;
+                    }
+                }
+                continue;
+            }
+            let stats_s = stats_by_season[season_id];
+            if stats_s.1 == 0.0 || obs_by_season[season_id].len() < 2 {
+                frozen[season_id] = true;
+                continue;
+            }
+            let n_obs = obs_by_season[season_id].len();
+            let pacf_values = periodic_pacf(
+                season_id,
+                max_orders[season_id],
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+            );
+            let pacf_result = select_order_pacf(&pacf_values, n_obs, params.z_alpha);
+            let yw_result = estimate_periodic_ar_coefficients(
+                season_id,
+                pacf_result.selected_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+            );
+            for &idx in indices {
+                if estimates[idx].season_id == season_id {
+                    estimates[idx]
+                        .coefficients
+                        .clone_from(&yw_result.coefficients);
+                    estimates[idx].residual_std_ratio = yw_result.residual_std_ratio;
+                    all_coeffs[season_id].clone_from(&yw_result.coefficients);
+                }
+            }
+            if has_negative_phi1(&all_coeffs[season_id]) {
+                let original_order = all_coeffs[season_id].len();
+                all_reductions
+                    .entry(hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id,
+                        original_order,
+                        reduced_order: 0,
+                        contributions: Vec::new(),
+                        reason: ReductionReason::Phi1Negative,
+                    });
+                for &idx in indices {
+                    if estimates[idx].season_id == season_id {
+                        estimates[idx].coefficients.clear();
+                        estimates[idx].residual_std_ratio = 1.0;
+                        all_coeffs[season_id].clear();
+                        frozen[season_id] = true;
+                    }
+                }
+            } else {
+                any_reselected = true;
+            }
+        }
+        if !any_reselected {
+            break;
+        }
+    }
+}
+
+/// Iteratively reduce AR orders via PACF re-selection and contribution validation.
+///
+/// For each entity, maintains per-season `max_order` ceilings. When contribution
+/// analysis detects negative contributions for a season, reduces that season's
+/// ceiling by 1 and re-runs the full PACF selection + YW estimation + `phi_1`
+/// check + contribution validation cycle. Repeats until all seasons pass or
+/// their ceilings reach 0.
+fn iterative_pacf_reduction(
+    estimates: &mut [ArCoefficientEstimate],
+    n_seasons: usize,
+    hydro_ids: &[EntityId],
+    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    params: &PacfReductionParams,
+) -> HashMap<EntityId, Vec<ContributionReduction>> {
+    let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+
+    apply_prepass_reductions(estimates, params, &mut all_reductions);
+
     let mut hydro_indices: BTreeMap<EntityId, Vec<usize>> = BTreeMap::new();
     for (idx, est) in estimates.iter().enumerate() {
         hydro_indices.entry(est.hydro_id).or_default().push(idx);
     }
 
-    // Process each entity with iterative PACF re-selection.
     for &hydro_id in hydro_ids {
         let Some(indices) = hydro_indices.get(&hydro_id) else {
             continue;
         };
-
-        // Build observations and stats for this entity.
-        let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
-        let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
-
-        for season in 0..n_seasons {
-            if let Some(obs) = group_obs.get(&(hydro_id, season)) {
-                obs_by_season[season].clone_from(obs);
-            }
-            if let Some(stats) = stats_map.get(&(hydro_id, season)) {
-                stats_by_season[season] = (stats.mean, stats.std);
-            }
-        }
-
-        // Build std_by_season for contribution analysis.
-        let std_by_season: Vec<f64> = (0..n_seasons)
-            .map(|sid| stats_map.get(&(hydro_id, sid)).map_or(0.0, |s| s.std))
-            .collect();
-
-        // Initialize per-season max_order ceilings.
-        let mut max_orders: Vec<usize> = vec![initial_max_order; n_seasons];
-
-        // Initialize current coefficients from estimates.
-        let mut all_coeffs: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
-        for &idx in indices {
-            let est = &estimates[idx];
-            if est.season_id < n_seasons {
-                all_coeffs[est.season_id].clone_from(&est.coefficients);
-            }
-        }
-
-        // Mark which seasons are already finalized (order 0 from pre-passes or
-        // insufficient data).
-        let mut frozen: Vec<bool> = vec![false; n_seasons];
-        for &idx in indices {
-            let sid = estimates[idx].season_id;
-            if estimates[idx].coefficients.is_empty() {
-                frozen[sid] = true;
-            }
-        }
-
-        let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
-
-        // Iterative contribution validation loop.
-        loop {
-            // Find seasons that fail contribution validation.
-            let mut failing_seasons: Vec<usize> = Vec::new();
-
-            for &idx in indices {
-                let season_id = estimates[idx].season_id;
-                if frozen[season_id] {
-                    continue;
-                }
-                let current_order = estimates[idx].coefficients.len();
-                if current_order == 0 {
-                    continue;
-                }
-
-                let result = validate_order_contributions(
-                    season_id,
-                    n_seasons,
-                    current_order,
-                    &all_coeffs,
-                    &std_by_season,
-                );
-
-                if !result.valid {
-                    all_reductions
-                        .entry(hydro_id)
-                        .or_default()
-                        .push(ContributionReduction {
-                            season_id,
-                            original_order: current_order,
-                            reduced_order: result.max_valid_order,
-                            contributions: result.contributions,
-                            reason: ReductionReason::NegativeContribution,
-                        });
-                    failing_seasons.push(season_id);
-                }
-            }
-
-            if failing_seasons.is_empty() {
-                break; // All seasons pass.
-            }
-
-            // Reduce max_order for failing seasons and re-run PACF + YW.
-            let mut any_reselected = false;
-            for &season_id in &failing_seasons {
-                if max_orders[season_id] == 0 {
-                    continue;
-                }
-                max_orders[season_id] -= 1;
-
-                if max_orders[season_id] == 0 {
-                    // Set to order 0 directly.
-                    for &idx in indices {
-                        if estimates[idx].season_id == season_id {
-                            estimates[idx].coefficients.clear();
-                            estimates[idx].residual_std_ratio = 1.0;
-                            all_coeffs[season_id].clear();
-                            frozen[season_id] = true;
-                        }
-                    }
-                    continue;
-                }
-
-                // Re-run PACF with reduced max_order.
-                let stats_s = stats_by_season[season_id];
-                if stats_s.1 == 0.0 || obs_by_season[season_id].len() < 2 {
-                    frozen[season_id] = true;
-                    continue;
-                }
-
-                let n_obs = obs_by_season[season_id].len();
-                let pacf_values = periodic_pacf(
-                    season_id,
-                    max_orders[season_id],
-                    n_seasons,
-                    &obs_refs,
-                    &stats_by_season,
-                );
-                let pacf_result = select_order_pacf(&pacf_values, n_obs, z_alpha);
-                let selected_order = pacf_result.selected_order;
-
-                // Re-estimate coefficients at the new selected order.
-                let yw_result = estimate_periodic_ar_coefficients(
-                    season_id,
-                    selected_order,
-                    n_seasons,
-                    &obs_refs,
-                    &stats_by_season,
-                );
-
-                // Update the estimate.
-                for &idx in indices {
-                    if estimates[idx].season_id == season_id {
-                        estimates[idx]
-                            .coefficients
-                            .clone_from(&yw_result.coefficients);
-                        estimates[idx].residual_std_ratio = yw_result.residual_std_ratio;
-                        all_coeffs[season_id].clone_from(&yw_result.coefficients);
-                    }
-                }
-
-                // Check phi_1 on re-estimated coefficients.
-                if has_negative_phi1(&all_coeffs[season_id]) {
-                    let original_order = all_coeffs[season_id].len();
-                    all_reductions
-                        .entry(hydro_id)
-                        .or_default()
-                        .push(ContributionReduction {
-                            season_id,
-                            original_order,
-                            reduced_order: 0,
-                            contributions: Vec::new(),
-                            reason: ReductionReason::Phi1Negative,
-                        });
-                    for &idx in indices {
-                        if estimates[idx].season_id == season_id {
-                            estimates[idx].coefficients.clear();
-                            estimates[idx].residual_std_ratio = 1.0;
-                            all_coeffs[season_id].clear();
-                            frozen[season_id] = true;
-                        }
-                    }
-                } else {
-                    any_reselected = true;
-                }
-            }
-
-            if !any_reselected {
-                break; // All failing seasons are at order 0 or frozen.
-            }
-        }
+        reduce_entity_orders(
+            estimates,
+            n_seasons,
+            hydro_id,
+            indices,
+            group_obs,
+            stats_map,
+            params,
+            &mut all_reductions,
+        );
     }
 
     all_reductions
@@ -3425,9 +3455,11 @@ mod tests {
             &[hydro_id],
             &group_obs,
             &stats_map,
-            3, // initial_max_order
-            1.96,
-            None,
+            &PacfReductionParams {
+                initial_max_order: 3,
+                z_alpha: 1.96,
+                max_coeff_magnitude: None,
+            },
         );
 
         // The function should have re-estimated using PACF at a reduced
@@ -4094,9 +4126,11 @@ mod tests {
             &[hydro_id],
             &group_obs,
             &stats_map,
-            max_order,
-            z_alpha,
-            None,
+            &PacfReductionParams {
+                initial_max_order: max_order,
+                z_alpha,
+                max_coeff_magnitude: None,
+            },
         );
 
         // Stable PAR(2) should not be reduced (order remains 2).

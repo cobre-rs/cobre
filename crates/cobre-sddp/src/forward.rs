@@ -83,7 +83,7 @@ use crate::{
     context::{StageContext, TrainingContext},
     cut::pool::CutPool,
     lp_builder::COST_SCALE_FACTOR,
-    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
+    noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
@@ -842,6 +842,10 @@ pub(crate) fn write_capture_metadata(
 ///
 /// Returns `Err(SddpError::Infeasible)` when the stage LP is infeasible, or
 /// `Err(SddpError::Solver)` for any other terminal solver failure.
+// RATIONALE: 225 lines — covers the complete sequence of patch→solve→record→advance
+// for one forward stage. The body is a single linear pipeline with no opportunities
+// for intermediate extraction that would not require passing all the same context
+// objects; splitting would only add indirection without reducing complexity.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
@@ -891,8 +895,10 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
     if n_stochastic_ncs > 0 {
         transform_ncs_noise(
             raw_noise,
-            n_hydros,
-            n_load_buses,
+            &NcsNoiseOffsets {
+                n_hydros,
+                n_load_buses,
+            },
             stochastic,
             t,
             ctx.block_counts_per_stage[t],
@@ -1221,7 +1227,6 @@ pub fn build_sampler_from_ctx<'a>(
 /// [`crate::forward_pass_state::ForwardPassInputs`] and calls `run` on them.
 /// Production callers use `TrainingSession::run_forward_phase` which drives
 /// `fwd_state.run(...)` directly.
-#[allow(clippy::too_many_arguments)]
 pub fn run_forward_pass<S: SolverInterface + Send>(
     workspaces: &mut [SolverWorkspace<S>],
     basis_store: &mut BasisStore,

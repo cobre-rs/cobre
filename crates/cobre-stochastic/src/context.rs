@@ -78,7 +78,7 @@ use crate::{
     provenance::{ComponentProvenance, StochasticProvenance},
     sampling::historical::HistoricalScenarioLibrary,
     tree::{
-        generate::{ClassDimensions, generate_opening_tree},
+        generate::{ClassDimensions, OpeningTreeInputs as GenerateInputs, generate_opening_tree},
         opening_tree::OpeningTreeView,
     },
 };
@@ -497,9 +497,11 @@ pub fn build_stochastic_context(
                 n_load_buses,
                 n_ncs: n_stochastic_ncs,
             },
-            historical_library,
-            external_scenario_counts.as_deref(),
-            noise_group_ids.as_deref(),
+            &GenerateInputs {
+                historical_library,
+                external_scenario_counts: external_scenario_counts.as_deref(),
+                noise_group_ids: noise_group_ids.as_deref(),
+            },
         )?
     };
 

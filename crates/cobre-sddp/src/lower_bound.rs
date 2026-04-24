@@ -592,9 +592,7 @@ mod tests {
                 n_load_buses: 0,
                 n_ncs: 0,
             },
-            None,
-            None,
-            None, // noise_group_ids: mock tree has 1 stage, no sharing needed
+            &cobre_stochastic::tree::generate::OpeningTreeInputs::default(),
         )
         .unwrap()
     }

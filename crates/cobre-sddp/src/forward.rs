@@ -1,71 +1,9 @@
-//! Forward pass execution for the SDDP training loop.
+//! Forward pass execution for SDDP training.
 //!
-//! [`run_forward_pass`] simulates `M` scenario trajectories through the full
-//! stage horizon, solving the stage LP at each `(scenario, stage)` pair with
-//! the current Future Cost Function (FCF) approximation.
-//!
-//! ## Outputs
-//!
-//! The function produces two outputs:
-//!
-//! - **[`TrajectoryRecord`]s** — one per `(scenario, stage)` pair, stored in
-//!   a flat pre-allocated slice at index `scenario * num_stages + stage`. The
-//!   backward pass reads these records to generate Benders cuts.
-//! - **[`ForwardResult`]** — local UB candidate statistics for the calling
-//!   rank, merged across ranks by the forward synchronisation step.
-//!
-//! ## Work distribution
-//!
-//! The user's total forward passes are split across MPI ranks by the caller
-//! (`train()`), which passes each rank's local share as the
-//! `local_forward_passes` parameter. The global scenario index for local
-//! scenario `m` is `fwd_offset + m`, where `fwd_offset` is the pre-computed
-//! global index of this rank's first forward pass. This deterministic mapping
-//! drives the communication-free seed derivation used by `ForwardSampler::sample`.
-//!
-//! ## Thread-level parallelism
-//!
-//! Within a rank, scenarios are distributed across one or more [`SolverWorkspace`]
-//! instances from a [`crate::WorkspacePool`]. Each workspace owns its solver, patch
-//! buffer, and current-state buffer. Rayon's `par_iter_mut` drives
-//! the scenario loop: scenarios are statically partitioned across workspaces
-//! (not rayon's default work-stealing chunking) so that the assignment of
-//! scenarios to workers is deterministic and reproducible.
-//!
-//! Warm-start bases are stored per `(scenario, stage)` in a [`BasisStore`]
-//! passed by the caller. Before the parallel region the store is split into
-//! disjoint per-worker sub-views via [`BasisStore::split_workers_mut`]; each
-//! worker writes bases only for its own scenario range.
-//!
-//! Per-scenario costs are collected after the parallel region by merging
-//! worker-local cost vectors in global scenario index order (worker 0's costs
-//! first, then worker 1's, etc.). This canonical ordering ensures that
-//! [`sync_forward`] produces bit-identical statistics for any workspace count.
-//!
-//! ## LP rebuild sequence
-//!
-//! For each `(worker, scenario)` pair (iterating over scenarios in the outer
-//! loop and stages in the inner loop):
-//!
-//! 1. `solver.load_model(template)` — reset to the structural LP for this
-//!    stage (per-scenario reload, not per-stage).
-//! 2. `solver.add_rows(cut_batch)` — append active Benders cuts.
-//! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
-//!
-//! Reloading the full model per scenario (rather than reusing the model across
-//! scenarios within the same stage) ensures deterministic LP state regardless
-//! of thread assignment: no residual warm-start artefacts or bound mutations
-//! carry over between scenarios processed by the same worker.
-//!
-//! ## Hot-path allocation discipline
-//!
-//! No allocations occur per scenario during the inner loops. Per-worker
-//! buffers (`trajectory_costs`, `raw_noise_buf`, `perm_scratch`) are
-//! allocated once at the start of each iteration — one allocation per worker,
-//! not per scenario. The [`TrajectoryRecord`] slice is pre-allocated by the
-//! caller. The only additional allocation inside the function is the
-//! [`RowBatch`] built by `build_cut_row_batch`, which runs once per stage
-//! template (before the scenario loop) — not once per scenario.
+//! [`run_forward_pass`] simulates scenario trajectories via stage LPs with the
+//! current Future Cost Function. Outputs [`TrajectoryRecord`]s and [`ForwardResult`]
+//! for the backward pass and synchronization step. Parallelized across workers
+//! with deterministic scenario assignment. No per-scenario allocations on hot path.
 
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -969,16 +907,19 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
         ws.solver.set_col_bounds(&[indexer.theta], &[0.0], &[0.0]);
     }
 
-    // Copy current_state into a local buffer before constructing StageInputs
-    // so the immutable borrow of ws.current_state does not overlap with the
-    // mutable borrow taken by run_stage_solve.
-    let current_state_buf: Vec<f64> = ws.current_state[..indexer.n_state].to_vec();
+    // Take the scratch buffer out of ws so that the immutable borrow of the
+    // local vec does not conflict with the `&mut ws` taken by run_stage_solve.
+    // Scratch buffer reused from `ws.scratch.current_state_scratch` via
+    // `std::mem::take` (capacity retained).
+    let mut current_state_local: Vec<f64> = std::mem::take(&mut ws.scratch.current_state_scratch);
+    current_state_local.clear();
+    current_state_local.extend_from_slice(&ws.current_state[..indexer.n_state]);
 
     let inputs = crate::stage_solve::StageInputs {
         stage_context: ctx,
         indexer,
         pool,
-        current_state: &current_state_buf,
+        current_state: &current_state_local,
         stored_basis: basis_slice.get_mut(m, t).as_ref(),
         baked_template,
         stage_index: t,
@@ -1024,6 +965,15 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             .map(|(&xp, &d)| d * xp)
             .collect()
     };
+
+    // `view` is Copy, so use `let _ =` to end its borrow of ws for 'ws before
+    // the restore assignment below takes a mutable borrow of ws.scratch.
+    // `inputs` and its borrow of current_state_local ended at the `?` above
+    // (NLL sees no further use of inputs after that point).
+    // Restore scratch capacity back into the workspace slot so the next call
+    // reuses the warmed allocation without reallocating.
+    let _ = view;
+    ws.scratch.current_state_scratch = current_state_local;
 
     let d_t = ctx.discount_factors.get(t).copied().unwrap_or(1.0);
     let stage_cost = (view_objective - d_t * unscaled_primal[indexer.theta]) * COST_SCALE_FACTOR;
@@ -1240,7 +1190,7 @@ pub fn run_forward_pass<S: SolverInterface + Send>(
     use crate::forward_pass_state::{ForwardPassInputs, ForwardPassState};
     let n_workers = workspaces.len().max(1);
     let num_stages = training_ctx.horizon.num_stages();
-    let mut state = ForwardPassState::new(n_workers, num_stages);
+    let mut state = ForwardPassState::new(n_workers, num_stages, batch.local_forward_passes);
     let mut inputs = ForwardPassInputs {
         workspaces,
         basis_store,
@@ -1930,8 +1880,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3918,8 +3872,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -4054,8 +4012,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),

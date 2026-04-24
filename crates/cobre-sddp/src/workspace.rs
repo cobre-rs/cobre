@@ -6,6 +6,7 @@
 
 use cobre_solver::{Basis, SolverInterface};
 
+use crate::backward::StagedCut;
 use crate::basis_reconstruct::PromotionScratch;
 
 // ---------------------------------------------------------------------------
@@ -252,7 +253,7 @@ impl CapturedBasis {
 }
 
 use crate::lp_builder::PatchBuffer;
-use crate::risk_measure::BackwardOutcome;
+use crate::risk_measure::{BackwardOutcome, RiskMeasureScratch};
 
 /// Sizing parameters shared by [`SolverWorkspace`], [`WorkspacePool`], and
 /// `ScratchBuffers` constructors.
@@ -292,6 +293,22 @@ pub struct WorkspaceSizing {
     /// `BackwardAccumulators::agg_coefficients`. Pass `0` for
     /// simulation-only workspaces.
     pub n_state: usize,
+    /// Maximum number of forward-pass scenarios assigned to this rank.
+    ///
+    /// Used to pre-size [`ScratchBuffers::trajectory_costs_buf`]. Pass `0`
+    /// for backward-only or simulation-only workspaces; the buffer will start
+    /// empty and resize on first use.
+    pub max_local_fwd: usize,
+    /// Total forward passes across all MPI ranks.
+    ///
+    /// Used to pre-size [`ScratchBuffers::perm_scratch`]. Pass `0` for
+    /// backward-only or simulation-only workspaces.
+    pub total_forward_passes: usize,
+    /// Noise dimension for forward-pass sampling buffers.
+    ///
+    /// Used to pre-size [`ScratchBuffers::raw_noise_buf`]. Pass `0` for
+    /// backward-only or simulation-only workspaces.
+    pub noise_dim: usize,
 }
 
 /// Pre-allocated accumulators for the backward pass trial-point loop.
@@ -347,6 +364,36 @@ pub(crate) struct BackwardAccumulators {
     /// contributions across all workers to produce the per-stage
     /// `Vec<SolverStatsDelta>` stored in `BackwardResult::stage_stats`.
     pub(crate) per_opening_stats: Vec<crate::solver_stats::SolverStatsDelta>,
+    /// Per-opening scratch buffer for state-fixing-row duals.
+    ///
+    /// Reused across openings and trial points. Cleared via `clear()` then
+    /// filled with `extend_from_slice` or `extend(iter.map(...))` at the start
+    /// of each opening. Capacity grows monotonically to `indexer.n_state`; no
+    /// shrink ever occurs. Avoids the per-opening `to_vec()` allocation in
+    /// `process_trial_point_backward`.
+    pub(crate) state_duals_buf: Vec<f64>,
+    /// Per-opening scratch buffer for cut-row duals.
+    ///
+    /// Reused across openings and trial points. Cleared via `clear()` then
+    /// filled with `extend_from_slice` at the start of each opening that has
+    /// cuts. Capacity grows monotonically to `succ.num_cuts_at_successor`.
+    /// Avoids the per-opening `to_vec()` or `Vec::new()` allocation in
+    /// `process_trial_point_backward`.
+    pub(crate) cut_duals_buf: Vec<f64>,
+    /// Per-worker staging buffer for cuts produced within one stage.
+    ///
+    /// Cleared via `clear()` at the start of each stage's trial-point loop.
+    /// Populated with `push()` per trial point. At the rayon closure boundary
+    /// drained via `drain(..).collect::<Vec<_>>()` so the ownership can cross
+    /// the closure return. Avoids the per-stage `Vec::with_capacity(n_local)`
+    /// allocation in `process_stage_backward`.
+    pub(crate) staged_cuts_buf: Vec<StagedCut>,
+    /// Scratch buffers for `CVaR` weight computation in [`RiskMeasure::CVaR`].
+    ///
+    /// The three internal `Vec`s (`upper_bounds`, `order`, `mu`) grow lazily
+    /// to `n_openings` on the first `CVaR` call and are reused thereafter.
+    /// For `RiskMeasure::Expectation` these buffers are never accessed.
+    pub(crate) risk_scratch: RiskMeasureScratch,
 }
 
 impl BackwardAccumulators {
@@ -370,6 +417,10 @@ impl BackwardAccumulators {
             metadata_sync_contribution: vec![0u64; initial_pool_capacity],
             metadata_sync_window_contribution: vec![0u32; initial_pool_capacity],
             per_opening_stats: Vec::new(),
+            state_duals_buf: Vec::new(),
+            cut_duals_buf: Vec::new(),
+            staged_cuts_buf: Vec::new(),
+            risk_scratch: RiskMeasureScratch::new(),
         }
     }
 }
@@ -405,6 +456,17 @@ pub(crate) struct ScratchBuffers {
     // Slot 0 = oldest completed quarter, slot n-1 = most recent.
     pub(crate) downstream_completed_lags: Vec<f64>,
     pub(crate) downstream_n_completed: usize,
+    /// Scratch buffer for the current-state slice copied before each LP solve.
+    ///
+    /// Eliminates the per-scenario `Vec<f64>` allocation that previously
+    /// occurred in `run_forward_stage` and `solve_simulation_stage`.  The
+    /// buffer is filled via `clear()` + `extend_from_slice()` immediately
+    /// before constructing `StageInputs`, then borrowed immutably into
+    /// `StageInputs::current_state`.  Sized to `n_state` at construction so
+    /// the hot path never reallocates.
+    ///
+    /// Scratch buffer reused from `ws.scratch.current_state_scratch`.
+    pub(crate) current_state_scratch: Vec<f64>,
     /// Scratch lookup table for basis reconstruction.
     ///
     /// Maps each cut pool slot to its position in the stored
@@ -428,6 +490,42 @@ pub(crate) struct ScratchBuffers {
     /// `reconstruct_basis` call.  Pre-allocated to `initial_pool_capacity`
     /// so the hot path avoids reallocation.
     pub(crate) promotion_scratch: PromotionScratch,
+
+    /// Per-worker trajectory-cost accumulator for the forward pass.
+    ///
+    /// Pre-sized to `max_local_fwd` at construction via [`WorkspaceSizing`].
+    /// Inside [`run_forward_worker`] the buffer is `clear()`ed then
+    /// `resize(n_local, 0.0)`d so no heap allocation occurs on the hot path.
+    /// At the worker boundary ownership is transferred via `std::mem::take`,
+    /// leaving this field empty until the next iteration's resize.
+    ///
+    /// Named `trajectory_costs_buf` (not `trajectory_costs`) to avoid
+    /// collision with the identically-named field on [`ForwardWorkerResult`].
+    pub(crate) trajectory_costs_buf: Vec<f64>,
+
+    /// Per-worker raw-noise scratch for the forward-pass sampler and simulation
+    /// worker loop.
+    ///
+    /// Distinct from [`ScratchBuffers::noise_buf`] which is used by the
+    /// backward inflow-patch path.  Pre-sized to `noise_dim` at construction.
+    /// Inside [`run_forward_worker`] the buffer is `resize(noise_dim, 0.0)`d
+    /// before the inner scenario loop so no per-call allocation occurs.
+    /// Inside [`run_worker_scenarios`] the buffer is `resize(noise_dim, 0.0)`d
+    /// before the scenario loop; neither use overlaps the other within a single
+    /// `SolverWorkspace`.
+    pub(crate) raw_noise_buf: Vec<f64>,
+
+    /// Per-worker permutation scratch for the forward-pass sampler and
+    /// simulation worker loop.
+    ///
+    /// Pre-sized to `total_forward_passes.max(1)` at construction.
+    /// Inside [`run_forward_worker`] the buffer is
+    /// `resize(total_forward_passes.max(1), 0)`d before the inner scenario
+    /// loop so no per-call allocation occurs.
+    /// Inside [`run_worker_scenarios`] the buffer is
+    /// `resize(n_scenarios.max(1), 0)`d before the scenario loop; neither
+    /// use overlaps the other within a single `SolverWorkspace`.
+    pub(crate) perm_scratch: Vec<usize>,
 }
 
 /// All per-thread mutable resources required for one LP solve sequence.
@@ -545,7 +643,11 @@ impl ScratchBuffers {
             max_blocks,
             downstream_par_order,
             initial_pool_capacity,
-            // max_openings, n_state used by BackwardAccumulators only
+            n_state,
+            max_local_fwd,
+            total_forward_passes,
+            noise_dim,
+            // max_openings used by BackwardAccumulators only
             ..
         } = s;
         Self {
@@ -578,8 +680,12 @@ impl ScratchBuffers {
                 Vec::new()
             },
             downstream_n_completed: 0,
+            current_state_scratch: Vec::with_capacity(n_state),
             recon_slot_lookup: vec![None; initial_pool_capacity],
             promotion_scratch: PromotionScratch::with_capacity(initial_pool_capacity),
+            trajectory_costs_buf: Vec::with_capacity(max_local_fwd),
+            raw_noise_buf: Vec::with_capacity(noise_dim),
+            perm_scratch: Vec::with_capacity(total_forward_passes.max(1)),
         }
     }
 }

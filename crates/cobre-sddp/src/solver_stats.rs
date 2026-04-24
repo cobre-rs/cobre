@@ -7,10 +7,9 @@
 
 use cobre_solver::SolverStatistics;
 
-/// Per-phase delta of solver counters, computed from before/after snapshots.
+/// Delta of solver counters between two snapshots.
 ///
-/// All integer fields represent the difference between the after and before snapshots.
-/// `solve_time_ms` is the wall-clock time delta in milliseconds.
+/// All fields represent the difference: after minus before snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct SolverStatsDelta {
     /// Number of LP solves in this phase.
@@ -138,6 +137,60 @@ impl SolverStatsDelta {
         {
             *d += s;
         }
+    }
+
+    /// Copy all fields from `self` into `dst`, reusing the destination's
+    /// existing `retry_level_histogram` allocation.
+    ///
+    /// All 14 scalar fields are copied by value. The destination's histogram
+    /// `Vec<u64>` is resized (via `resize`) to match `self`, then overwritten
+    /// with `copy_from_slice`. When `dst` already has a histogram of the same
+    /// length (the common case on iteration ≥ 2), no heap allocation occurs.
+    ///
+    /// Prefer this over `dst = self.clone()` or `dst = self.clone_into_reuse(..)`
+    /// on hot paths where the histogram length is stable across calls.
+    pub fn clone_into_reuse(&self, dst: &mut Self) {
+        dst.lp_solves = self.lp_solves;
+        dst.lp_successes = self.lp_successes;
+        dst.first_try_successes = self.first_try_successes;
+        dst.lp_failures = self.lp_failures;
+        dst.retry_attempts = self.retry_attempts;
+        dst.basis_offered = self.basis_offered;
+        dst.basis_consistency_failures = self.basis_consistency_failures;
+        dst.simplex_iterations = self.simplex_iterations;
+        dst.solve_time_ms = self.solve_time_ms;
+        dst.load_model_count = self.load_model_count;
+        dst.load_model_time_ms = self.load_model_time_ms;
+        dst.set_bounds_time_ms = self.set_bounds_time_ms;
+        dst.basis_set_time_ms = self.basis_set_time_ms;
+        dst.basis_reconstructions = self.basis_reconstructions;
+        let n = self.retry_level_histogram.len();
+        dst.retry_level_histogram.resize(n, 0);
+        dst.retry_level_histogram
+            .copy_from_slice(&self.retry_level_histogram);
+    }
+
+    /// Reset all scalar fields to zero and clear the histogram in place.
+    ///
+    /// Equivalent to `*self = SolverStatsDelta::default()` but retains the
+    /// existing `retry_level_histogram` capacity. Use this on hot paths where
+    /// the histogram is known to be refilled immediately after the reset.
+    pub fn reset_in_place(&mut self) {
+        self.lp_solves = 0;
+        self.lp_successes = 0;
+        self.first_try_successes = 0;
+        self.lp_failures = 0;
+        self.retry_attempts = 0;
+        self.basis_offered = 0;
+        self.basis_consistency_failures = 0;
+        self.simplex_iterations = 0;
+        self.solve_time_ms = 0.0;
+        self.load_model_count = 0;
+        self.load_model_time_ms = 0.0;
+        self.set_bounds_time_ms = 0.0;
+        self.basis_set_time_ms = 0.0;
+        self.basis_reconstructions = 0;
+        self.retry_level_histogram.clear();
     }
 
     /// Sum an iterator of deltas element-wise into a single aggregate.
@@ -1211,5 +1264,110 @@ mod tests {
         // Also confirm that a valid 13-element buffer round-trips without panic.
         let buf: [f64; 13] = [0.0; 13];
         let _ = unpack_delta_scalars(&buf);
+    }
+
+    /// `clone_into_reuse` must copy all scalar fields and resize+overwrite
+    /// the histogram without reallocating when the destination already has
+    /// sufficient capacity (tested via distinct source and destination
+    /// histogram lengths).
+    #[test]
+    fn solver_stats_delta_clone_into_reuse_preserves_values() {
+        let src = SolverStatsDelta {
+            lp_solves: 42,
+            lp_successes: 40,
+            first_try_successes: 38,
+            lp_failures: 2,
+            retry_attempts: 5,
+            basis_offered: 35,
+            basis_consistency_failures: 3,
+            simplex_iterations: 1200,
+            solve_time_ms: 99.5,
+            load_model_count: 10,
+            load_model_time_ms: 7.25,
+            set_bounds_time_ms: 1.5,
+            basis_set_time_ms: 0.75,
+            basis_reconstructions: 4,
+            retry_level_histogram: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        };
+
+        // dst starts with a different histogram length to verify resize.
+        let mut dst = SolverStatsDelta {
+            lp_solves: 0,
+            retry_level_histogram: vec![0; 5], // different length from src
+            ..SolverStatsDelta::default()
+        };
+
+        src.clone_into_reuse(&mut dst);
+
+        assert_eq!(dst.lp_solves, 42);
+        assert_eq!(dst.lp_successes, 40);
+        assert_eq!(dst.first_try_successes, 38);
+        assert_eq!(dst.lp_failures, 2);
+        assert_eq!(dst.retry_attempts, 5);
+        assert_eq!(dst.basis_offered, 35);
+        assert_eq!(dst.basis_consistency_failures, 3);
+        assert_eq!(dst.simplex_iterations, 1200);
+        assert!((dst.solve_time_ms - 99.5).abs() < 1e-10);
+        assert_eq!(dst.load_model_count, 10);
+        assert!((dst.load_model_time_ms - 7.25).abs() < 1e-10);
+        assert!((dst.set_bounds_time_ms - 1.5).abs() < 1e-10);
+        assert!((dst.basis_set_time_ms - 0.75).abs() < 1e-10);
+        assert_eq!(dst.basis_reconstructions, 4);
+        assert_eq!(
+            dst.retry_level_histogram,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        );
+
+        // Verify reuse: clone_into_reuse onto a dst that already has the
+        // right histogram length must produce the same result.
+        let src2 = SolverStatsDelta {
+            lp_solves: 7,
+            retry_level_histogram: vec![10; 12],
+            ..SolverStatsDelta::default()
+        };
+        src2.clone_into_reuse(&mut dst);
+        assert_eq!(dst.lp_solves, 7);
+        assert_eq!(dst.retry_level_histogram, vec![10; 12]);
+    }
+
+    /// `reset_in_place` must zero all scalar fields and clear the histogram,
+    /// leaving the existing `Vec` capacity intact.
+    #[test]
+    fn solver_stats_delta_reset_in_place_zeroes_all_fields() {
+        let mut d = SolverStatsDelta {
+            lp_solves: 99,
+            lp_successes: 88,
+            first_try_successes: 77,
+            lp_failures: 11,
+            retry_attempts: 6,
+            basis_offered: 50,
+            basis_consistency_failures: 4,
+            simplex_iterations: 500,
+            solve_time_ms: 42.0,
+            load_model_count: 8,
+            load_model_time_ms: 3.0,
+            set_bounds_time_ms: 1.0,
+            basis_set_time_ms: 0.5,
+            basis_reconstructions: 2,
+            retry_level_histogram: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        };
+
+        d.reset_in_place();
+
+        assert_eq!(d.lp_solves, 0);
+        assert_eq!(d.lp_successes, 0);
+        assert_eq!(d.first_try_successes, 0);
+        assert_eq!(d.lp_failures, 0);
+        assert_eq!(d.retry_attempts, 0);
+        assert_eq!(d.basis_offered, 0);
+        assert_eq!(d.basis_consistency_failures, 0);
+        assert_eq!(d.simplex_iterations, 0);
+        assert_eq!(d.solve_time_ms, 0.0);
+        assert_eq!(d.load_model_count, 0);
+        assert_eq!(d.load_model_time_ms, 0.0);
+        assert_eq!(d.set_bounds_time_ms, 0.0);
+        assert_eq!(d.basis_set_time_ms, 0.0);
+        assert_eq!(d.basis_reconstructions, 0);
+        assert!(d.retry_level_histogram.is_empty());
     }
 }

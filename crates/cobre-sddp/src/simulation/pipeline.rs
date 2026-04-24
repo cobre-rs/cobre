@@ -1,43 +1,8 @@
-//! Simulation forward pass loop for SDDP policy evaluation.
+//! Simulation forward pass for policy evaluation.
 //!
-//! [`simulate`] evaluates the trained SDDP policy on a set of scenarios by
-//! running a forward-only pass through all stages, extracting per-entity
-//! results at each stage, streaming completed scenario results through a
-//! bounded channel, and returning a compact cost buffer for MPI aggregation.
-//!
-//! ## LP rebuild sequence
-//!
-//! Identical to the training forward pass (`forward.rs`):
-//!
-//! 1. `solver.load_model(template)` — reset to the structural LP.
-//! 2. `solver.add_rows(cut_batch)` — append Benders cuts from the trained FCF.
-//! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
-//!
-//! ## Work distribution
-//!
-//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
-//! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
-//! distributes scenarios across [`SolverWorkspace`] instances. Each stage LP
-//! is optionally warm-started with a per-stage basis from the training checkpoint.
-//! The warm-start basis is read-only and shared across all threads, so it does
-//! not introduce any thread-count-dependent state — determinism is preserved.
-//! Results are sorted by `scenario_id` for deterministic MPI aggregation.
-//!
-//! ## Seed domain separation
-//!
-//! To avoid seed collisions with training forward pass seeds (which use
-//! `global_scenario = rank * forward_passes + m`), the simulation domain adds
-//! an offset of `u32::MAX / 2` to the scenario ID before passing it to
-//! [`ForwardSampler::sample`]. This places simulation seeds in a disjoint region of
-//! the SipHash-1-3 seed space (deterministic SipHash-1-3 seeds for communication-free parallel noise).
-//!
-//! ## Hot-path allocation discipline
-//!
-//! No allocations occur per scenario or per stage during the inner loops.
-//! Each [`SolverWorkspace`] pre-allocates its [`crate::PatchBuffer`] and
-//! `current_state`. The
-//! [`RowBatch`] per stage is built once before the scenario loop — not once
-//! per scenario.
+//! [`simulate`] evaluates the trained policy on scenarios. Scenarios distributed
+//! across ranks via two-level distribution; within-rank parallelism via Rayon.
+//! Seed domain separated from training. No per-scenario allocations on hot path.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Sender, SyncSender};
@@ -396,14 +361,24 @@ fn solve_simulation_stage<S: SolverInterface>(
         );
     }
 
-    // Copy current_state to avoid borrow overlap with run_stage_solve.
-    let current_state_buf: Vec<f64> = ws.current_state[..indexer.n_state].to_vec();
+    // Take scratch buffers out of ws before run_stage_solve borrows ws.
+    // The `mem::take` pattern (capacity retained, empty vec left in field) allows
+    // us to pass borrowed slices while `&mut ws` is also live, and to fill
+    // unscaled_primal/unscaled_dual from `view` slices that are still tied to 'ws.
+    // All three are restored to ws.scratch at function end so the next stage reuses
+    // the warmed allocations.
+    let mut current_state_local: Vec<f64> = std::mem::take(&mut ws.scratch.current_state_scratch);
+    let mut unscaled_primal: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_primal);
+    let mut unscaled_dual: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_dual);
+
+    current_state_local.clear();
+    current_state_local.extend_from_slice(&ws.current_state[..indexer.n_state]);
 
     let inputs = crate::stage_solve::StageInputs {
         stage_context: ctx,
         indexer,
         pool: &fcf.pools[t],
-        current_state: &current_state_buf,
+        current_state: &current_state_local,
         stored_basis: load_spec.warm_basis,
         baked_template: load_spec.baked_template,
         stage_index: t,
@@ -450,60 +425,69 @@ fn solve_simulation_stage<S: SolverInterface>(
         unreachable!("run_stage_solve(Phase::Simulation) returns Simulation variant")
     };
 
-    // Extract view fields into owned locals before mutable borrowing ws.scratch.
+    // Extract scaling slices and objective scalar before filling unscaled buffers.
+    // `view` borrows from `ws` (via run_stage_solve), so we must finish all reads
+    // of `view` before the view borrow ends.
     let col_scale = &ctx.templates[ids.t].col_scale;
     let row_scale = &ctx.templates[ids.t].row_scale;
     let view_objective = view.objective;
-    let view_iterations = view.iterations;
-    let view_solve_time = view.solve_time_seconds;
-    // Unscale primal values when column scaling is active.
-    let unscaled_primal: Vec<f64> = if col_scale.is_empty() {
-        view.primal.to_vec()
+
+    // Fill the taken-out unscaled buffers from view.primal/view.dual. The locals
+    // already carry the pre-warmed capacity; clear() + extend reuses it.
+    unscaled_primal.clear();
+    if col_scale.is_empty() {
+        unscaled_primal.extend_from_slice(view.primal);
     } else {
-        view.primal
-            .iter()
-            .zip(col_scale)
-            .map(|(&xp, &d)| d * xp)
-            .collect()
-    };
-    // Unscale dual values when row scaling is active.
+        unscaled_primal.extend(
+            view.primal
+                .iter()
+                .zip(col_scale.iter())
+                .map(|(&xp, &d)| d * xp),
+        );
+    }
+
     // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
     // Structural rows use row_scale[i]; rows beyond the template length
     // (cut rows) have implicit row_scale = 1.0.
-    let unscaled_dual: Vec<f64> = if row_scale.is_empty() {
-        view.dual.to_vec()
+    unscaled_dual.clear();
+    if row_scale.is_empty() {
+        unscaled_dual.extend_from_slice(view.dual);
     } else {
-        view.dual
-            .iter()
-            .enumerate()
-            .map(|(i, &d)| {
-                let scale = if i < row_scale.len() {
-                    row_scale[i]
-                } else {
-                    1.0
-                };
-                d * scale
-            })
-            .collect()
-    };
-    // `reduced_costs` is not used by extract_sim_stage_result; pass an empty
-    // slice. The `view` borrow of `ws` ended after the last use of view.primal
-    // and view.dual above; the subsequent &mut ws accesses are safe.
-    let unscaled_view = cobre_solver::SolutionView {
-        objective: view_objective,
-        primal: &unscaled_primal,
-        dual: &unscaled_dual,
-        reduced_costs: &[],
-        iterations: view_iterations,
-        solve_time_seconds: view_solve_time,
-    };
+        unscaled_dual.extend(view.dual.iter().enumerate().map(|(i, &d)| {
+            let scale = if i < row_scale.len() {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            d * scale
+        }));
+    }
+
+    // End the `view` borrow of `ws` before mutating ws further.
+    // `SolutionView` is Copy so `drop(view)` would be a no-op; `let _` is idiomatic.
+    // `inputs` and its borrow of current_state_local ended at the `?` above
+    // (NLL sees no further use of inputs after that point).
+    // Restore scratch buffers so the next stage reuses the warmed allocations.
+    let _ = view;
+    ws.scratch.current_state_scratch = current_state_local;
+    ws.scratch.unscaled_primal = unscaled_primal;
+    ws.scratch.unscaled_dual = unscaled_dual;
+
+    // extract_sim_stage_result takes individual scratch field borrows so the
+    // borrow checker can see that unscaled_primal/dual (passed as &[f64]) are
+    // disjoint from the fields it mutates (&mut inflow_m3s_buf, &mut row_lower_buf).
     let (immediate_cost, result) = extract_sim_stage_result(
-        &mut ws.scratch,
+        &mut ws.scratch.inflow_m3s_buf,
+        &mut ws.scratch.row_lower_buf,
+        &ws.scratch.load_rhs_buf,
+        &ws.scratch.ncs_col_upper_buf,
+        &ws.scratch.unscaled_primal,
+        &ws.scratch.unscaled_dual,
+        view_objective,
         ctx,
         output,
         indexer,
         ids,
-        &unscaled_view,
         n_stochastic_ncs,
     );
     // Save incoming lag values before overwriting state.
@@ -516,7 +500,7 @@ fn solve_simulation_stage<S: SolverInterface>(
 
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+        .extend_from_slice(&ws.scratch.unscaled_primal[..indexer.n_state]);
 
     // Accumulate and shift lag state using stage-level transition weights.
     // For monthly-only studies this degenerates to the previous direct shift.
@@ -540,10 +524,13 @@ fn solve_simulation_stage<S: SolverInterface>(
             ws.scratch.downstream_completed_lags.len() / h
         }
     };
+    // Pass unscaled_primal as a separate borrow so the borrow checker sees it is
+    // disjoint from the &mut ws.scratch.lag_* fields passed alongside it.
+    let unscaled_primal_ref: &[f64] = &ws.scratch.unscaled_primal;
     crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
-        &unscaled_primal,
+        unscaled_primal_ref,
         indexer,
         &stage_lag,
         &mut crate::noise::LagAccumState {
@@ -559,9 +546,6 @@ fn solve_simulation_stage<S: SolverInterface>(
         },
     );
 
-    // Put the buffers back so they are reused on the next stage.
-    ws.scratch.unscaled_primal = unscaled_primal;
-    ws.scratch.unscaled_dual = unscaled_dual;
     Ok((immediate_cost, result))
 }
 
@@ -569,13 +553,25 @@ fn solve_simulation_stage<S: SolverInterface>(
 ///
 /// Separated from [`solve_simulation_stage`] to keep that function under the
 /// line-count lint limit.
+///
+/// Takes individual scratch field borrows rather than `&mut ScratchBuffers` so
+/// the caller can pass `unscaled_primal`/`unscaled_dual` as `&[f64]` slices of
+/// their respective scratch fields while simultaneously passing `&mut` borrows to
+/// the fields this function actually mutates (`inflow_m3s_buf`, `row_lower_buf`).
+/// The borrow checker can verify disjointness at field granularity.
+#[allow(clippy::too_many_arguments)]
 fn extract_sim_stage_result(
-    scratch: &mut crate::workspace::ScratchBuffers,
+    inflow_m3s_buf: &mut Vec<f64>,
+    row_lower_buf: &mut Vec<f64>,
+    load_rhs_buf: &[f64],
+    ncs_col_upper_buf: &[f64],
+    unscaled_primal: &[f64],
+    unscaled_dual: &[f64],
+    view_objective: f64,
     ctx: &StageContext<'_>,
     output: &SimulationOutputSpec<'_>,
     indexer: &crate::StageIndexer,
     ids: &SimStageIds,
-    view: &cobre_solver::SolutionView<'_>,
     n_stochastic_ncs: usize,
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
@@ -584,18 +580,16 @@ fn extract_sim_stage_result(
         .get(t)
         .and_then(|tmpl| tmpl.objective.get(indexer.theta).copied())
         .unwrap_or(1.0);
-    let theta_contribution = view.primal[indexer.theta] * theta_obj_coeff;
-    let immediate_cost = (view.objective - theta_contribution) * COST_SCALE_FACTOR;
+    let theta_contribution = unscaled_primal[indexer.theta] * theta_obj_coeff;
+    let immediate_cost = (view_objective - theta_contribution) * COST_SCALE_FACTOR;
     // Read realized inflow Z_t directly from the LP primal solution.
     // The z_h variables are defined by the z-inflow constraint:
     //   z_h = base_h + sum_l[psi_l * lag_in[h,l]] + sigma_h * eta_h
     // This is the total natural inflow, including PAR lag contribution
     // and gross of withdrawal.
-    scratch.inflow_m3s_buf.clear();
+    inflow_m3s_buf.clear();
     for h in 0..ctx.n_hydros {
-        scratch
-            .inflow_m3s_buf
-            .push(view.primal[indexer.z_inflow.start + h]);
+        inflow_m3s_buf.push(unscaled_primal[indexer.z_inflow.start + h]);
     }
     let blk_hrs = output
         .block_hours_per_stage
@@ -613,8 +607,8 @@ fn extract_sim_stage_result(
     let row_lower_ref = build_row_lower_unscaled(
         &ctx.templates[t].row_lower,
         &ctx.templates[t].row_scale,
-        &scratch.load_rhs_buf,
-        &mut scratch.row_lower_buf,
+        load_rhs_buf,
+        row_lower_buf,
         ctx.n_load_buses,
         load_row_start,
         load_n_blks,
@@ -626,35 +620,33 @@ fn extract_sim_stage_result(
     let ncs_n = output.n_ncs_per_stage.get(t).copied().unwrap_or(0);
     let ncs_col_start = output.ncs_col_starts.get(t).copied().unwrap_or(0);
     let stage_n_blks = ctx.block_counts_per_stage.get(t).copied().unwrap_or(0);
-    let ncs_col_upper: &[f64] = if n_stochastic_ncs > 0
-        && n_stochastic_ncs == ncs_n
-        && !scratch.ncs_col_upper_buf.is_empty()
-    {
-        // All active NCS entities at this stage are stochastic — use the patched values.
-        &scratch.ncs_col_upper_buf
-    } else if ncs_n > 0 && stage_n_blks > 0 {
-        let start = ncs_col_start;
-        let end = start + ncs_n * stage_n_blks;
-        if end <= ctx.templates[t].col_upper.len() {
-            &ctx.templates[t].col_upper[start..end]
+    let ncs_col_upper: &[f64] =
+        if n_stochastic_ncs > 0 && n_stochastic_ncs == ncs_n && !ncs_col_upper_buf.is_empty() {
+            // All active NCS entities at this stage are stochastic — use the patched values.
+            ncs_col_upper_buf
+        } else if ncs_n > 0 && stage_n_blks > 0 {
+            let start = ncs_col_start;
+            let end = start + ncs_n * stage_n_blks;
+            if end <= ctx.templates[t].col_upper.len() {
+                &ctx.templates[t].col_upper[start..end]
+            } else {
+                &[]
+            }
         } else {
             &[]
-        }
-    } else {
-        &[]
-    };
+        };
     let result = extract_stage_result(
         &SolutionView {
-            primal: view.primal,
-            dual: view.dual,
-            objective: view.objective,
+            primal: unscaled_primal,
+            dual: unscaled_dual,
+            objective: view_objective,
             objective_coeffs: &ctx.templates[t].objective,
             row_lower: row_lower_ref,
         },
         &StageExtractionSpec {
             indexer,
             entity_counts: output.entity_counts,
-            inflow_m3s_per_hydro: &scratch.inflow_m3s_buf,
+            inflow_m3s_per_hydro: inflow_m3s_buf,
             block_hours: blk_hrs,
             generic_constraint_entries: output
                 .generic_constraint_row_entries
@@ -1455,8 +1447,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -2286,8 +2282,12 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
                     recon_slot_lookup: Vec::new(),
                     promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
@@ -3305,8 +3305,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3622,8 +3626,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3928,8 +3936,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),

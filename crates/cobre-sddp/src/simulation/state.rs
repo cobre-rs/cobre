@@ -1,21 +1,21 @@
-//! Owned scratch state and per-call inputs for the simulation pass.
+//! Simulation state management and entry point.
 //!
-//! [`SimulationState`] owns the optional re-bake scratch buffers allocated once
-//! per simulation run. It exposes a single entry point, [`SimulationState::run`],
-//! which is the renamed body of the former free function `simulate`.
+//! [`SimulationState`] owns re-bake scratch buffers allocated once per run.
+//! [`SimulationInputs`] bundles per-call borrowed inputs (no per-scenario allocation).
 //!
-//! [`SimulationInputs`] is a plain argument-bundle that groups all borrowed
-//! references (workspaces, contexts, config, output spec, checkpoint data, and
-//! communicator) that the caller provides. Splitting owned scratch from borrowed
-//! inputs removes the need for `#[allow(clippy::too_many_arguments)]` on the
-//! entry point.
+//! ## Callers
 //!
-//! ## Re-bake disposition
+//! Production call sites of [`crate::simulate`] (via [`super::StudySetup::simulate`]):
 //!
-//! When the caller provides `baked_templates: None` (checkpoint-loaded simulation),
-//! the function rebuilds baked templates locally via [`rebake_templates_if_needed`].
-//! The allocation is `O(num_stages)` and happens once per simulation run (not per
-//! scenario), so it is acceptable for a non-hot-path function.
+//! | Caller | File | `baked_templates` |
+//! |--------|------|-------------------|
+//! | `run_simulation_phase` — training path | `crates/cobre-cli/src/commands/run.rs` | `Some(...)` from `TrainingResult` produced by `TrainingSession::finalize` |
+//! | `run_simulation_phase` — checkpoint path | `crates/cobre-cli/src/commands/run.rs` | `None` — baked templates are not stored in policy checkpoints; `rebake_templates_if_needed` rebuilds them once at startup |
+//! | `run_simulation_phase_py` — training path | `crates/cobre-python/src/run.rs` | `Some(...)` from `TrainingResult` produced by `TrainingSession::finalize` |
+//! | `run_simulation_phase_py` — checkpoint path | `crates/cobre-python/src/run.rs` | `None` — same checkpoint constraint as the CLI path |
+//!
+//! Tests in `crates/cobre-sddp/src/setup/mod.rs` pass `None` directly; this is
+//! intentional — tests use minimal fixtures and are not on the hot path.
 //!
 //! ## Hot-path allocation discipline
 //!
@@ -351,11 +351,14 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
     let n_scenarios = end_local - start_local;
     let mut worker_costs = Vec::with_capacity(n_scenarios);
     let mut worker_stats = Vec::with_capacity(n_scenarios);
-    // Sampling scratch: allocated once per worker, reused across scenarios.
+    // Sampling scratch: resize ws.scratch buffers once per worker, reuse across
+    // scenarios. Avoids per-worker vec![...] allocations on the hot path.
     let noise_dim = training_ctx.stochastic.dim();
-    let mut raw_noise_buf = vec![0.0_f64; noise_dim];
+    ws.scratch.raw_noise_buf.resize(noise_dim, 0.0_f64);
     #[allow(clippy::cast_possible_truncation)]
-    let mut perm_scratch = vec![0_usize; config.n_scenarios.max(1) as usize];
+    ws.scratch
+        .perm_scratch
+        .resize(config.n_scenarios.max(1) as usize, 0_usize);
 
     for local_idx in start_local..end_local {
         #[allow(clippy::cast_possible_truncation)]
@@ -368,7 +371,13 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
             stage_bases,
             basis_activity_window: config.basis_activity_window,
         };
-        let (total_cost, stage_results) = process_scenario_stages(
+        // Split raw_noise_buf and perm_scratch out of ws.scratch so that the
+        // immutable borrows of those slices in ScenarioIds do not conflict with
+        // the &mut ws passed to process_scenario_stages.  Capacity is retained
+        // across calls via mem::take + swap-back.
+        let mut raw_noise_buf = std::mem::take(&mut ws.scratch.raw_noise_buf);
+        let mut perm_scratch = std::mem::take(&mut ws.scratch.perm_scratch);
+        let result = process_scenario_stages(
             ws,
             ctx,
             fcf,
@@ -384,7 +393,10 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
                 perm_scratch: &mut perm_scratch,
                 sampler,
             },
-        )?;
+        );
+        ws.scratch.raw_noise_buf = raw_noise_buf;
+        ws.scratch.perm_scratch = perm_scratch;
+        let (total_cost, stage_results) = result?;
         let stats_after = ws.solver.statistics();
         let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
         let scenario_solve_time_ms = scenario_delta.solve_time_ms;

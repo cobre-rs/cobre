@@ -1,18 +1,26 @@
 //! Per-iteration scratch buffers for the SDDP training loop.
 //!
-//! [`IterationScratch`] groups the seven reusable scratch fields that the
-//! training iteration loop (forward pass, backward pass, cut management,
-//! and lower-bound evaluation) writes into in-place each iteration.
-//! They are allocated once in [`IterationScratch::new`] and reused without
-//! per-iteration heap allocation.
+//! [`IterationScratch`] holds reusable scratch fields allocated once and cleared
+//! each iteration, avoiding per-iteration heap allocation.
 //!
-//! This struct intentionally excludes the backward-pass-specific scratch
-//! currently held as `bwd_*_buf` fields on `TrainingSession`; those belong
-//! to [`BackwardPassState`](crate::backward).
+//! ## Startup allocations
+//!
+//! [`IterationScratch::new`] performs `O(max_local_fwd * num_stages)`
+//! allocations at training-run startup:
+//! - N × [`TrajectoryRecord`](crate::TrajectoryRecord) with `state: Vec<f64>` of length `n_state`.
+//! - `num_stages` × `RowBatch` for cut-batch scratch.
+//! - `num_stages` × `RowBatch` for bake scratch.
+//! - `num_stages` × `StageTemplate` for baked templates.
+//! - One `PatchBuffer`, one `lb_cut_batch`, one `CutRowMap`.
+//!
+//! These are amortized across all iterations of a training run.
 
 use cobre_solver::{RowBatch, StageTemplate};
 
-use crate::{TrajectoryRecord, context::StageContext, cut::CutRowMap, lp_builder::PatchBuffer};
+use crate::{
+    TrajectoryRecord, context::StageContext, cut::CutRowMap, lower_bound::LbEvalScratch,
+    lp_builder::PatchBuffer,
+};
 
 /// Per-training-run iteration scratch owned by `TrainingSession`.
 ///
@@ -40,6 +48,8 @@ pub(crate) struct IterationScratch {
     pub bake_row_batches: Vec<RowBatch>,
     /// Cut row map for the lower-bound LP (tracks row positions within stage 0 template).
     pub lb_cut_row_map: CutRowMap,
+    /// Per-evaluation scratch buffers for lower-bound evaluation (reused across iterations).
+    pub lb_scratch: LbEvalScratch,
 }
 
 impl IterationScratch {
@@ -72,13 +82,16 @@ impl IterationScratch {
         stage_ctx: &StageContext<'_>,
     ) -> Self {
         // ── Trajectory records ─────────────────────────────────────────────
-        let empty_record = TrajectoryRecord {
-            primal: vec![],
-            dual: vec![],
-            stage_cost: 0.0,
-            state: vec![0.0; n_state],
-        };
-        let records = vec![empty_record; max_local_fwd * num_stages];
+        // Each record is constructed fresh to avoid cloning empty Vecs;
+        // `Vec::new()` is strictly cheaper than cloning a capacity-0 Vec.
+        let records: Vec<TrajectoryRecord> = (0..max_local_fwd * num_stages)
+            .map(|_| TrajectoryRecord {
+                primal: Vec::new(),
+                dual: Vec::new(),
+                stage_cost: 0.0,
+                state: vec![0.0; n_state],
+            })
+            .collect();
 
         // ── Patch buffer ───────────────────────────────────────────────────
         // Standalone patch buffer for the lower bound evaluation which uses
@@ -135,6 +148,11 @@ impl IterationScratch {
         // ── Lower-bound cut row map ────────────────────────────────────────
         let lb_cut_row_map = CutRowMap::new(fcf_pool_0_capacity, template_0_num_rows);
 
+        // ── Lower-bound evaluation scratch ────────────────────────────────
+        // Allocated empty; populated on the first evaluate_lower_bound call
+        // and reused (without reallocation) on every subsequent iteration.
+        let lb_scratch = LbEvalScratch::new();
+
         Self {
             patch_buf,
             records,
@@ -143,6 +161,7 @@ impl IterationScratch {
             baked_templates,
             bake_row_batches,
             lb_cut_row_map,
+            lb_scratch,
         }
     }
 }

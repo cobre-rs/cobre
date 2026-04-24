@@ -32,6 +32,7 @@
 //! - [`deserialize_cut`] — read one cut record from a byte buffer.
 //! - [`serialize_cuts_to_buffer`] — pack multiple cuts into a new buffer.
 //! - [`deserialize_cuts_from_buffer`] — unpack multiple cuts from a buffer.
+//! - [`deserialize_cuts_from_buffer_into`] — unpack into caller-provided buffers (no allocation).
 
 // ---------------------------------------------------------------------------
 // CutWireHeader
@@ -246,6 +247,55 @@ pub fn deserialize_cuts_from_buffer(buf: &[u8], n_state: usize) -> Vec<(CutWireH
         .collect()
 }
 
+/// Deserialize all cuts from a contiguous byte buffer into caller-provided
+/// pre-allocated scratch buffers.
+///
+/// On return, `headers_out` contains one [`CutWireHeader`] per cut record and
+/// `coefficients_flat_out` contains all coefficients concatenated in order:
+/// cut 0's `n_state` values, then cut 1's, and so on (flat `SoA` layout).
+///
+/// Both output buffers are cleared at the start of each call so they can be
+/// reused across iterations without releasing their heap allocation.
+///
+/// The buffer must contain a whole number of cut records: its length must be
+/// `0` or a multiple of `cut_wire_size(n_state)`.
+///
+/// # Panics
+///
+/// Panics if `buf.len()` is not a multiple of `cut_wire_size(n_state)` (when
+/// `n_state > 0`).
+pub fn deserialize_cuts_from_buffer_into(
+    buf: &[u8],
+    n_state: usize,
+    headers_out: &mut Vec<CutWireHeader>,
+    coefficients_flat_out: &mut Vec<f64>,
+) {
+    headers_out.clear();
+    coefficients_flat_out.clear();
+
+    if buf.is_empty() {
+        return;
+    }
+
+    let record_size = cut_wire_size(n_state);
+    assert!(
+        buf.len() % record_size == 0,
+        "buffer length {} is not a multiple of record size {record_size}",
+        buf.len()
+    );
+
+    let n_cuts = buf.len() / record_size;
+    headers_out.reserve(n_cuts);
+    coefficients_flat_out.reserve(n_cuts * n_state);
+
+    for i in 0..n_cuts {
+        let start = i * record_size;
+        let (header, coefficients) = deserialize_cut(&buf[start..start + record_size], n_state);
+        headers_out.push(header);
+        coefficients_flat_out.extend_from_slice(&coefficients);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -255,8 +305,8 @@ mod tests {
     )]
 
     use super::{
-        CutWireHeader, cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer, serialize_cut,
-        serialize_cuts_to_buffer,
+        CutWireHeader, cut_wire_size, deserialize_cut, deserialize_cuts_from_buffer,
+        deserialize_cuts_from_buffer_into, serialize_cut, serialize_cuts_to_buffer,
     };
 
     #[test]
@@ -495,5 +545,108 @@ mod tests {
         assert_eq!(h, cloned);
         let debug_str = format!("{h:?}");
         assert!(!debug_str.is_empty());
+    }
+
+    #[test]
+    fn deserialize_cuts_from_buffer_into_populates_buffers() {
+        // Serialize 3 cuts with n_state=2, then verify that
+        // deserialize_cuts_from_buffer_into produces values bit-for-bit
+        // identical to those from deserialize_cuts_from_buffer.
+        let n_state = 2usize;
+        let cuts_data: &[(u32, u32, u32, f64, &[f64])] = &[
+            (0, 1, 0, 10.0, &[1.0, 2.0]),
+            (1, 2, 1, 20.0, &[3.0, 4.0]),
+            (2, 3, 2, 30.0, &[5.0, 6.0]),
+        ];
+        let buf = serialize_cuts_to_buffer(cuts_data, n_state);
+
+        // New path: into pre-allocated buffers.
+        let mut headers_out: Vec<CutWireHeader> = Vec::new();
+        let mut coefficients_flat_out: Vec<f64> = Vec::new();
+        deserialize_cuts_from_buffer_into(
+            &buf,
+            n_state,
+            &mut headers_out,
+            &mut coefficients_flat_out,
+        );
+
+        assert_eq!(headers_out.len(), 3, "must produce exactly 3 headers");
+        assert_eq!(
+            coefficients_flat_out.len(),
+            3 * n_state,
+            "flat coefficient buffer must have 3 * n_state entries"
+        );
+
+        // Old path: allocating reference.
+        let reference = deserialize_cuts_from_buffer(&buf, n_state);
+        assert_eq!(reference.len(), 3);
+
+        // Values must be bit-for-bit identical.
+        for (i, (ref_header, ref_coeffs)) in reference.iter().enumerate() {
+            assert_eq!(headers_out[i], *ref_header, "header mismatch at cut {i}");
+            let start = i * n_state;
+            for j in 0..n_state {
+                assert_eq!(
+                    coefficients_flat_out[start + j].to_bits(),
+                    ref_coeffs[j].to_bits(),
+                    "coefficient[{j}] mismatch at cut {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deserialize_cuts_from_buffer_into_reuses_capacity() {
+        // Call twice with the same buffers and verify that after the second
+        // call the capacity is at least as large as after the first (proving
+        // the Vec allocation is retained between calls).
+        let n_state = 3usize;
+        let cuts_data: &[(u32, u32, u32, f64, &[f64])] = &[
+            (0, 1, 0, 1.0, &[1.0, 2.0, 3.0]),
+            (1, 1, 1, 2.0, &[4.0, 5.0, 6.0]),
+            (2, 1, 2, 3.0, &[7.0, 8.0, 9.0]),
+        ];
+        let buf = serialize_cuts_to_buffer(cuts_data, n_state);
+
+        let mut headers_out: Vec<CutWireHeader> = Vec::new();
+        let mut coefficients_flat_out: Vec<f64> = Vec::new();
+
+        // First call: buffers grow to hold 3 cuts.
+        deserialize_cuts_from_buffer_into(
+            &buf,
+            n_state,
+            &mut headers_out,
+            &mut coefficients_flat_out,
+        );
+        let cap_headers_after_first = headers_out.capacity();
+        let cap_coeffs_after_first = coefficients_flat_out.capacity();
+
+        assert!(
+            cap_headers_after_first >= 3,
+            "headers capacity must be >= 3 after first call, got {cap_headers_after_first}"
+        );
+
+        // Second call: buffers are cleared then re-populated without
+        // releasing the previous allocation.
+        deserialize_cuts_from_buffer_into(
+            &buf,
+            n_state,
+            &mut headers_out,
+            &mut coefficients_flat_out,
+        );
+
+        assert!(
+            headers_out.capacity() >= cap_headers_after_first,
+            "headers capacity must not shrink between calls"
+        );
+        assert!(
+            coefficients_flat_out.capacity() >= cap_coeffs_after_first,
+            "coefficients capacity must not shrink between calls"
+        );
+        assert_eq!(
+            headers_out.len(),
+            3,
+            "second call must still produce 3 headers"
+        );
     }
 }

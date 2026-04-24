@@ -31,10 +31,9 @@
 //! [`CutSyncBuffers::new`] pre-allocates all byte buffers for the maximum
 //! possible exchange size. [`sync_cuts`](CutSyncBuffers::sync_cuts) serializes
 //! cuts directly into the pre-allocated `send_buf` using [`serialize_cut`] to
-//! avoid per-call allocation. The receive-side deserialization does allocate
-//! (one `Vec<f64>` per remote cut), but this occurs O(ranks * `cuts_per_rank`)
-//! times per stage — not per-scenario — and is acceptable on the backward pass
-//! hot path.
+//! avoid per-call allocation. The receive-side deserialization writes into the
+//! pre-allocated `deserialize_headers_buf` and `deserialize_coefficients_buf`
+//! scratch buffers, eliminating all per-call heap allocations on the hot path.
 //!
 //! [`cut::wire`]: crate::cut::wire
 //! [`serialize_cut`]: crate::cut::wire::serialize_cut
@@ -43,7 +42,7 @@ use cobre_comm::Communicator;
 
 use crate::{
     FutureCostFunction, SddpError,
-    cut::wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
+    cut::wire::{CutWireHeader, cut_wire_size, deserialize_cuts_from_buffer_into, serialize_cut},
 };
 
 /// Pre-allocated byte buffers for gathering cut wire records across all MPI
@@ -135,6 +134,20 @@ pub struct CutSyncBuffers {
     /// iteration. Used by [`sync_cuts`](Self::sync_cuts) to determine the
     /// expected byte count from each remote rank during `allgatherv`.
     per_rank_cuts: Vec<usize>,
+
+    /// Scratch buffer for deserialized cut headers, reused across calls.
+    ///
+    /// Grown lazily on demand; never shrunk. Eliminates the per-call
+    /// `Vec<CutWireHeader>` allocation in the deserialization hot path.
+    deserialize_headers_buf: Vec<CutWireHeader>,
+
+    /// Scratch buffer for deserialized cut coefficients (flat layout), reused
+    /// across calls.
+    ///
+    /// Stores all coefficients concatenated: cut 0's `n_state` values, then
+    /// cut 1's, etc. Grown lazily; never shrunk. Eliminates the per-cut
+    /// `Vec<f64>` allocation in the deserialization hot path.
+    deserialize_coefficients_buf: Vec<f64>,
 }
 
 impl CutSyncBuffers {
@@ -209,6 +222,8 @@ impl CutSyncBuffers {
             num_ranks,
             record_size,
             per_rank_cuts,
+            deserialize_headers_buf: Vec::new(),
+            deserialize_coefficients_buf: Vec::new(),
         }
     }
 
@@ -323,14 +338,20 @@ impl CutSyncBuffers {
             let start = self.displs[r];
             let end = start + self.counts[r];
             let slice = &self.recv_buf[start..end];
-            let cuts = deserialize_cuts_from_buffer(slice, self.n_state);
-            for (header, coefficients) in cuts {
+            deserialize_cuts_from_buffer_into(
+                slice,
+                self.n_state,
+                &mut self.deserialize_headers_buf,
+                &mut self.deserialize_coefficients_buf,
+            );
+            for (i, header) in self.deserialize_headers_buf.iter().enumerate() {
+                let coeff_start = i * self.n_state;
                 fcf.add_cut(
                     stage,
                     u64::from(header.iteration),
                     header.forward_pass_index,
                     header.intercept,
-                    &coefficients,
+                    &self.deserialize_coefficients_buf[coeff_start..coeff_start + self.n_state],
                 );
                 remote_count += 1;
             }
@@ -466,14 +487,20 @@ impl CutSyncBuffers {
             let start = self.displs[r];
             let end = start + self.counts[r];
             let slice = &self.recv_buf[start..end];
-            let cuts = deserialize_cuts_from_buffer(slice, self.n_state);
-            for (header, coefficients) in cuts {
+            deserialize_cuts_from_buffer_into(
+                slice,
+                self.n_state,
+                &mut self.deserialize_headers_buf,
+                &mut self.deserialize_coefficients_buf,
+            );
+            for (i, header) in self.deserialize_headers_buf.iter().enumerate() {
+                let coeff_start = i * self.n_state;
                 fcf.add_cut(
                     stage,
                     u64::from(header.iteration),
                     header.forward_pass_index,
                     header.intercept,
-                    &coefficients,
+                    &self.deserialize_coefficients_buf[coeff_start..coeff_start + self.n_state],
                 );
                 remote_count += 1;
             }
@@ -516,6 +543,23 @@ mod tests {
     };
 
     // ── Unit tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_deserialize_scratch_bufs_start_empty() {
+        // AC3: deserialize_headers_buf and deserialize_coefficients_buf both
+        // have capacity == 0 immediately after construction (grown lazily).
+        let bufs = CutSyncBuffers::new(2, 3, 4);
+        assert_eq!(
+            bufs.deserialize_headers_buf.capacity(),
+            0,
+            "deserialize_headers_buf must start with capacity 0"
+        );
+        assert_eq!(
+            bufs.deserialize_coefficients_buf.capacity(),
+            0,
+            "deserialize_coefficients_buf must start with capacity 0"
+        );
+    }
 
     #[test]
     fn new_send_buf_capacity_is_max_cuts_times_record_size() {

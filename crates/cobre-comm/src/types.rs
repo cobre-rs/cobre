@@ -1,12 +1,6 @@
-//! Type definitions for the cobre-comm abstraction layer.
+//! Type definitions for the communication abstraction layer.
 //!
-//! This module provides the shared types used across all communication backends:
-//!
-//! - [`ReduceOp`] — enumeration of supported reduction operations (sum, min, max)
-//!   passed to `Communicator::allreduce`.
-//! - [`CommError`] — top-level error type for the communicator API, covering
-//!   collective operation errors, buffer size mismatches, and shared memory failures.
-//! - [`BackendError`] — error type for backend selection and initialization failures.
+//! Provides shared types for all backends: [`ReduceOp`], [`CommError`], [`BackendError`].
 
 /// Element-wise reduction operations for `allreduce`.
 ///

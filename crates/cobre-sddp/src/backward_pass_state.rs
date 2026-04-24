@@ -1,21 +1,7 @@
-//! Owned scratch state and per-call inputs for the backward pass.
+//! Backward pass state management and entry point.
 //!
-//! [`BackwardPassState`] owns the 13 `Vec` scratch buffers that are allocated
-//! once at training-session setup and reused across every iteration. It exposes
-//! a single entry point, [`BackwardPassState::run`], which is the renamed body
-//! of the former free function `run_backward_pass`.
-//!
-//! [`BackwardPassInputs`] is a plain argument-bundle that groups all
-//! per-iteration borrowed references (exchange buffers, records, risk measures,
-//! etc.) that change between calls. Splitting ownership from per-call inputs
-//! removes all lifetime parameters from `BackwardPassState` and avoids
-//! variance gymnastics.
-//!
-//! ## Hot-path allocation discipline
-//!
-//! All `Vec` fields in `BackwardPassState` are pre-sized in [`BackwardPassState::new`]
-//! and reused via `clear()` / `resize()` / `fill()` inside `run`. No
-//! `Vec::new()` or `Vec::with_capacity` appears in `run` or its helpers.
+//! [`BackwardPassState`] owns pre-allocated scratch buffers reused each iteration.
+//! [`BackwardPassInputs`] bundles per-call borrowed inputs (no allocation on hot path).
 
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -941,8 +927,10 @@ pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
 
             // Static partition: assign scenarios to worker, matching basis_slice view.
             let (start_m, end_m) = partition(local_work, n_workers, w);
-            let n_local = end_m - start_m;
-            let mut staged: Vec<StagedCut> = Vec::with_capacity(n_local.max(1));
+            // Reuse the per-worker staged-cuts buffer; `clear()` preserves the
+            // allocation from prior stages so no heap activity occurs after the
+            // first stage of the first iteration.
+            ws.backward_accum.staged_cuts_buf.clear();
             let worker_stage_wall_start = Instant::now();
 
             for m in start_m..end_m {
@@ -950,7 +938,10 @@ pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
                 // basis, factorization, and RNG position.
                 load_backward_lp(ws, succ);
                 ws.backward_accum.slot_increments[..pop].fill(0);
-                staged.push(process_trial_point_backward(
+                // Call process_trial_point_backward before the push to avoid a
+                // simultaneous mutable borrow of `ws.backward_accum.staged_cuts_buf`
+                // (for the push receiver) and `ws` (for the function argument).
+                let cut = process_trial_point_backward(
                     ws,
                     ctx,
                     training_ctx,
@@ -961,14 +952,18 @@ pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
                     succ,
                     &mut basis_slice,
                     m,
-                )?);
+                )?;
+                ws.backward_accum.staged_cuts_buf.push(cut);
             }
 
             // Accumulate per-worker elapsed into the iteration-level timing buffer.
             ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_WALL] +=
                 worker_stage_wall_start.elapsed().as_secs_f64() * 1_000.0;
 
-            Ok(staged)
+            // Drain the buffer into an owned Vec to cross the rayon closure
+            // boundary.  `drain(..)` leaves `staged_cuts_buf` empty with its
+            // capacity intact so the next stage reuses the same allocation.
+            Ok(ws.backward_accum.staged_cuts_buf.drain(..).collect())
         })
         .collect()
 }
@@ -1174,8 +1169,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -1534,6 +1533,115 @@ mod tests {
         assert!(
             !result.stage_stats.is_empty(),
             "stage_stats must be non-empty after a successful backward pass"
+        );
+    }
+
+    /// Verify that `state_duals_buf` on the per-worker `BackwardAccumulators`
+    /// is correctly sized after the backward pass completes.
+    ///
+    /// After `BackwardPassState::run` returns, the single worker's
+    /// `backward_accum.state_duals_buf` must hold exactly `indexer.n_state`
+    /// entries — the last opening's unscaled duals that were written during
+    /// the final trial-point/opening iteration.
+    ///
+    /// This guards against buffer re-use bugs where the fill loop writes the
+    /// wrong number of entries across consecutive openings.
+    #[test]
+    fn backward_pass_state_duals_buf_len_equals_n_state_after_run() {
+        let n_stages = 2_usize;
+        let n_openings = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+        let forward_passes = 2_u32;
+
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let solution = solution_1_0(100.0, -5.0);
+        let comm = StubComm;
+        let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut cut_batches = empty_cut_batches(n_stages);
+        let ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &[],
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+        };
+
+        let bwd_max_openings = n_openings;
+        let mut state = BackwardPassState::new(1, 1, bwd_max_openings, n_state);
+        let local_count = exchange.local_count();
+
+        let mut inputs = BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut cut_batches,
+            training_ctx: &training_ctx,
+            comm: &comm,
+            exchange: &mut exchange,
+            records: &[],
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+            risk_measures: &risk_measures,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            iteration: 1,
+            local_work: local_count,
+            fwd_offset: 0,
+        };
+
+        let _ = state
+            .run(&mut inputs)
+            .expect("backward pass must not error");
+
+        // After the backward pass, the sole worker's `state_duals_buf` must
+        // hold exactly `n_state` entries — the duals from the last opening
+        // processed during the last trial-point/stage iteration.
+        assert_eq!(
+            inputs.workspaces[0].backward_accum.state_duals_buf.len(),
+            n_state,
+            "state_duals_buf must have length n_state after backward pass"
         );
     }
 }

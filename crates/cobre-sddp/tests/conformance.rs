@@ -809,7 +809,8 @@ mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
     use cobre_sddp::{
-        InflowNonNegativityMethod, PatchBuffer, RiskMeasure, StageIndexer,
+        InflowNonNegativityMethod, LbEvalScratch, LbEvalScratchBundle, PatchBuffer, RiskMeasure,
+        StageIndexer,
         lower_bound::{LbEvalSpec, evaluate_lower_bound},
     };
     use cobre_solver::RowBatch;
@@ -856,21 +857,28 @@ mod lb_conformance {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
         };
+        let mut lb_scratch = LbEvalScratch::new();
 
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
         // After unscaling by COST_SCALE_FACTOR (1000), LB = 75_000.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
-        let lb1 = evaluate_lower_bound(
-            &mut solver1,
-            &fcf,
-            &initial_state,
-            &indexer,
-            &mut patch_buf,
-            &mut lb_cut_batch,
-            &spec,
-            &comm,
-            None,
-        )
+        let lb1 = {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut lb_cut_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver1,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+        }
         .expect("first evaluate_lower_bound must succeed");
 
         assert!(
@@ -882,17 +890,23 @@ mod lb_conformance {
         // After unscaling by COST_SCALE_FACTOR (1000), LB = 100_000.
         // This simulates the effect of tighter cuts (higher stage-0 LP objectives).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
-        let lb2 = evaluate_lower_bound(
-            &mut solver2,
-            &fcf,
-            &initial_state,
-            &indexer,
-            &mut patch_buf,
-            &mut lb_cut_batch,
-            &spec,
-            &comm,
-            None,
-        )
+        let lb2 = {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut lb_cut_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver2,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+        }
         .expect("second evaluate_lower_bound must succeed");
 
         assert!(

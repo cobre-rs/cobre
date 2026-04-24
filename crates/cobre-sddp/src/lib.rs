@@ -1,27 +1,8 @@
-//! # cobre-sddp
+//! SDDP solver for hydrothermal dispatch.
 //!
-//! Stochastic Dual Dynamic Programming for the [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
-//!
-//! This crate implements the SDDP algorithm (Pereira & Pinto, 1991) for
-//! long-term hydrothermal dispatch and energy planning:
-//!
-//! - **Forward pass**: scenario-based simulation with policy evaluation.
-//! - **Backward pass**: Benders cut generation for the cost-to-go function.
-//! - **Cut management**: single-cut and multi-cut strategies, cut selection,
-//!   and dominance pruning.
-//! - **Risk measures**: expected value, `CVaR`, and convex combinations.
-//! - **Convergence**: statistical stopping criteria and bound gap monitoring.
-//! - **Parallelism**: designed for hybrid MPI + thread-level parallelism
-//!   via [ferrompi](https://github.com/cobre-rs/ferrompi).
-//!
-//! Built on `cobre-core` for system data, `cobre-stochastic` for inflow
-//! modeling, and `cobre-solver` for LP subproblems.
-//!
-//! ## Status
-//!
-//! This crate is in early development. The API **will** change.
-//!
-//! See the [repository](https://github.com/cobre-rs/cobre) for the current status.
+//! Implements the SDDP algorithm: forward/backward passes, Benders cuts, risk measures,
+//! convergence monitoring, and policy simulation. Parallelized via rayon (intra-rank)
+//! and ferrompi (inter-rank).
 
 // Relax strict production lints for test builds (normal in test contexts).
 #![cfg_attr(
@@ -106,7 +87,7 @@ pub use indexer::{
     EquipmentCounts, EvapConfig, EvaporationIndices, FphaColumnLayout, FphaRowRange, StageIndexer,
 };
 pub use inflow_method::InflowNonNegativityMethod;
-pub use lower_bound::{LbEvalSpec, evaluate_lower_bound};
+pub use lower_bound::{LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound};
 pub use lp_builder::{
     GenericConstraintRowEntry, PatchBuffer, StageTemplates, ar_dynamics_row_offset,
     build_stage_templates,
@@ -116,7 +97,10 @@ pub use policy_load::{
     resolve_warm_start_counts, validate_policy_compatibility,
 };
 pub use provenance::{ModelProvenanceReport, ProvenanceSource, build_provenance_report};
-pub use risk_measure::{BackwardOutcome, RiskMeasure};
+pub use risk_measure::{
+    BackwardOutcome, RiskMeasure, RiskMeasureScratch, compute_cvar_weights_from_costs_into,
+    compute_cvar_weights_into,
+};
 pub use scaling_report::ScalingReport;
 pub use setup::{
     DEFAULT_FORWARD_PASSES, DEFAULT_MAX_ITERATIONS, DEFAULT_SEED, PhaseLibraries,

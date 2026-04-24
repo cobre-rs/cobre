@@ -217,6 +217,10 @@ impl StudySetup {
                     .unwrap_or(0),
                 initial_pool_capacity: 0,
                 n_state: self.stage_data.indexer.n_state,
+                // Simulation-only pool: forward-worker scratch fields unused.
+                max_local_fwd: 0,
+                total_forward_passes: 0,
+                noise_dim: 0,
             },
             solver_factory,
         )?;

@@ -34,6 +34,10 @@ Available context structs:
 | `ForwardWorkerParams`  | `cobre-sddp/src/forward_pass_state.rs`         | Read-only captures for rayon workers            | Immutable bundle (`&`) |
 | `ForwardWorkerResult`  | `cobre-sddp/src/forward_pass_state.rs`         | Return bundle from per-worker forward execution | Owned (moved out)      |
 | `OpeningTreeInputs`    | `cobre-stochastic/src/tree/generate.rs`        | Optional inputs to `generate_opening_tree`      | Immutable bundle (`&`) |
+| `LbEvalScratch`        | `cobre-sddp/src/lower_bound.rs`                | 10 f64/usize scratch vectors reused across `evaluate_lower_bound` phases | Mutable (`&mut`)       |
+| `LbEvalScratchBundle`  | `cobre-sddp/src/lower_bound.rs`                | Bundles `patch_buf`, `lb_cut_batch`, `lb_cut_row_map`, `lb_scratch` for `evaluate_lower_bound` | Mutable bundle (`&mut`) |
+| `RiskMeasureScratch`   | `cobre-sddp/src/risk_measure.rs`               | CVaR weight-computation scratch (`upper_bounds`, `order`, `mu`) | Mutable (`&mut`)       |
+| `FerrompiScratch`      | `cobre-comm/src/ferrompi.rs`                   | `allreduce_bor` per-call scratch (counts/displs in usize and i32) | Mutable (`&mut`, via `RefCell`) |
 
 **Decision tree when adding new data to the hot path:**
 

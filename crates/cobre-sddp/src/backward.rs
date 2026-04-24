@@ -77,7 +77,7 @@
 
 #[cfg(test)]
 use cobre_comm::Communicator;
-use cobre_solver::{RowBatch, SolverInterface};
+use cobre_solver::{RowBatch, SolutionView, SolverInterface, SolverStatistics};
 
 use crate::{
     SddpError,
@@ -340,6 +340,167 @@ fn resolve_backward_basis<'a>(
     basis_slice.get(m, s)
 }
 
+/// Extract state and cut duals from the solver view into pre-warmed scratch buffers.
+///
+/// Called while `view` is still live (borrowing the solver). The output buffers
+/// (`state_duals`, `cut_duals`) were taken out of `ws.backward_accum` before the
+/// solve and are passed here directly so that no `ws` borrow is needed.
+///
+/// Returns the LP objective value.
+///
+/// # Dual-fill layout
+///
+/// `state_duals`: unscaled duals for state-fixing rows `[0, n_state)`.
+/// Scaling: `dual_original[i] = row_scale[i] * dual_scaled[i]`; when
+/// `row_scale` is empty the raw duals are used directly.
+///
+/// `cut_duals`: raw duals for cut rows `[template_num_rows, template_num_rows + num_cuts)`.
+/// These always have implicit `row_scale = 1.0`.
+fn extract_duals_from_view(
+    view: &SolutionView<'_>,
+    n_state: usize,
+    row_scale: &[f64],
+    succ: &SuccessorSpec<'_>,
+    state_duals: &mut Vec<f64>,
+    cut_duals: &mut Vec<f64>,
+) -> f64 {
+    let objective = view.objective;
+
+    // Unscale state-fixing-row duals from scaled to original units.
+    // `state_duals` carries pre-warmed capacity; `clear` + `extend` reuses it.
+    state_duals.clear();
+    if row_scale.is_empty() {
+        state_duals.extend_from_slice(&view.dual[..n_state]);
+    } else {
+        state_duals.extend(
+            view.dual[..n_state]
+                .iter()
+                .zip(row_scale)
+                .map(|(&d, &rs)| d * rs),
+        );
+    }
+    debug_assert_eq!(
+        state_duals.len(),
+        n_state,
+        "state_duals must contain exactly n_state entries after fill"
+    );
+
+    // Fill cut duals from the cut-row slice.
+    //
+    // Layout: [0, template_num_rows) — structural rows;
+    //         [template_num_rows, template_num_rows + num_cuts) — cut rows (baked then delta).
+    cut_duals.clear();
+    if succ.num_cuts_at_successor > 0 {
+        cut_duals.extend_from_slice(
+            &view.dual[succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor],
+        );
+    }
+
+    objective
+}
+
+/// Accumulate one opening's solve result into the workspace accumulators.
+///
+/// Called after `view` is dropped (so `ws` is freely borrowable). Writes:
+/// - per-opening stats delta into `ws.backward_accum.per_opening_stats[omega]`
+/// - outcome coefficients, objective, and intercept into `ws.backward_accum.outcomes[omega]`
+/// - binding-cut slot increments into `ws.backward_accum.slot_increments`
+fn accumulate_opening_outcome<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    succ: &SuccessorSpec<'_>,
+    omega: usize,
+    objective: f64,
+    x_hat: &[f64],
+    stats_before: &SolverStatistics,
+    stats_after: &SolverStatistics,
+) {
+    // Per-opening stats delta.
+    let opening_delta = SolverStatsDelta::from_snapshots(stats_before, stats_after);
+    SolverStatsDelta::accumulate_into(
+        &mut ws.backward_accum.per_opening_stats[omega],
+        &opening_delta,
+    );
+
+    // Copy state duals into outcome coefficients, then compute the intercept.
+    // Simultaneous access to `outcomes[omega]` (mutable) and `state_duals_buf`
+    // (immutable) is safe because they are distinct fields of `BackwardAccumulators`.
+    let out = &mut ws.backward_accum.outcomes[omega];
+    out.coefficients
+        .copy_from_slice(&ws.backward_accum.state_duals_buf);
+    out.objective_value = objective;
+    // Intercept: alpha = Q_scaled - pi' * x_hat.
+    // All terms are in scaled cost units (LP duals inherit cost scaling).
+    out.intercept = objective
+        - out
+            .coefficients
+            .iter()
+            .zip(x_hat)
+            .map(|(pi, x)| pi * x)
+            .sum::<f64>();
+
+    // Update binding-cut slot increments from cut duals.
+    for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
+        if ws
+            .backward_accum
+            .cut_duals_buf
+            .get(cut_idx)
+            .is_some_and(|&d| d > succ.cut_activity_tolerance)
+        {
+            ws.backward_accum.slot_increments[slot] += 1;
+        }
+    }
+}
+
+/// Capture the post-solve basis at ω=0 into `basis_slice[m, s]`.
+///
+/// Only called when `omega == 0`; writes at ω>0 are forbidden because the
+/// retained LU factorization would be overwritten by subsequent opening solves,
+/// making the stored basis stale and potentially infeasible when reloaded.
+///
+/// Reuses an existing slot in-place when present (avoids reallocation on
+/// subsequent iterations). Allocates a new `CapturedBasis` only on the first
+/// capture for this `(m, s)` pair.
+fn save_basis_at_omega_zero<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    succ: &SuccessorSpec<'_>,
+    basis_slice: &mut BasisStoreSliceMut<'_>,
+    m: usize,
+    x_hat: &[f64],
+) {
+    let s = succ.successor;
+    let num_cols = succ.baked_template.num_cols;
+    let base_row_count = succ.template_num_rows;
+    let cut_row_count = succ.num_cuts_at_successor;
+    let basis_row_capacity = base_row_count + cut_row_count;
+    if let Some(captured) = basis_slice.get_mut(m, s).as_mut() {
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            captured,
+            succ.successor_pool,
+            base_row_count,
+            cut_row_count,
+            x_hat,
+        );
+    } else {
+        let mut captured = CapturedBasis::new(
+            num_cols,
+            basis_row_capacity,
+            base_row_count,
+            cut_row_count,
+            x_hat.len(),
+        );
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            &mut captured,
+            succ.successor_pool,
+            base_row_count,
+            cut_row_count,
+            x_hat,
+        );
+        *basis_slice.get_mut(m, s) = Some(captured);
+    }
+}
+
 /// Process one trial point `m` in the backward pass, iterating over all openings.
 ///
 /// Solves at each (scenario, opening) and accumulates duals into `per_opening_stats`.
@@ -378,6 +539,17 @@ pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
+        // Take scratch buffers out of `ws.backward_accum` before the solve so
+        // they can be filled from `view.dual` while `view` holds a `'ws` borrow
+        // over `ws`. The `take` leaves an empty `Vec` in place; its former
+        // content (which may carry capacity from a prior opening) moves into
+        // the local binding.  After `view` is dropped the local binding is
+        // moved back into the scratch slot so capacity is reused on the next
+        // iteration.  This means allocation only occurs on the first opening of
+        // the first stage; subsequent openings reuse the pre-warmed capacity.
+        let mut state_duals = std::mem::take(&mut ws.backward_accum.state_duals_buf);
+        let mut cut_duals = std::mem::take(&mut ws.backward_accum.cut_duals_buf);
+
         // Snapshot solver statistics before this opening's solve.
         let stats_before_omega = ws.solver.statistics();
 
@@ -413,133 +585,45 @@ pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
             unreachable!("run_stage_solve(Phase::Backward) returns Backward variant")
         };
 
-        // Extract all needed values from `view` before any mutable borrow of
-        // `ws.backward_accum`. `view` borrows from `ws` through the
-        // `run_stage_solve` lifetime; extracting into owned locals ends that
-        // borrow before the subsequent `&mut ws` accesses below.
-        let objective = view.objective;
-        // Unscale duals from scaled units back to original units.
-        // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
-        // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
-        // Cut rows have implicit row_scale = 1.0 and require no adjustment.
-        let row_scale = &ctx.templates[s].row_scale;
-        let state_duals: Vec<f64> = if row_scale.is_empty() {
-            view.dual[..indexer.n_state].to_vec()
-        } else {
-            view.dual[..indexer.n_state]
-                .iter()
-                .zip(row_scale)
-                .map(|(&d, &rs)| d * rs)
-                .collect()
-        };
-        let cut_duals_owned: Vec<f64> = if succ.num_cuts_at_successor > 0 {
-            // Dual extraction for cut binding-activity tracking.
-            //
-            // Layout invariant:
-            //   [0, template_num_rows)               — base structural rows
-            //   [template_num_rows, template_num_rows + num_cuts_at_successor) — cut rows
-            //
-            // The baked template contains:
-            //   [template_num_rows, baked_template_num_rows) — baked cut rows (from prior iters)
-            //   [baked_template_num_rows, baked_template_num_rows + num_delta_cuts) — delta rows
-            //
-            // Both sections are contiguous and slot-monotone (baked then delta in active-slot
-            // order), so the unified index `cut_idx` maps correctly to `successor_active_slots`.
-            view.dual[succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor]
-                .to_vec()
-        } else {
-            Vec::new()
-        };
-        // `view` is Copy; assign to `_` to make the end-of-borrow intent explicit.
-        // Subsequent code may mutably borrow `ws` fields.
+        // Extract duals while `view` is live. `state_duals` and `cut_duals` were
+        // taken from their scratch slots above, so no `ws` borrow is needed here.
+        // `view` is dropped at the end of the call (it is `Copy`; the explicit
+        // `let _ = view` inside the helper documents that intent).
         //
-        // IMPORTANT: the after-snapshot for per-opening stats is taken AFTER
-        // `view` is dropped. `run_stage_solve` returns a `StageOutcome<'ws>`
-        // whose `view` field borrows `ws` for `'ws`. While `view` is live the
-        // borrow checker treats `ws` as mutably borrowed, preventing
-        // `ws.solver.statistics()` (shared borrow). Dropping `view` here ends
-        // the mutable borrow so the statistics call below is safe.
+        // SEQUENCING: `ws.solver.statistics()` (stats_after) must be called AFTER
+        // this returns, because `view` borrows `ws` for `'ws` and the borrow checker
+        // forbids `ws.solver` access while `view` is alive.
+        let objective = extract_duals_from_view(
+            &view,
+            indexer.n_state,
+            &ctx.templates[s].row_scale,
+            succ,
+            &mut state_duals,
+            &mut cut_duals,
+        );
         let _ = view;
 
-        // Snapshot solver statistics after this opening's solve. All needed
-        // values from `view` (objective, duals) are already in owned locals.
-        // The monotonic counters in `statistics()` are unaffected by the
-        // solution data that `view` was borrowing.
+        // Restore pre-warmed scratch back into workspace slots before any `ws` access.
+        ws.backward_accum.state_duals_buf = state_duals;
+        ws.backward_accum.cut_duals_buf = cut_duals;
+
+        // Statistics after the solve (safe now that `view` is dropped).
         let stats_after_omega = ws.solver.statistics();
 
-        // Accumulate per-opening delta element-wise into the worker's buffer.
-        // The buffer was initialised to `Default::default()` for this stage
-        // at the start of `process_stage_backward`, before the trial-point loop.
-        let opening_delta =
-            SolverStatsDelta::from_snapshots(&stats_before_omega, &stats_after_omega);
-        SolverStatsDelta::accumulate_into(
-            &mut ws.backward_accum.per_opening_stats[omega],
-            &opening_delta,
+        // Accumulate stats delta, outcome coefficients/intercept, and cut activity.
+        accumulate_opening_outcome(
+            ws,
+            succ,
+            omega,
+            objective,
+            x_hat,
+            &stats_before_omega,
+            &stats_after_omega,
         );
 
-        let out = &mut ws.backward_accum.outcomes[omega];
-        out.coefficients.copy_from_slice(&state_duals);
-        out.objective_value = objective;
-        // Intercept: alpha = Q_scaled - pi' * x_hat.
-        //
-        // `objective` is the LP objective in scaled cost units (divided by
-        // COST_SCALE_FACTOR). `coefficients` are unscaled duals (dual_i *
-        // row_scale_i). The product `pi' * x_hat` is also in scaled cost
-        // units because the LP duals inherit the cost scaling. The cut
-        // `theta >= alpha + pi'(x - x_hat)` is evaluated in the parent
-        // LP, where theta is also in scaled units, so all terms are
-        // consistently scaled.
-        out.intercept = objective
-            - out
-                .coefficients
-                .iter()
-                .zip(x_hat)
-                .map(|(pi, x)| pi * x)
-                .sum::<f64>();
-
-        for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
-            if cut_duals_owned
-                .get(cut_idx)
-                .is_some_and(|&d| d > succ.cut_activity_tolerance)
-            {
-                ws.backward_accum.slot_increments[slot] += 1;
-            }
-        }
-
-        // write BasisStore[m, s] at ω=0 only (corruption risk at ω>0).
-        // Reuse existing slot in-place; first iteration allocates, subsequent reuse.
+        // Capture basis at ω=0; ω>0 writes are forbidden (retained-LU corruption risk).
         if omega == 0 {
-            let num_cols = succ.baked_template.num_cols;
-            let base_row_count = succ.template_num_rows;
-            let cut_row_count = succ.num_cuts_at_successor;
-            let basis_row_capacity = base_row_count + cut_row_count;
-            if let Some(captured) = basis_slice.get_mut(m, s).as_mut() {
-                ws.solver.get_basis(&mut captured.basis);
-                write_capture_metadata(
-                    captured,
-                    succ.successor_pool,
-                    base_row_count,
-                    cut_row_count,
-                    x_hat,
-                );
-            } else {
-                let mut captured = CapturedBasis::new(
-                    num_cols,
-                    basis_row_capacity,
-                    base_row_count,
-                    cut_row_count,
-                    x_hat.len(),
-                );
-                ws.solver.get_basis(&mut captured.basis);
-                write_capture_metadata(
-                    &mut captured,
-                    succ.successor_pool,
-                    base_row_count,
-                    cut_row_count,
-                    x_hat,
-                );
-                *basis_slice.get_mut(m, s) = Some(captured);
-            }
+            save_basis_at_omega_zero(ws, succ, basis_slice, m, x_hat);
         }
     }
 
@@ -553,6 +637,7 @@ pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
         succ.probabilities,
         &mut agg_intercept,
         &mut ws.backward_accum.agg_coefficients,
+        &mut ws.backward_accum.risk_scratch,
     );
     let agg_coefficients = ws.backward_accum.agg_coefficients.clone();
     debug_assert!(
@@ -884,8 +969,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -2673,8 +2762,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -2769,8 +2862,12 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
                     recon_slot_lookup: Vec::new(),
                     promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
@@ -3120,8 +3217,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3285,8 +3386,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -3445,8 +3550,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -4227,8 +4336,12 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
                     recon_slot_lookup: Vec::new(),
                     promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
@@ -4584,8 +4697,12 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
                     recon_slot_lookup: Vec::new(),
                     promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
@@ -4802,8 +4919,12 @@ mod tests {
                     downstream_weight_accum: 0.0,
                     downstream_completed_lags: Vec::new(),
                     downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
                     recon_slot_lookup: Vec::new(),
                     promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),

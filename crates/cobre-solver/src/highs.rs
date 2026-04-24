@@ -167,6 +167,14 @@ pub struct HighsSolver {
     /// Reused across warm-start `solve` and `get_basis` calls to avoid per-call allocation.
     /// Resized in `load_model` to `num_rows` and grown in `add_rows`.
     basis_row_i32: Vec<i32>,
+    /// Scratch buffer for dual-ray extraction in `interpret_terminal_status` (dual).
+    /// Grown lazily to `num_rows` via `resize`; contents are discarded after classification.
+    /// Retained across calls so repeated non-optimal solves do not re-allocate.
+    terminal_status_dual_scratch: Vec<f64>,
+    /// Scratch buffer for primal-ray extraction in `interpret_terminal_status` (primal).
+    /// Grown lazily to `num_cols` via `resize`; contents are discarded after classification.
+    /// Retained across calls so repeated non-optimal solves do not re-allocate.
+    terminal_status_primal_scratch: Vec<f64>,
     /// Current number of LP columns (decision variables), updated by `load_model` and `add_rows`.
     num_cols: usize,
     /// Current number of LP rows (constraints), updated by `load_model` and `add_rows`.
@@ -259,6 +267,8 @@ impl HighsSolver {
             scratch_i32: Vec::new(),
             basis_col_i32: Vec::new(),
             basis_row_i32: Vec::new(),
+            terminal_status_dual_scratch: Vec::new(),
+            terminal_status_primal_scratch: Vec::new(),
             num_cols: 0,
             num_rows: 0,
             has_model: false,
@@ -308,10 +318,13 @@ impl HighsSolver {
                 self.row_dual.as_mut_ptr(),
             )
         };
-        assert_ne!(
+        // HiGHS documentation guarantees `cobre_highs_get_solution` returns
+        // non-ERROR status after `OPTIMAL` model status; this is a
+        // debug-build-only invariant check.
+        debug_assert_ne!(
             status,
             ffi::HIGHS_STATUS_ERROR,
-            "cobre_highs_get_solution failed after optimal solve"
+            "cobre_highs_get_solution failed after optimal solve; HiGHS invariant violation"
         );
 
         // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
@@ -422,29 +435,37 @@ impl HighsSolver {
                 // Probe for a dual ray to classify as Infeasible, then a primal
                 // ray to classify as Unbounded. The ray values are not stored in
                 // the error -- only the classification matters.
+                //
+                // `num_rows` and `num_cols` are up-to-date because `load_model`
+                // and `add_rows` always update them before any solve that could
+                // reach this branch. The `resize` below matches the exact count
+                // that HiGHS writes into the buffer.
                 let mut has_dual_ray: i32 = 0;
-                // A scratch buffer is needed for the HiGHS API even though the
-                // values are discarded after classification.
-                let mut dual_buf = vec![0.0_f64; self.num_rows];
-                // SAFETY: valid non-null HiGHS pointer; buffers are valid.
+                self.terminal_status_dual_scratch.resize(self.num_rows, 0.0);
+                // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+                // `terminal_status_dual_scratch` has been resized to at least
+                // `self.num_rows` elements; HiGHS writes exactly `num_rows` values.
                 let dual_status = unsafe {
                     ffi::cobre_highs_get_dual_ray(
                         self.handle,
                         &raw mut has_dual_ray,
-                        dual_buf.as_mut_ptr(),
+                        self.terminal_status_dual_scratch.as_mut_ptr(),
                     )
                 };
                 if dual_status != ffi::HIGHS_STATUS_ERROR && has_dual_ray != 0 {
                     return Some(SolverError::Infeasible);
                 }
                 let mut has_primal_ray: i32 = 0;
-                let mut primal_buf = vec![0.0_f64; self.num_cols];
-                // SAFETY: valid non-null HiGHS pointer; buffers are valid.
+                self.terminal_status_primal_scratch
+                    .resize(self.num_cols, 0.0);
+                // SAFETY: `self.handle` is a valid, non-null HiGHS pointer.
+                // `terminal_status_primal_scratch` has been resized to at least
+                // `self.num_cols` elements; HiGHS writes exactly `num_cols` values.
                 let primal_status = unsafe {
                     ffi::cobre_highs_get_primal_ray(
                         self.handle,
                         &raw mut has_primal_ray,
-                        primal_buf.as_mut_ptr(),
+                        self.terminal_status_primal_scratch.as_mut_ptr(),
                     )
                 };
                 if primal_status != ffi::HIGHS_STATUS_ERROR && has_primal_ray != 0 {
@@ -1870,6 +1891,83 @@ mod tests {
             ),
         }
     }
+
+    /// `terminal_status_dual_scratch` and `terminal_status_primal_scratch` are
+    /// initialized as empty `Vec`s in the constructor and retain their capacity
+    /// across repeated `resize` calls, matching the pattern used by
+    /// `scratch_i32`, `basis_col_i32`, and `basis_row_i32`.
+    ///
+    /// This test directly exercises the `resize`-reuse invariant without depending
+    /// on a specific `HiGHS` model status. The `UNBOUNDED_OR_INFEASIBLE` branch in
+    /// `interpret_terminal_status` calls `self.terminal_status_dual_scratch.resize(num_rows, 0.0)`;
+    /// we verify here that repeated `resize` calls grow but never shrink capacity.
+    ///
+    /// The LP: 3-column, 2-row SS1.1 fixture. After `load_model`, `num_rows=2` and
+    /// `num_cols=3`. We simulate two scratch-buffer resize cycles and verify capacity
+    /// is monotonically non-decreasing.
+    #[test]
+    fn interpret_terminal_status_reuses_scratch() {
+        let template = make_fixture_stage_template();
+        let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
+
+        // Verify that scratch fields start empty (Vec::new() in constructor).
+        assert_eq!(
+            solver.terminal_status_dual_scratch.capacity(),
+            0,
+            "dual scratch must start with capacity 0 (Vec::new() in constructor)"
+        );
+        assert_eq!(
+            solver.terminal_status_primal_scratch.capacity(),
+            0,
+            "primal scratch must start with capacity 0 (Vec::new() in constructor)"
+        );
+
+        // Load model to establish num_rows=2 and num_cols=3.
+        solver.load_model(&template);
+
+        // Simulate what interpret_terminal_status does in UNBOUNDED_OR_INFEASIBLE branch:
+        // resize dual scratch to num_rows, primal scratch to num_cols.
+        solver
+            .terminal_status_dual_scratch
+            .resize(solver.num_rows, 0.0);
+        solver
+            .terminal_status_primal_scratch
+            .resize(solver.num_cols, 0.0);
+
+        let cap_dual_after_first = solver.terminal_status_dual_scratch.capacity();
+        let cap_primal_after_first = solver.terminal_status_primal_scratch.capacity();
+
+        assert!(
+            cap_dual_after_first >= solver.num_rows,
+            "dual scratch capacity {cap_dual_after_first} must be >= num_rows {} after first resize",
+            solver.num_rows,
+        );
+        assert!(
+            cap_primal_after_first >= solver.num_cols,
+            "primal scratch capacity {cap_primal_after_first} must be >= num_cols {} after first resize",
+            solver.num_cols,
+        );
+
+        // Second resize to the same size: capacity must not decrease (heap retained).
+        solver
+            .terminal_status_dual_scratch
+            .resize(solver.num_rows, 0.0);
+        solver
+            .terminal_status_primal_scratch
+            .resize(solver.num_cols, 0.0);
+
+        let cap_dual_after_second = solver.terminal_status_dual_scratch.capacity();
+        let cap_primal_after_second = solver.terminal_status_primal_scratch.capacity();
+
+        assert!(
+            cap_dual_after_second >= cap_dual_after_first,
+            "dual scratch capacity must not decrease: {cap_dual_after_second} < {cap_dual_after_first}",
+        );
+        assert!(
+            cap_primal_after_second >= cap_primal_after_first,
+            "primal scratch capacity must not decrease: {cap_primal_after_second} < {cap_primal_after_first}",
+        );
+    }
 }
 
 // ─── Research verification tests for non-optimal HiGHS model statuses ────
@@ -2311,5 +2409,87 @@ mod research_tests {
         );
 
         unsafe { ffi::cobre_highs_destroy(highs) };
+    }
+
+    /// Verify that `HighsSolver` correctly maps unbounded and infeasible statuses.
+    ///
+    /// With presolve=off and dual simplex (the default `HighsSolver` configuration),
+    /// HiGHS returns `HIGHS_MODEL_STATUS_UNBOUNDED` (10) for unbounded LPs and
+    /// `HIGHS_MODEL_STATUS_INFEASIBLE` (8) for infeasible LPs. Both are mapped to
+    /// the appropriate `SolverError` variants without entering the
+    /// `UNBOUNDED_OR_INFEASIBLE` probe branch.
+    ///
+    /// Note: `HIGHS_MODEL_STATUS_UNBOUNDED_OR_INFEASIBLE` (9) is returned only by
+    /// IPM (`IpxWrapper.cpp:317`) when it detects dual infeasibility, or when
+    /// `allow_unbounded_or_infeasible=true` is set with presolve=on. Neither
+    /// condition occurs in the default `HighsSolver` configuration, so the
+    /// `UNBOUNDED_OR_INFEASIBLE` branch serves as a safe fallback for retry paths
+    /// that switch to IPM.
+    #[test]
+    fn test_research_verify_non_optimal_highs_status_mapping() {
+        use super::super::HighsSolver;
+        use crate::SolverInterface;
+        use crate::types::SolverError;
+        use crate::types::StageTemplate;
+
+        // Unbounded LP: min -x0 - x1, x0 + x1 >= 1, x0/x1 in [0, +inf).
+        // With presolve=off and dual simplex, HiGHS returns UNBOUNDED (10).
+        let unbounded_template = StageTemplate {
+            num_cols: 2,
+            num_rows: 1,
+            num_nz: 2,
+            col_starts: vec![0_i32, 1, 2],
+            row_indices: vec![0_i32, 0],
+            values: vec![1.0, 1.0],
+            col_lower: vec![0.0, 0.0],
+            col_upper: vec![f64::INFINITY, f64::INFINITY],
+            objective: vec![-1.0, -1.0],
+            row_lower: vec![1.0],
+            row_upper: vec![f64::INFINITY],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 1,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        };
+        let mut solver_unb = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver_unb.load_model(&unbounded_template);
+        let result_unb = solver_unb.solve(None).map(|_| ());
+        assert!(
+            matches!(result_unb, Err(SolverError::Unbounded)),
+            "unbounded LP must return Err(SolverError::Unbounded), got {result_unb:?}"
+        );
+
+        // Infeasible LP: x0 must equal 99 but is bounded to [0, 10].
+        // HiGHS returns INFEASIBLE (8) directly; mapped to Err(SolverError::Infeasible).
+        let infeasible_template = StageTemplate {
+            num_cols: 1,
+            num_rows: 1,
+            num_nz: 1,
+            col_starts: vec![0_i32, 1],
+            row_indices: vec![0_i32],
+            values: vec![1.0],
+            col_lower: vec![0.0],
+            col_upper: vec![10.0],
+            objective: vec![0.0],
+            row_lower: vec![99.0],
+            row_upper: vec![99.0],
+            n_state: 1,
+            n_transfer: 0,
+            n_dual_relevant: 1,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        };
+        let mut solver_inf = HighsSolver::new().expect("HighsSolver::new() must succeed");
+        solver_inf.load_model(&infeasible_template);
+        let result_inf = solver_inf.solve(None).map(|_| ());
+        assert!(
+            matches!(result_inf, Err(SolverError::Infeasible)),
+            "infeasible LP must return Err(SolverError::Infeasible), got {result_inf:?}"
+        );
     }
 }

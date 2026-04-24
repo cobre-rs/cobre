@@ -1,30 +1,7 @@
-//! Owned scratch state and per-call inputs for the forward pass.
+//! Forward pass state management and entry point.
 //!
-//! [`ForwardPassState`] owns the per-worker, per-stage accumulator `Vec`s that
-//! are allocated once at training-session setup and reused across every
-//! iteration. It exposes a single entry point, [`ForwardPassState::run`], which
-//! is the renamed body of the former free function `run_forward_pass`.
-//!
-//! [`ForwardPassInputs`] is a plain argument-bundle that groups all per-iteration
-//! borrowed references (workspaces, basis store, contexts, records, etc.) that
-//! change between calls. Splitting ownership from per-call inputs removes all
-//! lifetime parameters from `ForwardPassState` and avoids variance gymnastics.
-//!
-//! [`ForwardWorkerParams`] bundles the read-only captures that every rayon
-//! worker thread reads from: sampler, contexts, scalars, and seeds. Passing
-//! `&ForwardWorkerParams` by shared reference allows rayon to fan out the
-//! struct across workers without cloning.
-//!
-//! [`ForwardWorkerResult`] is the named return bundle from
-//! [`run_forward_worker`], replacing the former anonymous 3-tuple and
-//! eliminating the `clippy::type_complexity` suppression.
-//!
-//! ## Hot-path allocation discipline
-//!
-//! All `Vec` fields in `ForwardPassState` are pre-sized in
-//! [`ForwardPassState::new`] and reused via `clear()` / `resize()` /
-//! `extend()` inside `run`. No `Vec::new()` or `Vec::with_capacity` appears in
-//! `run` or its helpers.
+//! [`ForwardPassState`] owns pre-allocated scratch buffers reused each iteration.
+//! [`ForwardPassInputs`] bundles per-call borrowed inputs (no allocation on hot path).
 
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -212,8 +189,6 @@ pub(crate) struct ForwardWorkerResult {
 struct PostProcessContext {
     /// Total number of rayon workers used in the parallel region.
     n_workers: usize,
-    /// Number of forward-pass scenarios on this rank.
-    forward_passes: usize,
     /// Number of stages in the study horizon.
     num_stages: usize,
     /// Wall-clock duration of the parallel region in milliseconds.
@@ -259,6 +234,27 @@ pub(crate) struct ForwardPassState {
     ///
     /// Cleared and repopulated after the parallel region each `run()`.
     worker_totals: Vec<f64>,
+
+    /// Per-iteration scenario cost accumulator.
+    ///
+    /// Pre-sized to `max_local_fwd` at construction. At the start of
+    /// `post_process_worker_results` the buffer is taken via
+    /// `std::mem::take`, cleared, populated by the worker-result merge loop,
+    /// then moved into [`ForwardResult`]. On the next iteration the field
+    /// starts empty; the merge loop extends into it, growing capacity only
+    /// when `forward_passes` exceeds the previous maximum.
+    scenario_costs: Vec<f64>,
+
+    /// Per-stage solver-stats accumulator for the merged forward result.
+    ///
+    /// Pre-sized to `num_stages` at construction with default-initialised
+    /// entries. At the start of `post_process_worker_results` the buffer is
+    /// taken via `std::mem::take` and each entry reset in place, then
+    /// populated by the worker-result merge loop, then moved into
+    /// [`ForwardResult`]. On the next iteration the field is restored via
+    /// `std::mem::replace` from the returned `ForwardResult` by the
+    /// `run()` method so no allocation occurs from iteration 2 onward.
+    stage_stats: Vec<SolverStatsDelta>,
 }
 
 impl ForwardPassState {
@@ -268,7 +264,9 @@ impl ForwardPassState {
     ///
     /// - `n_workers`: number of rayon worker threads on this rank.
     /// - `num_stages`: total number of stages in the study horizon.
-    pub(crate) fn new(n_workers: usize, num_stages: usize) -> Self {
+    /// - `max_local_fwd`: maximum number of forward-pass scenarios assigned to
+    ///   this rank across all iterations. Used to pre-size `scenario_costs`.
+    pub(crate) fn new(n_workers: usize, num_stages: usize, max_local_fwd: usize) -> Self {
         let worker_stage_stats = (0..n_workers)
             .map(|_| {
                 (0..num_stages)
@@ -276,12 +274,17 @@ impl ForwardPassState {
                     .collect()
             })
             .collect();
+        let stage_stats = (0..num_stages)
+            .map(|_| SolverStatsDelta::default())
+            .collect();
         Self {
             worker_stage_stats,
             worker_stats_before: Vec::with_capacity(n_workers),
             worker_stats_after: Vec::with_capacity(n_workers),
             worker_deltas: Vec::with_capacity(n_workers),
             worker_totals: Vec::with_capacity(n_workers),
+            scenario_costs: Vec::with_capacity(max_local_fwd),
+            stage_stats,
         }
     }
 
@@ -376,12 +379,28 @@ impl ForwardPassState {
         // Re-size per-worker per-stage stat accumulators to match the current
         // worker count (may differ from the count at new() if the pool shrank).
         // Each entry is reset to default.
-        self.worker_stage_stats.clear();
-        for _ in 0..n_workers {
-            let stage_vec: Vec<SolverStatsDelta> = (0..num_stages)
-                .map(|_| SolverStatsDelta::default())
-                .collect();
-            self.worker_stage_stats.push(stage_vec);
+        //
+        // Fast path (common case): dimensions unchanged → reset scalars in place
+        // and clear each histogram without reallocating the outer Vec.
+        //
+        // Slow path: dimensions changed (e.g. pool resized) → rebuild from scratch
+        // so that the shape exactly matches (n_workers, num_stages).
+        let shape_matches = self.worker_stage_stats.len() == n_workers
+            && self.worker_stage_stats.first().map_or(0, Vec::len) == num_stages;
+        if shape_matches {
+            for inner in &mut self.worker_stage_stats {
+                for d in inner.iter_mut() {
+                    d.reset_in_place();
+                }
+            }
+        } else {
+            self.worker_stage_stats.clear();
+            for _ in 0..n_workers {
+                let stage_vec: Vec<SolverStatsDelta> = (0..num_stages)
+                    .map(|_| SolverStatsDelta::default())
+                    .collect();
+                self.worker_stage_stats.push(stage_vec);
+            }
         }
 
         // Collect per-worker snapshots before the parallel region.
@@ -453,7 +472,6 @@ impl ForwardPassState {
 
         let ppc = PostProcessContext {
             n_workers,
-            forward_passes,
             num_stages,
             parallel_wall_ms,
             start,
@@ -478,7 +496,6 @@ impl ForwardPassState {
     ) -> Result<ForwardResult, SddpError> {
         let PostProcessContext {
             n_workers,
-            forward_passes,
             num_stages,
             parallel_wall_ms,
             start,
@@ -546,12 +563,33 @@ impl ForwardPassState {
         }
 
         // Merge per-worker cost vectors in global scenario index order (canonical).
-        // Simultaneously merge per-stage stats by summing element-wise across workers.
-        let mut scenario_costs = Vec::with_capacity(forward_passes);
+        // Simultaneously merge per-stage stats by summing element-wise across workers,
+        // and move each worker's per_stage_stats Vec back into self.worker_stage_stats
+        // so the next iteration's fast-path reset can reuse the allocation.
+        //
+        // scenario_costs: taken from self (pre-allocated in new), cleared, extended, then
+        // moved into ForwardResult. self.scenario_costs becomes Vec::new() after each call;
+        // capacity grows only when forward_passes increases beyond the previous maximum.
+        //
+        // stage_stats: reset in-place (len unchanged across iterations). After accumulation
+        // we swap self.stage_stats with a Vec::with_capacity(num_stages), giving ForwardResult
+        // the populated vec and leaving self a pre-sized empty vec for next iteration.
+        // resize_with at the start of the next run() fills it without allocating.
+        let mut scenario_costs = std::mem::take(&mut self.scenario_costs);
+        scenario_costs.clear();
+
+        // Ensure stage_stats has the correct length (on iteration 1 it was pre-sized
+        // by new(); on subsequent iterations it is empty but has capacity num_stages).
+        if self.stage_stats.len() != num_stages {
+            self.stage_stats
+                .resize_with(num_stages, SolverStatsDelta::default);
+        }
+        for d in &mut self.stage_stats {
+            d.reset_in_place();
+        }
+
         let mut lp_solves = 0u64;
-        let mut stage_stats: Vec<SolverStatsDelta> = (0..num_stages)
-            .map(|_| SolverStatsDelta::default())
-            .collect();
+        self.worker_stage_stats.clear();
         for result in worker_results {
             let ForwardWorkerResult {
                 trajectory_costs: worker_costs,
@@ -560,10 +598,17 @@ impl ForwardPassState {
             } = result?;
             scenario_costs.extend(worker_costs);
             lp_solves += w_solves;
-            for (dst, src) in stage_stats.iter_mut().zip(&worker_stage_stats) {
+            for (dst, src) in self.stage_stats.iter_mut().zip(&worker_stage_stats) {
                 SolverStatsDelta::accumulate_into(dst, src);
             }
+            // Move the buffer back so the next iteration can reset in place.
+            self.worker_stage_stats.push(worker_stage_stats);
         }
+
+        // Swap self.stage_stats (populated) with a pre-sized empty vec. ForwardResult
+        // receives the populated data; self retains a capacity-sized empty vec so that
+        // the resize_with above does not allocate on the next iteration.
+        let stage_stats = std::mem::replace(&mut self.stage_stats, Vec::with_capacity(num_stages));
 
         #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -615,13 +660,22 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
     let worker_wall_start = Instant::now();
     let (start_m, end_m) = partition(params.forward_passes, params.n_workers, w);
     let n_local = end_m - start_m;
-    let mut trajectory_costs = vec![0.0_f64; n_local];
+
+    // ── Pre-allocated scratch from ws (R3, R4) ────────────────────────────
+    // trajectory_costs_buf: reused across iterations; clear + resize avoids
+    // re-allocation when n_local is stable.
+    ws.scratch.trajectory_costs_buf.clear();
+    ws.scratch.trajectory_costs_buf.resize(n_local, 0.0_f64);
+
+    // Sampling scratch: taken out of ws to avoid borrow conflicts when
+    // run_forward_stage borrows ws while raw_noise is still live.  The same
+    // mem::take pattern is used for current_state_scratch in forward.rs.
+    let mut raw_noise_buf = std::mem::take(&mut ws.scratch.raw_noise_buf);
+    raw_noise_buf.resize(params.noise_dim, 0.0_f64);
+    let mut perm_scratch = std::mem::take(&mut ws.scratch.perm_scratch);
+    perm_scratch.resize((params.total_forward_passes).max(1), 0_usize);
+
     let local_solve_count_before = ws.solver.statistics().solve_count;
-    // Sampling scratch: lives here (not in ws) to avoid borrow conflicts
-    // when run_forward_stage borrows ws while raw_noise is still live.
-    let mut raw_noise_buf = vec![0.0_f64; params.noise_dim];
-    #[allow(clippy::cast_possible_truncation)]
-    let mut perm_scratch = vec![0_usize; (params.total_forward_passes).max(1)];
     #[allow(clippy::cast_possible_truncation)]
     let total_scenarios_u32 = params.total_forward_passes as u32;
 
@@ -725,15 +779,22 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
             let stage_delta =
                 SolverStatsDelta::from_snapshots(&stats_before_stage, &ws.solver.statistics());
             SolverStatsDelta::accumulate_into(&mut per_stage_stats[t], &stage_delta);
-            trajectory_costs[local_m] += cum_d * stage_cost;
+            ws.scratch.trajectory_costs_buf[local_m] += cum_d * stage_cost;
         }
     }
+
+    // Restore taken scratch buffers so they survive into the next iteration.
+    ws.scratch.raw_noise_buf = raw_noise_buf;
+    ws.scratch.perm_scratch = perm_scratch;
 
     let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
     ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_WALL] +=
         worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
     Ok(ForwardWorkerResult {
-        trajectory_costs,
+        // R5: take the pre-allocated buffer out of ws; ForwardResult reassembles
+        // the pieces, and post_process_worker_results later returns it via
+        // mem::take so the allocation survives across training iterations.
+        trajectory_costs: std::mem::take(&mut ws.scratch.trajectory_costs_buf),
         local_solves,
         per_stage_stats: per_stage_stats.to_vec(),
     })
@@ -897,8 +958,12 @@ mod tests {
                 downstream_weight_accum: 0.0,
                 downstream_completed_lags: Vec::new(),
                 downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
                 recon_slot_lookup: Vec::new(),
                 promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
@@ -1068,11 +1133,82 @@ mod tests {
         (0..2).map(make_stage).collect()
     }
 
+    // ── Fixture helper ────────────────────────────────────────────────────
+
+    /// Owned data bundle for the 2-stage, 1-hydro, 2-scenario forward-pass fixture.
+    ///
+    /// Holds all owned values whose borrows must live long enough to create a
+    /// `ForwardPassInputs`. Callers build `ForwardPassInputs` inline using the
+    /// fields of this struct, which avoids lifetime issues that arise from
+    /// returning borrows.
+    struct ForwardFixture {
+        n_stages: usize,
+        n_scenarios: usize,
+        indexer: StageIndexer,
+        templates: Vec<StageTemplate>,
+        base_rows: Vec<usize>,
+        initial_state: Vec<f64>,
+        noise_scale: Vec<f64>,
+        fcf: FutureCostFunction,
+        horizon: HorizonMode,
+        stochastic: cobre_stochastic::StochasticContext,
+        stages: Vec<cobre_core::temporal::Stage>,
+        workspaces: Vec<SolverWorkspace<MockSolver>>,
+        basis_store: BasisStore,
+        records: Vec<TrajectoryRecord>,
+    }
+
+    impl ForwardFixture {
+        fn new() -> Self {
+            let n_stages = 2_usize;
+            let n_scenarios = 2_usize;
+            let indexer = StageIndexer::new(1, 0);
+            let stochastic = make_stochastic_context_2_stages();
+            let stages = make_stages_2();
+            let solution = fixed_solution_1_0();
+            let solver = MockSolver::always_ok(solution);
+            let templates = vec![minimal_template_1_0(); n_stages];
+            let base_rows = vec![0_usize; n_stages];
+            let initial_state = vec![0.0_f64; indexer.n_state];
+            let noise_scale = vec![0.0_f64; n_stages * indexer.hydro_count];
+            let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 2, 10, &vec![0; n_stages]);
+            let horizon = HorizonMode::Finite {
+                num_stages: n_stages,
+            };
+            let workspaces = vec![single_workspace(solver, &indexer)];
+            let basis_store = BasisStore::new(n_scenarios, n_stages);
+            let records = (0..n_scenarios * n_stages)
+                .map(|_| TrajectoryRecord {
+                    primal: Vec::new(),
+                    dual: Vec::new(),
+                    stage_cost: 0.0,
+                    state: Vec::new(),
+                })
+                .collect();
+            Self {
+                n_stages,
+                n_scenarios,
+                indexer,
+                templates,
+                base_rows,
+                initial_state,
+                noise_scale,
+                fcf,
+                horizon,
+                stochastic,
+                stages,
+                workspaces,
+                basis_store,
+                records,
+            }
+        }
+    }
+
     // ── Tests ──────────────────────────────────────────────────────────────
 
     #[test]
     fn forward_pass_state_new_preallocates_per_worker_buffers() {
-        let state = ForwardPassState::new(3, 5);
+        let state = ForwardPassState::new(3, 5, 8);
         assert_eq!(state.worker_stage_stats.len(), 3);
         for inner in &state.worker_stage_stats {
             assert_eq!(inner.len(), 5);
@@ -1088,35 +1224,12 @@ mod tests {
     /// `ForwardPassState::run`. Asserts that the result carries exactly 2
     /// scenario costs (one per forward pass).
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn forward_pass_state_run_produces_expected_scenario_count() {
-        let n_stages = 2_usize;
-        let n_scenarios = 2_usize;
-
-        let indexer = StageIndexer::new(1, 0); // 1 hydro, 0 lag order
-        let stochastic = make_stochastic_context_2_stages();
-        let stages = make_stages_2();
-
-        let solution = fixed_solution_1_0();
-        let solver = MockSolver::always_ok(solution);
-
-        let templates = vec![minimal_template_1_0(); n_stages];
-        // base_rows[t] is the index within template.row_lower where the inflow
-        // constraint starts. The minimal template has num_rows=1, so base_row=0.
-        let base_rows = vec![0_usize; n_stages];
-        let initial_state = vec![0.0_f64; indexer.n_state];
-        // noise_scale layout: [stage * n_hydros + hydro]. 2 stages × 1 hydro → 2 entries.
-        let noise_scale = vec![0.0_f64; n_stages * indexer.hydro_count];
-
-        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 2, 10, &vec![0; n_stages]);
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-
+        let mut fx = ForwardFixture::new();
         let ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
+            templates: &fx.templates,
+            base_rows: &fx.base_rows,
+            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             n_load_buses: 0,
             load_balance_row_starts: &[],
@@ -1130,15 +1243,15 @@ mod tests {
             downstream_par_order: 0,
         };
         let training_ctx = TrainingContext {
-            horizon: &horizon,
-            indexer: &indexer,
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
             inflow_method: &InflowNonNegativityMethod::None,
-            stochastic: &stochastic,
-            initial_state: &initial_state,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
             inflow_scheme: SamplingScheme::InSample,
             load_scheme: SamplingScheme::InSample,
             ncs_scheme: SamplingScheme::InSample,
-            stages: &stages,
+            stages: &fx.stages,
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1147,28 +1260,17 @@ mod tests {
             recent_weight_seed: 0.0,
         };
 
-        let mut workspaces = vec![single_workspace(solver, &indexer)];
-        let mut basis_store = BasisStore::new(n_scenarios, n_stages);
-        let mut records: Vec<TrajectoryRecord> = (0..n_scenarios * n_stages)
-            .map(|_| TrajectoryRecord {
-                primal: Vec::new(),
-                dual: Vec::new(),
-                stage_cost: 0.0,
-                state: Vec::new(),
-            })
-            .collect();
-
-        let mut state = ForwardPassState::new(1, n_stages);
+        let mut state = ForwardPassState::new(1, fx.n_stages, fx.n_scenarios);
         let mut inputs = ForwardPassInputs {
-            workspaces: &mut workspaces,
-            basis_store: &mut basis_store,
+            workspaces: &mut fx.workspaces,
+            basis_store: &mut fx.basis_store,
             ctx: &ctx,
-            baked: &templates,
-            fcf: &fcf,
+            baked: &fx.templates,
+            fcf: &fx.fcf,
             training_ctx: &training_ctx,
-            records: &mut records,
-            local_forward_passes: n_scenarios,
-            total_forward_passes: n_scenarios,
+            records: &mut fx.records,
+            local_forward_passes: fx.n_scenarios,
+            total_forward_passes: fx.n_scenarios,
             iteration: 1,
             fwd_offset: 0,
             event_sender: None,
@@ -1179,7 +1281,7 @@ mod tests {
 
         assert_eq!(
             result.scenario_costs.len(),
-            n_scenarios,
+            fx.n_scenarios,
             "result must carry one cost per forward-pass scenario"
         );
     }
@@ -1187,32 +1289,12 @@ mod tests {
     /// Verify that `run_forward_worker` produces exactly `n_local` trajectory
     /// costs for the worker's scenario partition.
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn run_forward_worker_produces_expected_trajectory_costs() {
-        let n_stages = 2_usize;
-        let n_scenarios = 2_usize;
-
-        let indexer = StageIndexer::new(1, 0);
-        let stochastic = make_stochastic_context_2_stages();
-        let stages = make_stages_2();
-
-        let solution = fixed_solution_1_0();
-        let solver = MockSolver::always_ok(solution);
-
-        let templates = vec![minimal_template_1_0(); n_stages];
-        let base_rows = vec![0_usize; n_stages];
-        let initial_state = vec![0.0_f64; indexer.n_state];
-        let noise_scale = vec![0.0_f64; n_stages * indexer.hydro_count];
-
-        let fcf = FutureCostFunction::new(n_stages, indexer.n_state, 2, 10, &vec![0; n_stages]);
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-
+        let fx = ForwardFixture::new();
         let ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &noise_scale,
+            templates: &fx.templates,
+            base_rows: &fx.base_rows,
+            noise_scale: &fx.noise_scale,
             n_hydros: 1,
             n_load_buses: 0,
             load_balance_row_starts: &[],
@@ -1226,15 +1308,15 @@ mod tests {
             downstream_par_order: 0,
         };
         let training_ctx = TrainingContext {
-            horizon: &horizon,
-            indexer: &indexer,
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
             inflow_method: &InflowNonNegativityMethod::None,
-            stochastic: &stochastic,
-            initial_state: &initial_state,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
             inflow_scheme: SamplingScheme::InSample,
             load_scheme: SamplingScheme::InSample,
             ncs_scheme: SamplingScheme::InSample,
-            stages: &stages,
+            stages: &fx.stages,
             historical_library: None,
             external_inflow_library: None,
             external_load_library: None,
@@ -1249,12 +1331,12 @@ mod tests {
                 load: Some(SamplingScheme::InSample),
                 ncs: Some(SamplingScheme::InSample),
             },
-            ctx: &stochastic,
-            stages: &stages,
+            ctx: &fx.stochastic,
+            stages: &fx.stages,
             dims: ClassDimensions {
-                n_hydros: stochastic.n_hydros(),
-                n_load_buses: stochastic.n_load_buses(),
-                n_ncs: stochastic.n_stochastic_ncs(),
+                n_hydros: fx.stochastic.n_hydros(),
+                n_load_buses: fx.stochastic.n_load_buses(),
+                n_ncs: fx.stochastic.n_stochastic_ncs(),
             },
             historical_library: None,
             external_inflow_library: None,
@@ -1264,31 +1346,32 @@ mod tests {
         .expect("sampler build must not error");
 
         let params = ForwardWorkerParams {
-            forward_passes: n_scenarios,
-            total_forward_passes: n_scenarios,
-            num_stages: n_stages,
+            forward_passes: fx.n_scenarios,
+            total_forward_passes: fx.n_scenarios,
+            num_stages: fx.n_stages,
             n_workers: 1,
             iteration: 1,
             fwd_offset: 0,
             basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
             terminal_has_boundary_cuts: false,
-            noise_dim: stochastic.dim(),
-            initial_state: &initial_state,
+            noise_dim: fx.stochastic.dim(),
+            initial_state: &fx.initial_state,
             recent_accum_seed: &[],
             recent_weight_seed: 0.0,
-            indexer: &indexer,
+            indexer: &fx.indexer,
             ctx: &ctx,
-            baked: &templates,
-            fcf: &fcf,
+            baked: &fx.templates,
+            fcf: &fx.fcf,
             training_ctx: &training_ctx,
             sampler: &sampler,
         };
 
-        let mut ws = single_workspace(solver, &indexer);
-        let mut basis_store = BasisStore::new(n_scenarios, n_stages);
+        // Mutable per-call state: independent allocations, not borrows of fx.
+        let mut ws = single_workspace(MockSolver::always_ok(fixed_solution_1_0()), &fx.indexer);
+        let mut basis_store = BasisStore::new(fx.n_scenarios, fx.n_stages);
         let mut basis_slices = basis_store.split_workers_mut(1);
         let mut basis_slice = basis_slices.remove(0);
-        let mut records: Vec<TrajectoryRecord> = (0..n_scenarios * n_stages)
+        let mut records: Vec<TrajectoryRecord> = (0..fx.n_scenarios * fx.n_stages)
             .map(|_| TrajectoryRecord {
                 primal: Vec::new(),
                 dual: Vec::new(),
@@ -1296,8 +1379,9 @@ mod tests {
                 state: Vec::new(),
             })
             .collect();
-        let mut per_stage_stats: Vec<SolverStatsDelta> =
-            (0..n_stages).map(|_| SolverStatsDelta::default()).collect();
+        let mut per_stage_stats: Vec<SolverStatsDelta> = (0..fx.n_stages)
+            .map(|_| SolverStatsDelta::default())
+            .collect();
 
         let result = run_forward_worker(
             0,
@@ -1311,8 +1395,222 @@ mod tests {
 
         assert_eq!(
             result.trajectory_costs.len(),
-            n_scenarios,
-            "worker 0 owns all scenarios when n_workers=1; expected {n_scenarios} costs"
+            fx.n_scenarios,
+            "worker 0 owns all scenarios when n_workers=1; expected {} costs",
+            fx.n_scenarios
+        );
+    }
+
+    /// After two calls to `ForwardPassState::run` with the same dimensions,
+    /// the outer `worker_stage_stats` Vec must not have been reallocated
+    /// (AC3: in-place reset preserves the heap buffer across iterations).
+    #[test]
+    fn forward_pass_state_run_preserves_worker_stage_stats_shape() {
+        let mut fx = ForwardFixture::new();
+        let ctx = StageContext {
+            templates: &fx.templates,
+            base_rows: &fx.base_rows,
+            noise_scale: &fx.noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        let training_ctx = TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &fx.stages,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+        };
+
+        let mut state = ForwardPassState::new(1, fx.n_stages, fx.n_scenarios);
+
+        // First run: populates worker_stage_stats with the initial allocation.
+        {
+            let mut inputs = ForwardPassInputs {
+                workspaces: &mut fx.workspaces,
+                basis_store: &mut fx.basis_store,
+                ctx: &ctx,
+                baked: &fx.templates,
+                fcf: &fx.fcf,
+                training_ctx: &training_ctx,
+                records: &mut fx.records,
+                local_forward_passes: fx.n_scenarios,
+                total_forward_passes: fx.n_scenarios,
+                iteration: 1,
+                fwd_offset: 0,
+                event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            };
+            let _ = state.run(&mut inputs).expect("first run must not error");
+        }
+
+        // Capture the heap address of the outer Vec's buffer after the first run.
+        let ptr_after_first = state.worker_stage_stats.as_ptr();
+        let len_after_first = state.worker_stage_stats.len();
+        let inner_len_after_first = state.worker_stage_stats[0].len();
+
+        // Second run: must reuse the allocation (no clear+rebuild).
+        {
+            let mut inputs = ForwardPassInputs {
+                workspaces: &mut fx.workspaces,
+                basis_store: &mut fx.basis_store,
+                ctx: &ctx,
+                baked: &fx.templates,
+                fcf: &fx.fcf,
+                training_ctx: &training_ctx,
+                records: &mut fx.records,
+                local_forward_passes: fx.n_scenarios,
+                total_forward_passes: fx.n_scenarios,
+                iteration: 2,
+                fwd_offset: 0,
+                event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            };
+            let _ = state.run(&mut inputs).expect("second run must not error");
+        }
+
+        // The outer Vec must not have been reallocated.
+        assert_eq!(
+            state.worker_stage_stats.as_ptr(),
+            ptr_after_first,
+            "worker_stage_stats outer Vec must not be reallocated between runs"
+        );
+        assert_eq!(
+            state.worker_stage_stats.len(),
+            len_after_first,
+            "outer Vec length must be unchanged"
+        );
+        assert_eq!(
+            state.worker_stage_stats[0].len(),
+            inner_len_after_first,
+            "inner Vec length must be unchanged"
+        );
+    }
+
+    /// `ForwardPassState::new` pre-allocates `scenario_costs` with capacity
+    /// >= `max_local_fwd` so the first iteration never needs to grow the buffer.
+    #[test]
+    fn forward_pass_state_scenario_costs_are_preallocated() {
+        let state = ForwardPassState::new(4, 12, 8);
+        assert!(
+            state.scenario_costs.capacity() >= 8,
+            "scenario_costs must be pre-allocated with capacity >= max_local_fwd (8), got {}",
+            state.scenario_costs.capacity()
+        );
+    }
+
+    /// After two `run()` calls the returned `ForwardResult.scenario_costs` must
+    /// retain capacity >= `n_scenarios` on both runs, proving that the
+    /// pre-allocated buffer from `new()` is used on run 1 and that run 2 does
+    /// not allocate a smaller buffer (`Vec::extend` preserves existing capacity).
+    #[test]
+    fn forward_pass_state_run_reuses_scenario_costs_allocation() {
+        let mut fx = ForwardFixture::new();
+        let ctx = StageContext {
+            templates: &fx.templates,
+            base_rows: &fx.base_rows,
+            noise_scale: &fx.noise_scale,
+            n_hydros: 1,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        let training_ctx = TrainingContext {
+            horizon: &fx.horizon,
+            indexer: &fx.indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &fx.stochastic,
+            initial_state: &fx.initial_state,
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &fx.stages,
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+        };
+
+        let mut state = ForwardPassState::new(1, fx.n_stages, fx.n_scenarios);
+
+        let result1 = {
+            let mut inputs = ForwardPassInputs {
+                workspaces: &mut fx.workspaces,
+                basis_store: &mut fx.basis_store,
+                ctx: &ctx,
+                baked: &fx.templates,
+                fcf: &fx.fcf,
+                training_ctx: &training_ctx,
+                records: &mut fx.records,
+                local_forward_passes: fx.n_scenarios,
+                total_forward_passes: fx.n_scenarios,
+                iteration: 1,
+                fwd_offset: 0,
+                event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            };
+            state.run(&mut inputs).expect("run 1 must not error")
+        };
+
+        assert!(
+            result1.scenario_costs.capacity() >= fx.n_scenarios,
+            "run 1: scenario_costs capacity {} must be >= n_scenarios {}",
+            result1.scenario_costs.capacity(),
+            fx.n_scenarios
+        );
+
+        let result2 = {
+            let mut inputs = ForwardPassInputs {
+                workspaces: &mut fx.workspaces,
+                basis_store: &mut fx.basis_store,
+                ctx: &ctx,
+                baked: &fx.templates,
+                fcf: &fx.fcf,
+                training_ctx: &training_ctx,
+                records: &mut fx.records,
+                local_forward_passes: fx.n_scenarios,
+                total_forward_passes: fx.n_scenarios,
+                iteration: 2,
+                fwd_offset: 0,
+                event_sender: None,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            };
+            state.run(&mut inputs).expect("run 2 must not error")
+        };
+
+        assert!(
+            result2.scenario_costs.capacity() >= fx.n_scenarios,
+            "run 2: scenario_costs capacity {} must be >= n_scenarios {}",
+            result2.scenario_costs.capacity(),
+            fx.n_scenarios
         );
     }
 }

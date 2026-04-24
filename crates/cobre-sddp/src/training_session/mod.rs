@@ -1,29 +1,7 @@
-//! Per-training-run state container for the SDDP training loop.
+//! Training session state container and iteration loop.
 //!
-//! [`TrainingSession`] owns all scratch buffers and bookkeeping state for a
-//! single call to [`crate::training::train`]. Its [`new`](TrainingSession::new)
-//! constructor performs all up-front allocation (the prelude that used to span
-//! lines 400-712 of `training.rs`), and its iteration methods drive the
-//! per-iteration loop body.
-//!
-//! ## Design
-//!
-//! The struct is intentionally flat: every field that was a local variable in
-//! `train()` becomes a field here. The borrow topology is:
-//!
-//! - Five `&'a`-bounded references (`solver`, `fcf`, `stage_ctx`,
-//!   `training_ctx`, `comm`) are held for the duration of the session.
-//! - All scratch buffers (`fwd_pool`, `basis_store`, `bwd_state`, …) are
-//!   owned by the session and reused across iterations — zero hot-path
-//!   allocation.
-//! - `finalize` / `finalize_with_error` consume `self` so that
-//!   [`TrainingOutcome`] can take ownership of `visited_archive`,
-//!   `solver_stats_log`, and `baked_templates` without cloning.
-//!
-//! Backward-pass scratch is fully encapsulated in [`BackwardPassState`]
-//! (owned by `bwd_state`); per-call inputs are bundled in [`BackwardPassInputs`].
-//! Forward-pass scratch is fully encapsulated in [`ForwardPassState`]
-//! (owned by `fwd_state`); per-call inputs are bundled in [`ForwardPassInputs`].
+//! [`TrainingSession`] owns all scratch buffers for a single [`crate::training::train`] call.
+//! No hot-path allocations; forward and backward passes encapsulated in their own state structs.
 
 pub(crate) mod iteration_scratch;
 pub(crate) mod rank_distribution;
@@ -54,7 +32,7 @@ use crate::{
     evaluate_lower_bound,
     forward::{build_cut_row_batch_into, sync_forward},
     forward_pass_state::{ForwardPassInputs, ForwardPassState},
-    lower_bound::LbEvalSpec,
+    lower_bound::{LbEvalScratchBundle, LbEvalSpec},
     solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
@@ -192,6 +170,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                     .unwrap_or(0),
                 initial_pool_capacity: fcf.pools[0].capacity,
                 n_state: ranks.n_state,
+                max_local_fwd: ranks.max_local_fwd,
+                total_forward_passes,
+                noise_dim: training_ctx.stochastic.dim(),
             },
             solver_factory,
         )
@@ -301,7 +282,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // ── Forward-pass scratch buffers ──────────────────────────────────
         // All allocated once in ForwardPassState::new; reused across iterations.
         let n_workers_local = fwd_pool.workspaces.len();
-        let fwd_state = ForwardPassState::new(n_workers_local, ranks.num_stages);
+        let fwd_state =
+            ForwardPassState::new(n_workers_local, ranks.num_stages, ranks.max_local_fwd);
 
         // ── Backward-pass scratch buffers ─────────────────────────────────
         // All allocated once in BackwardPassState::new; reused across iterations.
@@ -437,7 +419,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             self.results.termination_reason = rule_results
                 .iter()
                 .find(|r| r.triggered)
-                .map_or_else(|| "unknown".to_string(), |r| r.rule_name.clone());
+                .map_or_else(|| "unknown".to_string(), |r| r.rule_name.to_string());
 
             // Distinguish shutdown from convergence using the triggered rule name.
             if self.results.termination_reason == RULE_GRACEFUL_SHUTDOWN {
@@ -623,6 +605,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
 
         #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         for (stage_idx, delta) in forward_result.stage_stats.iter().enumerate() {
+            let mut entry = SolverStatsDelta::default();
+            delta.clone_into_reuse(&mut entry);
             self.results.solver_stats_log.push((
                 iteration,
                 "forward",
@@ -630,7 +614,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                 -1,
                 self.ranks.fwd_rank,
                 -1,
-                delta.clone(),
+                entry,
             ));
         }
 
@@ -714,6 +698,8 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             for (stage_idx, entries) in &backward_result.stage_stats {
                 for (rank, worker_id, omega, delta) in entries {
+                    let mut entry = SolverStatsDelta::default();
+                    delta.clone_into_reuse(&mut entry);
                     self.results.solver_stats_log.push((
                         iteration,
                         "backward",
@@ -722,7 +708,7 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
                             .expect("opening index is bounded well below i32::MAX"),
                         *rank,
                         *worker_id,
-                        delta.clone(),
+                        entry,
                     ));
                 }
             }
@@ -974,16 +960,20 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
             ncs_generation: self.training_ctx.indexer.ncs_generation.clone(),
             inflow_method: self.training_ctx.inflow_method,
         };
+        let mut lb_bundle = LbEvalScratchBundle::from_scratch_fields(
+            &mut self.scratch.patch_buf,
+            &mut self.scratch.lb_cut_batch,
+            Some(&mut self.scratch.lb_cut_row_map),
+            &mut self.scratch.lb_scratch,
+        );
         let lb = evaluate_lower_bound(
             self.solver,
             self.fcf,
             self.training_ctx.initial_state,
             self.training_ctx.indexer,
-            &mut self.scratch.patch_buf,
-            &mut self.scratch.lb_cut_batch,
+            &mut lb_bundle,
             &lb_spec,
             self.comm,
-            Some(&mut self.scratch.lb_cut_row_map),
         )?;
 
         let lb_stats_after = self.solver.statistics();

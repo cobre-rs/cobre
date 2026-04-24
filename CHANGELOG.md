@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+- `StoppingRuleResult.rule_name` is now `&'static str`; `StoppingRuleResult.detail` is now `Cow<'static, str>`. Call `.to_string()` on `rule_name` or use `detail.as_ref()` at consumers that previously expected `String`.
+
 ### Added
 
 ### Changed
@@ -18,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 ### Verified
-
 
 ## [0.5.0] - 2026-04-22
 

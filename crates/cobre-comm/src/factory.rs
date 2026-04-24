@@ -65,13 +65,10 @@ pub enum BackendKind {
 ///
 /// # Design rationale
 ///
-/// [`crate::Communicator`] carries generic methods (`allgatherv<T>`, `allreduce<T>`,
-/// `broadcast<T>`) that make the trait intentionally not object-safe — writing
-/// `Box<dyn Communicator>` does not compile. Enum dispatch is used for closed
-/// variant sets (avoids `Box<dyn>`; enum dispatch for closed variant sets): a `match` arm delegates
-/// each method call to the inner concrete type. The dispatch overhead is a
-/// single branch predictor–friendly integer comparison (spec SS4.3), negligible
-/// compared to the cost of the MPI collective or LP solve it wraps.
+/// [`crate::Communicator`] carries generic methods that make the trait not object-safe.
+/// Enum dispatch for closed variant sets avoids `Box<dyn>`: a `match` arm delegates
+/// each method call to the inner concrete type. The dispatch overhead is negligible
+/// compared to the MPI collective or LP solve it wraps.
 ///
 /// # Availability
 ///
@@ -93,7 +90,7 @@ pub enum CommBackend {
     ///
     /// Only compiled when the `mpi` Cargo feature is enabled.
     #[cfg(feature = "mpi")]
-    Mpi(crate::FerrompiBackend),
+    Mpi(Box<crate::FerrompiBackend>),
 
     /// Single-process local backend.
     ///
@@ -387,7 +384,7 @@ pub fn create_communicator() -> Result<CommBackend, crate::BackendError> {
     match requested.as_str() {
         "auto" => auto_detect(),
         #[cfg(feature = "mpi")]
-        "mpi" => Ok(CommBackend::Mpi(crate::FerrompiBackend::new()?)),
+        "mpi" => Ok(CommBackend::Mpi(Box::new(crate::FerrompiBackend::new()?))),
         #[cfg(not(feature = "mpi"))]
         "mpi" => Err(crate::BackendError::BackendNotAvailable {
             requested,
@@ -430,7 +427,7 @@ pub fn create_communicator() -> Result<CommBackend, crate::BackendError> {
 fn auto_detect() -> Result<CommBackend, crate::BackendError> {
     #[cfg(feature = "mpi")]
     if mpi_launch_detected() {
-        return Ok(CommBackend::Mpi(crate::FerrompiBackend::new()?));
+        return Ok(CommBackend::Mpi(Box::new(crate::FerrompiBackend::new()?)));
     }
     Ok(CommBackend::Local(crate::LocalBackend))
 }

@@ -18,6 +18,28 @@
 
 use crate::BackendError;
 
+/// Pre-allocated scratch buffers reused across `allreduce_bor` calls.
+///
+/// Holds the four non-generic count/displacement vectors needed by
+/// `allgatherv`. A `Vec<u8>` scratch for the gathered buffer is intentionally
+/// omitted: reinterpreting a `Vec<u8>` as `&mut [T]` requires over-alignment
+/// tricks that outweigh the allocation savings for the small buffers involved.
+/// The `gathered: Vec<T>` buffer therefore remains a per-call allocation.
+///
+/// All fields are private to the module — populated and consumed only inside
+/// `allreduce_bor`.
+#[derive(Default)]
+struct FerrompiScratch {
+    /// Per-rank element count for `allgatherv` (uniform: all entries equal `n`).
+    counts_usize: Vec<usize>,
+    /// Per-rank displacement for `allgatherv` (entry `r` = `r * n`).
+    displs_usize: Vec<usize>,
+    /// `i32` version of `counts_usize` required by the ferrompi API.
+    counts_i32: Vec<i32>,
+    /// `i32` version of `displs_usize` required by the ferrompi API.
+    displs_i32: Vec<i32>,
+}
+
 /// MPI communication backend wrapping ferrompi v0.3.
 ///
 /// Holds the MPI environment handle (`Mpi`), the world communicator, and the
@@ -86,6 +108,15 @@ pub struct FerrompiBackend {
     /// `FerrompiBackend::new` and cached here. All subsequent queries are
     /// non-collective and allocation-free.
     topology: crate::ExecutionTopology,
+
+    /// Interior-mutable scratch buffers for `allreduce_bor`.
+    ///
+    /// `RefCell` is required because `Communicator::allreduce` (and therefore
+    /// `allreduce_bor`) takes `&self`, not `&mut self`. This is safe because
+    /// `FerrompiBackend` is only ever called from the MPI-funneled main thread
+    /// (see `ThreadLevel::Funneled` in `new`), so no concurrent borrows are
+    /// possible at runtime.
+    scratch: std::cell::RefCell<FerrompiScratch>,
 }
 
 // SAFETY: ferrompi::Mpi is !Send + !Sync because PhantomData<*const ()> opts out
@@ -102,6 +133,12 @@ pub struct FerrompiBackend {
 //
 // All actual collective communication goes through `ferrompi::Communicator`, which
 // is already `Send + Sync` (it wraps an integer handle into a C-side table).
+//
+// The `scratch: RefCell<FerrompiScratch>` field opts out of Sync by default. That
+// is correct in general, but safe here because all MPI calls — and therefore all
+// accesses to `scratch` — are serialised on the MPI-funneled main thread. No
+// concurrent borrow of the RefCell can occur.
+//
 // Therefore it is sound to implement Send and Sync for FerrompiBackend.
 unsafe impl Send for FerrompiBackend {}
 unsafe impl Sync for FerrompiBackend {}
@@ -180,6 +217,7 @@ impl FerrompiBackend {
             rank,
             size,
             topology,
+            scratch: std::cell::RefCell::new(FerrompiScratch::default()),
         })
     }
 
@@ -210,19 +248,11 @@ impl FerrompiBackend {
     }
 }
 
-/// Convert SLURM metadata from `ferrompi::TopologyInfo` to `crate::SlurmJobInfo`.
-///
 /// Extract a concise library identifier from `MPI_Get_library_version`.
 ///
-/// MPI implementations return widely different formats:
-/// - **Open MPI**: `"Open MPI v4.1.6"` (already clean)
-/// - **MPICH**: `"MPICH Version:      4.3.2\nMPICH Release date: ...\n..."` (multi-line)
-/// - **Intel MPI**: `"Intel(R) MPI Library 2021.6 ..."` (single line, long)
-///
-/// This function extracts the implementation name and version as a single-line
-/// string suitable for display and metadata JSON. For MPICH, it parses
-/// `"MPICH Version: X.Y.Z"` from the first line. For other implementations,
-/// it takes only the first line and trims it.
+/// MPI implementations return widely different formats. This function normalizes
+/// them to a single-line display string: for MPICH, parses `"MPICH Version: X.Y.Z"`;
+/// for others, takes the first line trimmed.
 fn sanitize_library_version(raw: &str) -> String {
     let first_line = raw.lines().next().unwrap_or(raw).trim();
 
@@ -464,16 +494,52 @@ fn to_i32_vec(values: &[usize], operation: &'static str) -> Result<Vec<i32>, cra
         .collect()
 }
 
+/// Convert a slice of `usize` values into a caller-provided `Vec<i32>` buffer.
+///
+/// The destination buffer is cleared and repopulated. This avoids allocating a
+/// new `Vec<i32>` on every call when a scratch buffer is available.
+///
+/// Returns `Err(CommError::InvalidBufferSize)` if any value exceeds `i32::MAX`.
+///
+/// # Errors
+///
+/// Returns [`crate::CommError::InvalidBufferSize`] if any element in `src`
+/// exceeds `i32::MAX` (2 147 483 647).
+#[cfg(all(feature = "mpi", test))]
+fn to_i32_vec_into(
+    src: &[usize],
+    dst: &mut Vec<i32>,
+    operation: &'static str,
+) -> Result<(), crate::CommError> {
+    dst.clear();
+    dst.reserve(src.len());
+    for &v in src {
+        dst.push(
+            i32::try_from(v).map_err(|_| crate::CommError::InvalidBufferSize {
+                operation,
+                expected: i32::MAX as usize,
+                actual: v,
+            })?,
+        );
+    }
+    Ok(())
+}
+
 /// Bitwise-OR allreduce via allgatherv + local fold.
 ///
 /// ferrompi v0.3 does not expose `MPI_BOR`. This helper gathers all rank
 /// contributions and folds them element-wise using byte-level OR, which is
 /// correct because bitwise OR on integers is equivalent to byte-wise OR.
 ///
-/// The allocation inside this function is a temporary gather buffer of
-/// `send.len() * size` elements. It is called only for the small `u32`
-/// `active_window` buffers (`pool_size` entries) on the backward-pass MPI sync
-/// path; the overhead is acceptable until ferrompi gains a native `Bor` op.
+/// # Allocations
+///
+/// The four non-generic count/displacement `Vec`s (`counts_usize`,
+/// `displs_usize`, `counts_i32`, `displs_i32`) are pre-allocated in
+/// `self.scratch` and reused across calls — no heap allocation after the
+/// first call for those buffers. The generic gather buffer (`gathered: Vec<T>`)
+/// cannot be stored in a typed scratch field because `T` varies per call; it
+/// is therefore still allocated per call. This is acceptable given the small
+/// buffer sizes involved (`pool_size` × `size` elements of `u32`).
 #[cfg(feature = "mpi")]
 impl FerrompiBackend {
     fn allreduce_bor<T: crate::CommData>(
@@ -484,40 +550,109 @@ impl FerrompiBackend {
         let n = send.len();
         let size = self.size;
 
+        // --- Populate scratch count/displacement buffers (reused across calls) ---
+        //
+        // All four scratch vecs are derived from the local `n` and `size` values.
+        // Because `to_i32_vec_into` takes `&[usize]` as input and `&mut Vec<i32>`
+        // as output, naively passing `&scratch.counts_usize` and
+        // `&mut scratch.counts_i32` in the same call would create simultaneous
+        // immutable + mutable borrows of the `RefMut` — the borrow checker rejects
+        // this even though they are different struct fields.
+        //
+        // Solution: derive the i32 vecs directly from the `n`/`size` locals rather
+        // than reading them back through the usize scratch fields. This lets all
+        // four vecs be populated in a single borrow scope with no aliasing.
+        let n_i32 = i32::try_from(n).map_err(|_| crate::CommError::InvalidBufferSize {
+            operation: "allreduce[BitwiseOr]",
+            expected: i32::MAX as usize,
+            actual: n,
+        })?;
+        {
+            let mut scratch = self.scratch.borrow_mut();
+
+            scratch.counts_usize.clear();
+            scratch.counts_usize.resize(size, n);
+
+            scratch.displs_usize.clear();
+            scratch.displs_usize.extend((0..size).map(|r| r * n));
+
+            // Populate i32 vecs directly from the `n_i32` / `size` locals so
+            // that no field of `scratch` is read while another is mutably borrowed.
+            scratch.counts_i32.clear();
+            scratch.counts_i32.resize(size, n_i32);
+
+            scratch.displs_i32.clear();
+            scratch.displs_i32.reserve(size);
+            for r in 0..size {
+                // Displacement for rank r is r * n. Convert r to i32 (r < size,
+                // and size comes from ferrompi::Communicator::size() which fits in
+                // i32 by MPI spec), then multiply with n_i32 (validated above).
+                // checked_mul guards against overflow on the product.
+                let r_i32 = i32::try_from(r).map_err(|_| crate::CommError::InvalidBufferSize {
+                    operation: "allreduce[BitwiseOr]",
+                    expected: i32::MAX as usize,
+                    actual: r,
+                })?;
+                let displ = r_i32.checked_mul(n_i32).ok_or_else(|| {
+                    crate::CommError::InvalidBufferSize {
+                        operation: "allreduce[BitwiseOr]",
+                        expected: i32::MAX as usize,
+                        actual: r * n,
+                    }
+                })?;
+                scratch.displs_i32.push(displ);
+            }
+        }
+
         // Gather all ranks' send buffers into a flat Vec<T> of length n * size.
-        let counts: Vec<usize> = vec![n; size];
-        let displs: Vec<usize> = (0..size).map(|r| r * n).collect();
+        // The generic type parameter prevents storing this in a typed scratch field;
+        // it remains a per-call allocation. See module-level note.
         let mut gathered: Vec<T> = vec![T::default(); n * size];
-        let i32_counts = to_i32_vec(&counts, "allreduce[BitwiseOr]")?;
-        let i32_displs = to_i32_vec(&displs, "allreduce[BitwiseOr]")?;
-        self.world
-            .allgatherv(send, &mut gathered, &i32_counts, &i32_displs)
-            .map_err(|e| map_ferrompi_error(&e, "allreduce[BitwiseOr]"))?;
+
+        {
+            let scratch = self.scratch.borrow();
+            self.world
+                .allgatherv(
+                    send,
+                    &mut gathered,
+                    &scratch.counts_i32,
+                    &scratch.displs_i32,
+                )
+                .map_err(|e| map_ferrompi_error(&e, "allreduce[BitwiseOr]"))?;
+        }
 
         // Fold all rank contributions element-wise via byte-level OR.
         //
-        // SAFETY: T: Copy guarantees stable layout. `size_of::<T>()` bytes are
-        // read from each element; bitwise OR on those bytes produces the same
-        // result as OR on the integer value because OR has no carry propagation.
-        // Initialise recv from the local send (first rank slice = displs[0..n]).
+        // Initialise recv from the local send contribution.
         recv.copy_from_slice(send);
-        // OR in the contribution from each other rank.
+
+        // SAFETY: `recv` holds `n` contiguous, valid, initialized `T` values.
+        // Reinterpreting as `&mut [u8]` is sound because:
+        //   1. `T: CommData` requires `T: Copy`, which guarantees a stable,
+        //      well-defined memory representation with no padding that matters
+        //      for the OR operation.
+        //   2. The resulting byte slice has length `n * size_of::<T>()`, which
+        //      is exactly `size_of_val(recv)`.
+        //   3. No other reference to `recv` is alive during this block.
+        // Byte-level OR produces the same result as integer OR for all
+        // two's-complement types because OR has no cross-byte carry.
+        let recv_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                recv.as_mut_ptr().cast::<u8>(),
+                std::mem::size_of_val(recv),
+            )
+        };
+
+        // OR in the contribution from each rank other than ourselves.
         for r in 0..size {
             if r == self.rank {
                 continue; // already included via copy_from_slice above
             }
             let rank_slice = &gathered[r * n..(r + 1) * n];
-            // SAFETY: `recv` contains `n` valid T values.
-            // `rank_slice` contains `n` valid T values gathered from rank `r`.
-            // We reinterpret both as byte slices and OR element-wise; the result
-            // is valid for any integer T because OR on bytes is equivalent to OR
-            // on the integer representation for all two's-complement integers.
-            let recv_bytes = unsafe {
-                std::slice::from_raw_parts_mut(
-                    recv.as_mut_ptr().cast::<u8>(),
-                    std::mem::size_of_val(recv),
-                )
-            };
+            // SAFETY: `rank_slice` holds `n` contiguous, valid, initialized `T`
+            // values gathered from rank `r`. The byte slice length equals
+            // `n * size_of::<T>()` = `size_of_val(rank_slice)`. The slice is
+            // only read (shared reference), so it does not alias `recv_bytes`.
             let src_bytes = unsafe {
                 std::slice::from_raw_parts(
                     rank_slice.as_ptr().cast::<u8>(),
@@ -726,9 +861,69 @@ mod tests {
         let _ = assert_object_safe as fn(&dyn crate::LocalCommunicator);
     }
 
+    /// Verify that the scratch Vec capacities are preserved across two `allreduce_bor`
+    /// calls so that the second call does not allocate for the count/displacement
+    /// buffers.
+    ///
+    /// This test cannot exercise the full MPI collective (single-process MPI is
+    /// effectively rank-0 of a size-1 world), but it confirms:
+    ///   1. The first call populates the scratch buffers.
+    ///   2. The second call reuses them (capacity is non-decreasing).
+    ///   3. The bitwise-OR result is correct for the single-rank case.
+    #[cfg(feature = "mpi")]
+    #[test]
+    fn ferrompi_allreduce_bor_reuses_scratch() {
+        #![cfg_attr(
+            test,
+            allow(
+                clippy::unwrap_used,
+                clippy::expect_used,
+                clippy::panic,
+                clippy::float_cmp
+            )
+        )]
+        let backend = FerrompiBackend::new().expect("MPI init should succeed");
+
+        let send: Vec<u32> = vec![0b0011_u32, 0b1010_u32];
+        let mut recv = vec![0_u32; 2];
+
+        // First call: scratch is empty, gets populated.
+        backend
+            .allreduce_bor(&send, &mut recv)
+            .expect("first allreduce_bor should succeed");
+
+        // Single-rank OR with itself is the identity.
+        assert_eq!(recv, send, "single-rank OR should equal send");
+
+        let cap_counts_usize_after_first = backend.scratch.borrow().counts_usize.capacity();
+        let cap_counts_i32_after_first = backend.scratch.borrow().counts_i32.capacity();
+
+        // Second call: scratch already has capacity; it must not shrink.
+        backend
+            .allreduce_bor(&send, &mut recv)
+            .expect("second allreduce_bor should succeed");
+
+        assert_eq!(
+            recv, send,
+            "single-rank OR should equal send on second call"
+        );
+
+        let cap_counts_usize_after_second = backend.scratch.borrow().counts_usize.capacity();
+        let cap_counts_i32_after_second = backend.scratch.borrow().counts_i32.capacity();
+
+        assert!(
+            cap_counts_usize_after_second >= cap_counts_usize_after_first,
+            "scratch usize capacity must not shrink on reuse"
+        );
+        assert!(
+            cap_counts_i32_after_second >= cap_counts_i32_after_first,
+            "scratch i32 capacity must not shrink on reuse"
+        );
+    }
+
     #[cfg(feature = "mpi")]
     mod mpi_helpers {
-        use super::super::{map_ferrompi_error, map_reduce_op, to_i32_vec};
+        use super::super::{map_ferrompi_error, map_reduce_op, to_i32_vec, to_i32_vec_into};
         use crate::{CommError, ReduceOp};
 
         #[test]
@@ -928,6 +1123,59 @@ mod tests {
                     }
                 ),
                 "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_to_i32_vec_into_valid() {
+            let mut dst = Vec::new();
+            to_i32_vec_into(&[0, 1, 100], &mut dst, "test").expect("valid values should convert");
+            assert_eq!(dst, vec![0i32, 1, 100]);
+        }
+
+        #[test]
+        fn test_to_i32_vec_into_overflow() {
+            let overflow = usize::try_from(i32::MAX).expect("i32::MAX fits in usize") + 1;
+            let mut dst = Vec::new();
+            let err = to_i32_vec_into(&[overflow], &mut dst, "allgatherv")
+                .expect_err("overflow should return error");
+            assert!(
+                matches!(
+                    err,
+                    CommError::InvalidBufferSize {
+                        operation: "allgatherv",
+                        ..
+                    }
+                ),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn test_to_i32_vec_into_empty() {
+            let mut dst = Vec::new();
+            to_i32_vec_into(&[], &mut dst, "test").expect("empty slice should convert");
+            assert!(dst.is_empty());
+        }
+
+        #[test]
+        fn test_to_i32_vec_into_clears_existing_contents() {
+            let mut dst = vec![99i32; 5];
+            to_i32_vec_into(&[1, 2], &mut dst, "test").expect("should succeed");
+            assert_eq!(
+                dst,
+                vec![1i32, 2],
+                "dst must be cleared before repopulating"
+            );
+        }
+
+        #[test]
+        fn test_to_i32_vec_into_reuses_capacity() {
+            let mut dst: Vec<i32> = Vec::with_capacity(8);
+            to_i32_vec_into(&[10, 20, 30], &mut dst, "test").expect("should succeed");
+            assert!(
+                dst.capacity() >= 8,
+                "capacity should not shrink below pre-reserved amount"
             );
         }
     }

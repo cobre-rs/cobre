@@ -686,7 +686,7 @@ pub fn estimate_correlation_with_season_map(
 
     Ok(assemble_seasonal_correlation_model(
         hydro_ids,
-        pooled_matrix,
+        &pooled_matrix,
         &seasonal_matrices,
         stages,
         lookups.n_seasons,
@@ -901,7 +901,7 @@ fn warn_degenerate_hydros(
 fn compute_seasonal_matrices(
     per_season_residuals: &[HashMap<usize, HashMap<NaiveDate, f64>>],
     n_seasons: usize,
-) -> HashMap<usize, Vec<Vec<f64>>> {
+) -> HashMap<usize, Vec<f64>> {
     let mut result = HashMap::new();
     let n_hydros = per_season_residuals.len();
 
@@ -946,14 +946,13 @@ fn compute_seasonal_matrices(
 /// For each pair `(i, j)`, collects time steps where both have residuals,
 /// then applies the standard Pearson formula with Bessel correction (N-1).
 /// Pairs are sorted for deterministic iteration across `HashMap` orderings.
-fn compute_pearson_correlation_matrix(
-    hydro_residuals: &[HashMap<NaiveDate, f64>],
-) -> Vec<Vec<f64>> {
+fn compute_pearson_correlation_matrix(hydro_residuals: &[HashMap<NaiveDate, f64>]) -> Vec<f64> {
     let n = hydro_residuals.len();
-    let mut matrix: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n];
+    // Flat row-major N×N matrix: entry (i, j) is at index i * n + j.
+    let mut matrix = vec![0.0_f64; n * n];
 
     for i in 0..n {
-        matrix[i][i] = 1.0;
+        matrix[i * n + i] = 1.0;
 
         for j in (i + 1)..n {
             let r_i = &hydro_residuals[i];
@@ -965,8 +964,8 @@ fn compute_pearson_correlation_matrix(
                 .collect();
 
             if pairs.len() < 2 {
-                matrix[i][j] = 0.0;
-                matrix[j][i] = 0.0;
+                matrix[i * n + j] = 0.0;
+                matrix[j * n + i] = 0.0;
                 continue;
             }
 
@@ -1000,8 +999,8 @@ fn compute_pearson_correlation_matrix(
             };
 
             let rho = rho.clamp(-1.0, 1.0);
-            matrix[i][j] = rho;
-            matrix[j][i] = rho;
+            matrix[i * n + j] = rho;
+            matrix[j * n + i] = rho;
         }
     }
 
@@ -1019,11 +1018,13 @@ fn compute_pearson_correlation_matrix(
 /// index), and the schedule maps each stage to its season's profile name.
 fn assemble_seasonal_correlation_model(
     hydro_ids: &[EntityId],
-    pooled_matrix: Vec<Vec<f64>>,
-    seasonal_matrices: &HashMap<usize, Vec<Vec<f64>>>,
+    pooled_matrix: &[f64],
+    seasonal_matrices: &HashMap<usize, Vec<f64>>,
     stages: &[Stage],
     n_seasons: usize,
 ) -> CorrelationModel {
+    let n = hydro_ids.len();
+
     let entities: Vec<CorrelationEntity> = hydro_ids
         .iter()
         .map(|&id| CorrelationEntity {
@@ -1034,6 +1035,12 @@ fn assemble_seasonal_correlation_model(
 
     let mut profiles = BTreeMap::new();
 
+    // Convert a flat row-major N×N Vec<f64> to the AoS Vec<Vec<f64>> layout
+    // required by CorrelationGroup.matrix (defined in cobre-core).
+    let flat_to_aos = |flat: &[f64]| -> Vec<Vec<f64>> {
+        (0..n).map(|i| flat[i * n..(i + 1) * n].to_vec()).collect()
+    };
+
     // Always include the pooled matrix as "default".
     profiles.insert(
         "default".to_string(),
@@ -1041,7 +1048,7 @@ fn assemble_seasonal_correlation_model(
             groups: vec![CorrelationGroup {
                 name: "default".to_string(),
                 entities: entities.clone(),
-                matrix: pooled_matrix,
+                matrix: flat_to_aos(pooled_matrix),
             }],
         },
     );
@@ -1065,7 +1072,7 @@ fn assemble_seasonal_correlation_model(
                 groups: vec![CorrelationGroup {
                     name: "default".to_string(),
                     entities: entities.clone(),
-                    matrix: matrix.clone(),
+                    matrix: flat_to_aos(matrix),
                 }],
             },
         );
@@ -1433,6 +1440,11 @@ pub fn build_periodic_yw_matrix(
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
 ) -> (Vec<f64>, Vec<f64>) {
+    #[cfg(test)]
+    BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| {
+        *c.borrow_mut() += 1;
+    });
+
     if order == 0 {
         return (Vec::new(), Vec::new());
     }
@@ -1472,6 +1484,74 @@ pub fn build_periodic_yw_matrix(
     }
 
     (matrix, rhs)
+}
+
+/// Write the periodic Yule-Walker matrix and RHS into caller-supplied flat
+/// buffers, resizing them to `order * order` and `order` respectively.
+///
+/// This variant avoids allocating new `Vec`s on each call, which matters when
+/// `periodic_pacf` builds systems of increasing dimension in a loop.
+///
+/// # Parameters
+///
+/// - `season` -- 0-based target season.
+/// - `order` -- AR order (`matrix_out` will hold `order * order` entries).
+/// - `n_seasons` -- total number of seasons.
+/// - `observations_by_season` -- observations grouped by season.
+/// - `stats_by_season` -- `(mean, std)` per season.
+/// - `matrix_out` -- caller-allocated flat buffer; resized and overwritten.
+/// - `rhs_out` -- caller-allocated buffer; resized and overwritten.
+///
+/// No-op when `order == 0` (buffers are cleared to empty).
+pub fn build_periodic_yw_matrix_into(
+    season: usize,
+    order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    matrix_out: &mut Vec<f64>,
+    rhs_out: &mut Vec<f64>,
+) {
+    if order == 0 {
+        matrix_out.clear();
+        rhs_out.clear();
+        return;
+    }
+
+    matrix_out.resize(order * order, 0.0_f64);
+    // Zero-fill: entries are written below, but the symmetric fill relies on
+    // the upper triangle being populated before mirroring.
+    for v in matrix_out.iter_mut() {
+        *v = 0.0;
+    }
+    rhs_out.resize(order, 0.0_f64);
+
+    for i in 0..order {
+        matrix_out[i * order + i] = 1.0;
+        let ref_month = (season + n_seasons - (i + 1) % n_seasons) % n_seasons;
+        for j in (i + 1)..order {
+            let lag = j - i;
+            let rho = periodic_autocorrelation(
+                ref_month,
+                lag,
+                n_seasons,
+                observations_by_season,
+                stats_by_season,
+            );
+            matrix_out[i * order + j] = rho;
+            matrix_out[j * order + i] = rho;
+        }
+    }
+
+    for (i, rhs_entry) in rhs_out.iter_mut().enumerate().take(order) {
+        *rhs_entry = periodic_autocorrelation(
+            season,
+            i + 1,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1592,16 +1672,24 @@ pub fn periodic_pacf(
 ) -> Vec<f64> {
     let mut pacf_values = Vec::with_capacity(max_order);
 
+    // Reuse two scratch buffers across the loop to avoid allocating a new
+    // Vec pair per order k. build_periodic_yw_matrix_into resizes them in
+    // place (no-alloc when capacity already covers the new size).
+    let mut matrix_buf: Vec<f64> = Vec::new();
+    let mut rhs_buf: Vec<f64> = Vec::new();
+
     for k in 1..=max_order {
-        let (mut matrix, mut rhs) = build_periodic_yw_matrix(
+        build_periodic_yw_matrix_into(
             season,
             k,
             n_seasons,
             observations_by_season,
             stats_by_season,
+            &mut matrix_buf,
+            &mut rhs_buf,
         );
 
-        match solve_linear_system(&mut matrix, &mut rhs, k) {
+        match solve_linear_system(&mut matrix_buf, &mut rhs_buf, k) {
             Some(phi) => pacf_values.push(phi[k - 1]),
             None => break, // Singular matrix, stop.
         }
@@ -1672,13 +1760,7 @@ pub fn estimate_periodic_ar_coefficients(
     for k in 1..=selected_order {
         // Build and solve the periodic YW system at order k.
         // Save the original RHS for sigma2 computation (solve modifies in-place).
-        let (_, rhs_orig) = build_periodic_yw_matrix(
-            season,
-            k,
-            n_seasons,
-            observations_by_season,
-            stats_by_season,
-        );
+        // Build the matrix once; clone rhs (O(k)) before the in-place solve.
         let (mut matrix, mut rhs) = build_periodic_yw_matrix(
             season,
             k,
@@ -1686,6 +1768,7 @@ pub fn estimate_periodic_ar_coefficients(
             observations_by_season,
             stats_by_season,
         );
+        let rhs_orig: Vec<f64> = rhs.clone();
 
         match solve_linear_system(&mut matrix, &mut rhs, k) {
             Some(phi) => {
@@ -1728,6 +1811,16 @@ pub fn estimate_periodic_ar_coefficients(
 // Tests
 // ---------------------------------------------------------------------------
 
+// Thread-local call counter used by
+// `estimate_periodic_ar_coefficients_calls_build_once_per_order` to verify
+// that F2-006 is in effect (exactly one `build_periodic_yw_matrix` call per
+// loop iteration, not two).
+#[cfg(test)]
+thread_local! {
+    static BUILD_PERIODIC_YW_MATRIX_CALL_COUNT: std::cell::RefCell<usize> =
+        const { std::cell::RefCell::new(0) };
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -1739,8 +1832,9 @@ pub fn estimate_periodic_ar_coefficients(
 )]
 mod tests {
     use super::{
-        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, periodic_autocorrelation,
-        periodic_pacf, select_order_aic, select_order_pacf, solve_linear_system,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
+        estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
+        select_order_aic, select_order_pacf, solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -3819,5 +3913,110 @@ mod tests {
         assert!((matrix[1][1] - 1.0).abs() < 1e-10);
         assert!((matrix[0][1] - 1.0).abs() < 1e-10);
         assert!((matrix[1][0] - 1.0).abs() < 1e-10);
+    }
+
+    // -----------------------------------------------------------------------
+    // F2-006 regression: estimate_periodic_ar_coefficients calls
+    // build_periodic_yw_matrix exactly once per order (not twice).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn estimate_periodic_ar_coefficients_calls_build_once_per_order() {
+        let data: Vec<f64> = (0..50)
+            .map(|i| (i as f64 * 0.3).sin() * 5.0 + 10.0)
+            .collect();
+        let stats = pop_mean_std(&data);
+        let obs: &[&[f64]] = &[&data];
+        let stats_arr: &[(f64, f64)] = &[stats];
+
+        let selected_order = 4;
+
+        // Reset counter before the call under test.
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| *c.borrow_mut() = 0);
+
+        let result = estimate_periodic_ar_coefficients(0, selected_order, 1, obs, stats_arr);
+
+        let call_count = BUILD_PERIODIC_YW_MATRIX_CALL_COUNT.with(|c| *c.borrow());
+
+        assert_eq!(result.sigma2_per_order.len(), selected_order);
+        assert_eq!(
+            call_count, selected_order,
+            "build_periodic_yw_matrix called {call_count} times for order \
+             {selected_order}; expected exactly {selected_order} (F2-006: must \
+             not call twice per order)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // F2-007 regression: compute_pearson_correlation_matrix returns a flat
+    // row-major Vec<f64> with correct diagonals and symmetric off-diagonals.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compute_pearson_correlation_matrix_returns_flat_layout() {
+        use super::compute_pearson_correlation_matrix;
+        use std::collections::HashMap;
+
+        // Build 3 hydros with known residuals.  Each entry maps a NaiveDate
+        // to a standardised residual value.
+        let make_residuals = |values: &[(i32, f64)]| -> HashMap<chrono::NaiveDate, f64> {
+            values
+                .iter()
+                .map(|&(day, v)| {
+                    (
+                        chrono::NaiveDate::from_ymd_opt(2020, 1, day as u32).unwrap(),
+                        v,
+                    )
+                })
+                .collect()
+        };
+
+        // All three hydros share the same 5 dates so every pair has 5 samples.
+        let h0 = make_residuals(&[(1, 1.0), (2, -1.0), (3, 1.0), (4, -1.0), (5, 1.0)]);
+        let h1 = make_residuals(&[(1, 2.0), (2, -2.0), (3, 2.0), (4, -2.0), (5, 2.0)]);
+        let h2 = make_residuals(&[(1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0), (5, 1.0)]);
+        let hydro_residuals = vec![h0, h1, h2];
+
+        let result = compute_pearson_correlation_matrix(&hydro_residuals);
+
+        // Flat layout: 3 hydros → 9 elements.
+        assert_eq!(result.len(), 9, "expected 9 elements for a 3×3 matrix");
+
+        // Diagonals must be 1.0.
+        assert!(
+            (result[0] - 1.0).abs() < 1e-10,
+            "diagonal [0,0] = {}, expected 1.0",
+            result[0]
+        );
+        assert!(
+            (result[4] - 1.0).abs() < 1e-10,
+            "diagonal [1,1] = {}, expected 1.0",
+            result[4]
+        );
+        assert!(
+            (result[8] - 1.0).abs() < 1e-10,
+            "diagonal [2,2] = {}, expected 1.0",
+            result[8]
+        );
+
+        // Symmetry: result[i*3+j] == result[j*3+i].
+        assert!(
+            (result[1] - result[3]).abs() < 1e-10,
+            "matrix not symmetric: [0,1]={} vs [1,0]={}",
+            result[1],
+            result[3]
+        );
+        assert!(
+            (result[2] - result[6]).abs() < 1e-10,
+            "matrix not symmetric: [0,2]={} vs [2,0]={}",
+            result[2],
+            result[6]
+        );
+        assert!(
+            (result[5] - result[7]).abs() < 1e-10,
+            "matrix not symmetric: [1,2]={} vs [2,1]={}",
+            result[5],
+            result[7]
+        );
     }
 }

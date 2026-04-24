@@ -34,11 +34,11 @@
 //!
 //! See [`TrainingEvent`] for the full variant catalogue.
 
+use std::borrow::Cow;
+
 /// Phase discriminant for [`TrainingEvent::WorkerTiming`].
 ///
-/// Distinguishes whether the timing buffer was captured during the forward
-/// or backward parallel region so we place the row on
-/// the correct iteration-timing parquet column.
+/// Distinguishes whether timing was captured during forward or backward pass.
 #[derive(Clone, Debug)]
 pub enum WorkerTimingPhase {
     /// Timing captured from the forward-pass parallel region.
@@ -74,12 +74,18 @@ pub struct StoppingRuleResult {
     /// Rule identifier matching the variant name in the stopping rules config
     /// (e.g., `"gap_tolerance"`, `"bound_stalling"`, `"iteration_limit"`,
     /// `"time_limit"`, `"simulation"`).
-    pub rule_name: String,
+    ///
+    /// Always a compile-time `&'static str` constant. No heap allocation
+    /// occurs on the hot path.
+    pub rule_name: &'static str,
     /// Whether this rule's condition is satisfied at the current iteration.
     pub triggered: bool,
     /// Human-readable description of the rule's current state
     /// (e.g., `"gap 0.42% <= 1.00%"`, `"LB stable for 12/10 iterations"`).
-    pub detail: String,
+    ///
+    /// Use [`Cow::Borrowed`] for compile-time string literals and
+    /// [`Cow::Owned`] for runtime `format!(...)` results.
+    pub detail: Cow<'static, str>,
 }
 
 /// Per-stage row-selection statistics for one iteration.
@@ -496,6 +502,8 @@ pub enum TrainingEvent {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::{
         StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_COUNT,
         WorkerTimingPhase,
@@ -562,9 +570,9 @@ mod tests {
                 upper_bound_std: 5.0,
                 gap: 0.0909,
                 rules_evaluated: vec![StoppingRuleResult {
-                    rule_name: "gap_tolerance".to_string(),
+                    rule_name: "gap_tolerance",
                     triggered: false,
-                    detail: "gap 9.09% > 1.00%".to_string(),
+                    detail: Cow::Borrowed("gap 9.09% > 1.00%"),
                 }],
             },
             TrainingEvent::CheckpointComplete {
@@ -685,14 +693,14 @@ mod tests {
     fn convergence_update_rules_evaluated_field() {
         let rules = vec![
             StoppingRuleResult {
-                rule_name: "gap_tolerance".to_string(),
+                rule_name: "gap_tolerance",
                 triggered: true,
-                detail: "gap 0.42% <= 1.00%".to_string(),
+                detail: Cow::Borrowed("gap 0.42% <= 1.00%"),
             },
             StoppingRuleResult {
-                rule_name: "iteration_limit".to_string(),
+                rule_name: "iteration_limit",
                 triggered: false,
-                detail: "iteration 10/100".to_string(),
+                detail: Cow::Borrowed("iteration 10/100"),
             },
         ];
         let event = TrainingEvent::ConvergenceUpdate {
@@ -719,9 +727,9 @@ mod tests {
     #[test]
     fn stopping_rule_result_fields_accessible() {
         let r = StoppingRuleResult {
-            rule_name: "bound_stalling".to_string(),
+            rule_name: "bound_stalling",
             triggered: false,
-            detail: "LB stable for 8/10 iterations".to_string(),
+            detail: Cow::Borrowed("LB stable for 8/10 iterations"),
         };
         let cloned = r.clone();
         assert_eq!(cloned.rule_name, "bound_stalling");
@@ -732,9 +740,9 @@ mod tests {
     #[test]
     fn stopping_rule_result_debug_non_empty() {
         let r = StoppingRuleResult {
-            rule_name: "time_limit".to_string(),
+            rule_name: "time_limit",
             triggered: true,
-            detail: "elapsed 3602s > 3600s limit".to_string(),
+            detail: Cow::Borrowed("elapsed 3602s > 3600s limit"),
         };
         let debug = format!("{r:?}");
         assert!(!debug.is_empty());

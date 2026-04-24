@@ -82,30 +82,121 @@ pub struct LbEvalSpec<'a> {
     pub inflow_method: &'a InflowNonNegativityMethod,
 }
 
-/// Scratch buffers allocated once per [`evaluate_lower_bound`] call on rank 0.
+/// Per-evaluation scratch buffers for [`evaluate_lower_bound`] on rank 0.
 ///
-/// Owns the per-evaluation working memory that would otherwise live as local
-/// bindings inside the function body. Constructed in [`lb_init_rank0`] and
-/// consumed by [`lb_evaluate_stage_0`].
+/// Allocated once and stored on [`crate::training_session::IterationScratch`];
+/// reused across training iterations to eliminate per-iteration heap allocation.
+/// The first call to `evaluate_lower_bound` still allocates (grows Vec capacity);
+/// subsequent iterations reuse the existing capacity.
+///
+/// All fields are plain `f64` / `usize` working buffers — no LP-specific state.
 // All fields are scratch buffers; the shared `_buf` postfix is intentional.
 #[allow(clippy::struct_field_names)]
-struct LbRank0State {
-    noise_buf: Vec<f64>,
-    z_inflow_rhs_buf: Vec<f64>,
-    ncs_col_upper_buf: Vec<f64>,
-    ncs_col_indices_buf: Vec<usize>,
-    ncs_col_lower_buf: Vec<f64>,
-    lag_matrix_buf: Vec<f64>,
-    eta_floor_buf: Vec<f64>,
-    par_inflow_buf: Vec<f64>,
-    effective_eta_buf: Vec<f64>,
+pub struct LbEvalScratch {
+    /// Per-opening noise realization (one entry per hydro).
+    pub noise_buf: Vec<f64>,
+    /// Z-inflow RHS values per hydro for PAR(p) rows.
+    pub z_inflow_rhs_buf: Vec<f64>,
+    /// NCS column upper bounds, written by `transform_ncs_noise` per opening.
+    pub ncs_col_upper_buf: Vec<f64>,
+    /// NCS column indices (constant across openings for a given stage).
+    pub ncs_col_indices_buf: Vec<usize>,
+    /// NCS column lower bounds (constant zeros, parallel to `ncs_col_indices_buf`).
+    pub ncs_col_lower_buf: Vec<f64>,
+    /// PAR lag matrix (constant across openings for a given call).
+    pub lag_matrix_buf: Vec<f64>,
+    /// Per-hydro eta floor computed from lags (constant across openings).
+    pub eta_floor_buf: Vec<f64>,
+    /// Per-hydro PAR inflow evaluated per opening.
+    pub par_inflow_buf: Vec<f64>,
+    /// Per-hydro effective eta after clamping (recomputed per opening).
+    pub effective_eta_buf: Vec<f64>,
+    /// Per-hydro zero-target vector for truncation precompute.
+    pub zero_targets_buf: Vec<f64>,
 }
 
-/// Phase 1 — rank-0 buffer pre-allocation and append-only LP management.
+impl LbEvalScratch {
+    /// Construct a new scratch with all buffers empty.
+    ///
+    /// No heap allocation occurs until `evaluate_lower_bound` populates the
+    /// buffers on the first call.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            noise_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::new(),
+            ncs_col_upper_buf: Vec::new(),
+            ncs_col_indices_buf: Vec::new(),
+            ncs_col_lower_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            effective_eta_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
+        }
+    }
+}
+
+impl Default for LbEvalScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Bundle of mutable scratch references passed to [`evaluate_lower_bound`].
+///
+/// Groups `patch_buf`, `lb_cut_batch`, `lb_cut_row_map`, and `lb_scratch` so
+/// that the public signature of `evaluate_lower_bound` stays within the
+/// clippy `too-many-arguments-threshold = 9`.  Construct via
+/// [`LbEvalScratchBundle::from_scratch_fields`] when calling from a
+/// `TrainingSession` (disjoint-borrow factory pattern from Epic 03).
+pub struct LbEvalScratchBundle<'a> {
+    /// Reusable patch buffer for LP row-bound patching.
+    pub patch_buf: &'a mut PatchBuffer,
+    /// Cut row batch for the lower-bound LP (stage 0).
+    pub lb_cut_batch: &'a mut cobre_solver::RowBatch,
+    /// Optional cut row map for append-only lower-bound LP management.
+    pub lb_cut_row_map: Option<&'a mut crate::cut::CutRowMap>,
+    /// Per-evaluation scratch buffers (reused across training iterations).
+    pub lb_scratch: &'a mut LbEvalScratch,
+}
+
+impl<'a> LbEvalScratchBundle<'a> {
+    /// Construct from disjoint fields of [`crate::training_session::IterationScratch`].
+    ///
+    /// Analogous to `BackwardPassInputs::from_session_fields` (Epic 03): the
+    /// caller takes the fields it needs separately so that the borrow checker
+    /// can verify non-aliasing, then passes them here.
+    ///
+    /// ```text
+    /// let bundle = LbEvalScratchBundle::from_scratch_fields(
+    ///     &mut self.scratch.patch_buf,
+    ///     &mut self.scratch.lb_cut_batch,
+    ///     Some(&mut self.scratch.lb_cut_row_map),
+    ///     &mut self.scratch.lb_scratch,
+    /// );
+    /// ```
+    pub fn from_scratch_fields(
+        patch_buf: &'a mut PatchBuffer,
+        lb_cut_batch: &'a mut cobre_solver::RowBatch,
+        lb_cut_row_map: Option<&'a mut crate::cut::CutRowMap>,
+        lb_scratch: &'a mut LbEvalScratch,
+    ) -> Self {
+        Self {
+            patch_buf,
+            lb_cut_batch,
+            lb_cut_row_map,
+            lb_scratch,
+        }
+    }
+}
+
+/// Phase 1 — rank-0 buffer pre-population and append-only LP management.
 ///
 /// Pre-populates the constant NCS column-bound index/lower buffers (same across
-/// all openings at a given stage), performs the append-only LP load, and returns
-/// all per-evaluation scratch buffers bundled in `LbRank0State`.
+/// all openings at a given stage) in `scratch` and performs the append-only LP
+/// load. The caller-supplied `scratch` is populated in-place so that its
+/// capacity is reused across training iterations.
 ///
 /// Only called on rank 0.
 fn lb_init_rank0<S: SolverInterface>(
@@ -115,10 +206,12 @@ fn lb_init_rank0<S: SolverInterface>(
     indexer: &StageIndexer,
     lb_cut_batch: &mut RowBatch,
     lb_cut_row_map: Option<&mut crate::cut::CutRowMap>,
-) -> LbRank0State {
-    let ncs_col_upper_buf: Vec<f64> = Vec::new();
-    let mut ncs_col_indices_buf: Vec<usize> = Vec::new();
-    let mut ncs_col_lower_buf: Vec<f64> = Vec::new();
+    scratch: &mut LbEvalScratch,
+) {
+    // Clear the append-only buffers before repopulating (capacity is kept).
+    scratch.ncs_col_upper_buf.clear();
+    scratch.ncs_col_indices_buf.clear();
+    scratch.ncs_col_lower_buf.clear();
 
     // Pre-populate index/lower buffers for NCS column bound patching.
     // These are constant across openings (same stage, same block count),
@@ -128,13 +221,18 @@ fn lb_init_rank0<S: SolverInterface>(
         if n_stochastic_ncs > 0 && !spec.ncs_generation.is_empty() {
             for ncs_idx in 0..n_stochastic_ncs {
                 for blk in 0..spec.block_count {
-                    ncs_col_indices_buf
+                    scratch
+                        .ncs_col_indices_buf
                         .push(spec.ncs_generation.start + ncs_idx * spec.block_count + blk);
-                    ncs_col_lower_buf.push(0.0);
+                    scratch.ncs_col_lower_buf.push(0.0);
                 }
             }
         }
     }
+
+    // Resize par_inflow_buf to the current n_hydros (no-op when capacity
+    // is already sufficient, which is the common case from iteration 2 on).
+    scratch.par_inflow_buf.resize(spec.n_hydros, 0.0);
 
     // Append-only LP management for the lower bound solver.
     //
@@ -169,18 +267,6 @@ fn lb_init_rank0<S: SolverInterface>(
             solver.add_rows(lb_cut_batch);
         }
     }
-
-    LbRank0State {
-        noise_buf: Vec::with_capacity(spec.n_hydros),
-        z_inflow_rhs_buf: Vec::with_capacity(spec.n_hydros),
-        ncs_col_upper_buf,
-        ncs_col_indices_buf,
-        ncs_col_lower_buf,
-        lag_matrix_buf: Vec::new(),
-        eta_floor_buf: Vec::new(),
-        par_inflow_buf: vec![0.0_f64; spec.n_hydros],
-        effective_eta_buf: Vec::with_capacity(spec.n_hydros),
-    }
 }
 
 /// Phase 2 — truncation precompute and per-opening LP evaluation.
@@ -205,7 +291,7 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
     patch_buf: &mut PatchBuffer,
     initial_state: &[f64],
     indexer: &StageIndexer,
-    state: &mut LbRank0State,
+    scratch: &mut LbEvalScratch,
 ) -> Result<Vec<f64>, SddpError> {
     let n_openings = spec.opening_tree.n_openings(0);
     let n_hydros = spec.n_hydros;
@@ -230,24 +316,27 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
     if let Some(par_lp) = truncation_par {
         let max_order = indexer.max_par_order;
         let lag_len = max_order * n_hydros;
-        state.lag_matrix_buf.resize(lag_len, 0.0);
+        scratch.lag_matrix_buf.resize(lag_len, 0.0);
         for h in 0..n_hydros {
             for l in 0..max_order {
-                state.lag_matrix_buf[l * n_hydros + h] =
+                scratch.lag_matrix_buf[l * n_hydros + h] =
                     initial_state[indexer.inflow_lags.start + l * n_hydros + h];
             }
         }
 
         // eta_floor is constant across openings: depends only on lags
         // (initial_state) and stage (0), not on the opening noise.
-        state.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
-        let zero_targets = vec![0.0_f64; n_hydros];
+        scratch.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+        // zero_targets is constant (all zeros); reuse the scratch buffer to
+        // avoid a per-call allocation.
+        scratch.zero_targets_buf.clear();
+        scratch.zero_targets_buf.resize(n_hydros, 0.0);
         solve_par_noise_batch(
             par_lp,
             0,
-            &state.lag_matrix_buf,
-            &zero_targets,
-            &mut state.eta_floor_buf,
+            &scratch.lag_matrix_buf,
+            &scratch.zero_targets_buf,
+            &mut scratch.eta_floor_buf,
         );
     }
 
@@ -255,17 +344,17 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
 
     for opening_idx in 0..n_openings {
         let raw_noise = spec.opening_tree.opening(0, opening_idx);
-        state.noise_buf.clear();
-        state.z_inflow_rhs_buf.clear();
+        scratch.noise_buf.clear();
+        scratch.z_inflow_rhs_buf.clear();
 
         // Per-opening: evaluate PAR inflows (only when truncation active).
         if let Some(par_lp) = truncation_par {
             evaluate_par_batch(
                 par_lp,
                 0,
-                &state.lag_matrix_buf,
+                &scratch.lag_matrix_buf,
                 raw_noise,
-                &mut state.par_inflow_buf,
+                &mut scratch.par_inflow_buf,
             );
         }
 
@@ -274,14 +363,14 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
             raw_noise,
             n_hydros,
             spec.inflow_method,
-            &state.par_inflow_buf,
-            &state.eta_floor_buf,
-            &mut state.effective_eta_buf,
+            &scratch.par_inflow_buf,
+            &scratch.eta_floor_buf,
+            &mut scratch.effective_eta_buf,
         );
 
         // Build noise_buf and z_inflow_rhs_buf from effective eta.
-        for (h, &eta_eff) in state.effective_eta_buf.iter().enumerate() {
-            state
+        for (h, &eta_eff) in scratch.effective_eta_buf.iter().enumerate() {
+            scratch
                 .noise_buf
                 .push(spec.template.row_lower[base_row + h] + spec.noise_scale[h] * eta_eff);
             if let Some(stoch) = spec.stochastic {
@@ -289,25 +378,25 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
                 if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
                     let base = par_lp.deterministic_base(0, h);
                     let sigma = par_lp.sigma(0, h);
-                    state.z_inflow_rhs_buf.push(base + sigma * eta_eff);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * eta_eff);
                 } else {
-                    state.z_inflow_rhs_buf.push(0.0);
+                    scratch.z_inflow_rhs_buf.push(0.0);
                 }
             } else {
-                state.z_inflow_rhs_buf.push(0.0);
+                scratch.z_inflow_rhs_buf.push(0.0);
             }
         }
 
         patch_buf.fill_forward_patches(
             indexer,
             initial_state,
-            &state.noise_buf,
+            &scratch.noise_buf,
             base_row,
             &spec.template.row_scale,
         );
         patch_buf.fill_z_inflow_patches(
             indexer.z_inflow_row_start,
-            &state.z_inflow_rhs_buf,
+            &scratch.z_inflow_rhs_buf,
             &spec.template.row_scale,
         );
         let n_patches = patch_buf.forward_patch_count();
@@ -334,14 +423,14 @@ fn lb_evaluate_stage_0<S: SolverInterface>(
                     0,
                     spec.block_count,
                     spec.ncs_max_gen,
-                    &mut state.ncs_col_upper_buf,
+                    &mut scratch.ncs_col_upper_buf,
                 );
                 // ncs_col_indices_buf and ncs_col_lower_buf were pre-populated
                 // in lb_init_rank0 — no rebuild needed here.
                 solver.set_col_bounds(
-                    &state.ncs_col_indices_buf,
-                    &state.ncs_col_lower_buf,
-                    &state.ncs_col_upper_buf,
+                    &scratch.ncs_col_indices_buf,
+                    &scratch.ncs_col_lower_buf,
+                    &scratch.ncs_col_upper_buf,
                 );
             }
         }
@@ -396,7 +485,8 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
 /// - `fcf` — Future Cost Function with all accumulated cuts.
 /// - `initial_state` — Known initial state vector `x_0` (length `indexer.n_state`).
 /// - `indexer` — LP layout map for stage 0.
-/// - `patch_buf` — Reusable patch buffer (must be sized for this stage).
+/// - `scratch` — Bundled mutable scratch references (patch buffer, cut batch,
+///   cut row map, and per-evaluation buffers). See [`LbEvalScratchBundle`].
 /// - `spec` — Stage-0 data bundle: template, base row, noise scale, hydro count,
 ///   opening tree, and risk measure. See [`LbEvalSpec`].
 /// - `comm` — Communicator for rank/size queries and broadcast.
@@ -414,21 +504,14 @@ fn lb_aggregate_and_broadcast<C: Communicator>(
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
-///
-/// Structurally independent parameters: `solver` is the LB-specific solver instance,
-/// `fcf`/`initial_state`/`indexer` are study-level reads, `patch_buf`/`lb_cut_batch`/
-/// `lb_cut_row_map` are per-evaluation mutable scratch, `spec` is the evaluation config,
-/// `comm` is the communicator.
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,
     initial_state: &[f64],
     indexer: &StageIndexer,
-    patch_buf: &mut PatchBuffer,
-    lb_cut_batch: &mut RowBatch,
+    scratch: &mut LbEvalScratchBundle<'_>,
     spec: &LbEvalSpec<'_>,
     comm: &C,
-    lb_cut_row_map: Option<&mut crate::cut::CutRowMap>,
 ) -> Result<f64, SddpError> {
     let mut lb = 0.0_f64;
 
@@ -438,12 +521,26 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        // Phase 1: pre-allocate buffers and perform append-only LP load.
-        let mut state = lb_init_rank0(solver, fcf, spec, indexer, lb_cut_batch, lb_cut_row_map);
+        // Phase 1: populate scratch buffers and perform append-only LP load.
+        lb_init_rank0(
+            solver,
+            fcf,
+            spec,
+            indexer,
+            scratch.lb_cut_batch,
+            scratch.lb_cut_row_map.as_deref_mut(),
+            scratch.lb_scratch,
+        );
 
         // Phase 2: truncation precompute + per-opening loop.
-        let objectives =
-            lb_evaluate_stage_0(solver, spec, patch_buf, initial_state, indexer, &mut state)?;
+        let objectives = lb_evaluate_stage_0(
+            solver,
+            spec,
+            scratch.patch_buf,
+            initial_state,
+            indexer,
+            scratch.lb_scratch,
+        )?;
 
         // Phase 3: risk-measure aggregation + broadcast.
         lb = lb_aggregate_and_broadcast(&objectives, spec.risk_measure, comm)?;
@@ -464,7 +561,9 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     clippy::cast_precision_loss
 )]
 mod tests {
-    use super::{LbEvalSpec, LbRank0State, evaluate_lower_bound, lb_evaluate_stage_0};
+    use super::{
+        LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound, lb_evaluate_stage_0,
+    };
     use crate::{
         FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
         StageIndexer,
@@ -484,6 +583,20 @@ mod tests {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
         }
+    }
+
+    /// Return the owned locals needed to build an [`LbEvalScratchBundle`] for tests.
+    ///
+    /// Call pattern:
+    /// ```text
+    /// let (mut row_batch, mut lb_scratch) = make_lb_locals();
+    /// let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+    ///     &mut patch_buf, &mut row_batch, None, &mut lb_scratch,
+    /// );
+    /// evaluate_lower_bound(..., &mut bundle, ...);
+    /// ```
+    fn make_lb_locals() -> (RowBatch, LbEvalScratch) {
+        (empty_row_batch(), LbEvalScratch::new())
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR order.
@@ -809,16 +922,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch, mut lb_scratch) = make_lb_locals();
+        let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch,
+            None,
+            &mut lb_scratch,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -857,16 +975,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -912,16 +1035,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -964,16 +1092,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1012,16 +1145,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1058,16 +1196,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1111,16 +1254,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1164,31 +1312,41 @@ mod tests {
 
         // First call: solver returns [50, 100] → LB = 75.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
+        let (mut row_batch_lb1, mut lb_scratch_lb1) = make_lb_locals();
+        let mut bundle_lb1 = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb1,
+            None,
+            &mut lb_scratch_lb1,
+        );
         let lb1 = evaluate_lower_bound(
             &mut solver1,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb1,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
         // Second call: solver returns [80, 120] → LB = 100 (tighter cuts raise obj).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
+        let (mut row_batch_lb2, mut lb_scratch_lb2) = make_lb_locals();
+        let mut bundle_lb2 = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb2,
+            None,
+            &mut lb_scratch_lb2,
+        );
         let lb2 = evaluate_lower_bound(
             &mut solver2,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb2,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1232,16 +1390,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1284,16 +1447,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::Truncation,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1330,16 +1498,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::TruncationWithPenalty { cost: 100.0 },
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1534,27 +1707,16 @@ mod tests {
             inflow_method: &InflowNonNegativityMethod::None,
         };
 
-        // Pre-populate LbRank0State as lb_init_rank0 would.
-        let mut ncs_col_indices_buf = Vec::new();
-        let mut ncs_col_lower_buf = Vec::new();
+        // Pre-populate LbEvalScratch as lb_init_rank0 would.
+        let mut lb_scratch = LbEvalScratch::new();
         for ncs_idx in 0..n_ncs {
             for blk in 0..block_count {
-                ncs_col_indices_buf.push(spec.ncs_generation.start + ncs_idx * block_count + blk);
-                ncs_col_lower_buf.push(0.0);
+                lb_scratch
+                    .ncs_col_indices_buf
+                    .push(spec.ncs_generation.start + ncs_idx * block_count + blk);
+                lb_scratch.ncs_col_lower_buf.push(0.0);
             }
         }
-
-        let mut lb_state = LbRank0State {
-            noise_buf: Vec::new(),
-            z_inflow_rhs_buf: Vec::new(),
-            ncs_col_upper_buf: Vec::new(),
-            ncs_col_indices_buf,
-            ncs_col_lower_buf,
-            lag_matrix_buf: Vec::new(),
-            eta_floor_buf: Vec::new(),
-            par_inflow_buf: Vec::new(),
-            effective_eta_buf: Vec::new(),
-        };
 
         let mut patch_buf = PatchBuffer::new(0, 0, 0, 0);
         let initial_state: Vec<f64> = Vec::new();
@@ -1568,7 +1730,7 @@ mod tests {
             &mut patch_buf,
             &initial_state,
             &indexer,
-            &mut lb_state,
+            &mut lb_scratch,
         )
         .unwrap();
 
@@ -1583,6 +1745,103 @@ mod tests {
         assert!(
             actual_n_openings > 0,
             "opening tree must have at least one opening at stage 0"
+        );
+    }
+
+    // ── Scratch reuse regression test ────────────────────────────────────────
+
+    /// Verify that `LbEvalScratch` buffers are reused across consecutive calls.
+    ///
+    /// Calls `evaluate_lower_bound` twice on the same scratch and verifies that
+    /// `noise_buf.capacity()` does not decrease on the second call (i.e., no
+    /// reallocation occurred). This guards against regressions that would re-
+    /// introduce per-iteration heap allocation on the lower-bound hot path.
+    #[test]
+    fn lb_eval_scratch_reuses_buffers_across_calls() {
+        // Use n_hydros = 1 so that noise_buf gets populated (capacity grows to 1
+        // after the first call). The template must have at least 1 row to avoid
+        // index-out-of-bounds in fill_forward_patches when n_hydros = 1.
+        let indexer = StageIndexer::new(1, 0);
+        let template = minimal_template();
+        let fcf = make_fcf(2, indexer.n_state);
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
+        let opening_tree = simple_opening_tree(1);
+        let rm = RiskMeasure::Expectation;
+        let comm = LocalComm;
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 0,
+            noise_scale: &[1.0],
+            n_hydros: 1,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
+        };
+
+        let mut row_batch = empty_row_batch();
+        let mut lb_scratch = LbEvalScratch::new();
+
+        // First call — allocates scratch buffers for the first time.
+        let mut solver1 = MockSolver::with_objectives(vec![10.0]);
+        {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut row_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver1,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+            .unwrap();
+        }
+
+        // Capture capacity after the first call.
+        let cap_after_first = lb_scratch.noise_buf.capacity();
+        assert!(
+            cap_after_first > 0,
+            "noise_buf must have nonzero capacity after first call (n_hydros = 1)"
+        );
+
+        // Second call — must reuse the existing capacity (no reallocation).
+        let mut solver2 = MockSolver::with_objectives(vec![20.0]);
+        {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut row_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver2,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+            .unwrap();
+        }
+
+        let cap_after_second = lb_scratch.noise_buf.capacity();
+        assert_eq!(
+            cap_after_second, cap_after_first,
+            "noise_buf capacity must be stable across calls (first={cap_after_first}, second={cap_after_second}); \
+             a decrease indicates reallocation on the lower-bound hot path"
         );
     }
 }

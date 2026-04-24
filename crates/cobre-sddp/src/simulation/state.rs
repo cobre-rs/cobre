@@ -32,12 +32,11 @@ use cobre_core::TrainingEvent;
 use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    ClassDimensions, ForwardSampler, ForwardSamplerConfig, build_forward_sampler,
+    build_forward_sampler, ClassDimensions, ForwardSampler, ForwardSamplerConfig,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
-    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch_into, partition},
     simulation::{
@@ -45,13 +44,14 @@ use crate::{
         error::SimulationError,
         extraction::assign_scenarios,
         pipeline::{
-            SIMULATION_SEED_OFFSET, ScenarioIds, SimulationOutputSpec, SimulationRunResult,
-            WorkerCosts, WorkerStats, dispatch_scenario_result, emit_sim_progress,
-            process_scenario_stages,
+            dispatch_scenario_result, emit_sim_progress, process_scenario_stages, ScenarioIds,
+            SimulationOutputSpec, SimulationRunResult, WorkerCosts, WorkerStats,
+            SIMULATION_SEED_OFFSET,
         },
     },
     solver_stats::SolverStatsDelta,
     workspace::{CapturedBasis, SolverWorkspace},
+    FutureCostFunction,
 };
 
 /// Per-call argument bundle for [`SimulationState::run`].
@@ -227,8 +227,25 @@ impl SimulationState {
         let local_count = (scenario_range.end - scenario_range.start) as usize;
         let scenario_start = scenario_range.start as usize;
         let n_workers = inputs.workspaces.len().max(1);
+        let world_size = u32::try_from(inputs.comm.size()).unwrap_or(1).max(1);
         let sim_start = Instant::now();
         let scenarios_complete = AtomicU32::new(0);
+
+        // Emit SimulationStarted once per rank before the parallel region so
+        // rank 0's progress thread can render a banner before any scenario
+        // completes. Non-root ranks' senders are None; this is a no-op on
+        // those ranks.
+        if let Some(sender) = inputs.output.event_sender.as_ref() {
+            #[allow(clippy::cast_possible_truncation)]
+            let _ = sender.send(TrainingEvent::SimulationStarted {
+                case_name: String::new(),
+                n_scenarios: inputs.config.n_scenarios,
+                n_stages: num_stages as u32,
+                ranks: world_size,
+                threads_per_rank: n_workers as u32,
+                timestamp: String::new(),
+            });
+        }
 
         let sampler = build_sim_sampler(training_ctx)?;
 
@@ -254,6 +271,7 @@ impl SimulationState {
                     scenario_start,
                     &sampler,
                     num_stages,
+                    world_size,
                 )
             })
             .collect();
@@ -345,6 +363,7 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
     scenario_start: usize,
     sampler: &ForwardSampler,
     num_stages: usize,
+    world_size: u32,
 ) -> Result<(WorkerCosts, WorkerStats), SimulationError> {
     let (start_local, end_local) = partition(local_count, n_workers, w);
     let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
@@ -412,13 +431,17 @@ fn run_worker_scenarios<S: SolverInterface + Send>(
             stage_results,
         )?);
         let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
+        // Scale rank-local count to a global estimate assuming balanced
+        // workload across ranks (the assign_scenarios invariant). Clamp at
+        // the global total so the final scenario lands exactly on 100%.
+        let completed_global = completed.saturating_mul(world_size).min(config.n_scenarios);
         #[allow(clippy::cast_possible_truncation)]
         emit_sim_progress(
             worker_sender.as_ref(),
             total_cost,
             scenario_solve_time_ms,
             scenario_lp_solves,
-            completed,
+            completed_global,
             config.n_scenarios,
             sim_start.elapsed().as_millis() as u64,
         );
@@ -502,5 +525,36 @@ mod tests {
             state.bake_batch.num_rows, 0,
             "bake_batch.num_rows must be 0"
         );
+    }
+
+    /// Reproduces the scaling logic used inside `run_worker_scenarios` for
+    /// `SimulationProgress.scenarios_complete`. Kept as a free helper so the
+    /// invariants are testable without a full `SimulationInputs` fixture.
+    fn scaled_global_count(local_completed: u32, world_size: u32, total: u32) -> u32 {
+        local_completed.saturating_mul(world_size).min(total)
+    }
+
+    #[test]
+    fn scaled_global_count_single_rank_is_identity() {
+        assert_eq!(scaled_global_count(0, 1, 100), 0);
+        assert_eq!(scaled_global_count(50, 1, 100), 50);
+        assert_eq!(scaled_global_count(100, 1, 100), 100);
+    }
+
+    #[test]
+    fn scaled_global_count_balanced_two_ranks_tracks_global() {
+        // Rank 0 has 50 local scenarios out of 100 global; each local
+        // completion advances the global estimate by world_size = 2.
+        assert_eq!(scaled_global_count(1, 2, 100), 2);
+        assert_eq!(scaled_global_count(25, 2, 100), 50);
+        assert_eq!(scaled_global_count(50, 2, 100), 100);
+    }
+
+    #[test]
+    fn scaled_global_count_clamps_at_total_when_unevenly_divided() {
+        // N=100 across K=3 ranks: rank 0 has 34, ranks 1-2 have 33 each.
+        // At local 33: estimate = 99. At local 34: estimate = 102 clamped to 100.
+        assert_eq!(scaled_global_count(33, 3, 100), 99);
+        assert_eq!(scaled_global_count(34, 3, 100), 100);
     }
 }

@@ -856,7 +856,7 @@ mod tests {
     fn compute_cvar_weights_into_matches_allocating_variant() {
         // Verify the _into variant produces identical mu output to the
         // allocating compute_cvar_weights for the same inputs.
-        use super::{compute_cvar_weights_into, RiskMeasureScratch};
+        use super::{RiskMeasureScratch, compute_cvar_weights_into};
 
         let outcomes = vec![
             outcome(10.0, 10.0),

@@ -15,7 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `TrainingEvent::SimulationStarted` variant mirrors `TrainingStarted` for the
+  simulation phase. Carries `n_scenarios`, `n_stages`, `ranks`, and
+  `threads_per_rank`. Emitted once per rank before the parallel scenario loop
+  so consumers can render a banner before any scenario completes.
+- Non-TTY progress lines (pipes, `mpirun` aggregators, log files) now include
+  an `[elapsed HH:MM:SS < eta HH:MM:SS]` trailing cell matching the interactive
+  bar.
+
 ### Changed
+
+- `TrainingEvent::SimulationProgress.scenarios_complete` now carries a global
+  estimate under multi-rank execution (`local × ranks`, clamped to
+  `scenarios_total`), matching the `scenarios_total` field's global scope.
+  Single-rank runs are unchanged. Previously, rank 0 reported its local count
+  against the global total, producing a misleading `50/100` final line on a
+  2-rank run.
 
 ### Removed
 

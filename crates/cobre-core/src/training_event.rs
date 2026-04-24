@@ -149,6 +149,7 @@ pub struct StageRowSelectionRecord {
 /// |------------------------------|-------------------------------------|
 /// | [`Self::TrainingStarted`]    | Training loop entry                 |
 /// | [`Self::TrainingFinished`]   | Training loop exit                  |
+/// | [`Self::SimulationStarted`]  | Simulation loop entry               |
 /// | [`Self::SimulationProgress`] | Simulation batch completion         |
 /// | [`Self::SimulationFinished`] | Simulation completion               |
 #[derive(Clone, Debug)]
@@ -409,6 +410,26 @@ pub enum TrainingEvent {
         total_rows: u64,
     },
 
+    /// Emitted once per rank when the simulation loop begins, before any
+    /// scenario runs. Mirrors [`Self::TrainingStarted`] for the simulation
+    /// phase. Progress consumers use this to display a "starting..." banner
+    /// and capture run-level metadata (scenario count, parallelism layout).
+    SimulationStarted {
+        /// Case study name from the input data directory.
+        case_name: String,
+        /// Total number of simulation scenarios across all ranks.
+        n_scenarios: u32,
+        /// Total number of stages in the optimization horizon.
+        n_stages: u32,
+        /// Number of distributed ranks participating in simulation.
+        ranks: u32,
+        /// Number of threads per rank.
+        threads_per_rank: u32,
+        /// Wall-clock time at simulation start as an ISO 8601 string
+        /// (run-level metadata, not a per-event timestamp).
+        timestamp: String,
+    },
+
     /// Emitted periodically during policy simulation (not during training).
     ///
     /// Consumers can use this to display a progress indicator during the
@@ -416,9 +437,17 @@ pub enum TrainingEvent {
     /// completed scenario; the progress thread accumulates statistics across
     /// events.
     SimulationProgress {
-        /// Number of simulation scenarios completed so far.
+        /// Number of simulation scenarios completed so far, as a global
+        /// estimate.
+        ///
+        /// Only rank 0 emits displayable progress events (non-root ranks are
+        /// `--quiet`). Rank 0 knows only its own local completion count, so
+        /// the global estimate is computed as `local_completed × ranks`,
+        /// clamped to `scenarios_total`. The estimate is exact when work is
+        /// evenly distributed and ranks finish at similar rates; it assumes
+        /// the balanced-workload invariant from [`assign_scenarios`].
         scenarios_complete: u32,
-        /// Total number of simulation scenarios to run.
+        /// Total number of simulation scenarios to run across all ranks.
         scenarios_total: u32,
         /// Wall-clock time since simulation started, in milliseconds.
         elapsed_ms: u64,

@@ -311,6 +311,20 @@ impl BarRenderer {
                 bar.set_position(0);
                 bar.set_message("starting...");
             }
+            TrainingEvent::SimulationStarted {
+                n_scenarios,
+                ranks,
+                threads_per_rank,
+                ..
+            } => {
+                let bar = self.simulation_bar.get_or_insert_with(|| {
+                    create_simulation_bar(u64::from(n_scenarios), self.term_width)
+                });
+                bar.set_position(0);
+                bar.set_message(format!(
+                    "starting... ({ranks} ranks × {threads_per_rank} threads)"
+                ));
+            }
             TrainingEvent::IterationSummary {
                 iteration,
                 lower_bound,
@@ -476,6 +490,16 @@ impl LineRenderer {
                 let _ = self.stderr.write_line(&format!(
                     "Training   starting... (max {} iterations)",
                     self.max_iterations
+                ));
+            }
+            TrainingEvent::SimulationStarted {
+                n_scenarios,
+                ranks,
+                threads_per_rank,
+                ..
+            } => {
+                let _ = self.stderr.write_line(&format!(
+                    "Simulation starting... ({n_scenarios} scenarios across {ranks} ranks × {threads_per_rank} threads)"
                 ));
             }
             TrainingEvent::IterationSummary {
@@ -652,6 +676,42 @@ mod tests {
             output_dir: "/tmp/output".to_string(),
             elapsed_ms: 10_000,
         }
+    }
+
+    fn make_simulation_started(n_scenarios: u32, ranks: u32) -> TrainingEvent {
+        TrainingEvent::SimulationStarted {
+            case_name: "test-case".to_string(),
+            n_scenarios,
+            n_stages: 12,
+            ranks,
+            threads_per_rank: 4,
+            timestamp: "2026-04-24T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn simulation_started_event_is_preserved_and_renders_banner() {
+        // Log mode exercises the `SimulationStarted` arm and writes a banner
+        // to stderr (not captured here); we rely on the channel round-trip
+        // to verify event propagation.
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let handle = run_progress_thread(rx, RenderMode::Log, 10, 120);
+
+        tx.send(make_simulation_started(100, 2)).unwrap();
+        tx.send(make_simulation_progress(2, 100)).unwrap();
+        tx.send(make_simulation_progress(100, 100)).unwrap();
+        drop(tx);
+
+        let events = handle.join();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events[0],
+            TrainingEvent::SimulationStarted {
+                n_scenarios: 100,
+                ranks: 2,
+                ..
+            }
+        ));
     }
 
     #[test]

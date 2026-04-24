@@ -54,6 +54,46 @@ fn fmt_sci(v: f64) -> String {
     raw
 }
 
+/// Format a millisecond count as `HH:MM:SS`.
+///
+/// Matches the width of `indicatif`'s `{elapsed_precise}` / `{eta_precise}`
+/// tokens so log-mode lines stay visually aligned with bar-mode output for
+/// the same run.
+fn fmt_hms(millis: u64) -> String {
+    let total_secs = millis / 1000;
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// Linear-extrapolation ETA: remaining time = elapsed * (total - done) / done.
+///
+/// Returns `None` when `done == 0` or `done >= total` (nothing left to
+/// estimate). Arithmetic is done in `u128` to avoid overflow at large
+/// elapsed values.
+fn eta_millis(elapsed_ms: u64, done: u64, total: u64) -> Option<u64> {
+    if done == 0 || done >= total {
+        return None;
+    }
+    let remaining = u128::from(total - done);
+    let elapsed = u128::from(elapsed_ms);
+    let eta = elapsed.saturating_mul(remaining) / u128::from(done);
+    u64::try_from(eta).ok()
+}
+
+/// Render the trailing `[elapsed HH:MM:SS < eta HH:MM:SS]` time cell.
+///
+/// When `eta` is `None` (first iteration, or all work done) only elapsed is
+/// shown. Mirrors the `{elapsed_precise} < {eta_precise}` segment of the
+/// interactive progress bars so log-mode output carries the same info.
+fn fmt_time_cell(elapsed_ms: u64, eta_ms: Option<u64>) -> String {
+    match eta_ms {
+        Some(eta) => format!("[{} < {}]", fmt_hms(elapsed_ms), fmt_hms(eta)),
+        None => format!("[{}]", fmt_hms(elapsed_ms)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -443,6 +483,7 @@ impl LineRenderer {
                 lower_bound,
                 upper_bound,
                 gap,
+                wall_time_ms,
                 lp_solves,
                 solve_time_ms,
                 ..
@@ -454,8 +495,12 @@ impl LineRenderer {
                 } else {
                     "LP: --".to_string()
                 };
+                let time_cell = fmt_time_cell(
+                    wall_time_ms,
+                    eta_millis(wall_time_ms, iteration, self.max_iterations),
+                );
                 let _ = self.stderr.write_line(&format!(
-                    "Training   {iteration}/{max} iter  LB: {lb}  UB: {ub}  gap: {gap_pct:.1}%  {avg_lp}",
+                    "Training   {iteration}/{max} iter  LB: {lb}  UB: {ub}  gap: {gap_pct:.1}%  {avg_lp}  {time_cell}",
                     max = self.max_iterations,
                     lb = fmt_sci(lower_bound),
                     ub = fmt_sci(upper_bound),
@@ -464,6 +509,7 @@ impl LineRenderer {
             TrainingEvent::SimulationProgress {
                 scenarios_complete,
                 scenarios_total,
+                elapsed_ms,
                 solve_time_ms,
                 lp_solves,
                 ..
@@ -479,8 +525,16 @@ impl LineRenderer {
                 } else {
                     String::new()
                 };
+                let time_cell = fmt_time_cell(
+                    elapsed_ms,
+                    eta_millis(
+                        elapsed_ms,
+                        u64::from(scenarios_complete),
+                        u64::from(scenarios_total),
+                    ),
+                );
                 let _ = self.stderr.write_line(&format!(
-                    "Simulation {scenarios_complete}/{scenarios_total} scenarios  {avg_lp}"
+                    "Simulation {scenarios_complete}/{scenarios_total} scenarios  {avg_lp}  {time_cell}"
                 ));
             }
             TrainingEvent::TrainingFinished { .. }
@@ -505,7 +559,50 @@ mod tests {
 
     use cobre_core::TrainingEvent;
 
-    use super::{RenderMode, run_progress_thread};
+    use super::{RenderMode, eta_millis, fmt_hms, fmt_time_cell, run_progress_thread};
+
+    #[test]
+    fn fmt_hms_pads_hours_minutes_seconds() {
+        assert_eq!(fmt_hms(0), "00:00:00");
+        assert_eq!(fmt_hms(999), "00:00:00");
+        assert_eq!(fmt_hms(1_000), "00:00:01");
+        assert_eq!(fmt_hms(61_500), "00:01:01");
+        assert_eq!(fmt_hms(3_600_000), "01:00:00");
+        assert_eq!(fmt_hms(90 * 60_000 + 45_000), "01:30:45");
+        assert_eq!(fmt_hms(100 * 3_600_000), "100:00:00");
+    }
+
+    #[test]
+    fn eta_millis_none_when_done_is_zero() {
+        assert_eq!(eta_millis(5_000, 0, 10), None);
+    }
+
+    #[test]
+    fn eta_millis_none_when_done_reaches_total() {
+        assert_eq!(eta_millis(5_000, 10, 10), None);
+        assert_eq!(eta_millis(5_000, 11, 10), None);
+    }
+
+    #[test]
+    fn eta_millis_linear_extrapolation() {
+        // elapsed = 10s after 2/10 iterations -> 40s remaining (5s/iter × 8).
+        assert_eq!(eta_millis(10_000, 2, 10), Some(40_000));
+        // elapsed = 30s after 3/6 iterations -> 30s remaining.
+        assert_eq!(eta_millis(30_000, 3, 6), Some(30_000));
+    }
+
+    #[test]
+    fn fmt_time_cell_shows_both_when_eta_present() {
+        assert_eq!(
+            fmt_time_cell(61_500, Some(120_000)),
+            "[00:01:01 < 00:02:00]"
+        );
+    }
+
+    #[test]
+    fn fmt_time_cell_shows_elapsed_only_when_eta_absent() {
+        assert_eq!(fmt_time_cell(61_500, None), "[00:01:01]");
+    }
 
     #[allow(clippy::cast_precision_loss)]
     fn make_iteration_summary(iteration: u64) -> TrainingEvent {

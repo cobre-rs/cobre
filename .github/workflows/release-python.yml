@@ -142,11 +142,16 @@ jobs:
         run: pytest crates/cobre-python/tests/ -v
 
   # Publish all wheels to PyPI.
+  #
+  # Runs on either a version tag push or an explicit workflow_dispatch
+  # invocation (so we can recover from a transient build failure on the
+  # tag-push run without needing to retag). The dry-run input still
+  # short-circuits to skip in either case.
   publish:
     name: Publish to PyPI
     needs: [build, test]
     if: >-
-      startsWith(github.ref, 'refs/tags/v')
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
       && !(github.event.inputs.dry-run == 'true')
     runs-on: ubuntu-latest
     environment: pypi

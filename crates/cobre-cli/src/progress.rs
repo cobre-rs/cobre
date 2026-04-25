@@ -330,8 +330,8 @@ impl BarRenderer {
                 lower_bound,
                 upper_bound,
                 gap,
-                lp_solves,
-                solve_time_ms,
+                forward_ms,
+                backward_ms,
                 ..
             } => {
                 let bar = self.training_bar.get_or_insert_with(|| {
@@ -339,14 +339,8 @@ impl BarRenderer {
                 });
                 let gap_pct = gap * 100.0;
                 bar.set_position(iteration);
-                #[allow(clippy::cast_precision_loss)]
-                let avg_lp = if lp_solves > 0 {
-                    format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
-                } else {
-                    "LP: --".to_string()
-                };
                 bar.set_message(format!(
-                    "LB: {}  UB: {}  gap: {gap_pct:.1}%  {avg_lp}",
+                    "LB: {}  UB: {}  gap: {gap_pct:.1}%  fwd: {forward_ms}ms / bwd: {backward_ms}ms",
                     fmt_sci(lower_bound),
                     fmt_sci(upper_bound)
                 ));
@@ -508,23 +502,17 @@ impl LineRenderer {
                 upper_bound,
                 gap,
                 wall_time_ms,
-                lp_solves,
-                solve_time_ms,
+                forward_ms,
+                backward_ms,
                 ..
             } => {
                 let gap_pct = gap * 100.0;
-                #[allow(clippy::cast_precision_loss)]
-                let avg_lp = if lp_solves > 0 {
-                    format!("LP: {:.1}ms", solve_time_ms / lp_solves as f64)
-                } else {
-                    "LP: --".to_string()
-                };
                 let time_cell = fmt_time_cell(
                     wall_time_ms,
                     eta_millis(wall_time_ms, iteration, self.max_iterations),
                 );
                 let _ = self.stderr.write_line(&format!(
-                    "Training   {iteration}/{max} iter  LB: {lb}  UB: {ub}  gap: {gap_pct:.1}%  {avg_lp}  {time_cell}",
+                    "Training   {iteration}/{max} iter  LB: {lb}  UB: {ub}  gap: {gap_pct:.1}%  fwd: {forward_ms}ms / bwd: {backward_ms}ms  {time_cell}",
                     max = self.max_iterations,
                     lb = fmt_sci(lower_bound),
                     ub = fmt_sci(upper_bound),

@@ -456,17 +456,28 @@ pub struct TrainingSummary {
     /// Number of solves that exhausted all retry levels.
     pub total_failed: Option<u64>,
 
-    /// Total LP solve wall-clock time in seconds.
-    pub total_solve_time_seconds: Option<f64>,
+    /// Forward-phase cumulative LP solve wall time in seconds, summed
+    /// across all (rank, worker) pairs. Divide by `parallelism` to obtain
+    /// the average per-worker forward solve wall time, which is bounded
+    /// by `total_time_ms` and represents the wall-time attributable to
+    /// forward LP solving.
+    pub total_forward_solve_seconds: Option<f64>,
 
-    /// Total warm-start solve calls (basis offers) across all solvers in the training phase.
-    pub total_basis_offered: Option<u64>,
+    /// Backward-phase cumulative LP solve wall time in seconds, summed
+    /// across all (rank, worker) pairs. See [`Self::total_forward_solve_seconds`].
+    pub total_backward_solve_seconds: Option<f64>,
 
-    /// Number of warm-start calls in which `isBasisConsistent` returned false.
-    pub total_basis_consistency_failures: Option<u64>,
+    /// Effective parallelism = `n_ranks * n_workers_local`. Used to
+    /// normalize cumulative solve times into per-worker wall-time
+    /// equivalents for the time-split breakdown. `None` when the
+    /// summary was reconstructed from `metadata.json` and parallelism
+    /// is unknown.
+    pub parallelism: Option<u32>,
 
-    /// Total simplex iterations across all solves.
-    pub total_simplex_iterations: Option<u64>,
+    /// Initial optimality gap (iteration 1) in percent. Read from the
+    /// first row of `convergence.parquet`. `None` when convergence
+    /// data is unavailable or the run completed in zero iterations.
+    pub initial_gap_percent: Option<f64>,
 }
 
 /// Simulation completion statistics for display in the post-run summary.
@@ -501,17 +512,18 @@ pub struct SimulationSummary {
     /// Solves that exhausted all retry levels.
     pub total_failed_solves: Option<u64>,
 
-    /// Cumulative LP solve wall-clock time in seconds.
+    /// Cumulative LP solve wall time in seconds, summed across all
+    /// (rank, worker) pairs. Divide by `parallelism` to obtain the
+    /// average per-worker solve wall time, which is bounded by
+    /// `total_time_ms`.
     pub total_solve_time_seconds: Option<f64>,
 
-    /// Total warm-start solve calls (basis offers) across all solvers in the simulation phase.
-    pub total_basis_offered: Option<u64>,
-
-    /// Number of warm-start calls in which `isBasisConsistent` returned false.
-    pub total_basis_consistency_failures: Option<u64>,
-
-    /// Total simplex iterations across all solves.
-    pub total_simplex_iterations: Option<u64>,
+    /// Effective parallelism = `n_ranks * n_workers_local`. Used to
+    /// normalize cumulative solve times into per-worker wall-time
+    /// equivalents for the time-split breakdown. `None` when the
+    /// summary was reconstructed from `metadata.json` and parallelism
+    /// is unknown.
+    pub parallelism: Option<u32>,
 }
 
 /// All data needed to render the complete post-run summary block.
@@ -547,6 +559,44 @@ fn format_convergence_detail(converged: bool, converged_at: Option<u64>, reason:
         }
     }
     reason.to_string()
+}
+
+/// Format a duration for the time-split breakdown lines.
+///
+/// Sub-second values get `Xms`; values up to 60s get `X.Xs`; values up
+/// to one hour get `Xm Ys`; longer values fall back to `Xh Ym`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn format_split_duration(seconds: f64) -> String {
+    if seconds < 1.0 {
+        let ms = (seconds * 1000.0).round() as u64;
+        format!("{ms}ms")
+    } else if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else if seconds < 3600.0 {
+        let total = seconds.round() as u64;
+        format!("{}m {}s", total / 60, total % 60)
+    } else {
+        let total = seconds.round() as u64;
+        format!("{}h {}m", total / 3600, (total % 3600) / 60)
+    }
+}
+
+/// Compute a per-worker average wall time from cumulative solve time and
+/// parallelism, capped at the total wall-clock budget.
+///
+/// `cumulative_seconds` is summed across all `(rank, worker)` pairs;
+/// `parallelism = n_ranks * n_workers_local`; `cap_seconds` is the
+/// total run wall time. Cumulative / parallelism is the per-worker
+/// average solve wall time, which is bounded by the parallel-region
+/// wall time and therefore by the total run wall time. The cap is
+/// applied defensively in case of arithmetic edge cases.
+fn solver_wall_seconds(cumulative_seconds: f64, parallelism: u32, cap_seconds: f64) -> f64 {
+    if parallelism == 0 {
+        return 0.0;
+    }
+    (cumulative_seconds / f64::from(parallelism))
+        .min(cap_seconds)
+        .max(0.0)
 }
 
 /// Render the complete post-run summary as a plain-text `String`.
@@ -648,7 +698,14 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
         fmt_sci(t.upper_bound),
         fmt_sci(t.upper_bound_std)
     ));
-    let _ = stderr.write_line(&format!("  Gap:          {:.1}%", t.gap_percent));
+    if let Some(initial) = t.initial_gap_percent {
+        let _ = stderr.write_line(&format!(
+            "  Gap:          {:.1}% (started at {:.1}%)",
+            t.gap_percent, initial
+        ));
+    } else {
+        let _ = stderr.write_line(&format!("  Gap:          {:.1}%", t.gap_percent));
+    }
     let _ = stderr.write_line(&format!(
         "  Policy rows:  {} active / {} generated",
         t.total_rows_active, t.total_rows_generated
@@ -663,32 +720,43 @@ pub fn print_training_summary(stderr: &Term, t: &TrainingSummary) {
     } else {
         let _ = stderr.write_line(&format!("  LP solves:    {}", t.total_lp_solves));
     }
-    if let Some(solve_time) = t.total_solve_time_seconds {
+    if t.iterations > 0 {
         #[allow(clippy::cast_precision_loss)]
-        let avg_ms = if t.total_lp_solves > 0 {
-            solve_time * 1000.0 / t.total_lp_solves as f64
-        } else {
-            0.0
+        let avg_iter_ms = t.total_time_ms as f64 / t.iterations as f64;
+        let _ = stderr.write_line(&format!("  Avg iter:     {avg_iter_ms:.0}ms"));
+    }
+    if let (Some(forward), Some(backward), Some(parallelism)) = (
+        t.total_forward_solve_seconds,
+        t.total_backward_solve_seconds,
+        t.parallelism,
+    ) {
+        #[allow(clippy::cast_precision_loss)]
+        let total_s = t.total_time_ms as f64 / 1000.0;
+        let fwd = solver_wall_seconds(forward, parallelism, total_s);
+        let bwd = solver_wall_seconds(backward, parallelism, total_s);
+        let other = (total_s - fwd - bwd).max(0.0);
+        let pct = |part: f64| -> f64 {
+            if total_s > 0.0 {
+                100.0 * part / total_s
+            } else {
+                0.0
+            }
         };
         let _ = stderr.write_line(&format!(
-            "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
+            "  Time split:   Forward  {} ({:.0}%)",
+            format_split_duration(fwd),
+            pct(fwd)
         ));
-    }
-    if let (Some(offered), Some(failures)) =
-        (t.total_basis_offered, t.total_basis_consistency_failures)
-    {
-        if offered > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let hit_pct = (1.0 - failures as f64 / offered as f64) * 100.0;
-            let _ = stderr.write_line(&format!(
-                "  Basis reuse:  {hit_pct:.1}% hit ({failures} rejected / {offered} offered)"
-            ));
-        } else if failures > 0 {
-            let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
-        }
-    }
-    if let Some(simplex) = t.total_simplex_iterations {
-        let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
+        let _ = stderr.write_line(&format!(
+            "                Backward {} ({:.0}%)",
+            format_split_duration(bwd),
+            pct(bwd)
+        ));
+        let _ = stderr.write_line(&format!(
+            "                Other    {} ({:.0}%)",
+            format_split_duration(other),
+            pct(other)
+        ));
     }
 }
 
@@ -729,34 +797,33 @@ pub fn print_simulation_summary(stderr: &Term, sim: &SimulationSummary) {
     } else if let Some(lp_solves) = sim.total_lp_solves {
         let _ = stderr.write_line(&format!("  LP solves:    {lp_solves}"));
     }
-    if let (Some(lp_solves), Some(solve_time)) = (sim.total_lp_solves, sim.total_solve_time_seconds)
-    {
+    if sim.completed > 0 {
         #[allow(clippy::cast_precision_loss)]
-        let avg_ms = if lp_solves > 0 {
-            solve_time * 1000.0 / lp_solves as f64
-        } else {
-            0.0
+        let avg_s = sim.total_time_ms as f64 / 1000.0 / f64::from(sim.completed);
+        let _ = stderr.write_line(&format!("  Avg/scenario: {avg_s:.3}s"));
+    }
+    if let (Some(solve_time), Some(parallelism)) = (sim.total_solve_time_seconds, sim.parallelism) {
+        #[allow(clippy::cast_precision_loss)]
+        let total_s = sim.total_time_ms as f64 / 1000.0;
+        let solver = solver_wall_seconds(solve_time, parallelism, total_s);
+        let other = (total_s - solver).max(0.0);
+        let pct = |part: f64| -> f64 {
+            if total_s > 0.0 {
+                100.0 * part / total_s
+            } else {
+                0.0
+            }
         };
         let _ = stderr.write_line(&format!(
-            "  LP time:      {solve_time:.1}s total, {avg_ms:.1}ms avg"
+            "  Time split:   Solver {} ({:.0}%)",
+            format_split_duration(solver),
+            pct(solver)
         ));
-    }
-    if let (Some(offered), Some(failures)) = (
-        sim.total_basis_offered,
-        sim.total_basis_consistency_failures,
-    ) {
-        if offered > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let hit_pct = (1.0 - failures as f64 / offered as f64) * 100.0;
-            let _ = stderr.write_line(&format!(
-                "  Basis reuse:  {hit_pct:.1}% hit ({failures} rejected / {offered} offered)"
-            ));
-        } else if failures > 0 {
-            let _ = stderr.write_line(&format!("  Basis consistency failures: {failures}"));
-        }
-    }
-    if let Some(simplex) = sim.total_simplex_iterations {
-        let _ = stderr.write_line(&format!("  Simplex iter: {simplex}"));
+        let _ = stderr.write_line(&format!(
+            "                Other  {} ({:.0}%)",
+            format_split_duration(other),
+            pct(other)
+        ));
     }
 }
 
@@ -820,10 +887,10 @@ mod tests {
             total_first_try: Some(35_900),
             total_retried: Some(100),
             total_failed: Some(0),
-            total_solve_time_seconds: Some(28.8),
-            total_basis_offered: Some(34_000),
-            total_basis_consistency_failures: Some(200),
-            total_simplex_iterations: Some(1_800_000),
+            total_forward_solve_seconds: Some(12.0),
+            total_backward_solve_seconds: Some(16.8),
+            parallelism: Some(1),
+            initial_gap_percent: Some(28.0),
         }
     }
 
@@ -894,9 +961,7 @@ mod tests {
             total_retried: None,
             total_failed_solves: None,
             total_solve_time_seconds: None,
-            total_basis_offered: None,
-            total_basis_consistency_failures: None,
-            total_simplex_iterations: None,
+            parallelism: None,
         };
         let summary = make_run_summary(Some(sim));
         let s = format_summary_string(&summary);
@@ -1059,9 +1124,7 @@ mod tests {
             total_retried: None,
             total_failed_solves: None,
             total_solve_time_seconds: None,
-            total_basis_offered: None,
-            total_basis_consistency_failures: None,
-            total_simplex_iterations: None,
+            parallelism: None,
         };
         let summary = make_run_summary(Some(sim));
         print_summary(&Term::buffered_stderr(), &summary);

@@ -23,7 +23,9 @@ pub mod solver_stats_writer;
 pub mod stochastic;
 pub mod training_writer;
 
-pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
+pub use convergence_reader::{
+    ConvergenceSummary, read_convergence_summary, read_initial_gap_percent,
+};
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;

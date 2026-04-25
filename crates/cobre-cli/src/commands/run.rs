@@ -995,24 +995,16 @@ fn run_training_phase(
         local_first_try,
         local_retried,
         local_failed,
-        local_solve_time_s,
-        local_basis_offered,
-        local_basis_consistency_failures,
-        local_simplex_iter,
+        local_forward_solve_s,
+        local_backward_solve_s,
     ) = aggregate_solver_stats(&training_result.solver_stats_log, my_rank);
 
-    // Build a temporary delta with the six u64 fields cast to f64 in the
-    // training allreduce buffer below. `lp_solves`, `retry_attempts`, and
-    // `load_model_count` are not packed in the training buffer; they are
-    // guarded by `check_stats_overflow` in the simulation path via
-    // `aggregate_simulation_solver_stats`.
+    // Guard the three u64 counters cast to f64 in the training allreduce
+    // buffer below.
     let training_guard_delta = cobre_sddp::SolverStatsDelta {
         lp_successes: local_first_try.saturating_add(local_retried),
         first_try_successes: local_first_try,
         lp_failures: local_failed,
-        basis_offered: local_basis_offered,
-        basis_consistency_failures: local_basis_consistency_failures,
-        simplex_iterations: local_simplex_iter,
         ..cobre_sddp::SolverStatsDelta::default()
     };
     check_stats_overflow(&training_guard_delta)?;
@@ -1022,12 +1014,10 @@ fn run_training_phase(
         local_first_try as f64,
         local_retried as f64,
         local_failed as f64,
-        local_solve_time_s,
-        local_basis_offered as f64,
-        local_basis_consistency_failures as f64,
-        local_simplex_iter as f64,
+        local_forward_solve_s,
+        local_backward_solve_s,
     ];
-    let mut recv_stats = [0.0_f64; 7];
+    let mut recv_stats = [0.0_f64; 5];
     ctx.comm
         .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
@@ -1038,19 +1028,27 @@ fn run_training_phase(
         total_first_try,
         total_retried,
         total_failed,
-        total_solve_time_s,
-        total_basis_offered,
-        total_basis_consistency_failures,
-        total_simplex_iter,
+        total_forward_solve_s,
+        total_backward_solve_s,
     ) = (
         recv_stats[0] as u64,
         recv_stats[1] as u64,
         recv_stats[2] as u64,
         recv_stats[3],
-        recv_stats[4] as u64,
-        recv_stats[5] as u64,
-        recv_stats[6] as u64,
+        recv_stats[4],
     );
+
+    // Pull iter-1 gap from the in-memory convergence records. Used in the
+    // summary line "Gap: X% (started at Y%)". The records are not yet
+    // persisted to parquet at this point in the run flow, so reading them
+    // from disk would return None; the in-memory copy is authoritative.
+    let initial_gap_percent = training_output
+        .convergence_records
+        .first()
+        .and_then(|r| r.gap_percent);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);
 
     // Print training summary on rank 0.
     let training_summary = TrainingSummary {
@@ -1073,10 +1071,10 @@ fn run_training_phase(
         total_first_try: Some(total_first_try),
         total_retried: Some(total_retried),
         total_failed: Some(total_failed),
-        total_solve_time_seconds: Some(total_solve_time_s),
-        total_basis_offered: Some(total_basis_offered),
-        total_basis_consistency_failures: Some(total_basis_consistency_failures),
-        total_simplex_iterations: Some(total_simplex_iter),
+        total_forward_solve_seconds: Some(total_forward_solve_s),
+        total_backward_solve_seconds: Some(total_backward_solve_s),
+        parallelism: Some(parallelism),
+        initial_gap_percent,
     };
     if !ctx.quiet && ctx.is_root {
         crate::summary::print_training_summary(&ctx.stderr, &training_summary);
@@ -1108,34 +1106,31 @@ fn aggregate_solver_stats(
         cobre_sddp::SolverStatsDelta,
     )],
     my_rank: i32,
-) -> (u64, u64, u64, f64, u64, u64, u64) {
+) -> (u64, u64, u64, f64, f64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
     let mut failed = 0u64;
-    let mut solve_time = 0.0_f64;
-    let mut basis_offered = 0u64;
-    let mut basis_consistency_failures = 0u64;
-    let mut simplex = 0u64;
-    for (_, _, _, _, entry_rank, _, delta) in stats_log {
+    let mut forward_solve_ms = 0.0_f64;
+    let mut backward_solve_ms = 0.0_f64;
+    for (_, phase, _, _, entry_rank, _, delta) in stats_log {
         if *entry_rank != my_rank {
             continue;
         }
         first_try += delta.first_try_successes;
         retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
         failed += delta.lp_failures;
-        solve_time += delta.solve_time_ms;
-        basis_offered += delta.basis_offered;
-        basis_consistency_failures += delta.basis_consistency_failures;
-        simplex += delta.simplex_iterations;
+        match *phase {
+            "forward" => forward_solve_ms += delta.solve_time_ms,
+            "backward" => backward_solve_ms += delta.solve_time_ms,
+            _ => {}
+        }
     }
     (
         first_try,
         retried,
         failed,
-        solve_time / 1000.0,
-        basis_offered,
-        basis_consistency_failures,
-        simplex,
+        forward_solve_ms / 1000.0,
+        backward_solve_ms / 1000.0,
     )
 }
 
@@ -1290,12 +1285,15 @@ fn run_simulation_phase(
         )?;
 
     if !ctx.quiet && ctx.is_root {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);
         print_sim_summary(
             &ctx.stderr,
             n_scenarios,
             sim_time_ms,
             &global_agg,
             &cost_summary,
+            parallelism,
         );
     }
 
@@ -1374,6 +1372,7 @@ fn print_sim_summary(
     sim_time_ms: u64,
     agg: &cobre_sddp::SolverStatsDelta,
     cost_summary: &cobre_sddp::SimulationSummary,
+    parallelism: u32,
 ) {
     crate::summary::print_simulation_summary(
         stderr,
@@ -1389,9 +1388,7 @@ fn print_sim_summary(
             total_retried: Some(agg.lp_successes.saturating_sub(agg.first_try_successes)),
             total_failed_solves: Some(agg.lp_failures),
             total_solve_time_seconds: Some(agg.solve_time_ms / 1000.0),
-            total_basis_offered: Some(agg.basis_offered),
-            total_basis_consistency_failures: Some(agg.basis_consistency_failures),
-            total_simplex_iterations: Some(agg.simplex_iterations),
+            parallelism: Some(parallelism),
         },
     );
 }

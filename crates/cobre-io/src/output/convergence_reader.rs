@@ -115,6 +115,35 @@ impl BatchTotals {
     }
 }
 
+/// Read the first row's `gap_percent` value from `training/convergence.parquet`.
+///
+/// Used by the post-run summary to display "Gap: X% (started at Y%)".
+/// Returns `None` when the file is empty, the gap column is null on the
+/// first row (e.g. upper-bound evaluation disabled), or the file cannot
+/// be read or parsed. Errors are not surfaced because the initial gap is
+/// a cosmetic enhancement, not a load-bearing data point.
+#[must_use]
+pub fn read_initial_gap_percent(path: &Path) -> Option<f64> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .ok()?
+        .build()
+        .ok()?;
+    for batch_result in reader {
+        let batch = batch_result.ok()?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let gap_arr = get_f64_column(&batch, "gap_percent").ok()?;
+        return if gap_arr.is_valid(0) {
+            Some(gap_arr.value(0))
+        } else {
+            None
+        };
+    }
+    None
+}
+
 /// Extract an `Int64` column from `batch` by name, returning a schema error on failure.
 fn get_i64_column<'a>(
     batch: &'a RecordBatch,

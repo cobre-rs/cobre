@@ -78,6 +78,7 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
     let convergence_path = output_dir.join("training/convergence.parquet");
     let convergence = read_convergence_summary(&convergence_path)
         .unwrap_or_else(|_| convergence_fallback(&metadata));
+    let initial_gap_percent = cobre_io::output::read_initial_gap_percent(&convergence_path);
 
     // simulation/metadata.json is optional; missing file is silently skipped.
     let simulation_metadata_path = output_dir.join("simulation/metadata.json");
@@ -85,7 +86,7 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
         read_optional_simulation_metadata(&simulation_metadata_path)?;
 
     // Build and print training summary.
-    let training_summary = build_training_summary(&metadata, &convergence);
+    let training_summary = build_training_summary(&metadata, &convergence, initial_gap_percent);
     let stderr = Term::stderr();
     print_training_summary(&stderr, &training_summary);
 
@@ -120,6 +121,7 @@ fn convergence_fallback(metadata: &TrainingMetadata) -> ConvergenceSummary {
 fn build_training_summary(
     metadata: &TrainingMetadata,
     convergence: &ConvergenceSummary,
+    initial_gap_percent: Option<f64>,
 ) -> TrainingSummary {
     TrainingSummary {
         iterations: u64::from(metadata.iterations.completed),
@@ -137,10 +139,10 @@ fn build_training_summary(
         total_first_try: None,
         total_retried: None,
         total_failed: None,
-        total_solve_time_seconds: None,
-        total_basis_offered: None,
-        total_basis_consistency_failures: None,
-        total_simplex_iterations: None,
+        total_forward_solve_seconds: None,
+        total_backward_solve_seconds: None,
+        parallelism: None,
+        initial_gap_percent,
     }
 }
 
@@ -158,9 +160,7 @@ fn build_simulation_summary(metadata: &SimulationMetadata) -> SimulationSummary 
         total_retried: None,
         total_failed_solves: None,
         total_solve_time_seconds: None,
-        total_basis_offered: None,
-        total_basis_consistency_failures: None,
-        total_simplex_iterations: None,
+        parallelism: None,
     }
 }
 
@@ -271,7 +271,7 @@ mod tests {
         let metadata = make_training_metadata();
         let convergence = make_convergence_summary();
 
-        let summary = build_training_summary(&metadata, &convergence);
+        let summary = build_training_summary(&metadata, &convergence, None);
 
         assert_eq!(summary.iterations, 42);
         assert!(summary.converged);
@@ -315,7 +315,7 @@ mod tests {
             ..make_convergence_summary()
         };
 
-        let summary = build_training_summary(&metadata, &convergence);
+        let summary = build_training_summary(&metadata, &convergence, None);
 
         assert!(summary.gap_percent.abs() < f64::EPSILON);
     }
@@ -327,7 +327,7 @@ mod tests {
         metadata.convergence.achieved = false;
 
         let convergence = make_convergence_summary();
-        let summary = build_training_summary(&metadata, &convergence);
+        let summary = build_training_summary(&metadata, &convergence, None);
 
         assert!(summary.converged_at.is_none());
         assert!(!summary.converged);

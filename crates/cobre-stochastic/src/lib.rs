@@ -41,9 +41,9 @@ pub use sampling::insample::sample_forward;
 pub use sampling::{
     ClassSampleRequest, ClassSampler, ExternalScenarioLibrary, ForwardNoise, ForwardSampler,
     ForwardSamplerConfig, HistoricalScenarioLibrary, SampleRequest, build_forward_sampler,
-    discover_historical_windows, standardize_external_inflow, standardize_external_load,
-    standardize_external_ncs, standardize_historical_windows, validate_external_library,
-    validate_historical_library,
+    discover_historical_windows, pad_library_to_uniform, standardize_external_inflow,
+    standardize_external_load, standardize_external_ncs, standardize_historical_windows,
+    validate_external_library, validate_historical_library,
 };
 pub use tree::{ClassDimensions, OpeningTree, OpeningTreeView, generate_opening_tree};
 

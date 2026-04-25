@@ -99,10 +99,7 @@ fn execute_scaffold(
     })?;
 
     if directory.exists() {
-        let is_nonempty = directory
-            .read_dir()
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
+        let is_nonempty = directory.read_dir().is_ok_and(|mut d| d.next().is_some());
 
         if is_nonempty && !force {
             return Err(CliError::Io {
@@ -256,7 +253,7 @@ mod tests {
         }
     }
 
-    /// AC (ticket-007b): generated `config.json` contains the correct `$schema` URL.
+    /// generated `config.json` contains the correct `$schema` URL.
     #[test]
     fn test_init_config_json_contains_schema_url() {
         let tmp = TempDir::new().unwrap();
@@ -276,7 +273,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): generated `system/buses.json` contains the correct `$schema` URL.
+    /// generated `system/buses.json` contains the correct `$schema` URL.
     #[test]
     fn test_init_system_json_files_contain_schema_urls() {
         let tmp = TempDir::new().unwrap();

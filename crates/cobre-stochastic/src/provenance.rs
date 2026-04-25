@@ -214,6 +214,8 @@ mod tests {
             OpeningTreeInputs {
                 user_tree: Some(user_tree),
                 historical_library: None,
+                external_scenario_counts: None,
+                noise_group_ids: None,
             },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),

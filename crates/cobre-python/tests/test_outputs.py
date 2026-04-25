@@ -16,15 +16,15 @@ import shutil
 import pyarrow.parquet as pq
 import pytest
 
-
 VALID_CASE = "examples/1dtoy"
 D20_CASE = "examples/deterministic/d20-operational-violations"
+D28_CASE = "examples/deterministic/d28-decomp-weekly-monthly"
 
 
 @pytest.fixture(scope="module")
 def run_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     """Run 1dtoy once and return the output directory."""
-    import cobre.run  # noqa: PLC0415
+    import cobre.run
 
     output_dir = tmp_path_factory.mktemp("outputs_test")
     cobre.run.run(VALID_CASE, output_dir=str(output_dir))
@@ -126,7 +126,7 @@ def d20_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     we need the full write path exercised, so we copy the case to a temp
     directory and flip the simulation flag on.
     """
-    import cobre.run  # noqa: PLC0415
+    import cobre.run
 
     src = pathlib.Path(D20_CASE)
     case_dir = tmp_path_factory.mktemp("d20_case")
@@ -167,7 +167,7 @@ def test_hydro_parquet_has_slack_columns(d20_output: pathlib.Path) -> None:
 def test_hydro_slack_values_nonzero_on_violations(d20_output: pathlib.Path) -> None:
     """D20 forces operational violations. At least one scenario/stage must
     have non-zero ``outflow_slack_below_m3s`` and ``turbined_slack_m3s``."""
-    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow as pa
 
     hydros_dir = d20_output / "simulation" / "hydros"
     parquets = sorted(hydros_dir.rglob("*.parquet"))
@@ -188,3 +188,62 @@ def test_hydro_slack_values_nonzero_on_violations(d20_output: pathlib.Path) -> N
         "D20: expected non-zero turbined_slack_m3s in at least one row. "
         "Stage 1 has inflow=10 m3/s but min_turbined=30 m3/s."
     )
+
+
+# ---------------------------------------------------------------------------
+# D28 weekly+monthly parity tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def d28_output(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
+    """Run D28 case via Python bindings and return the output directory."""
+    import cobre.run
+
+    src = pathlib.Path(D28_CASE)
+    case_dir = tmp_path_factory.mktemp("d28_case")
+
+    for item in src.iterdir():
+        dest = case_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest)
+        else:
+            shutil.copy2(item, dest)
+
+    output_dir = tmp_path_factory.mktemp("d28_output")
+    cobre.run.run(str(case_dir), output_dir=str(output_dir))
+    return output_dir
+
+
+def test_d28_runs_and_produces_outputs(d28_output: pathlib.Path) -> None:
+    """D28 case produces all standard training and simulation outputs."""
+    # Training artifacts
+    assert (d28_output / "training" / "_SUCCESS").is_file()
+    assert (d28_output / "training" / "metadata.json").is_file()
+    assert (d28_output / "training" / "convergence.parquet").is_file()
+    assert (d28_output / "training" / "scaling_report.json").is_file()
+
+    # Policy artifacts
+    assert (d28_output / "policy" / "metadata.json").is_file()
+    cuts_dir = d28_output / "policy" / "cuts"
+    assert cuts_dir.is_dir()
+    assert len(list(cuts_dir.iterdir())) > 0, "policy/cuts/ must contain files"
+
+    # Simulation artifacts
+    sim = d28_output / "simulation"
+    assert (sim / "_SUCCESS").is_file()
+    assert (sim / "metadata.json").is_file()
+    for subdir in ("buses", "hydros", "thermals", "costs"):
+        assert (sim / subdir).is_dir(), f"simulation/{subdir}/ must exist"
+
+
+def test_d28_convergence_has_iterations(d28_output: pathlib.Path) -> None:
+    """D28 convergence metadata reports at least 1 training iteration."""
+    meta_path = d28_output / "training" / "metadata.json"
+    meta = json.loads(meta_path.read_text())
+    assert "status" in meta
+    assert meta.get("iterations", {}).get("completed", 0) > 0
+
+    conv_path = d28_output / "training" / "convergence.parquet"
+    table = pq.read_table(conv_path)
+    assert len(table) > 0, "convergence.parquet must have at least one row"

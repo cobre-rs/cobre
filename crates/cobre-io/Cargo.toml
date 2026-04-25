@@ -14,10 +14,13 @@ categories = ["science", "parser-implementations"]
 
 [features]
 schema = ["dep:schemars"]
+## Opt-in to the slow test suite (no slow tests currently in this crate;
+## declaration reserved for workspace consistency).
+slow-tests = []
 
 [dependencies]
-cobre-core = { version = "0.4.4", path = "../cobre-core", features = ["serde"] }
-cobre-stochastic = { version = "0.4.4", path = "../cobre-stochastic" }
+cobre-core = { version = "0.5.0", path = "../cobre-core", features = ["serde"] }
+cobre-stochastic = { version = "0.5.0", path = "../cobre-stochastic" }
 arrow = { version = "58", default-features = false, features = ["prettyprint"] }
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"

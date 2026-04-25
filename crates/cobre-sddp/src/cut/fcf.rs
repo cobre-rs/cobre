@@ -600,7 +600,6 @@ mod tests {
             intercept,
             coefficients,
             is_active,
-            domination_count: 0,
         }
     }
 

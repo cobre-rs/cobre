@@ -28,10 +28,10 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
-//! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
-//! - Lag contiguity (1, 2, …, p for each (hydro, stage)) — Layer 3/5, Epic 06.
-//! - `residual_std_ratio` consistency across lag rows of the same (hydro, stage) — Layer 2/5, Epic 06.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
+//! - `stage_id` existence in the stages registry — Layer 3.
+//! - Lag contiguity (1, 2, …, p for each (hydro, stage)) — Layer 3/5.
+//! - `residual_std_ratio` consistency across lag rows of the same (hydro, stage) — Layer 2/5.
 
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;

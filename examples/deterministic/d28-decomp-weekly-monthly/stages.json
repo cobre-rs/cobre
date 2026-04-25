@@ -1,0 +1,122 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "season_definitions": {
+    "cycle_type": "monthly",
+    "seasons": [
+      { "id": 0, "month_start": 1, "label": "January" },
+      { "id": 1, "month_start": 2, "label": "February" },
+      { "id": 2, "month_start": 3, "label": "March" },
+      { "id": 3, "month_start": 4, "label": "April" },
+      { "id": 4, "month_start": 5, "label": "May" },
+      { "id": 5, "month_start": 6, "label": "June" },
+      { "id": 6, "month_start": 7, "label": "July" },
+      { "id": 7, "month_start": 8, "label": "August" },
+      { "id": 8, "month_start": 9, "label": "September" },
+      { "id": 9, "month_start": 10, "label": "October" },
+      { "id": 10, "month_start": 11, "label": "November" },
+      { "id": 11, "month_start": 12, "label": "December" }
+    ]
+  },
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2026-04-04",
+      "end_date": "2026-04-11",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 1,
+      "sampling_method": "saa"
+    },
+    {
+      "id": 1,
+      "start_date": "2026-04-11",
+      "end_date": "2026-04-18",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 1,
+      "sampling_method": "saa"
+    },
+    {
+      "id": 2,
+      "start_date": "2026-04-18",
+      "end_date": "2026-04-25",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 1,
+      "sampling_method": "saa"
+    },
+    {
+      "id": 3,
+      "start_date": "2026-04-25",
+      "end_date": "2026-05-02",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 1,
+      "sampling_method": "saa"
+    },
+    {
+      "id": 4,
+      "start_date": "2026-05-02",
+      "end_date": "2026-05-09",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 168.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 1,
+      "sampling_method": "saa"
+    },
+    {
+      "id": 5,
+      "start_date": "2026-05-01",
+      "end_date": "2026-06-01",
+      "season_id": 4,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": false },
+      "num_scenarios": 5,
+      "sampling_method": "saa"
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 {
   "$defs": {
     "RawCorrelationGroup": {
-      "description": "A named group of correlated entities with an associated correlation matrix.\n\nAll entities in a group must share the same `entity_type` (same-type constraint, v0.4.0). Mixing entity types (e.g. inflow and load in the same group) produces a runtime validation error.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and have\nall off-diagonal entries in [-1.0, 1.0]. The number of rows (and columns)\nmust equal the number of `entities`.",
+      "description": "A named group of correlated entities with an associated correlation matrix.\n\nAll entities in a group must share the same `type` (same-type constraint).\nMixing entity types (e.g. inflow and load in the same group) produces a\nruntime validation error.\n\nThe `matrix` must be square, symmetric, have 1.0 on every diagonal, and\nhave all off-diagonal entries in [-1.0, 1.0]. The number of rows (and\ncolumns) must equal the number of `entities`.",
       "properties": {
         "entities": {
-          "description": "Ordered list of entity references. The matrix row/column order matches this list. All entities must have the same `type` value; mixing entity types in one group produces a runtime validation error.",
+          "description": "Ordered list of entity references. The matrix row/column order matches\nthis list. All entities must have the same `type` value; mixing entity\ntypes in one group produces a runtime validation error.",
           "items": {
             "$ref": "#/$defs/RawEntity"
           },
@@ -26,7 +26,11 @@
           "type": "string"
         }
       },
-      "required": ["name", "entities", "matrix"],
+      "required": [
+        "name",
+        "entities",
+        "matrix"
+      ],
       "type": "object"
     },
     "RawEntity": {
@@ -38,11 +42,14 @@
           "type": "integer"
         },
         "type": {
-          "description": "Entity type tag. Valid values: `\"inflow\"` (hydro inflow series), `\"load\"` (bus load), `\"ncs\"` (non-controllable source availability).",
+          "description": "Entity type tag. Valid values: `\"inflow\"` (hydro inflow series),\n`\"load\"` (bus load), `\"ncs\"` (non-controllable source availability).",
           "type": "string"
         }
       },
-      "required": ["type", "id"],
+      "required": [
+        "type",
+        "id"
+      ],
       "type": "object"
     },
     "RawProfile": {
@@ -56,14 +63,16 @@
           "type": "array"
         }
       },
-      "required": ["correlation_groups"],
+      "required": [
+        "correlation_groups"
+      ],
       "type": "object"
     },
     "RawScheduleEntry": {
       "description": "Maps a stage to the named correlation profile active for that stage.",
       "properties": {
         "profile_name": {
-          "description": "Name of the correlation profile for this stage. Must match a key in `profiles`.",
+          "description": "Name of the correlation profile for this stage. Must match a key in\n`profiles`.",
           "type": "string"
         },
         "stage_id": {
@@ -72,39 +81,49 @@
           "type": "integer"
         }
       },
-      "required": ["stage_id", "profile_name"],
+      "required": [
+        "stage_id",
+        "profile_name"
+      ],
       "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Spatial correlation model loaded from `scenarios/correlation.json`.\n\nDefines named correlation profiles and an optional stage-to-profile schedule\nfor stochastic scenario generation. Each profile contains one or more\ncorrelation groups, each grouping a set of entity inflow series with a\nsymmetric correlation matrix decomposed via the method specified in the\n`method` field (default: `\"spectral\"`).\n\nProfiles are stored in deterministic order (BTreeMap) regardless of JSON\ndeclaration order. Schedule entries reference profile names that must exist\nin the `profiles` map.",
+  "description": "Spatial correlation model loaded from `scenarios/correlation.json`.\n\nDefines named correlation profiles and an optional stage-to-profile schedule\nfor stochastic scenario generation. Each profile contains one or more\ncorrelation groups, each grouping a set of entity inflow series with a\nsymmetric correlation matrix decomposed via the method specified in the\n`method` field (default: `\"spectral\"`).\n\nProfiles are stored in deterministic order regardless of JSON declaration\norder. Schedule entries reference profile names that must exist in the\n`profiles` map.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "method": {
-      "description": "Decomposition method for the correlation matrix. Must not be empty. Defaults to `\"spectral\"`. `\"cholesky\"` is also accepted for backward compatibility with existing case files. Unrecognized values produce a warning but are not rejected.",
-      "enum": ["spectral", "cholesky"],
+      "description": "Decomposition method for the correlation matrix. Must not be empty.\nDefaults to `\"spectral\"`. `\"cholesky\"` is also accepted for backward\ncompatibility with existing case files. Unrecognized values produce a\nwarning but are not rejected.",
       "type": "string"
     },
     "profiles": {
       "additionalProperties": {
         "$ref": "#/$defs/RawProfile"
       },
-      "description": "Named correlation profiles. Must not be empty. Keys are profile names (e.g. `\"default\"`, `\"wet_season\"`).",
+      "description": "Named correlation profiles. Must not be empty. Keys are profile names\n(e.g. `\"default\"`, `\"wet_season\"`).",
       "type": "object"
     },
     "schedule": {
-      "default": null,
-      "description": "Optional stage-to-profile schedule. Absent or null = empty schedule (single profile applies everywhere).\nEach entry's `profile_name` must match a key in `profiles`.",
+      "description": "Optional stage-to-profile schedule. Absent or null = empty schedule\n(single profile applies everywhere). Each entry's `profile_name` must\nmatch a key in `profiles`.",
       "items": {
         "$ref": "#/$defs/RawScheduleEntry"
       },
-      "type": ["array", "null"]
+      "type": [
+        "array",
+        "null"
+      ]
     }
   },
-  "required": ["method", "profiles"],
+  "required": [
+    "method",
+    "profiles"
+  ],
   "title": "RawCorrelationFile",
   "type": "object"
 }

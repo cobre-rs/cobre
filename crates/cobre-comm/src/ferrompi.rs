@@ -6,10 +6,15 @@
 //!
 //! Key characteristics:
 //!
-//! - Wraps `ferrompi::Communicator` for rank/size queries and collective operations.
-//! - Supports persistent collectives (MPI 4.x) for iterative algorithms such as
-//!   the forward/backward pass, reducing per-call setup overhead by 10–30 %.
-//! - Nonblocking collectives allow overlap of communication with local LP solves.
+//! - Wraps `ferrompi::Communicator` for rank/size queries and
+//!   collective operations.
+//! - Uses native blocking MPI collectives (`MPI_Allreduce`,
+//!   `MPI_Allgatherv`, `MPI_Bcast`); the bitwise-OR allreduce
+//!   used to synchronise the active-window bitmap is dispatched
+//!   directly to `MPI_Allreduce` with `MPI_BOR` (ferrompi 0.4.0).
+//! - Manages the MPI environment lifecycle via the `Mpi` RAII
+//!   guard so `MPI_Finalize` runs only after all communicators
+//!   are freed.
 //!
 //! # Feature gate
 //!
@@ -18,7 +23,7 @@
 
 use crate::BackendError;
 
-/// MPI communication backend wrapping ferrompi v0.3.
+/// MPI communication backend wrapping ferrompi v0.4.
 ///
 /// Holds the MPI environment handle (`Mpi`), the world communicator, and the
 /// intra-node shared communicator. Field declaration order is significant:
@@ -102,6 +107,7 @@ pub struct FerrompiBackend {
 //
 // All actual collective communication goes through `ferrompi::Communicator`, which
 // is already `Send + Sync` (it wraps an integer handle into a C-side table).
+//
 // Therefore it is sound to implement Send and Sync for FerrompiBackend.
 unsafe impl Send for FerrompiBackend {}
 unsafe impl Sync for FerrompiBackend {}
@@ -194,35 +200,13 @@ impl FerrompiBackend {
     pub fn size(&self) -> usize {
         self.size
     }
-
-    /// Returns a reference to the world communicator.
-    // Reserved for use by the `SharedMemoryProvider` trait implementation.
-    #[allow(dead_code)]
-    pub(crate) fn world(&self) -> &ferrompi::Communicator {
-        &self.world
-    }
-
-    /// Returns a reference to the intra-node shared communicator, if present.
-    // Reserved for use by the `SharedMemoryProvider` trait implementation.
-    #[allow(dead_code)]
-    pub(crate) fn shared(&self) -> Option<&ferrompi::Communicator> {
-        self.shared.as_ref()
-    }
 }
 
-/// Convert SLURM metadata from `ferrompi::TopologyInfo` to `crate::SlurmJobInfo`.
-///
 /// Extract a concise library identifier from `MPI_Get_library_version`.
 ///
-/// MPI implementations return widely different formats:
-/// - **Open MPI**: `"Open MPI v4.1.6"` (already clean)
-/// - **MPICH**: `"MPICH Version:      4.3.2\nMPICH Release date: ...\n..."` (multi-line)
-/// - **Intel MPI**: `"Intel(R) MPI Library 2021.6 ..."` (single line, long)
-///
-/// This function extracts the implementation name and version as a single-line
-/// string suitable for display and metadata JSON. For MPICH, it parses
-/// `"MPICH Version: X.Y.Z"` from the first line. For other implementations,
-/// it takes only the first line and trims it.
+/// MPI implementations return widely different formats. This function normalizes
+/// them to a single-line display string: for MPICH, parses `"MPICH Version: X.Y.Z"`;
+/// for others, takes the first line trimmed.
 fn sanitize_library_version(raw: &str) -> String {
     let first_line = raw.lines().next().unwrap_or(raw).trim();
 
@@ -384,6 +368,7 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> crate::Co
             class,
             code,
             message,
+            ..
         } => match class {
             ferrompi::MpiErrorClass::Comm => crate::CommError::InvalidCommunicator,
             ferrompi::MpiErrorClass::Root => crate::CommError::InvalidRoot {
@@ -424,7 +409,6 @@ fn map_ferrompi_error(e: &ferrompi::Error, operation: &'static str) -> crate::Co
 
 /// Map a `cobre_comm::ReduceOp` to the corresponding `ferrompi::ReduceOp`.
 ///
-/// The mapping is one-to-one for the three variants that Cobre currently uses.
 /// `ferrompi::ReduceOp::Prod` is not exposed in the Cobre trait.
 #[cfg(feature = "mpi")]
 fn map_reduce_op(op: crate::ReduceOp) -> ferrompi::ReduceOp {
@@ -432,6 +416,7 @@ fn map_reduce_op(op: crate::ReduceOp) -> ferrompi::ReduceOp {
         crate::ReduceOp::Sum => ferrompi::ReduceOp::Sum,
         crate::ReduceOp::Min => ferrompi::ReduceOp::Min,
         crate::ReduceOp::Max => ferrompi::ReduceOp::Max,
+        crate::ReduceOp::BitwiseOr => ferrompi::ReduceOp::BitwiseOr,
     }
 }
 
@@ -530,6 +515,7 @@ impl crate::Communicator for FerrompiBackend {
                 actual: 0,
             });
         }
+
         let mpi_op = map_reduce_op(op);
         self.world
             .allreduce(send, recv, mpi_op)
@@ -657,6 +643,10 @@ mod tests {
                 map_reduce_op(ReduceOp::Max),
                 ferrompi::ReduceOp::Max
             ));
+            assert!(matches!(
+                map_reduce_op(ReduceOp::BitwiseOr),
+                ferrompi::ReduceOp::BitwiseOr
+            ));
         }
 
         #[test]
@@ -753,6 +743,7 @@ mod tests {
                 class: ferrompi::MpiErrorClass::Comm,
                 code: 5,
                 message: "invalid comm".into(),
+                operation: None,
             };
             let err = map_ferrompi_error(&mpi_err, "barrier");
             assert!(
@@ -767,6 +758,7 @@ mod tests {
                 class: ferrompi::MpiErrorClass::Root,
                 code: 8,
                 message: "invalid root".into(),
+                operation: None,
             };
             let err = map_ferrompi_error(&mpi_err, "broadcast");
             assert!(
@@ -781,6 +773,7 @@ mod tests {
                 class: ferrompi::MpiErrorClass::Buffer,
                 code: 1,
                 message: "bad buffer".into(),
+                operation: None,
             };
             let err = map_ferrompi_error(&mpi_err, "allgatherv");
             assert!(
@@ -801,6 +794,7 @@ mod tests {
                 class: ferrompi::MpiErrorClass::Count,
                 code: 2,
                 message: "bad count".into(),
+                operation: None,
             };
             let err = map_ferrompi_error(&mpi_err, "allgatherv");
             assert!(
@@ -821,6 +815,7 @@ mod tests {
                 class: ferrompi::MpiErrorClass::Rank,
                 code: 6,
                 message: "bad rank".into(),
+                operation: None,
             };
             let err = map_ferrompi_error(&mpi_err, "allreduce");
             assert!(

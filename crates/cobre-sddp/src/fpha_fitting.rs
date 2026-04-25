@@ -229,7 +229,7 @@ impl std::error::Error for FphaFittingError {}
 /// Resolved volume range and discretization counts for the FPHA fitting grid.
 ///
 /// Produced by [`resolve_fitting_bounds`] from an [`FphaColumnLayout`] and the hydro
-/// plant entity. Consumed by the grid construction step in Epic 02.
+/// plant entity. Consumed by the FPHA fitting grid construction step.
 #[derive(Debug)]
 pub(crate) struct FittingBounds {
     /// Resolved lower bound of the fitting volume range (hm³).
@@ -675,8 +675,7 @@ pub(crate) fn evaluate_losses(
 /// Used by the net-head derivative computation to analytically propagate the loss
 /// term through the production function gradient.
 ///
-/// This function is retained for use in integration tests (ticket-010) and
-/// future derivative-based diagnostics.
+/// This function is retained for integration tests and future derivative-based diagnostics.
 #[allow(dead_code)]
 pub(crate) fn evaluate_losses_factor(model: &HydraulicLossesModel) -> f64 {
     match model {
@@ -747,7 +746,7 @@ pub(crate) struct ProductionFunction {
     pub(crate) max_turbined_m3s: f64,
     /// Human-readable plant name for error messages.
     ///
-    /// Retained for future diagnostic use in integration tests (ticket-010).
+    /// Retained for diagnostic use in integration tests.
     #[allow(dead_code)]
     pub(crate) hydro_name: String,
 }
@@ -915,7 +914,7 @@ impl ProductionFunction {
 /// Represents the tangent plane at a specific operating point `(v0, q0, s0)`:
 /// `g(v, q, s) = gamma_0 + gamma_v * v + gamma_q * q + gamma_s * s`
 ///
-/// The intercept is NOT scaled by kappa (contrast with [`cobre_core::FphaPlane`],
+/// The intercept is NOT scaled by kappa (contrast with `cobre_core::FphaPlane`,
 /// where `intercept = gamma_0 * kappa`). By construction, the tangent-point
 /// identity holds: `evaluate(v0, q0, s0) == phi(v0, q0, s0)`.
 #[derive(Debug, Clone, Copy)]
@@ -1214,7 +1213,7 @@ pub(crate) fn eliminate_redundant(
 /// - `pf` — production function used for ground-truth evaluation.
 /// - `bounds` — resolved fitting bounds supplying the volume range and grid counts.
 ///
-/// Retained for use in integration tests (ticket-010) that verify approximation quality.
+/// Retained for integration tests that verify approximation quality.
 #[allow(dead_code)]
 pub(crate) fn compute_max_approximation_error(
     planes: &[RawHyperplane],
@@ -3235,7 +3234,7 @@ mod tests {
 
     // ── RawHyperplane and compute_tangent_plane tests ─────────────────────────
 
-    /// Helper: build the production function used for the ticket-005 acceptance criteria.
+    /// Helper: build the production function used for the acceptance criteria.
     ///
     /// Setup: sloped_forebay (h = 380 + v * 2e-3), linear tailrace (h = 5.5/3000 * q),
     /// constant hydraulic loss = 2.0 m, efficiency = 0.92.
@@ -3261,7 +3260,7 @@ mod tests {
     /// AC: compute_tangent_plane at (v=10000, q=3000, s=0) returns Some and all four
     /// coefficients match the analytical derivation.
     ///
-    /// Expected (from ticket-005 AC section with ke = 9.81e-3 * 0.92):
+    /// Expected (with ke = 9.81e-3 * 0.92):
     ///   phi = ke * 3000 * 392.5
     ///   gamma_v = ke * 3000 * 2e-3
     ///   gamma_q = ke * (392.5 - 5.5) = ke * 387.0
@@ -3770,6 +3769,10 @@ mod tests {
 
     /// AC: given > max_planes_per_hydro non-redundant planes, select_planes returns
     /// exactly max_planes_per_hydro planes.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_reduces_to_target_count() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3791,6 +3794,10 @@ mod tests {
     }
 
     /// AC: approximation error of selected planes is < 2× error of the full set.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_approximation_error_not_catastrophically_worse() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3854,6 +3861,10 @@ mod tests {
 
     /// AC: envelope property preserved after selection — at every grid point,
     /// max_m(plane_m(v,q,s)) >= phi(v,q,s).
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_preserves_envelope_property() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();
@@ -3992,6 +4003,10 @@ mod tests {
     }
 
     /// AC: selected output is a subset of the input planes.
+    #[cfg_attr(
+        not(feature = "slow-tests"),
+        ignore = "slow: run with --features slow-tests"
+    )]
     #[test]
     fn select_planes_output_is_subset_of_input() {
         let (planes, pf, bounds) = non_redundant_planes_for_selection();

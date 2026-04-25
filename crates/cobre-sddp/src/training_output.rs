@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use cobre_core::TrainingEvent;
-use cobre_io::{CutSelectionRecord, CutStatistics, IterationRecord, TrainingOutput};
+use cobre_io::{IterationRecord, RowPoolStatistics, RowSelectionRecord, TrainingOutput};
 
 use crate::{FutureCostFunction, TrainingResult};
 
@@ -25,17 +25,29 @@ use crate::{FutureCostFunction, TrainingResult};
 /// before the final [`IterationRecord`] is assembled.
 #[derive(Default)]
 struct PartialRecord {
+    /// Lower bound from [`TrainingEvent::IterationSummary`].
     lower_bound: f64,
+    /// Upper bound mean from [`TrainingEvent::ForwardSyncComplete`].
     upper_bound_mean: f64,
+    /// Upper bound std from [`TrainingEvent::ForwardSyncComplete`].
     upper_bound_std: f64,
+    /// Gap from [`TrainingEvent::IterationSummary`].
     gap: f64,
+    /// Forward pass wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     forward_ms: u64,
+    /// Backward pass wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     backward_ms: u64,
+    /// Iteration total wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     iteration_time_ms: u64,
+    /// LP solve count from [`TrainingEvent::IterationSummary`].
     lp_solves: u64,
+    /// Forward passes from [`TrainingEvent::ForwardPassComplete`].
     forward_passes: u32,
+    /// Cuts generated from [`TrainingEvent::BackwardPassComplete`].
     cuts_added: u32,
+    /// Rows removed from [`TrainingEvent::PolicySyncComplete`].
     cuts_removed: u32,
+    /// Active rows from [`TrainingEvent::PolicySyncComplete`].
     cuts_active: u32,
     /// Wall-clock time for the `allreduce` bound-statistic reduction
     /// from [`TrainingEvent::ForwardSyncComplete`] (ms).
@@ -43,11 +55,11 @@ struct PartialRecord {
     /// Note: the forward-pass scenario exchange uses `allgatherv`, not
     /// `allreduce`. This field tracks only the scalar bound reduction.
     forward_sync_ms: u64,
-    /// Cut sync allgatherv time from [`TrainingEvent::CutSyncComplete`] (ms).
+    /// Policy sync allgatherv time from [`TrainingEvent::PolicySyncComplete`] (ms).
     cut_sync_ms: u64,
-    /// Local cut selection time from [`TrainingEvent::CutSelectionComplete`] (ms).
+    /// Local row selection time from [`TrainingEvent::PolicySelectionComplete`] (ms).
     cut_selection_ms: u64,
-    /// Allgatherv time from [`TrainingEvent::CutSelectionComplete`] (ms).
+    /// Allgatherv time from [`TrainingEvent::PolicySelectionComplete`] (ms).
     cut_selection_allgatherv_ms: u64,
     /// Cumulative LP solve wall-clock time for this iteration (ms).
     solve_time_ms: f64,
@@ -55,12 +67,20 @@ struct PartialRecord {
     state_exchange_ms: u64,
     /// Cut batch build time from [`TrainingEvent::BackwardPassComplete`] (ms).
     cut_batch_build_ms: u64,
-    /// Rayon overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
-    rayon_overhead_ms: u64,
+    /// Thread-pool setup time from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_setup_ms: u64,
+    /// Load imbalance from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_load_imbalance_ms: u64,
+    /// Scheduling overhead from [`TrainingEvent::BackwardPassComplete`] (ms).
+    bwd_scheduling_overhead_ms: u64,
     /// Lower bound evaluation wall-clock from [`TrainingEvent::IterationSummary`] (ms).
     lower_bound_eval_ms: u64,
-    /// Forward pass rayon overhead from [`TrainingEvent::IterationSummary`] (ms).
-    fwd_rayon_overhead_ms: u64,
+    /// Forward pass setup time from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_setup_ms: u64,
+    /// Forward pass load imbalance from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_load_imbalance_ms: u64,
+    /// Forward pass scheduling overhead from [`TrainingEvent::IterationSummary`] (ms).
+    fwd_scheduling_overhead_ms: u64,
 }
 
 /// Accumulate per-iteration partial records from the event log.
@@ -87,7 +107,9 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 lp_solves,
                 solve_time_ms,
                 lower_bound_eval_ms,
-                fwd_rayon_overhead_ms,
+                fwd_setup_time_ms,
+                fwd_load_imbalance_ms,
+                fwd_scheduling_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
@@ -100,7 +122,9 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.lp_solves = *lp_solves;
                 record.solve_time_ms = *solve_time_ms;
                 record.lower_bound_eval_ms = *lower_bound_eval_ms;
-                record.fwd_rayon_overhead_ms = *fwd_rayon_overhead_ms;
+                record.fwd_setup_ms = *fwd_setup_time_ms;
+                record.fwd_load_imbalance_ms = *fwd_load_imbalance_ms;
+                record.fwd_scheduling_overhead_ms = *fwd_scheduling_overhead_ms;
             }
 
             TrainingEvent::ForwardSyncComplete {
@@ -125,36 +149,40 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
 
             TrainingEvent::BackwardPassComplete {
                 iteration,
-                cuts_generated,
+                rows_generated,
                 state_exchange_time_ms,
-                cut_batch_build_time_ms,
-                rayon_overhead_time_ms,
+                row_batch_build_time_ms,
+                setup_time_ms,
+                load_imbalance_ms,
+                scheduling_overhead_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
-                record.cuts_added = *cuts_generated;
+                record.cuts_added = *rows_generated;
                 record.state_exchange_ms = *state_exchange_time_ms;
-                record.cut_batch_build_ms = *cut_batch_build_time_ms;
-                record.rayon_overhead_ms = *rayon_overhead_time_ms;
+                record.cut_batch_build_ms = *row_batch_build_time_ms;
+                record.bwd_setup_ms = *setup_time_ms;
+                record.bwd_load_imbalance_ms = *load_imbalance_ms;
+                record.bwd_scheduling_overhead_ms = *scheduling_overhead_ms;
             }
 
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration,
-                cuts_active,
-                cuts_removed,
+                rows_active,
+                rows_removed,
                 sync_time_ms,
                 ..
             } => {
                 let record = partials.entry(*iteration).or_default();
-                record.cuts_active = *cuts_active;
-                record.cuts_removed = *cuts_removed;
+                record.cuts_active = *rows_active;
+                record.cuts_removed = *rows_removed;
                 record.cut_sync_ms = *sync_time_ms;
-                peak_active = peak_active.max(u64::from(*cuts_active));
+                peak_active = peak_active.max(u64::from(*rows_active));
             }
 
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration,
-                cuts_deactivated,
+                rows_deactivated,
                 selection_time_ms,
                 allgatherv_time_ms,
                 ..
@@ -163,7 +191,7 @@ fn accumulate_partial_records(events: &[TrainingEvent]) -> (BTreeMap<u64, Partia
                 record.cut_selection_ms = *selection_time_ms;
                 record.cut_selection_allgatherv_ms = *allgatherv_time_ms;
                 // Adjust cuts_active to reflect the post-selection count.
-                record.cuts_active = record.cuts_active.saturating_sub(*cuts_deactivated);
+                record.cuts_active = record.cuts_active.saturating_sub(*rows_deactivated);
             }
 
             _ => {}
@@ -223,8 +251,12 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
         time_lower_bound_ms: partial.lower_bound_eval_ms,
         time_state_exchange_ms: partial.state_exchange_ms,
         time_cut_batch_build_ms: partial.cut_batch_build_ms,
-        time_bwd_rayon_overhead_ms: partial.rayon_overhead_ms,
-        time_fwd_rayon_overhead_ms: partial.fwd_rayon_overhead_ms,
+        time_bwd_setup_ms: partial.bwd_setup_ms,
+        time_bwd_load_imbalance_ms: partial.bwd_load_imbalance_ms,
+        time_bwd_scheduling_overhead_ms: partial.bwd_scheduling_overhead_ms,
+        time_fwd_setup_ms: partial.fwd_setup_ms,
+        time_fwd_load_imbalance_ms: partial.fwd_load_imbalance_ms,
+        time_fwd_scheduling_overhead_ms: partial.fwd_scheduling_overhead_ms,
         time_overhead_ms: overhead_ms,
         solve_time_ms: partial.solve_time_ms,
     }
@@ -243,18 +275,19 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 /// use cobre_sddp::{build_training_output, TrainingResult, FutureCostFunction};
 /// use cobre_core::TrainingEvent;
 ///
-/// let result = TrainingResult {
-///     final_lb: 100.0,
-///     final_ub: 110.0,
-///     final_ub_std: 5.0,
-///     final_gap: 0.091,
-///     iterations: 1,
-///     reason: "iteration_limit".to_string(),
-///     total_time_ms: 500,
-///     basis_cache: Vec::new(),
-///     solver_stats_log: Vec::new(),
-///     visited_archive: None,
-/// };
+/// let result = TrainingResult::new(
+///     100.0,
+///     110.0,
+///     5.0,
+///     0.091,
+///     1,
+///     "iteration_limit".to_string(),
+///     500,
+///     Vec::new(),
+///     Vec::new(),
+///     None,
+///     None,
+/// );
 ///
 /// let events = vec![TrainingEvent::IterationSummary {
 ///     iteration: 1,
@@ -268,7 +301,9 @@ fn partial_to_iteration_record(iter: u64, partial: &PartialRecord) -> IterationR
 ///     lp_solves: 60,
 ///     solve_time_ms: 0.0,
 ///     lower_bound_eval_ms: 0,
-///     fwd_rayon_overhead_ms: 0,
+///     fwd_setup_time_ms: 0,
+///     fwd_load_imbalance_ms: 0,
+///     fwd_scheduling_overhead_ms: 0,
 /// }];
 ///
 /// let fcf = FutureCostFunction::new(2, 1, 4, 1, &[0; 2]);
@@ -303,7 +338,7 @@ pub fn build_training_output(
         .map(|(iter, partial)| partial_to_iteration_record(iter, &partial))
         .collect();
 
-    let cut_stats = CutStatistics {
+    let cut_stats = RowPoolStatistics {
         total_generated: fcf.pools.iter().map(|p| p.populated_count as u64).sum(),
         total_active: fcf.total_active_cuts() as u64,
         peak_active,
@@ -312,6 +347,11 @@ pub fn build_training_output(
     let converged = result.reason == crate::stopping_rule::RULE_BOUND_STALLING
         || result.reason == crate::stopping_rule::RULE_SIMULATION_BASED;
 
+    // `final_gap_percent` is reported only when `final_lb > 0.0`.
+    // For a non-positive lower bound the gap percentage is either
+    // undefined (`final_lb == 0.0`) or sign-inverted
+    // (`final_lb < 0.0`), so the writer reports `None` rather than
+    // a value that would mislead downstream consumers.
     let final_gap_percent = if result.final_lb > 0.0 {
         Some(result.final_gap * 100.0)
     } else {
@@ -322,24 +362,23 @@ pub fn build_training_output(
     let iterations_completed = result.iterations as u32;
 
     #[allow(clippy::cast_possible_truncation)]
-    let cut_selection_records: Vec<CutSelectionRecord> = events
+    let cut_selection_records: Vec<RowSelectionRecord> = events
         .iter()
         .filter_map(|event| {
-            if let TrainingEvent::CutSelectionComplete {
+            if let TrainingEvent::PolicySelectionComplete {
                 iteration,
                 per_stage,
                 ..
             } = event
             {
-                Some(per_stage.iter().map(move |rec| CutSelectionRecord {
+                Some(per_stage.iter().map(move |rec| RowSelectionRecord {
                     iteration: *iteration as u32,
                     stage: rec.stage,
-                    cuts_populated: rec.cuts_populated,
-                    cuts_active_before: rec.cuts_active_before,
-                    cuts_deactivated: rec.cuts_deactivated,
-                    cuts_active_after: rec.cuts_active_after,
+                    cuts_populated: rec.rows_populated,
+                    cuts_active_before: rec.rows_active_before,
+                    cuts_deactivated: rec.rows_deactivated,
+                    cuts_active_after: rec.rows_active_after,
                     selection_time_ms: rec.selection_time_ms,
-                    active_after_angular: rec.active_after_angular,
                     budget_evicted: rec.budget_evicted,
                     active_after_budget: rec.active_after_budget,
                 }))
@@ -349,6 +388,8 @@ pub fn build_training_output(
         })
         .flatten()
         .collect();
+
+    let worker_timing_records = build_worker_timing_records(events, &convergence_records);
 
     TrainingOutput {
         convergence_records,
@@ -361,7 +402,108 @@ pub fn build_training_output(
         total_time_ms: result.total_time_ms,
         cut_stats,
         cut_selection_records,
+        worker_timing_records,
     }
+}
+
+/// Build the per-`(iteration, rank, worker_id)` timing rows for
+/// `training/timing/iterations.parquet`.
+///
+/// For each completed iteration:
+/// - One rank-aggregated row per rank (`worker_id=None`) carries the rank-only
+///   columns (`cut_selection`, `mpi_allreduce`, `cut_sync`, `lower_bound`,
+///   `state_exchange`, `cut_batch_build`, the synthetic
+///   `load_imbalance`/`scheduling_overhead` pair, and `overhead`).
+/// - One per-worker row per `(rank, worker_id)` carries the parallel-region
+///   contributions (`forward_wall`, `backward_wall`, `fwd_setup`, `bwd_setup`)
+///   merged from the `WorkerTiming{Forward}` and `WorkerTiming{Backward}` events.
+///
+/// `SUM(col) GROUP BY iteration` recovers the single-row totals.
+fn build_worker_timing_records(
+    events: &[TrainingEvent],
+    convergence_records: &[IterationRecord],
+) -> Vec<cobre_io::WorkerTimingRecord> {
+    use cobre_core::{
+        WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WORKER_TIMING_SLOT_COUNT,
+        WORKER_TIMING_SLOT_FWD_SETUP, WORKER_TIMING_SLOT_FWD_WALL,
+    };
+
+    // Per-(iteration, rank, worker_id) merged timings for the per-worker rows.
+    // The BTreeMap value is the 16-wide writer record that bridges the four named
+    // WorkerPhaseTimings fields and the unchanged Parquet schema.
+    let mut per_worker: BTreeMap<(u32, i32, i32), [u64; WORKER_TIMING_SLOT_COUNT]> =
+        BTreeMap::new();
+    for event in events {
+        if let TrainingEvent::WorkerTiming {
+            iteration,
+            rank,
+            worker_id,
+            timings,
+            ..
+        } = event
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            let iter_u32 = *iteration as u32;
+            let entry = per_worker
+                .entry((iter_u32, *rank, *worker_id))
+                .or_insert([0_u64; WORKER_TIMING_SLOT_COUNT]);
+            // Map the four named fields into the corresponding writer-record slots.
+            // Forward fills FWD_WALL/FWD_SETUP (both 0 on Backward events).
+            // Backward fills BWD_WALL/BWD_SETUP (both 0 on Forward events).
+            // All other slots remain 0 on per-worker rows; rank-aggregated rows
+            // carry the rank-only columns.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                entry[WORKER_TIMING_SLOT_FWD_WALL] = entry[WORKER_TIMING_SLOT_FWD_WALL]
+                    .saturating_add(timings.forward_wall_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_BWD_WALL] = entry[WORKER_TIMING_SLOT_BWD_WALL]
+                    .saturating_add(timings.backward_wall_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_BWD_SETUP] = entry[WORKER_TIMING_SLOT_BWD_SETUP]
+                    .saturating_add(timings.bwd_setup_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_FWD_SETUP] = entry[WORKER_TIMING_SLOT_FWD_SETUP]
+                    .saturating_add(timings.fwd_setup_ms.max(0.0).round() as u64);
+            }
+        }
+    }
+
+    let mut out: Vec<cobre_io::WorkerTimingRecord> =
+        Vec::with_capacity(convergence_records.len() + per_worker.len());
+
+    // Rank-aggregated rows: one per iteration. Single-rank in current builds —
+    // multi-rank emits one rank-aggregated row per rank when ranks > 0
+    // produce IterationSummary events (rank-0-only by design today).
+    for record in convergence_records {
+        let mut timings = [0_u64; WORKER_TIMING_SLOT_COUNT];
+        timings[2] = record.time_cut_selection_ms;
+        timings[3] = record.time_mpi_allreduce_ms;
+        timings[4] = record.time_cut_sync_ms;
+        timings[5] = record.time_lower_bound_ms;
+        timings[6] = record.time_state_exchange_ms;
+        timings[7] = record.time_cut_batch_build_ms;
+        timings[9] = record.time_bwd_load_imbalance_ms;
+        timings[10] = record.time_bwd_scheduling_overhead_ms;
+        timings[12] = record.time_fwd_load_imbalance_ms;
+        timings[13] = record.time_fwd_scheduling_overhead_ms;
+        timings[14] = record.time_overhead_ms;
+        out.push(cobre_io::WorkerTimingRecord {
+            iteration: record.iteration,
+            rank: 0,
+            worker_id: None,
+            timings,
+        });
+    }
+
+    // Per-worker rows.
+    for ((iteration, rank, worker_id), timings) in per_worker {
+        out.push(cobre_io::WorkerTimingRecord {
+            iteration,
+            rank,
+            worker_id: Some(worker_id),
+            timings,
+        });
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -373,18 +515,19 @@ mod tests {
     use crate::{FutureCostFunction, TrainingResult};
 
     fn make_result(reason: &str, lb: f64, ub: f64, gap: f64, iterations: u64) -> TrainingResult {
-        TrainingResult {
-            final_lb: lb,
-            final_ub: ub,
-            final_ub_std: 0.0,
-            final_gap: gap,
+        TrainingResult::new(
+            lb,
+            ub,
+            0.0,
+            gap,
             iterations,
-            reason: reason.to_string(),
-            total_time_ms: 1_000,
-            basis_cache: Vec::new(),
-            solver_stats_log: Vec::new(),
-            visited_archive: None,
-        }
+            reason.to_string(),
+            1_000,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
     }
 
     fn make_iteration_summary(iter: u64, lb: f64, ub: f64, gap: f64) -> TrainingEvent {
@@ -400,7 +543,9 @@ mod tests {
             lp_solves: 60,
             solve_time_ms: 0.0,
             lower_bound_eval_ms: 0,
-            fwd_rayon_overhead_ms: 0,
+            fwd_setup_time_ms: 0,
+            fwd_load_imbalance_ms: 0,
+            fwd_scheduling_overhead_ms: 0,
         }
     }
 
@@ -596,18 +741,20 @@ mod tests {
             make_iteration_summary(1, 100.0, 110.0, 0.1),
             TrainingEvent::BackwardPassComplete {
                 iteration: 1,
-                cuts_generated: 12,
+                rows_generated: 12,
                 stages_processed: 3,
                 elapsed_ms: 80,
                 state_exchange_time_ms: 0,
-                cut_batch_build_time_ms: 0,
-                rayon_overhead_time_ms: 0,
+                row_batch_build_time_ms: 0,
+                setup_time_ms: 0,
+                load_imbalance_ms: 0,
+                scheduling_overhead_ms: 0,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 12,
-                cuts_active: 24,
-                cuts_removed: 2,
+                rows_distributed: 12,
+                rows_active: 24,
+                rows_removed: 2,
                 sync_time_ms: 4,
             },
         ];
@@ -626,27 +773,27 @@ mod tests {
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 3);
         let events = vec![
             make_iteration_summary(1, 95.0, 112.0, 0.15),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
             make_iteration_summary(2, 98.0, 111.0, 0.12),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 2,
-                cuts_distributed: 10,
-                cuts_active: 20,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 20,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
             make_iteration_summary(3, 100.0, 110.0, 0.1),
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 3,
-                cuts_distributed: 5,
-                cuts_active: 18, // peak was 20 in iteration 2
-                cuts_removed: 7,
+                rows_distributed: 5,
+                rows_active: 18, // peak was 20 in iteration 2
+                rows_removed: 7,
                 sync_time_ms: 2,
             },
         ];
@@ -693,7 +840,9 @@ mod tests {
                 lp_solves: 60,
                 solve_time_ms: 0.0,
                 lower_bound_eval_ms: 0,
-                fwd_rayon_overhead_ms: 0,
+                fwd_setup_time_ms: 0,
+                fwd_load_imbalance_ms: 0,
+                fwd_scheduling_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -701,16 +850,16 @@ mod tests {
                 global_ub_std: 2.0,
                 sync_time_ms: 7,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 5,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 1,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
@@ -736,11 +885,11 @@ mod tests {
         );
         assert_eq!(
             rec.time_cut_sync_ms, 5,
-            "cut_sync must come from CutSyncComplete"
+            "cut_sync must come from PolicySyncComplete"
         );
         assert_eq!(
             rec.time_cut_selection_ms, 8,
-            "selection must come from CutSelectionComplete"
+            "selection must come from PolicySelectionComplete"
         );
     }
 
@@ -768,7 +917,9 @@ mod tests {
                 lp_solves: 60,
                 solve_time_ms: 0.0,
                 lower_bound_eval_ms: 3,
-                fwd_rayon_overhead_ms: 0,
+                fwd_setup_time_ms: 0,
+                fwd_load_imbalance_ms: 0,
+                fwd_scheduling_overhead_ms: 0,
             },
             TrainingEvent::ForwardSyncComplete {
                 iteration: 1,
@@ -776,16 +927,16 @@ mod tests {
                 global_ub_std: 2.0,
                 sync_time_ms: 7,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 10,
-                cuts_active: 10,
-                cuts_removed: 0,
+                rows_distributed: 10,
+                rows_active: 10,
+                rows_removed: 0,
                 sync_time_ms: 5,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 1,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 8,
                 allgatherv_time_ms: 2,
@@ -823,7 +974,9 @@ mod tests {
             lp_solves: 5,
             solve_time_ms: 0.0,
             lower_bound_eval_ms: 0,
-            fwd_rayon_overhead_ms: 0,
+            fwd_setup_time_ms: 0,
+            fwd_load_imbalance_ms: 0,
+            fwd_scheduling_overhead_ms: 0,
         }];
         let fcf = make_empty_fcf();
 
@@ -838,39 +991,37 @@ mod tests {
 
     #[test]
     fn cut_selection_records_extracted_from_events() {
-        use cobre_core::StageSelectionRecord;
+        use cobre_core::StageRowSelectionRecord;
 
         let result = make_result("iteration_limit", 100.0, 110.0, 0.1, 3);
         let events = vec![
             make_iteration_summary(1, 95.0, 112.0, 0.15),
             make_iteration_summary(2, 98.0, 111.0, 0.12),
             make_iteration_summary(3, 100.0, 110.0, 0.1),
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 2,
-                cuts_deactivated: 3,
+                rows_deactivated: 3,
                 stages_processed: 2,
                 selection_time_ms: 10,
                 allgatherv_time_ms: 0,
                 per_stage: vec![
-                    StageSelectionRecord {
+                    StageRowSelectionRecord {
                         stage: 0,
-                        cuts_populated: 5,
-                        cuts_active_before: 5,
-                        cuts_deactivated: 0,
-                        cuts_active_after: 5,
+                        rows_populated: 5,
+                        rows_active_before: 5,
+                        rows_deactivated: 0,
+                        rows_active_after: 5,
                         selection_time_ms: 0.0,
-                        active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
                     },
-                    StageSelectionRecord {
+                    StageRowSelectionRecord {
                         stage: 1,
-                        cuts_populated: 8,
-                        cuts_active_before: 8,
-                        cuts_deactivated: 3,
-                        cuts_active_after: 5,
+                        rows_populated: 8,
+                        rows_active_before: 8,
+                        rows_deactivated: 3,
+                        rows_active_after: 5,
                         selection_time_ms: 2.5,
-                        active_after_angular: None,
                         budget_evicted: None,
                         active_after_budget: None,
                     },

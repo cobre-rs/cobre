@@ -34,6 +34,79 @@
 //!
 //! See [`TrainingEvent`] for the full variant catalogue.
 
+use std::borrow::Cow;
+
+/// Phase discriminant for [`TrainingEvent::WorkerTiming`].
+///
+/// Distinguishes whether timing was captured during forward or backward pass.
+#[derive(Clone, Debug)]
+pub enum WorkerTimingPhase {
+    /// Timing captured from the forward-pass parallel region.
+    Forward,
+    /// Timing captured from the backward-pass parallel region.
+    Backward,
+}
+
+/// Number of timing slots in the 16-wide `[u64; 16]` writer record
+/// (`cobre_io::WorkerTimingRecord`).
+///
+/// Per-worker event payloads now use [`WorkerPhaseTimings`] (4 named fields)
+/// rather than a sparse 16-element array. The constants below remain the
+/// canonical bridge between the four named fields and the writer-record slot
+/// positions — the Parquet schema is unchanged.
+pub const WORKER_TIMING_SLOT_COUNT: usize = 16;
+
+/// Writer-record slot index for `forward_wall_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::forward_wall_ms`]
+/// into slot 0 of `cobre_io::WorkerTimingRecord`.
+pub const WORKER_TIMING_SLOT_FWD_WALL: usize = 0;
+
+/// Writer-record slot index for `backward_wall_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::backward_wall_ms`]
+/// into slot 1 of `cobre_io::WorkerTimingRecord`.
+pub const WORKER_TIMING_SLOT_BWD_WALL: usize = 1;
+
+/// Writer-record slot index for `bwd_setup_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::bwd_setup_ms`]
+/// into slot 8 of `cobre_io::WorkerTimingRecord`.
+pub const WORKER_TIMING_SLOT_BWD_SETUP: usize = 8;
+
+/// Writer-record slot index for `fwd_setup_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::fwd_setup_ms`]
+/// into slot 11 of `cobre_io::WorkerTimingRecord`.
+pub const WORKER_TIMING_SLOT_FWD_SETUP: usize = 11;
+
+/// Per-worker timing payload for [`TrainingEvent::WorkerTiming`].
+///
+/// Names the four populated values explicitly. Replaces the previous
+/// `[f64; 16]` payload where 12 of 16 slots were always zero on per-worker
+/// events. `WorkerPhaseTimings` is `4 × f64 = 32 bytes`; the previous
+/// payload was 128 bytes (75% waste).
+///
+/// On `Forward`-phase events, `forward_wall_ms` and `fwd_setup_ms` are
+/// populated; the backward fields are 0. On `Backward`-phase events,
+/// `backward_wall_ms` and `bwd_setup_ms` are populated; the forward fields
+/// are 0.
+///
+/// The writer adapter in `training_output.rs` maps these four fields into the
+/// unchanged 16-wide `cobre_io::WorkerTimingRecord` via the
+/// `WORKER_TIMING_SLOT_*` constants, preserving the Parquet output schema.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WorkerPhaseTimings {
+    /// Forward-pass wall time in ms (populated on Forward; 0 on Backward).
+    pub forward_wall_ms: f64,
+    /// Backward-pass wall time in ms (populated on Backward; 0 on Forward).
+    pub backward_wall_ms: f64,
+    /// Forward setup time in ms (populated on Forward; 0 on Backward).
+    pub fwd_setup_ms: f64,
+    /// Backward setup time in ms (populated on Backward; 0 on Forward).
+    pub bwd_setup_ms: f64,
+}
+
 /// Result of evaluating a single stopping rule at a given iteration.
 ///
 /// The [`TrainingEvent::ConvergenceUpdate`] variant carries a [`Vec`] of these,
@@ -45,47 +118,48 @@ pub struct StoppingRuleResult {
     /// Rule identifier matching the variant name in the stopping rules config
     /// (e.g., `"gap_tolerance"`, `"bound_stalling"`, `"iteration_limit"`,
     /// `"time_limit"`, `"simulation"`).
-    pub rule_name: String,
+    ///
+    /// Always a compile-time `&'static str` constant. No heap allocation
+    /// occurs on the hot path.
+    pub rule_name: &'static str,
     /// Whether this rule's condition is satisfied at the current iteration.
     pub triggered: bool,
     /// Human-readable description of the rule's current state
     /// (e.g., `"gap 0.42% <= 1.00%"`, `"LB stable for 12/10 iterations"`).
-    pub detail: String,
+    ///
+    /// Use [`Cow::Borrowed`] for compile-time string literals and
+    /// [`Cow::Owned`] for runtime `format!(...)` results.
+    pub detail: Cow<'static, str>,
 }
 
-/// Per-stage cut selection statistics for one iteration.
+/// Per-stage row-selection statistics for one iteration.
 ///
-/// Each instance describes the cut lifecycle at a single stage after a
-/// selection step: how many cuts existed, how many were active before
+/// Each instance describes the row-selection lifecycle at a single stage after a
+/// selection step: how many rows existed, how many were active before
 /// selection, how many were deactivated, and how many remain active.
 ///
-/// The three optional fields capture the multi-step pipeline state:
-/// `active_after_angular` is set after Step 4b (angular dominance pruning),
-/// `budget_evicted` and `active_after_budget` are set after Step 4c (budget
-/// enforcement). All three are `None` when the corresponding step is disabled.
+/// The two optional fields capture the budget-enforcement pipeline state:
+/// `budget_evicted` and `active_after_budget` are set after Step 4b (budget
+/// enforcement). Both are `None` when budget enforcement is disabled.
 #[derive(Debug, Clone)]
-pub struct StageSelectionRecord {
+pub struct StageRowSelectionRecord {
     /// 0-based stage index.
     pub stage: u32,
-    /// Total cuts ever generated at this stage (high-water mark).
-    pub cuts_populated: u32,
-    /// Active cuts before selection ran.
-    pub cuts_active_before: u32,
-    /// Cuts deactivated by selection at this stage.
-    pub cuts_deactivated: u32,
-    /// Active cuts after selection.
-    pub cuts_active_after: u32,
+    /// Total rows ever generated at this stage (high-water mark).
+    pub rows_populated: u32,
+    /// Active rows before selection ran.
+    pub rows_active_before: u32,
+    /// Rows deactivated by selection at this stage.
+    pub rows_deactivated: u32,
+    /// Active rows after selection.
+    pub rows_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
-    /// Active cuts after angular dominance pruning (Step 4b).
-    ///
-    /// `None` when angular pruning is disabled or has not run yet.
-    pub active_after_angular: Option<u32>,
-    /// Cuts evicted by budget enforcement (Step 4c) at this stage.
+    /// Rows evicted by budget enforcement (Step 4b) at this stage.
     ///
     /// `None` when budget enforcement is disabled.
     pub budget_evicted: Option<u32>,
-    /// Active cuts after budget enforcement (Step 4c).
+    /// Active cuts after budget enforcement (Step 4b).
     ///
     /// `None` when budget enforcement is disabled.
     pub active_after_budget: Option<u32>,
@@ -94,23 +168,24 @@ pub struct StageSelectionRecord {
 /// Typed events emitted by an iterative optimization training loop and
 /// simulation runner.
 ///
-/// The enum has 14 variants: 10 per-iteration events (one per lifecycle step)
+/// The enum has 15 variants: 11 per-iteration events (one per lifecycle step)
 /// and 4 lifecycle events (emitted once per training or simulation run).
 ///
-/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c)
+/// ## Per-iteration events (steps 1–7 + 4a + 4b + 4c + per-worker)
 ///
 /// | Step | Variant                  | When emitted                                           |
 /// |------|--------------------------|--------------------------------------------------------|
 /// | 1    | [`Self::ForwardPassComplete`]  | Local forward pass done                                |
 /// | 2    | [`Self::ForwardSyncComplete`]  | Global allreduce of bounds done                        |
 /// | 3    | [`Self::BackwardPassComplete`] | Backward sweep done                                    |
-/// | 4    | [`Self::CutSyncComplete`]      | Cut allgatherv done                                    |
-/// | 4a   | [`Self::CutSelectionComplete`] | Cut selection done (conditional on `should_run`)       |
-/// | 4b   | [`Self::AngularPruningComplete`] | Angular dominance pruning done (conditional on `should_run`) |
-/// | 4c   | [`Self::BudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
+/// | 4    | [`Self::PolicySyncComplete`]      | Row-sync allgatherv done                                    |
+/// | 4a   | [`Self::PolicySelectionComplete`] | Row-selection done (conditional on `should_run`)       |
+/// | 4b   | [`Self::PolicyBudgetEnforcementComplete`] | Budget cap enforcement done (every iteration when budget is set) |
+/// | 4c   | [`Self::PolicyTemplateBakeComplete`] | Per-stage baked template rebuild done (every iteration) |
 /// | 5    | [`Self::ConvergenceUpdate`]    | Stopping rules evaluated                               |
 /// | 6    | [`Self::CheckpointComplete`]   | Checkpoint written (conditional on checkpoint interval)|
 /// | 7    | [`Self::IterationSummary`]     | End-of-iteration aggregated summary                    |
+/// | pw   | [`Self::WorkerTiming`]         | Per-worker timing (2 × n\_workers per iteration)       |
 ///
 /// ## Lifecycle events
 ///
@@ -118,6 +193,7 @@ pub struct StageSelectionRecord {
 /// |------------------------------|-------------------------------------|
 /// | [`Self::TrainingStarted`]    | Training loop entry                 |
 /// | [`Self::TrainingFinished`]   | Training loop exit                  |
+/// | [`Self::SimulationStarted`]  | Simulation loop entry               |
 /// | [`Self::SimulationProgress`] | Simulation batch completion         |
 /// | [`Self::SimulationFinished`] | Simulation completion               |
 #[derive(Clone, Debug)]
@@ -154,13 +230,13 @@ pub enum TrainingEvent {
 
     /// Step 3: Backward pass completed for this iteration.
     ///
-    /// Emitted after the full backward sweep that generates new cuts for each
+    /// Emitted after the full backward sweep that generates new rows for each
     /// stage.
     BackwardPassComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of new cuts generated across all stages.
-        cuts_generated: u32,
+        /// Number of new rows generated across all stages.
+        rows_generated: u32,
         /// Number of stages processed in the backward sweep.
         stages_processed: u32,
         /// Wall-clock time for the backward pass, in milliseconds.
@@ -168,91 +244,98 @@ pub enum TrainingEvent {
         /// Wall-clock time for state exchange (`allgatherv`) across all stages,
         /// in milliseconds.
         state_exchange_time_ms: u64,
-        /// Wall-clock time for cut batch assembly (`build_cut_row_batch_into`)
+        /// Wall-clock time for row-batch assembly (`build_row_batch_into`)
         /// across all stages, in milliseconds.
-        cut_batch_build_time_ms: u64,
-        /// Estimated rayon barrier + scheduling overhead across all stages,
-        /// in milliseconds.
-        rayon_overhead_time_ms: u64,
+        row_batch_build_time_ms: u64,
+        /// Aggregate non-solve work inside the parallel region accumulated across
+        /// all stages and all workers, in milliseconds.
+        ///
+        /// Computed per stage as the sum over all workers of
+        /// `load_model + add_rows + set_bounds + basis_set` times. Because it
+        /// sums across workers, this value can exceed `parallel_wall_ms` when
+        /// there are multiple workers. It is an aggregate cost metric, not a
+        /// wall-time slice.
+        setup_time_ms: u64,
+        /// Estimated load imbalance across worker threads (wall minus ideal
+        /// parallel work), in milliseconds.
+        load_imbalance_ms: u64,
+        /// Scheduling and synchronisation overhead not attributable to solve
+        /// work or load imbalance, in milliseconds.
+        scheduling_overhead_ms: u64,
     },
 
-    /// Step 4: Cut synchronization (allgatherv) completed.
+    /// Step 4: Policy row synchronization (allgatherv) completed.
     ///
-    /// Emitted after new cuts from all ranks have been gathered and distributed
+    /// Emitted after new rows from all ranks have been gathered and distributed
     /// to every rank via allgatherv.
-    CutSyncComplete {
+    PolicySyncComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of cuts distributed to all ranks via allgatherv.
-        cuts_distributed: u32,
-        /// Total number of active cuts in the approximation after synchronization.
-        cuts_active: u32,
-        /// Number of cuts removed during synchronization.
-        cuts_removed: u32,
+        /// Number of rows distributed to all ranks via allgatherv.
+        rows_distributed: u32,
+        /// Total number of active rows in the approximation after synchronization.
+        rows_active: u32,
+        /// Number of rows removed during synchronization.
+        rows_removed: u32,
         /// Wall-clock time for the synchronization, in milliseconds.
         sync_time_ms: u64,
     },
 
-    /// Step 4a: Cut selection completed.
+    /// Step 4a: Policy row selection completed.
     ///
-    /// Only emitted on iterations where cut selection runs (i.e., when
+    /// Only emitted on iterations where row selection runs (i.e., when
     /// `should_run(iteration)` returns `true`). On non-selection iterations
     /// this variant is skipped entirely.
-    CutSelectionComplete {
+    PolicySelectionComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Number of cuts deactivated across all stages.
-        cuts_deactivated: u32,
-        /// Number of stages processed during cut selection.
+        /// Number of rows deactivated across all stages.
+        rows_deactivated: u32,
+        /// Number of stages processed during row selection.
         stages_processed: u32,
-        /// Wall-clock time for the local cut selection phase, in milliseconds.
+        /// Wall-clock time for the local row-selection phase, in milliseconds.
         selection_time_ms: u64,
         /// Wall-clock time for the allgatherv deactivation-set exchange, in
         /// milliseconds.
         allgatherv_time_ms: u64,
         /// Per-stage breakdown of selection results.
-        per_stage: Vec<StageSelectionRecord>,
+        per_stage: Vec<StageRowSelectionRecord>,
     },
 
-    /// Step 4b: Angular diversity pruning completed.
-    ///
-    /// Only emitted on iterations where angular pruning runs (i.e., when
-    /// `should_run(iteration)` returns `true`). On non-pruning iterations
-    /// this variant is skipped entirely. Always emitted after
-    /// [`Self::CutSelectionComplete`] when both are enabled on the same
-    /// iteration.
-    AngularPruningComplete {
-        /// Iteration number (1-based).
-        iteration: u64,
-        /// Total number of cuts deactivated across all stages.
-        cuts_deactivated: u32,
-        /// Total number of angular clusters formed across all stages.
-        clusters_formed: u32,
-        /// Total number of within-cluster dominance checks performed across all
-        /// stages.
-        dominance_checks: u32,
-        /// Number of stages processed (stages 1..num_stages-1; stage 0 is
-        /// exempt).
-        stages_processed: u32,
-        /// Wall-clock time for the angular pruning phase, in milliseconds.
-        pruning_time_ms: u64,
-    },
-
-    /// Step 4c: Active-cut budget enforcement completed.
+    /// Step 4b: Active-row budget enforcement completed.
     ///
     /// Emitted every iteration when `budget` is set in `TrainingConfig`.
-    /// When `budget` is `None`, this variant is never emitted. Unlike Steps
-    /// 4a and 4b, budget enforcement is not gated by `check_frequency`
-    /// because the budget is a hard cap that must be maintained at all times.
-    BudgetEnforcementComplete {
+    /// When `budget` is `None`, this variant is never emitted. Unlike Step
+    /// 4a, budget enforcement is not gated by `check_frequency` because the
+    /// budget is a hard cap that must be maintained at all times.
+    PolicyBudgetEnforcementComplete {
         /// Iteration number (1-based).
         iteration: u64,
-        /// Total number of cuts evicted across all stages in this iteration.
-        cuts_evicted: u32,
+        /// Total number of rows evicted across all stages in this iteration.
+        rows_evicted: u32,
         /// Number of stages processed during budget enforcement.
         stages_processed: u32,
         /// Wall-clock time for the budget enforcement pass, in milliseconds.
         enforcement_time_ms: u64,
+    },
+
+    /// Step 4c: Template baking completed.
+    ///
+    /// Emitted every iteration after all per-stage baked templates have been
+    /// rebuilt from the current active row set (after Steps 4a and 4b). Baking
+    /// runs sequentially over stages and is outside the forward/backward hot
+    /// paths. The baked templates are consumed by the forward and backward
+    /// passes in the *next* iteration.
+    PolicyTemplateBakeComplete {
+        /// Iteration number (1-based).
+        iteration: u64,
+        /// Number of stages for which baked templates were rebuilt.
+        stages_processed: u32,
+        /// Total number of rows baked across all stages
+        /// (sum of `active_count()` over all stage pools at the emit instant).
+        total_rows_baked: u64,
+        /// Wall-clock time for the baking pass across all stages, in milliseconds.
+        bake_time_ms: u64,
     },
 
     /// Step 5: Convergence check completed.
@@ -314,8 +397,21 @@ pub enum TrainingEvent {
         solve_time_ms: f64,
         /// Wall-clock time for lower bound evaluation, in milliseconds.
         lower_bound_eval_ms: u64,
-        /// Estimated rayon overhead in the forward pass, in milliseconds.
-        fwd_rayon_overhead_ms: u64,
+        /// Aggregate non-solve work inside the forward pass parallel region
+        /// accumulated across all workers, in milliseconds.
+        ///
+        /// Computed as the sum over all workers of
+        /// `load_model + add_rows + set_bounds + basis_set` times. Because it
+        /// sums across workers, this value can exceed `forward_ms` when there
+        /// are multiple workers. It is an aggregate cost metric, not a
+        /// wall-time slice.
+        fwd_setup_time_ms: u64,
+        /// Estimated load imbalance across worker threads in the forward pass,
+        /// in milliseconds.
+        fwd_load_imbalance_ms: u64,
+        /// Scheduling and synchronisation overhead in the forward pass not
+        /// attributable to solve work or load imbalance, in milliseconds.
+        fwd_scheduling_overhead_ms: u64,
     },
 
     // ── Lifecycle events (4) ─────────────────────────────────────────────────
@@ -354,8 +450,28 @@ pub enum TrainingEvent {
         final_ub: f64,
         /// Total wall-clock time for the training run, in milliseconds.
         total_time_ms: u64,
-        /// Total number of cuts in the approximation at termination.
-        total_cuts: u64,
+        /// Total number of rows in the approximation at termination.
+        total_rows: u64,
+    },
+
+    /// Emitted once per rank when the simulation loop begins, before any
+    /// scenario runs. Mirrors [`Self::TrainingStarted`] for the simulation
+    /// phase. Progress consumers use this to display a "starting..." banner
+    /// and capture run-level metadata (scenario count, parallelism layout).
+    SimulationStarted {
+        /// Case study name from the input data directory.
+        case_name: String,
+        /// Total number of simulation scenarios across all ranks.
+        n_scenarios: u32,
+        /// Total number of stages in the optimization horizon.
+        n_stages: u32,
+        /// Number of distributed ranks participating in simulation.
+        ranks: u32,
+        /// Number of threads per rank.
+        threads_per_rank: u32,
+        /// Wall-clock time at simulation start as an ISO 8601 string
+        /// (run-level metadata, not a per-event timestamp).
+        timestamp: String,
     },
 
     /// Emitted periodically during policy simulation (not during training).
@@ -363,11 +479,19 @@ pub enum TrainingEvent {
     /// Consumers can use this to display a progress indicator during the
     /// simulation phase. Each event carries the cost of the most recently
     /// completed scenario; the progress thread accumulates statistics across
-    /// events (see ticket-007).
+    /// events.
     SimulationProgress {
-        /// Number of simulation scenarios completed so far.
+        /// Number of simulation scenarios completed so far, as a global
+        /// estimate.
+        ///
+        /// Only rank 0 emits displayable progress events (non-root ranks are
+        /// `--quiet`). Rank 0 knows only its own local completion count, so
+        /// the global estimate is computed as `local_completed × ranks`,
+        /// clamped to `scenarios_total`. The estimate is exact when work is
+        /// evenly distributed and ranks finish at similar rates; it assumes
+        /// the balanced-workload invariant of the simulation scheduler.
         scenarios_complete: u32,
-        /// Total number of simulation scenarios to run.
+        /// Total number of simulation scenarios to run across all ranks.
         scenarios_total: u32,
         /// Wall-clock time since simulation started, in milliseconds.
         elapsed_ms: u64,
@@ -389,11 +513,60 @@ pub enum TrainingEvent {
         /// Total wall-clock time for the simulation run, in milliseconds.
         elapsed_ms: u64,
     },
+
+    /// Per-worker timing for one phase of one iteration.
+    ///
+    /// Emitted `n_workers_local` times per `(iteration, phase)` pair — once
+    /// for every rayon worker in the local pool — after the parallel region
+    /// completes. For a 10-worker / 50-iteration run this produces
+    /// `2 × 10 × 50 = 1 000` extra events; the [`WorkerPhaseTimings`]
+    /// payload (32 bytes, 4 named fields) is moved by value so no heap
+    /// allocation occurs per event.
+    ///
+    /// ## Payload fields
+    ///
+    /// | Field              | Phase     | Per-worker?                              |
+    /// |--------------------|-----------|------------------------------------------|
+    /// | `forward_wall_ms`  | Forward   | yes — populated on Forward; 0 on Backward |
+    /// | `backward_wall_ms` | Backward  | yes — populated on Backward; 0 on Forward |
+    /// | `fwd_setup_ms`     | Forward   | yes — populated on Forward; 0 on Backward |
+    /// | `bwd_setup_ms`     | Backward  | yes — populated on Backward; 0 on Forward |
+    ///
+    /// The writer adapter (`training_output.rs`) maps these four fields into
+    /// the 16-wide `cobre_io::WorkerTimingRecord` via [`WORKER_TIMING_SLOT_FWD_WALL`],
+    /// [`WORKER_TIMING_SLOT_BWD_WALL`], [`WORKER_TIMING_SLOT_BWD_SETUP`],
+    /// [`WORKER_TIMING_SLOT_FWD_SETUP`]. The rank-only slots (2–7, 9–10,
+    /// 12–15) are populated by the rank-aggregated `IterationSummary` rows
+    /// rather than per-worker events.
+    ///
+    /// ## Recovery invariant
+    ///
+    /// `SUM(field) GROUP BY (iteration)` over the per-worker `WorkerTiming`
+    /// events equals the corresponding field on the rank-level
+    /// `BackwardPassComplete` / `IterationSummary` event for the same
+    /// iteration.
+    WorkerTiming {
+        /// MPI rank that owns this worker.
+        rank: i32,
+        /// Rayon worker index within this rank's pool (`0..n_workers_local`).
+        worker_id: i32,
+        /// Training iteration (1-based), matching the rank-level events.
+        iteration: u64,
+        /// Forward or Backward, distinguishing the two per-iteration emissions.
+        phase: WorkerTimingPhase,
+        /// Per-worker timing payload with four named fields. See [`WorkerPhaseTimings`].
+        timings: WorkerPhaseTimings,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{StoppingRuleResult, TrainingEvent};
+    use std::borrow::Cow;
+
+    use super::{
+        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WorkerPhaseTimings,
+        WorkerTimingPhase,
+    };
 
     // Helper: build one of each variant with representative values.
     fn make_all_variants() -> Vec<TrainingEvent> {
@@ -413,41 +586,41 @@ mod tests {
             },
             TrainingEvent::BackwardPassComplete {
                 iteration: 1,
-                cuts_generated: 48,
+                rows_generated: 48,
                 stages_processed: 12,
                 elapsed_ms: 87,
                 state_exchange_time_ms: 0,
-                cut_batch_build_time_ms: 0,
-                rayon_overhead_time_ms: 0,
+                row_batch_build_time_ms: 0,
+                setup_time_ms: 0,
+                load_imbalance_ms: 0,
+                scheduling_overhead_ms: 0,
             },
-            TrainingEvent::CutSyncComplete {
+            TrainingEvent::PolicySyncComplete {
                 iteration: 1,
-                cuts_distributed: 48,
-                cuts_active: 200,
-                cuts_removed: 0,
+                rows_distributed: 48,
+                rows_active: 200,
+                rows_removed: 0,
                 sync_time_ms: 2,
             },
-            TrainingEvent::CutSelectionComplete {
+            TrainingEvent::PolicySelectionComplete {
                 iteration: 10,
-                cuts_deactivated: 15,
+                rows_deactivated: 15,
                 stages_processed: 12,
                 selection_time_ms: 20,
                 allgatherv_time_ms: 1,
                 per_stage: vec![],
             },
-            TrainingEvent::AngularPruningComplete {
+            TrainingEvent::PolicyBudgetEnforcementComplete {
                 iteration: 10,
-                cuts_deactivated: 3,
-                clusters_formed: 5,
-                dominance_checks: 12,
-                stages_processed: 11,
-                pruning_time_ms: 8,
-            },
-            TrainingEvent::BudgetEnforcementComplete {
-                iteration: 10,
-                cuts_evicted: 2,
+                rows_evicted: 2,
                 stages_processed: 12,
                 enforcement_time_ms: 1,
+            },
+            TrainingEvent::PolicyTemplateBakeComplete {
+                iteration: 10,
+                stages_processed: 12,
+                total_rows_baked: 48,
+                bake_time_ms: 2,
             },
             TrainingEvent::ConvergenceUpdate {
                 iteration: 1,
@@ -456,9 +629,9 @@ mod tests {
                 upper_bound_std: 5.0,
                 gap: 0.0909,
                 rules_evaluated: vec![StoppingRuleResult {
-                    rule_name: "gap_tolerance".to_string(),
+                    rule_name: "gap_tolerance",
                     triggered: false,
-                    detail: "gap 9.09% > 1.00%".to_string(),
+                    detail: Cow::Borrowed("gap 9.09% > 1.00%"),
                 }],
             },
             TrainingEvent::CheckpointComplete {
@@ -478,7 +651,9 @@ mod tests {
                 lp_solves: 240,
                 solve_time_ms: 45.2,
                 lower_bound_eval_ms: 10,
-                fwd_rayon_overhead_ms: 5,
+                fwd_setup_time_ms: 2,
+                fwd_load_imbalance_ms: 2,
+                fwd_scheduling_overhead_ms: 1,
             },
             TrainingEvent::TrainingStarted {
                 case_name: "test_case".to_string(),
@@ -495,7 +670,7 @@ mod tests {
                 final_lb: 105.0,
                 final_ub: 106.0,
                 total_time_ms: 300_000,
-                total_cuts: 2400,
+                total_rows: 2400,
             },
             TrainingEvent::SimulationProgress {
                 scenarios_complete: 50,
@@ -510,16 +685,23 @@ mod tests {
                 output_dir: "/tmp/output".to_string(),
                 elapsed_ms: 20_000,
             },
+            TrainingEvent::WorkerTiming {
+                rank: 0,
+                worker_id: 2,
+                iteration: 1,
+                phase: WorkerTimingPhase::Backward,
+                timings: WorkerPhaseTimings::default(),
+            },
         ]
     }
 
     #[test]
-    fn all_fourteen_variants_construct() {
+    fn all_fifteen_variants_construct() {
         let variants = make_all_variants();
         assert_eq!(
             variants.len(),
-            14,
-            "expected exactly 14 TrainingEvent variants"
+            15,
+            "expected exactly 15 TrainingEvent variants"
         );
     }
 
@@ -570,14 +752,14 @@ mod tests {
     fn convergence_update_rules_evaluated_field() {
         let rules = vec![
             StoppingRuleResult {
-                rule_name: "gap_tolerance".to_string(),
+                rule_name: "gap_tolerance",
                 triggered: true,
-                detail: "gap 0.42% <= 1.00%".to_string(),
+                detail: Cow::Borrowed("gap 0.42% <= 1.00%"),
             },
             StoppingRuleResult {
-                rule_name: "iteration_limit".to_string(),
+                rule_name: "iteration_limit",
                 triggered: false,
-                detail: "iteration 10/100".to_string(),
+                detail: Cow::Borrowed("iteration 10/100"),
             },
         ];
         let event = TrainingEvent::ConvergenceUpdate {
@@ -604,9 +786,9 @@ mod tests {
     #[test]
     fn stopping_rule_result_fields_accessible() {
         let r = StoppingRuleResult {
-            rule_name: "bound_stalling".to_string(),
+            rule_name: "bound_stalling",
             triggered: false,
-            detail: "LB stable for 8/10 iterations".to_string(),
+            detail: Cow::Borrowed("LB stable for 8/10 iterations"),
         };
         let cloned = r.clone();
         assert_eq!(cloned.rule_name, "bound_stalling");
@@ -617,9 +799,9 @@ mod tests {
     #[test]
     fn stopping_rule_result_debug_non_empty() {
         let r = StoppingRuleResult {
-            rule_name: "time_limit".to_string(),
+            rule_name: "time_limit",
             triggered: true,
-            detail: "elapsed 3602s > 3600s limit".to_string(),
+            detail: Cow::Borrowed("elapsed 3602s > 3600s limit"),
         };
         let debug = format!("{r:?}");
         assert!(!debug.is_empty());
@@ -627,18 +809,18 @@ mod tests {
     }
 
     #[test]
-    fn cut_selection_complete_fields_accessible() {
-        let event = TrainingEvent::CutSelectionComplete {
+    fn policy_selection_complete_fields_accessible() {
+        let event = TrainingEvent::PolicySelectionComplete {
             iteration: 10,
-            cuts_deactivated: 30,
+            rows_deactivated: 30,
             stages_processed: 12,
             selection_time_ms: 25,
             allgatherv_time_ms: 2,
             per_stage: vec![],
         };
-        let TrainingEvent::CutSelectionComplete {
+        let TrainingEvent::PolicySelectionComplete {
             iteration,
-            cuts_deactivated,
+            rows_deactivated,
             stages_processed,
             selection_time_ms,
             allgatherv_time_ms,
@@ -648,7 +830,7 @@ mod tests {
             panic!("wrong variant")
         };
         assert_eq!(iteration, 10);
-        assert_eq!(cuts_deactivated, 30);
+        assert_eq!(rows_deactivated, 30);
         assert_eq!(stages_processed, 12);
         assert_eq!(selection_time_ms, 25);
         assert_eq!(allgatherv_time_ms, 2);
@@ -716,45 +898,16 @@ mod tests {
     }
 
     #[test]
-    fn angular_pruning_complete_fields_accessible() {
-        let event = TrainingEvent::AngularPruningComplete {
-            iteration: 15,
-            cuts_deactivated: 7,
-            clusters_formed: 4,
-            dominance_checks: 20,
-            stages_processed: 11,
-            pruning_time_ms: 12,
-        };
-        let TrainingEvent::AngularPruningComplete {
-            iteration,
-            cuts_deactivated,
-            clusters_formed,
-            dominance_checks,
-            stages_processed,
-            pruning_time_ms,
-        } = event
-        else {
-            panic!("wrong variant")
-        };
-        assert_eq!(iteration, 15);
-        assert_eq!(cuts_deactivated, 7);
-        assert_eq!(clusters_formed, 4);
-        assert_eq!(dominance_checks, 20);
-        assert_eq!(stages_processed, 11);
-        assert_eq!(pruning_time_ms, 12);
-    }
-
-    #[test]
-    fn budget_enforcement_complete_fields_accessible() {
-        let event = TrainingEvent::BudgetEnforcementComplete {
+    fn policy_budget_enforcement_complete_fields_accessible() {
+        let event = TrainingEvent::PolicyBudgetEnforcementComplete {
             iteration: 7,
-            cuts_evicted: 5,
+            rows_evicted: 5,
             stages_processed: 12,
             enforcement_time_ms: 3,
         };
-        let TrainingEvent::BudgetEnforcementComplete {
+        let TrainingEvent::PolicyBudgetEnforcementComplete {
             iteration,
-            cuts_evicted,
+            rows_evicted,
             stages_processed,
             enforcement_time_ms,
         } = event
@@ -762,8 +915,97 @@ mod tests {
             panic!("wrong variant")
         };
         assert_eq!(iteration, 7);
-        assert_eq!(cuts_evicted, 5);
+        assert_eq!(rows_evicted, 5);
         assert_eq!(stages_processed, 12);
         assert_eq!(enforcement_time_ms, 3);
+    }
+
+    #[test]
+    fn worker_timing_fields_accessible() {
+        let timings = WorkerPhaseTimings {
+            forward_wall_ms: 10.0,
+            backward_wall_ms: 0.0,
+            fwd_setup_ms: 2.5,
+            bwd_setup_ms: 0.0,
+        };
+        let event = TrainingEvent::WorkerTiming {
+            rank: 2,
+            worker_id: 3,
+            iteration: 7,
+            phase: WorkerTimingPhase::Forward,
+            timings,
+        };
+        let TrainingEvent::WorkerTiming {
+            rank,
+            worker_id,
+            iteration,
+            phase,
+            timings: t,
+        } = event
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(rank, 2);
+        assert_eq!(worker_id, 3);
+        assert_eq!(iteration, 7);
+        assert!(
+            !format!("{phase:?}").is_empty(),
+            "WorkerTimingPhase::Forward debug must be non-empty"
+        );
+        assert!((t.forward_wall_ms - 10.0).abs() < f64::EPSILON);
+        assert!((t.fwd_setup_ms - 2.5).abs() < f64::EPSILON);
+        assert_eq!(t.backward_wall_ms, 0.0);
+        assert_eq!(t.bwd_setup_ms, 0.0);
+        // Verify Backward variant debug is also non-empty.
+        let bwd = WorkerTimingPhase::Backward;
+        assert!(
+            !format!("{bwd:?}").is_empty(),
+            "WorkerTimingPhase::Backward debug must be non-empty"
+        );
+    }
+
+    #[test]
+    fn policy_template_bake_complete_fields_accessible() {
+        let event = TrainingEvent::PolicyTemplateBakeComplete {
+            iteration: 5,
+            stages_processed: 12,
+            total_rows_baked: 96,
+            bake_time_ms: 3,
+        };
+        let TrainingEvent::PolicyTemplateBakeComplete {
+            iteration,
+            stages_processed,
+            total_rows_baked,
+            bake_time_ms,
+        } = event
+        else {
+            panic!("wrong variant")
+        };
+        assert_eq!(iteration, 5);
+        assert_eq!(stages_processed, 12);
+        assert_eq!(total_rows_baked, 96);
+        assert_eq!(bake_time_ms, 3);
+    }
+
+    #[test]
+    fn stage_row_selection_record_fields_accessible() {
+        let record = StageRowSelectionRecord {
+            stage: 3,
+            rows_populated: 100,
+            rows_active_before: 80,
+            rows_deactivated: 10,
+            rows_active_after: 70,
+            selection_time_ms: 1.5,
+            budget_evicted: Some(5),
+            active_after_budget: Some(65),
+        };
+        assert_eq!(record.stage, 3);
+        assert_eq!(record.rows_populated, 100);
+        assert_eq!(record.rows_active_before, 80);
+        assert_eq!(record.rows_deactivated, 10);
+        assert_eq!(record.rows_active_after, 70);
+        assert!((record.selection_time_ms - 1.5).abs() < f64::EPSILON);
+        assert_eq!(record.budget_evicted, Some(5));
+        assert_eq!(record.active_after_budget, Some(65));
     }
 }

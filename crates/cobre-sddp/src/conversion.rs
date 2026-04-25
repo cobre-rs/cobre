@@ -7,7 +7,7 @@ use cobre_io::output::simulation_writer::{
     ThermalWriteRecord,
 };
 
-use crate::{
+use crate::simulation::types::{
     SimulationBusResult, SimulationContractResult, SimulationCostResult, SimulationExchangeResult,
     SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationPumpingResult, SimulationScenarioResult,
@@ -223,7 +223,7 @@ impl From<SimulationScenarioResult> for ScenarioWritePayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ScenarioCategoryCosts;
+    use crate::simulation::ScenarioCategoryCosts;
     use cobre_io::output::simulation_writer::ScenarioWritePayload;
 
     fn make_cost(stage_id: u32, block_id: u32) -> SimulationCostResult {

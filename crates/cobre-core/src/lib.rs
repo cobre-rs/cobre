@@ -61,7 +61,9 @@ pub use error::ValidationError;
 pub use generic_constraint::{
     ConstraintExpression, ConstraintSense, GenericConstraint, LinearTerm, SlackConfig, VariableRef,
 };
-pub use initial_conditions::{HydroPastInflows, HydroStorage, InitialConditions};
+pub use initial_conditions::{
+    HydroPastInflows, HydroStorage, InitialConditions, RecentObservation,
+};
 pub use penalty::{
     GlobalPenaltyDefaults, HydroPenaltyOverrides, resolve_bus_deficit_segments,
     resolve_bus_excess_cost, resolve_hydro_penalties, resolve_line_exchange_cost,
@@ -87,5 +89,9 @@ pub use temporal::{
     Transition,
 };
 pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, NetworkTopology};
-pub use training_event::{StageSelectionRecord, StoppingRuleResult, TrainingEvent};
+pub use training_event::{
+    StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP,
+    WORKER_TIMING_SLOT_BWD_WALL, WORKER_TIMING_SLOT_COUNT, WORKER_TIMING_SLOT_FWD_SETUP,
+    WORKER_TIMING_SLOT_FWD_WALL, WorkerPhaseTimings, WorkerTimingPhase,
+};
 pub use welford::WelfordAccumulator;

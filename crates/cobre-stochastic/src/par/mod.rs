@@ -19,12 +19,14 @@
 //! - [`contribution`] — recursive contribution composition for detecting
 //!   explosive lag effects in periodic autoregressive models
 
+pub mod aggregate;
 pub mod contribution;
 pub mod evaluate;
 pub mod fitting;
 pub mod precompute;
 pub mod validation;
 
+pub use aggregate::aggregate_observations_to_season;
 pub use contribution::{
     check_negative_contributions, compute_contributions, find_max_valid_order, has_negative_phi1,
 };

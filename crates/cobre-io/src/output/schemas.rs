@@ -1,8 +1,6 @@
 //! Arrow schema definitions for all Parquet output files per output-schemas spec
 //! (SS5.1–5.11 and SS6.1–6.3).
 
-#![allow(dead_code)]
-
 use arrow::datatypes::{DataType, Field, Schema};
 
 /// Schema for `simulation/costs/` — stage and block-level cost breakdown.
@@ -240,14 +238,24 @@ pub(crate) fn convergence_schema() -> Schema {
 
 /// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
 ///
-/// 13 fields. Top-level non-overlapping phases: `forward_wall_ms`,
+/// 18 fields. Row semantics: one row per `(iteration, rank)` for
+/// rank-only sequential values (`worker_id = NULL`), and one row per
+/// `(iteration, rank, worker_id)` for per-worker parallel-region values.
+/// `SUM(col) GROUP BY iteration` recovers the single-row-per-iteration
+/// value for each of the 16 timing columns.
+///
+/// Top-level non-overlapping phases: `forward_wall_ms`,
 /// `backward_wall_ms`, `cut_selection_ms`, `mpi_allreduce_ms`,
 /// `lower_bound_ms`. Sub-components of backward: `cut_sync_ms`,
-/// `state_exchange_ms`, `cut_batch_build_ms`, `bwd_rayon_overhead_ms`.
-/// Sub-component of forward: `fwd_rayon_overhead_ms`. Residual: `overhead_ms`.
+/// `state_exchange_ms`, `cut_batch_build_ms`, `bwd_setup_ms`,
+/// `bwd_load_imbalance_ms`, `bwd_scheduling_overhead_ms`.
+/// Sub-components of forward: `fwd_setup_ms`, `fwd_load_imbalance_ms`,
+/// `fwd_scheduling_overhead_ms`. Residual: `overhead_ms`.
 pub(crate) fn iteration_timing_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
+        Field::new("rank", DataType::Int32, true),
+        Field::new("worker_id", DataType::Int32, true),
         Field::new("forward_wall_ms", DataType::Int64, false),
         Field::new("backward_wall_ms", DataType::Int64, false),
         Field::new("cut_selection_ms", DataType::Int64, false),
@@ -256,8 +264,12 @@ pub(crate) fn iteration_timing_schema() -> Schema {
         Field::new("lower_bound_ms", DataType::Int64, false),
         Field::new("state_exchange_ms", DataType::Int64, false),
         Field::new("cut_batch_build_ms", DataType::Int64, false),
-        Field::new("bwd_rayon_overhead_ms", DataType::Int64, false),
-        Field::new("fwd_rayon_overhead_ms", DataType::Int64, false),
+        Field::new("bwd_setup_ms", DataType::Int64, false),
+        Field::new("bwd_load_imbalance_ms", DataType::Int64, false),
+        Field::new("bwd_scheduling_overhead_ms", DataType::Int64, false),
+        Field::new("fwd_setup_ms", DataType::Int64, false),
+        Field::new("fwd_load_imbalance_ms", DataType::Int64, false),
+        Field::new("fwd_scheduling_overhead_ms", DataType::Int64, false),
         Field::new("overhead_ms", DataType::Int64, false),
     ])
 }
@@ -281,25 +293,33 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// Schema for `training/solver/iterations.parquet` -- per-iteration, per-phase
 /// solver statistics for diagnosing LP conditioning and retry behavior.
 ///
-/// 16 columns. One row per (iteration, phase, stage) triple.
+/// 19 columns. One row per (iteration, phase, stage, opening) tuple for
+/// backward rows; forward, `lower_bound`, and simulation rows carry
+/// `opening = NULL`. The `rank` and `worker_id` columns (positions 5 and 6,
+/// 0-indexed) are `Int32 nullable`; they are `NULL` for rank-aggregated rows
+/// and carry the producing rank's index and worker index respectively. Includes
+/// one basis reconstruction column: `basis_reconstructions`.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::UInt32, false),
         Field::new("phase", DataType::Utf8, false),
         Field::new("stage", DataType::Int32, false),
+        Field::new("opening", DataType::Int32, true),
+        Field::new("rank", DataType::Int32, true),
+        Field::new("worker_id", DataType::Int32, true),
         Field::new("lp_solves", DataType::UInt32, false),
         Field::new("lp_successes", DataType::UInt32, false),
         Field::new("lp_retries", DataType::UInt32, false),
         Field::new("lp_failures", DataType::UInt32, false),
         Field::new("retry_attempts", DataType::UInt32, false),
         Field::new("basis_offered", DataType::UInt32, false),
-        Field::new("basis_rejections", DataType::UInt32, false),
+        Field::new("basis_consistency_failures", DataType::UInt32, false),
         Field::new("simplex_iterations", DataType::UInt64, false),
         Field::new("solve_time_ms", DataType::Float64, false),
         Field::new("load_model_time_ms", DataType::Float64, false),
-        Field::new("add_rows_time_ms", DataType::Float64, false),
         Field::new("set_bounds_time_ms", DataType::Float64, false),
         Field::new("basis_set_time_ms", DataType::Float64, false),
+        Field::new("basis_reconstructions", DataType::UInt64, false),
     ])
 }
 
@@ -319,13 +339,12 @@ pub(crate) fn retry_histogram_schema() -> Schema {
 }
 
 /// Schema for `training/cut_selection/iterations.parquet` — per-stage
-/// cut selection statistics.
+/// row-selection statistics.
 ///
-/// 10 fields. One row per (iteration, stage) pair. The three nullable
-/// Int32 columns (`budget_evicted`, `active_after_angular`,
-/// `active_after_budget`) are `None` when the corresponding pipeline
-/// step is disabled.
-pub(crate) fn cut_selection_schema() -> Schema {
+/// 9 fields. One row per (iteration, stage) pair. The two nullable Int32
+/// columns (`budget_evicted`, `active_after_budget`) are `None` when
+/// budget enforcement is disabled.
+pub(crate) fn row_selection_schema() -> Schema {
     Schema::new(vec![
         Field::new("iteration", DataType::Int32, false),
         Field::new("stage", DataType::Int32, false),
@@ -335,13 +354,12 @@ pub(crate) fn cut_selection_schema() -> Schema {
         Field::new("cuts_active_after", DataType::Int32, false),
         Field::new("selection_time_ms", DataType::Float64, false),
         Field::new("budget_evicted", DataType::Int32, true),
-        Field::new("active_after_angular", DataType::Int32, true),
         Field::new("active_after_budget", DataType::Int32, true),
     ])
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
@@ -717,20 +735,32 @@ mod tests {
         let schema = iteration_timing_schema();
         assert_eq!(
             schema.fields().len(),
-            12,
-            "iteration_timing schema must have 12 fields"
+            18,
+            "iteration_timing schema must have 18 fields"
         );
     }
 
     #[test]
-    fn iteration_timing_schema_all_non_nullable() {
+    fn iteration_timing_schema_rank_worker_nullable() {
         let schema = iteration_timing_schema();
+        // rank (position 1) and worker_id (position 2) must be nullable.
+        let rank_field = schema
+            .field_with_name("rank")
+            .expect("rank field must exist");
+        assert!(rank_field.is_nullable(), "rank must be nullable");
+        let worker_id_field = schema
+            .field_with_name("worker_id")
+            .expect("worker_id field must exist");
+        assert!(worker_id_field.is_nullable(), "worker_id must be nullable");
+        // All other 16 timing columns must be non-nullable.
         for field in schema.fields() {
-            assert!(
-                !field.is_nullable(),
-                "iteration_timing field '{}' must not be nullable",
-                field.name()
-            );
+            if field.name() != "rank" && field.name() != "worker_id" {
+                assert!(
+                    !field.is_nullable(),
+                    "iteration_timing field '{}' must not be nullable",
+                    field.name()
+                );
+            }
         }
     }
 
@@ -757,12 +787,12 @@ mod tests {
     }
 
     #[test]
-    fn cut_selection_schema_field_count_and_types() {
-        let schema = cut_selection_schema();
+    fn row_selection_schema_field_count_and_types() {
+        let schema = row_selection_schema();
         assert_eq!(
             schema.fields().len(),
-            10,
-            "cut_selection schema must have 10 fields"
+            9,
+            "cut_selection schema must have 9 fields"
         );
         // First 6 fields are non-nullable Int32.
         for field in &schema.fields()[..6] {
@@ -773,12 +803,8 @@ mod tests {
         assert_eq!(schema.fields()[6].name(), "selection_time_ms");
         assert_eq!(schema.fields()[6].data_type(), &DataType::Float64);
         assert!(!schema.fields()[6].is_nullable());
-        // Fields 8-10 (indices 7-9): nullable Int32.
-        for &name in &[
-            "budget_evicted",
-            "active_after_angular",
-            "active_after_budget",
-        ] {
+        // Fields 8-9 (indices 7-8): nullable Int32.
+        for &name in &["budget_evicted", "active_after_budget"] {
             let field = schema
                 .field_with_name(name)
                 .unwrap_or_else(|_| panic!("field '{name}' not found"));
@@ -788,6 +814,74 @@ mod tests {
                 "field '{name}' must be Int32"
             );
             assert!(field.is_nullable(), "field '{name}' must be nullable");
+        }
+    }
+
+    #[test]
+    fn solver_iterations_schema_field_count_and_types() {
+        let schema = solver_iterations_schema();
+        assert_eq!(
+            schema.fields().len(),
+            19,
+            "solver_iterations schema must have 19 fields"
+        );
+        let expected: &[(&str, DataType, bool)] = &[
+            ("iteration", DataType::UInt32, false),
+            ("phase", DataType::Utf8, false),
+            ("stage", DataType::Int32, false),
+            ("opening", DataType::Int32, true),
+            ("rank", DataType::Int32, true),
+            ("worker_id", DataType::Int32, true),
+            ("lp_solves", DataType::UInt32, false),
+            ("lp_successes", DataType::UInt32, false),
+            ("lp_retries", DataType::UInt32, false),
+            ("lp_failures", DataType::UInt32, false),
+            ("retry_attempts", DataType::UInt32, false),
+            ("basis_offered", DataType::UInt32, false),
+            ("basis_consistency_failures", DataType::UInt32, false),
+            ("simplex_iterations", DataType::UInt64, false),
+            ("solve_time_ms", DataType::Float64, false),
+            ("load_model_time_ms", DataType::Float64, false),
+            ("set_bounds_time_ms", DataType::Float64, false),
+            ("basis_set_time_ms", DataType::Float64, false),
+            ("basis_reconstructions", DataType::UInt64, false),
+        ];
+        for (i, (name, dtype, nullable)) in expected.iter().enumerate() {
+            let field = &schema.fields()[i];
+            assert_eq!(field.name(), name, "field {i} name mismatch");
+            assert_eq!(field.data_type(), dtype, "field {i} ({name}) type mismatch");
+            assert_eq!(
+                field.is_nullable(),
+                *nullable,
+                "field {i} ({name}) nullability mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_histogram_schema_field_count_and_types() {
+        let schema = retry_histogram_schema();
+        assert_eq!(
+            schema.fields().len(),
+            5,
+            "retry_histogram schema must have 5 fields"
+        );
+        let expected: &[(&str, DataType, bool)] = &[
+            ("iteration", DataType::UInt32, false),
+            ("phase", DataType::Utf8, false),
+            ("stage", DataType::Int32, false),
+            ("retry_level", DataType::UInt32, false),
+            ("count", DataType::UInt64, false),
+        ];
+        for (i, (name, dtype, nullable)) in expected.iter().enumerate() {
+            let field = &schema.fields()[i];
+            assert_eq!(field.name(), name, "field {i} name mismatch");
+            assert_eq!(field.data_type(), dtype, "field {i} ({name}) type mismatch");
+            assert_eq!(
+                field.is_nullable(),
+                *nullable,
+                "field {i} ({name}) nullability mismatch"
+            );
         }
     }
 
@@ -809,7 +903,7 @@ mod tests {
             (convergence_schema(), "convergence"),
             (iteration_timing_schema(), "iteration_timing"),
             (rank_timing_schema(), "rank_timing"),
-            (cut_selection_schema(), "cut_selection"),
+            (row_selection_schema(), "cut_selection"),
             (solver_iterations_schema(), "solver_iterations"),
             (retry_histogram_schema(), "retry_histogram"),
         ];
@@ -836,10 +930,10 @@ mod tests {
             ("inflow_lags", 4),
             ("generic_violations", 5),
             ("convergence", 13),
-            ("iteration_timing", 12),
+            ("iteration_timing", 18),
             ("rank_timing", 8),
-            ("cut_selection", 10),
-            ("solver_iterations", 16),
+            ("cut_selection", 9),
+            ("solver_iterations", 19),
             ("retry_histogram", 5),
         ];
         for ((name, actual), (_, exp)) in counts.iter().zip(expected.iter()) {

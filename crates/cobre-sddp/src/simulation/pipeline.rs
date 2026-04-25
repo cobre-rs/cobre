@@ -1,77 +1,33 @@
-//! Simulation forward pass loop for SDDP policy evaluation.
+//! Simulation forward pass for policy evaluation.
 //!
-//! [`simulate`] evaluates the trained SDDP policy on a set of scenarios by
-//! running a forward-only pass through all stages, extracting per-entity
-//! results at each stage, streaming completed scenario results through a
-//! bounded channel, and returning a compact cost buffer for MPI aggregation.
-//!
-//! ## LP rebuild sequence
-//!
-//! Identical to the training forward pass (`forward.rs`):
-//!
-//! 1. `solver.load_model(template)` — reset to the structural LP.
-//! 2. `solver.add_rows(cut_batch)` — append Benders cuts from the trained FCF.
-//! 3. `solver.set_row_bounds(...)` — patch scenario-specific row bounds.
-//!
-//! ## Work distribution
-//!
-//! Scenarios are distributed across MPI ranks via [`assign_scenarios`] using
-//! two-level distribution (fat/lean). Within each rank, Rayon's `par_iter_mut`
-//! distributes scenarios across [`SolverWorkspace`] instances. Each stage LP
-//! is optionally warm-started with a per-stage basis from the training checkpoint.
-//! The warm-start basis is read-only and shared across all threads, so it does
-//! not introduce any thread-count-dependent state — determinism is preserved.
-//! Results are sorted by `scenario_id` for deterministic MPI aggregation.
-//!
-//! ## Seed domain separation
-//!
-//! To avoid seed collisions with training forward pass seeds (which use
-//! `global_scenario = rank * forward_passes + m`), the simulation domain adds
-//! an offset of `u32::MAX / 2` to the scenario ID before passing it to
-//! [`ForwardSampler::sample`]. This places simulation seeds in a disjoint region of
-//! the SipHash-1-3 seed space (deterministic SipHash-1-3 seeds for communication-free parallel noise).
-//!
-//! ## Hot-path allocation discipline
-//!
-//! No allocations occur per scenario or per stage during the inner loops.
-//! Each [`SolverWorkspace`] pre-allocates its [`crate::PatchBuffer`] and
-//! `current_state`. The
-//! [`RowBatch`] per stage is built once before the scenario loop — not once
-//! per scenario.
+//! [`simulate`] evaluates the trained policy on scenarios. Scenarios distributed
+//! across ranks via two-level distribution; within-rank parallelism via Rayon.
+//! Seed domain separated from training. No per-scenario allocations on hot path.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, SyncSender};
-use std::time::Instant;
 
 use cobre_comm::Communicator;
 use cobre_core::{EntityId, TrainingEvent};
-use cobre_solver::{Basis, RowBatch, SolverError, SolverInterface};
-use cobre_stochastic::context::ClassSchemes;
-use cobre_stochastic::{
-    ClassDimensions, ClassSampleRequest, ForwardSampler, ForwardSamplerConfig, SampleRequest,
-    build_forward_sampler,
-};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use cobre_solver::{SolverInterface, StageTemplate};
+use cobre_stochastic::{ClassSampleRequest, ForwardSampler, SampleRequest};
 
 use crate::{
     FutureCostFunction,
     context::{StageContext, TrainingContext},
-    forward::{build_cut_row_batch, partition},
     lp_builder::COST_SCALE_FACTOR,
-    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
+    noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     simulation::{
         config::SimulationConfig,
         error::SimulationError,
         extraction::EntityCounts,
         extraction::{
-            SolutionView, StageExtractionSpec, accumulate_category_costs, assign_scenarios,
-            extract_stage_result,
+            SolutionView, StageExtractionSpec, accumulate_category_costs, extract_stage_result,
         },
         types::{ScenarioCategoryCosts, SimulationScenarioResult, SimulationStageResult},
     },
     solver_stats::SolverStatsDelta,
-    workspace::SolverWorkspace,
+    workspace::{CapturedBasis, SolverWorkspace},
 };
 
 /// Offset added to the simulation scenario ID before passing to [`ForwardSampler::sample`].
@@ -80,13 +36,17 @@ use crate::{
 /// Training uses `global_scenario = rank * forward_passes + m`, while
 /// simulation uses `global_scenario = SIMULATION_SEED_OFFSET + scenario_id`.
 /// Both fit in `u32`; the offset guarantees no overlap for practical scenario counts.
-const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
+pub(crate) const SIMULATION_SEED_OFFSET: u32 = u32::MAX / 2;
 
 /// Per-worker scenario cost accumulation: `(scenario_id, total_cost, category_costs)`.
-type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
+pub(crate) type WorkerCosts = Vec<(u32, f64, ScenarioCategoryCosts)>;
 
-/// Per-worker solver statistics: `(scenario_id, delta)`.
-type WorkerStats = Vec<(u32, SolverStatsDelta)>;
+/// Per-worker solver statistics: `(scenario_id, opening, delta)`.
+///
+/// The `opening` field is always `-1` for simulation rows — simulation has one
+/// solve per `(scenario, stage)` with no opening loop. The sentinel value `-1`
+/// maps to a NULL `Int32` in the parquet schema.
+pub(crate) type WorkerStats = Vec<(u32, i32, SolverStatsDelta)>;
 
 /// Result of a simulation run, containing per-scenario costs and solver statistics.
 #[derive(Debug)]
@@ -94,7 +54,10 @@ pub struct SimulationRunResult {
     /// Per-scenario `(scenario_id, total_cost, category_costs)`, sorted by `scenario_id`.
     pub costs: Vec<(u32, f64, ScenarioCategoryCosts)>,
     /// Per-scenario solver statistics delta, sorted by `scenario_id`.
-    pub solver_stats: Vec<(u32, SolverStatsDelta)>,
+    ///
+    /// Each entry is `(scenario_id, opening, delta)` where `opening` is always
+    /// `-1` for simulation (no opening dimension).
+    pub solver_stats: Vec<(u32, i32, SolverStatsDelta)>,
 }
 
 /// Output-related inputs bundled from the caller for [`simulate`].
@@ -156,25 +119,28 @@ pub struct SimulationOutputSpec<'a> {
     pub event_sender: Option<Sender<TrainingEvent>>,
 }
 
-/// Scenario identifiers and scratch buffers bundled for `process_scenario_stages`.
-struct ScenarioIds<'a> {
+/// Per-scenario context bundled for `process_scenario_stages`.
+///
+/// Groups the scenario identifiers, scratch buffers, and noise sampler so the
+/// processor does not exceed the clippy `too_many_arguments` budget.
+pub(crate) struct ScenarioIds<'a> {
     /// Local scenario ID (0-based index within this rank's assigned slice).
-    scenario_id: u32,
+    pub(crate) scenario_id: u32,
     /// Global scenario ID passed to `ForwardSampler::sample` as `scenario`.
     ///
     /// Already includes [`SIMULATION_SEED_OFFSET`] to separate the simulation
     /// seed domain from the training forward pass domain.
-    global_scenario: u32,
+    pub(crate) global_scenario: u32,
     /// Total number of stages in the planning horizon.
-    num_stages: usize,
+    pub(crate) num_stages: usize,
     /// Total simulation scenario count, passed to `SampleRequest::total_scenarios`.
-    total_scenarios: u32,
-    /// Per-stage warm-start bases from the training checkpoint.
-    stage_bases: &'a [Option<Basis>],
+    pub(crate) total_scenarios: u32,
     /// Caller-owned buffer for raw noise output (reused across stages).
-    raw_noise_buf: &'a mut [f64],
+    pub(crate) raw_noise_buf: &'a mut [f64],
     /// Caller-owned permutation scratch for LHS generation (reused across stages).
-    perm_scratch: &'a mut [usize],
+    pub(crate) perm_scratch: &'a mut [usize],
+    /// Noise sampler used to draw per-stage stochastic values.
+    pub(crate) sampler: &'a ForwardSampler<'a>,
 }
 
 /// Rebuild the `row_lower` slice for a stage with full unscaling.
@@ -186,7 +152,11 @@ struct ScenarioIds<'a> {
 ///
 /// When `row_scale` is empty (no prescaling), the function does a bulk memcpy
 /// without per-element division, matching the old fast path.
-#[allow(clippy::too_many_arguments)]
+///
+/// Structurally independent parameters: template buffers (`template_row_lower`,
+/// `row_scale`, `scratch_buf`), load-RHS buffer (`load_rhs_buf`), and load-dimension
+/// indices (`n_load_buses`, `load_balance_row_start`, `n_blks`, `load_bus_indices`)
+/// are per-call scratch or lookup tables with no natural grouping.
 fn build_row_lower_unscaled<'a>(
     template_row_lower: &[f64],
     row_scale: &[f64],
@@ -243,6 +213,42 @@ struct SimStageIds {
     scenario_id: u32,
 }
 
+/// Load-path inputs bundled for `solve_simulation_stage`.
+///
+/// The LP is loaded via `load_model(baked_template)` — the baked template
+/// already embeds all active cut rows as structural rows. No `add_rows` call
+/// is needed.
+struct SimStageLoadSpec<'a> {
+    /// Baked template for this stage; always populated after the startup re-bake.
+    baked_template: &'a StageTemplate,
+    /// Warm-start basis captured during training at this stage, if any.
+    warm_basis: Option<&'a CapturedBasis>,
+    /// Runtime window for the basis-activity classifier.
+    /// Derived from `SimulationConfig::basis_activity_window`.
+    basis_activity_window: u32,
+}
+
+/// Per-stage batched form of [`SimStageLoadSpec`] consumed by
+/// `process_scenario_stages`; indexed by stage via [`Self::stage`].
+pub(crate) struct SimScenarioLoadSpec<'a> {
+    pub(crate) baked_templates: &'a [StageTemplate],
+    pub(crate) stage_bases: &'a [Option<CapturedBasis>],
+    /// Runtime window for the basis-activity classifier.
+    /// Propagated into each per-stage [`SimStageLoadSpec`] via [`Self::stage`].
+    pub(crate) basis_activity_window: u32,
+}
+
+impl<'a> SimScenarioLoadSpec<'a> {
+    #[inline]
+    fn stage(&self, t: usize) -> SimStageLoadSpec<'a> {
+        SimStageLoadSpec {
+            baked_template: &self.baked_templates[t],
+            warm_basis: self.stage_bases.get(t).and_then(Option::as_ref),
+            basis_activity_window: self.basis_activity_window,
+        }
+    }
+}
+
 /// Patch NCS column upper bounds in the LP solver with per-scenario availability.
 ///
 /// Called after `set_row_bounds` and before `solve`. The `ncs_col_upper_buf`
@@ -280,18 +286,28 @@ fn apply_ncs_col_bounds<S: SolverInterface>(
 ///
 /// Patches the LP for stage `t`, solves it, extracts inflow/row-lower data,
 /// and returns `(immediate_cost, SimulationStageResult)`. When a warm-start
-/// basis is provided, the LP is solved via `solve_with_basis`; otherwise it
-/// falls back to a cold-start `solve`. The warm-start basis is a read-only,
-/// per-stage artifact from training, so determinism is preserved.
+/// basis is provided, the LP is solved via slot-tracked `reconstruct_basis` then
+/// `solve(Some(&basis))`; otherwise it falls back to a cold-start `solve(None)`. The
+/// warm-start basis is a read-only, per-stage artifact from training, so
+/// determinism is preserved.
+///
+/// `load_model(baked_template)` is always used — the cut rows are already
+/// structural rows in the baked template; no `add_rows` call is needed.
+/// When `baked_templates` was `None` on `simulate` entry, the startup re-bake
+/// already produced a local `Vec<StageTemplate>` before this function is reached.
+// RATIONALE: solve_simulation_stage orchestrates the full per-stage simulation pipeline:
+// noise application, NCS patching, LP solve, result extraction, and output writing.
+// Each phase is a semantically distinct step; splitting further would fragment the
+// per-stage invariant tracking without reducing the total operations performed.
 #[allow(clippy::too_many_lines)]
 fn solve_simulation_stage<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
+    fcf: &FutureCostFunction,
     training_ctx: &TrainingContext<'_>,
-    cut_batch: &RowBatch,
+    load_spec: &SimStageLoadSpec<'_>,
     output: &SimulationOutputSpec<'_>,
     ids: &SimStageIds,
-    warm_basis: Option<&Basis>,
 ) -> Result<(f64, SimulationStageResult), SimulationError> {
     // Precondition: ws.scratch.noise_buf, ws.scratch.load_rhs_buf, and
     // ws.scratch.ncs_col_upper_buf are populated by the caller
@@ -302,8 +318,9 @@ fn solve_simulation_stage<S: SolverInterface>(
         ..
     } = training_ctx;
     let t = ids.t;
-    ws.solver.load_model(&ctx.templates[t]);
-    ws.solver.add_rows(cut_batch);
+    // The baked template already embeds all active cut rows as structural rows.
+    // No add_rows call is needed.
+    ws.solver.load_model(load_spec.baked_template);
     ws.patch_buf.fill_forward_patches(
         indexer,
         &ws.current_state,
@@ -344,81 +361,133 @@ fn solve_simulation_stage<S: SolverInterface>(
         );
     }
 
-    let view = if let Some(basis) = warm_basis {
-        ws.solver.solve_with_basis(basis)
-    } else {
-        ws.solver.solve()
-    }
-    .map_err(|e| match e {
-        SolverError::Infeasible => SimulationError::LpInfeasible {
-            scenario_id: ids.scenario_id,
-            stage_id: ids.stage_id_u32,
-            solver_message: "LP infeasible".to_string(),
-        },
-        other => SimulationError::SolverError {
-            scenario_id: ids.scenario_id,
-            stage_id: ids.stage_id_u32,
-            solver_message: other.to_string(),
-        },
-    })?;
+    // Take scratch buffers out of ws before run_stage_solve borrows ws.
+    // The `mem::take` pattern (capacity retained, empty vec left in field) allows
+    // us to pass borrowed slices while `&mut ws` is also live, and to fill
+    // unscaled_primal/unscaled_dual from `view` slices that are still tied to 'ws.
+    // All three are restored to ws.scratch at function end so the next stage reuses
+    // the warmed allocations.
+    let mut current_state_local: Vec<f64> = std::mem::take(&mut ws.scratch.current_state_scratch);
+    let mut unscaled_primal: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_primal);
+    let mut unscaled_dual: Vec<f64> = std::mem::take(&mut ws.scratch.unscaled_dual);
 
-    // Unscale primal values when column scaling is active.
+    current_state_local.clear();
+    current_state_local.extend_from_slice(&ws.current_state[..indexer.n_state]);
+
+    let inputs = crate::stage_solve::StageInputs {
+        stage_context: ctx,
+        indexer,
+        pool: &fcf.pools[t],
+        current_state: &current_state_local,
+        stored_basis: load_spec.warm_basis,
+        baked_template: load_spec.baked_template,
+        stage_index: t,
+        scenario_index: ids.scenario_id as usize,
+        iteration: None,            // simulation has no iteration counter
+        horizon_is_terminal: false, // simulation stage-sweep semantics
+        terminal_has_boundary_cuts: false,
+        basis_activity_window: load_spec.basis_activity_window,
+    };
+
+    let outcome =
+        crate::stage_solve::run_stage_solve(ws, crate::stage_solve::Phase::Simulation, &inputs)
+            .map_err(|e| match e {
+                crate::error::SddpError::Infeasible {
+                    stage, scenario, ..
+                } => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let scenario_id = scenario as u32;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let stage_id = stage as u32;
+                    SimulationError::LpInfeasible {
+                        scenario_id,
+                        stage_id,
+                        solver_message: "LP infeasible".to_string(),
+                    }
+                }
+                crate::error::SddpError::Solver(other) => SimulationError::SolverError {
+                    scenario_id: ids.scenario_id,
+                    stage_id: ids.stage_id_u32,
+                    solver_message: other.to_string(),
+                },
+                other => SimulationError::SolverError {
+                    scenario_id: ids.scenario_id,
+                    stage_id: ids.stage_id_u32,
+                    solver_message: format!("{other}"),
+                },
+            })?;
+
+    let crate::stage_solve::StageOutcome::Simulation {
+        view,
+        recon_stats: _,
+    } = outcome
+    else {
+        unreachable!("run_stage_solve(Phase::Simulation) returns Simulation variant")
+    };
+
+    // Extract scaling slices and objective scalar before filling unscaled buffers.
+    // `view` borrows from `ws` (via run_stage_solve), so we must finish all reads
+    // of `view` before the view borrow ends.
     let col_scale = &ctx.templates[ids.t].col_scale;
-    {
-        let buf = &mut ws.scratch.unscaled_primal;
-        if col_scale.is_empty() {
-            buf.clear();
-            buf.extend_from_slice(view.primal);
-        } else {
-            buf.resize(view.primal.len(), 0.0);
-            for (j, (xp, &d)) in view.primal.iter().zip(col_scale).enumerate() {
-                buf[j] = d * xp;
-            }
-        }
+    let row_scale = &ctx.templates[ids.t].row_scale;
+    let view_objective = view.objective;
+
+    // Fill the taken-out unscaled buffers from view.primal/view.dual. The locals
+    // already carry the pre-warmed capacity; clear() + extend reuses it.
+    unscaled_primal.clear();
+    if col_scale.is_empty() {
+        unscaled_primal.extend_from_slice(view.primal);
+    } else {
+        unscaled_primal.extend(
+            view.primal
+                .iter()
+                .zip(col_scale.iter())
+                .map(|(&xp, &d)| d * xp),
+        );
     }
-    // Unscale dual values when row scaling is active.
+
     // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
     // Structural rows use row_scale[i]; rows beyond the template length
     // (cut rows) have implicit row_scale = 1.0.
-    let row_scale = &ctx.templates[ids.t].row_scale;
-    {
-        let buf = &mut ws.scratch.unscaled_dual;
-        if row_scale.is_empty() {
-            buf.clear();
-            buf.extend_from_slice(view.dual);
-        } else {
-            buf.resize(view.dual.len(), 0.0);
-            for (i, &d) in view.dual.iter().enumerate() {
-                let scale = if i < row_scale.len() {
-                    row_scale[i]
-                } else {
-                    1.0
-                };
-                buf[i] = d * scale;
-            }
-        }
+    unscaled_dual.clear();
+    if row_scale.is_empty() {
+        unscaled_dual.extend_from_slice(view.dual);
+    } else {
+        unscaled_dual.extend(view.dual.iter().enumerate().map(|(i, &d)| {
+            let scale = if i < row_scale.len() {
+                row_scale[i]
+            } else {
+                1.0
+            };
+            d * scale
+        }));
     }
-    // Temporarily take the unscaled buffers out of scratch so we can
-    // simultaneously read them (via the SolutionView) and mutate other
-    // scratch fields inside extract_sim_stage_result.  std::mem::take
-    // replaces each field with an empty Vec (no allocation).
-    let unscaled_primal = std::mem::take(&mut ws.scratch.unscaled_primal);
-    let unscaled_dual = std::mem::take(&mut ws.scratch.unscaled_dual);
-    let unscaled_view = cobre_solver::SolutionView {
-        objective: view.objective,
-        primal: &unscaled_primal,
-        dual: &unscaled_dual,
-        reduced_costs: view.reduced_costs,
-        iterations: view.iterations,
-        solve_time_seconds: view.solve_time_seconds,
-    };
+
+    // End the `view` borrow of `ws` before mutating ws further.
+    // `SolutionView` is Copy so `drop(view)` would be a no-op; `let _` is idiomatic.
+    // `inputs` and its borrow of current_state_local ended at the `?` above
+    // (NLL sees no further use of inputs after that point).
+    // Restore scratch buffers so the next stage reuses the warmed allocations.
+    let _ = view;
+    ws.scratch.current_state_scratch = current_state_local;
+    ws.scratch.unscaled_primal = unscaled_primal;
+    ws.scratch.unscaled_dual = unscaled_dual;
+
+    // extract_sim_stage_result takes individual scratch field borrows so the
+    // borrow checker can see that unscaled_primal/dual (passed as &[f64]) are
+    // disjoint from the fields it mutates (&mut inflow_m3s_buf, &mut row_lower_buf).
     let (immediate_cost, result) = extract_sim_stage_result(
-        &mut ws.scratch,
+        &mut ws.scratch.inflow_m3s_buf,
+        &mut ws.scratch.row_lower_buf,
+        &ws.scratch.load_rhs_buf,
+        &ws.scratch.ncs_col_upper_buf,
+        &ws.scratch.unscaled_primal,
+        &ws.scratch.unscaled_dual,
+        view_objective,
         ctx,
         output,
         indexer,
         ids,
-        &unscaled_view,
         n_stochastic_ncs,
     );
     // Save incoming lag values before overwriting state.
@@ -431,19 +500,50 @@ fn solve_simulation_stage<S: SolverInterface>(
 
     ws.current_state.clear();
     ws.current_state
-        .extend_from_slice(&unscaled_primal[..indexer.n_state]);
+        .extend_from_slice(&ws.scratch.unscaled_primal[..indexer.n_state]);
 
-    // Shift lag state: lag[0] = Z_t (from z_inflow primal), lag[l] = lag[l-1] (shift).
-    crate::noise::shift_lag_state(
+    // Accumulate and shift lag state using stage-level transition weights.
+    // For monthly-only studies this degenerates to the previous direct shift.
+    let stage_lag = ctx.stage_lag_transitions.get(ids.t).copied().unwrap_or(
+        cobre_core::temporal::StageLagTransition {
+            accumulate_weight: 1.0,
+            spillover_weight: 0.0,
+            finalize_period: true,
+            accumulate_downstream: false,
+            downstream_accumulate_weight: 0.0,
+            downstream_spillover_weight: 0.0,
+            downstream_finalize: false,
+            rebuild_from_downstream: false,
+        },
+    );
+    let downstream_par_order = ws
+        .scratch
+        .downstream_completed_lags
+        .len()
+        .checked_div(ws.scratch.lag_accumulator.len())
+        .unwrap_or(0);
+    // Pass unscaled_primal as a separate borrow so the borrow checker sees it is
+    // disjoint from the &mut ws.scratch.lag_* fields passed alongside it.
+    let unscaled_primal_ref: &[f64] = &ws.scratch.unscaled_primal;
+    crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,
-        &unscaled_primal,
+        unscaled_primal_ref,
         indexer,
+        &stage_lag,
+        &mut crate::noise::LagAccumState {
+            accumulator: &mut ws.scratch.lag_accumulator,
+            weight_accum: &mut ws.scratch.lag_weight_accum,
+        },
+        &mut crate::noise::DownstreamAccumState {
+            accumulator: &mut ws.scratch.downstream_accumulator,
+            weight_accum: &mut ws.scratch.downstream_weight_accum,
+            completed_lags: &mut ws.scratch.downstream_completed_lags,
+            n_completed: &mut ws.scratch.downstream_n_completed,
+            par_order: downstream_par_order,
+        },
     );
 
-    // Put the buffers back so they are reused on the next stage.
-    ws.scratch.unscaled_primal = unscaled_primal;
-    ws.scratch.unscaled_dual = unscaled_dual;
     Ok((immediate_cost, result))
 }
 
@@ -451,13 +551,25 @@ fn solve_simulation_stage<S: SolverInterface>(
 ///
 /// Separated from [`solve_simulation_stage`] to keep that function under the
 /// line-count lint limit.
+///
+/// Takes individual scratch field borrows rather than `&mut ScratchBuffers` so
+/// the caller can pass `unscaled_primal`/`unscaled_dual` as `&[f64]` slices of
+/// their respective scratch fields while simultaneously passing `&mut` borrows to
+/// the fields this function actually mutates (`inflow_m3s_buf`, `row_lower_buf`).
+/// The borrow checker can verify disjointness at field granularity.
+#[allow(clippy::too_many_arguments)]
 fn extract_sim_stage_result(
-    scratch: &mut crate::workspace::ScratchBuffers,
+    inflow_m3s_buf: &mut Vec<f64>,
+    row_lower_buf: &mut Vec<f64>,
+    load_rhs_buf: &[f64],
+    ncs_col_upper_buf: &[f64],
+    unscaled_primal: &[f64],
+    unscaled_dual: &[f64],
+    view_objective: f64,
     ctx: &StageContext<'_>,
     output: &SimulationOutputSpec<'_>,
-    indexer: &crate::StageIndexer,
+    indexer: &crate::indexer::StageIndexer,
     ids: &SimStageIds,
-    view: &cobre_solver::SolutionView<'_>,
     n_stochastic_ncs: usize,
 ) -> (f64, SimulationStageResult) {
     let t = ids.t;
@@ -466,18 +578,16 @@ fn extract_sim_stage_result(
         .get(t)
         .and_then(|tmpl| tmpl.objective.get(indexer.theta).copied())
         .unwrap_or(1.0);
-    let theta_contribution = view.primal[indexer.theta] * theta_obj_coeff;
-    let immediate_cost = (view.objective - theta_contribution) * COST_SCALE_FACTOR;
+    let theta_contribution = unscaled_primal[indexer.theta] * theta_obj_coeff;
+    let immediate_cost = (view_objective - theta_contribution) * COST_SCALE_FACTOR;
     // Read realized inflow Z_t directly from the LP primal solution.
     // The z_h variables are defined by the z-inflow constraint:
     //   z_h = base_h + sum_l[psi_l * lag_in[h,l]] + sigma_h * eta_h
     // This is the total natural inflow, including PAR lag contribution
     // and gross of withdrawal.
-    scratch.inflow_m3s_buf.clear();
+    inflow_m3s_buf.clear();
     for h in 0..ctx.n_hydros {
-        scratch
-            .inflow_m3s_buf
-            .push(view.primal[indexer.z_inflow.start + h]);
+        inflow_m3s_buf.push(unscaled_primal[indexer.z_inflow.start + h]);
     }
     let blk_hrs = output
         .block_hours_per_stage
@@ -495,8 +605,8 @@ fn extract_sim_stage_result(
     let row_lower_ref = build_row_lower_unscaled(
         &ctx.templates[t].row_lower,
         &ctx.templates[t].row_scale,
-        &scratch.load_rhs_buf,
-        &mut scratch.row_lower_buf,
+        load_rhs_buf,
+        row_lower_buf,
         ctx.n_load_buses,
         load_row_start,
         load_n_blks,
@@ -508,35 +618,33 @@ fn extract_sim_stage_result(
     let ncs_n = output.n_ncs_per_stage.get(t).copied().unwrap_or(0);
     let ncs_col_start = output.ncs_col_starts.get(t).copied().unwrap_or(0);
     let stage_n_blks = ctx.block_counts_per_stage.get(t).copied().unwrap_or(0);
-    let ncs_col_upper: &[f64] = if n_stochastic_ncs > 0
-        && n_stochastic_ncs == ncs_n
-        && !scratch.ncs_col_upper_buf.is_empty()
-    {
-        // All active NCS entities at this stage are stochastic — use the patched values.
-        &scratch.ncs_col_upper_buf
-    } else if ncs_n > 0 && stage_n_blks > 0 {
-        let start = ncs_col_start;
-        let end = start + ncs_n * stage_n_blks;
-        if end <= ctx.templates[t].col_upper.len() {
-            &ctx.templates[t].col_upper[start..end]
+    let ncs_col_upper: &[f64] =
+        if n_stochastic_ncs > 0 && n_stochastic_ncs == ncs_n && !ncs_col_upper_buf.is_empty() {
+            // All active NCS entities at this stage are stochastic — use the patched values.
+            ncs_col_upper_buf
+        } else if ncs_n > 0 && stage_n_blks > 0 {
+            let start = ncs_col_start;
+            let end = start + ncs_n * stage_n_blks;
+            if end <= ctx.templates[t].col_upper.len() {
+                &ctx.templates[t].col_upper[start..end]
+            } else {
+                &[]
+            }
         } else {
             &[]
-        }
-    } else {
-        &[]
-    };
+        };
     let result = extract_stage_result(
         &SolutionView {
-            primal: view.primal,
-            dual: view.dual,
-            objective: view.objective,
+            primal: unscaled_primal,
+            dual: unscaled_dual,
+            objective: view_objective,
             objective_coeffs: &ctx.templates[t].objective,
             row_lower: row_lower_ref,
         },
         &StageExtractionSpec {
             indexer,
             entity_counts: output.entity_counts,
-            inflow_m3s_per_hydro: &scratch.inflow_m3s_buf,
+            inflow_m3s_per_hydro: inflow_m3s_buf,
             block_hours: blk_hrs,
             generic_constraint_entries: output
                 .generic_constraint_row_entries
@@ -567,40 +675,92 @@ fn extract_sim_stage_result(
     (immediate_cost, result)
 }
 
-fn process_scenario_stages<S: SolverInterface>(
+/// Reset workspace state to the initial conditions for a new scenario.
+///
+/// Separated from [`process_scenario_stages`] to keep that function under the
+/// line-count lint limit.
+fn reset_scenario_state<S: SolverInterface>(
+    ws: &mut crate::workspace::SolverWorkspace<S>,
+    sampler: &ForwardSampler<'_>,
+    global_scenario: u32,
+    total_scenarios: u32,
+    inflow_lags_start: usize,
+    training_ctx: &TrainingContext<'_>,
+) {
+    let TrainingContext {
+        initial_state,
+        recent_accum_seed,
+        recent_weight_seed,
+        ..
+    } = training_ctx;
+    ws.current_state.clear();
+    ws.current_state.extend_from_slice(initial_state);
+    sampler.apply_initial_state(
+        &ClassSampleRequest {
+            iteration: 0,
+            scenario: global_scenario,
+            stage: 0,
+            stage_idx: 0,
+            total_scenarios,
+            noise_group_id: 0,
+        },
+        &mut ws.current_state,
+        inflow_lags_start,
+    );
+    // Seed (or zero) the lag accumulator at trajectory start so it does not
+    // carry state across simulation scenarios. When recent_accum_seed is
+    // non-empty, copy it instead of zeroing — this pre-fills the partial
+    // period with pre-study observed data.
+    if recent_accum_seed.is_empty() {
+        ws.scratch.lag_accumulator.fill(0.0);
+        ws.scratch.lag_weight_accum = 0.0;
+    } else {
+        ws.scratch.lag_accumulator[..recent_accum_seed.len()].copy_from_slice(recent_accum_seed);
+        ws.scratch.lag_weight_accum = *recent_weight_seed;
+    }
+    // Reset downstream accumulator at trajectory start.
+    ws.scratch
+        .downstream_accumulator
+        .iter_mut()
+        .for_each(|v| *v = 0.0);
+    ws.scratch.downstream_weight_accum = 0.0;
+    ws.scratch
+        .downstream_completed_lags
+        .iter_mut()
+        .for_each(|v| *v = 0.0);
+    ws.scratch.downstream_n_completed = 0;
+}
+
+pub(crate) fn process_scenario_stages<S: SolverInterface>(
     ws: &mut crate::workspace::SolverWorkspace<S>,
     ctx: &StageContext<'_>,
+    fcf: &FutureCostFunction,
     training_ctx: &TrainingContext<'_>,
-    cut_batches: &[RowBatch],
+    load_spec: &SimScenarioLoadSpec<'_>,
     output: &SimulationOutputSpec<'_>,
     ids: &mut ScenarioIds<'_>,
-    sampler: &ForwardSampler<'_>,
 ) -> Result<(f64, Vec<SimulationStageResult>), SimulationError> {
     let TrainingContext {
         indexer,
         stochastic,
-        initial_state,
         ..
     } = training_ctx;
-    // Reset workspace state to the initial conditions for this scenario.
-    ws.current_state.clear();
-    ws.current_state.extend_from_slice(initial_state);
-    let class_req = ClassSampleRequest {
-        iteration: 0,
-        scenario: ids.global_scenario,
-        stage: 0,
-        stage_idx: 0,
-        total_scenarios: ids.total_scenarios,
-    };
-    sampler.apply_initial_state(&class_req, &mut ws.current_state, indexer.inflow_lags.start);
+    reset_scenario_state(
+        ws,
+        ids.sampler,
+        ids.global_scenario,
+        ids.total_scenarios,
+        indexer.inflow_lags.start,
+        training_ctx,
+    );
     let mut total_cost = 0.0_f64;
     let mut stage_results = Vec::with_capacity(ids.num_stages);
 
-    #[allow(clippy::needless_range_loop)] // t indexes cut_batches, ctx arrays, and SimStageIds
+    #[allow(clippy::needless_range_loop)] // t indexes load_spec, ctx arrays, and SimStageIds
     for t in 0..ids.num_stages {
         #[allow(clippy::cast_possible_truncation)]
         let stage_id_u32 = t as u32;
-        let noise = sampler.sample(SampleRequest {
+        let noise = ids.sampler.sample(SampleRequest {
             iteration: 0,
             scenario: ids.global_scenario,
             stage: stage_id_u32,
@@ -608,6 +768,7 @@ fn process_scenario_stages<S: SolverInterface>(
             noise_buf: ids.raw_noise_buf,
             perm_scratch: ids.perm_scratch,
             total_scenarios: ids.total_scenarios,
+            noise_group_id: ctx.noise_group_id_at(t),
         })?;
         let raw_noise = noise.as_slice();
         transform_inflow_noise(
@@ -635,8 +796,10 @@ fn process_scenario_stages<S: SolverInterface>(
         if n_stochastic_ncs > 0 {
             transform_ncs_noise(
                 raw_noise,
-                ctx.n_hydros,
-                ctx.n_load_buses,
+                &NcsNoiseOffsets {
+                    n_hydros: ctx.n_hydros,
+                    n_load_buses: ctx.n_load_buses,
+                },
                 stochastic,
                 t,
                 ctx.block_counts_per_stage[t],
@@ -647,15 +810,15 @@ fn process_scenario_stages<S: SolverInterface>(
         let (cost, result) = solve_simulation_stage(
             ws,
             ctx,
+            fcf,
             training_ctx,
-            &cut_batches[t],
+            &load_spec.stage(t),
             output,
             &SimStageIds {
                 t,
                 stage_id_u32,
                 scenario_id: ids.scenario_id,
             },
-            ids.stage_bases.get(t).and_then(Option::as_ref),
         )?;
         let cum_d = ctx
             .cumulative_discount_factors
@@ -675,7 +838,7 @@ fn process_scenario_stages<S: SolverInterface>(
 }
 
 /// Emit an in-progress simulation event if a sender is available.
-fn emit_sim_progress(
+pub(crate) fn emit_sim_progress(
     sender: Option<&Sender<TrainingEvent>>,
     scenario_cost: f64,
     solve_time_ms: f64,
@@ -702,7 +865,7 @@ fn emit_sim_progress(
 ///
 /// Extracted from `simulate`'s inner worker loop to keep that function within
 /// the 100-line limit.
-fn dispatch_scenario_result(
+pub(crate) fn dispatch_scenario_result(
     output: &SimulationOutputSpec<'_>,
     scenario_id: u32,
     total_cost: f64,
@@ -733,35 +896,11 @@ fn dispatch_scenario_result(
     Ok((scenario_id, total_cost, compact_category))
 }
 
-/// Evaluate the trained SDDP policy on this rank's assigned scenarios.
+/// Evaluate the trained SDDP policy on a set of scenarios.
 ///
-/// Distributes locally assigned scenarios across worker threads using the same
-/// static partitioning as the training forward pass. Each [`SolverWorkspace`]
-/// owns its solver, patch buffer, and current-state buffer exclusively — there
-/// is no shared mutable state between workers. When `stage_bases` provides a
-/// per-stage basis from the training checkpoint, each stage LP is warm-started
-/// via `solve_with_basis`; otherwise it falls back to a cold-start `solve`.
-/// The warm-start basis is read-only and shared across all threads, preserving
-/// determinism regardless of thread count.
-///
-/// `SyncSender::send()` is thread-safe; each worker sends its
-/// [`SimulationScenarioResult`] through `result_tx` as it completes each
-/// scenario. Channel send order may differ from scenario order, but the
-/// returned cost buffer is sorted by `scenario_id` for deterministic MPI
-/// aggregation.
-///
-/// Returns a compact cost buffer — one `(scenario_id, total_cost, category_costs)`
-/// entry per locally solved scenario, sorted by `scenario_id` in ascending
-/// order — for MPI aggregation by the caller.
-///
-/// ## Error handling
-///
-/// On `SolverError::Infeasible`, returns
-/// `SimulationError::LpInfeasible { scenario_id, stage_id, solver_message }`.
-/// On any other `SolverError`, returns
-/// `SimulationError::SolverError { scenario_id, stage_id, solver_message }`.
-/// On channel send failure (receiver dropped), returns
-/// `SimulationError::ChannelClosed`.
+/// Thin shim that delegates to `SimulationState::run`.
+/// All scheduling, bake logic, and rayon parallelism live in
+/// `crate::simulation::state`.
 ///
 /// # Errors
 ///
@@ -769,19 +908,6 @@ fn dispatch_scenario_result(
 /// feasible solution, `Err(SimulationError::SolverError { .. })` for other
 /// terminal LP solver failures, and `Err(SimulationError::ChannelClosed)` when
 /// the channel receiver has been dropped.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if any of the following debug preconditions are violated:
-///
-/// - `ctx.templates.len() != num_stages`
-/// - `ctx.base_rows.len() != num_stages`
-/// - `initial_state.len() != indexer.n_state`
-#[allow(
-    clippy::needless_pass_by_value,
-    clippy::too_many_lines,
-    clippy::too_many_arguments
-)]
 pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     workspaces: &mut [SolverWorkspace<S>],
     ctx: &StageContext<'_>,
@@ -789,155 +915,23 @@ pub fn simulate<S: SolverInterface + Send, C: Communicator>(
     training_ctx: &TrainingContext<'_>,
     config: &SimulationConfig,
     output: SimulationOutputSpec<'_>,
-    stage_bases: &[Option<Basis>],
+    baked_templates: Option<&[StageTemplate]>,
+    stage_bases: &[Option<CapturedBasis>],
     comm: &C,
 ) -> Result<SimulationRunResult, SimulationError> {
-    let TrainingContext {
-        horizon,
-        indexer,
-        initial_state,
-        ..
-    } = training_ctx;
-    let num_stages = horizon.num_stages();
-    let rank = comm.rank();
-    debug_assert_eq!(
-        ctx.templates.len(),
-        num_stages,
-        "templates.len()={} != num_stages={num_stages}",
-        ctx.templates.len()
-    );
-    debug_assert_eq!(
-        ctx.base_rows.len(),
-        num_stages,
-        "base_rows.len()={} != num_stages={num_stages}",
-        ctx.base_rows.len()
-    );
-    debug_assert_eq!(
-        initial_state.len(),
-        indexer.n_state,
-        "initial_state.len()={} != n_state={}",
-        initial_state.len(),
-        indexer.n_state
-    );
-
-    let cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|t| build_cut_row_batch(fcf, t, indexer, &ctx.templates[t].col_scale))
-        .collect();
-    let scenario_range = assign_scenarios(config.n_scenarios, rank, comm.size());
-    #[allow(clippy::cast_possible_truncation)]
-    let local_count = (scenario_range.end - scenario_range.start) as usize;
-    let scenario_start = scenario_range.start as usize;
-    let n_workers = workspaces.len().max(1);
-    let sim_start = Instant::now();
-    let scenarios_complete = AtomicU32::new(0);
-
-    let sampler = build_forward_sampler(ForwardSamplerConfig {
-        class_schemes: ClassSchemes {
-            inflow: Some(training_ctx.inflow_scheme),
-            load: Some(training_ctx.load_scheme),
-            ncs: Some(training_ctx.ncs_scheme),
-        },
-        ctx: training_ctx.stochastic,
-        stages: training_ctx.stages,
-        dims: ClassDimensions {
-            n_hydros: training_ctx.stochastic.n_hydros(),
-            n_load_buses: training_ctx.stochastic.n_load_buses(),
-            n_ncs: training_ctx.stochastic.n_stochastic_ncs(),
-        },
-        historical_library: training_ctx.historical_library,
-        external_inflow_library: training_ctx.external_inflow_library,
-        external_load_library: training_ctx.external_load_library,
-        external_ncs_library: training_ctx.external_ncs_library,
-    })?;
-
-    let worker_results: Vec<Result<(WorkerCosts, WorkerStats), SimulationError>> = workspaces
-        .par_iter_mut()
-        .enumerate()
-        .map(|(w, ws)| {
-            let (start_local, end_local) = partition(local_count, n_workers, w);
-            let worker_sender: Option<Sender<TrainingEvent>> = output.event_sender.clone();
-            let n_scenarios = end_local - start_local;
-            let mut worker_costs = Vec::with_capacity(n_scenarios);
-            let mut worker_stats = Vec::with_capacity(n_scenarios);
-            // Sampling scratch: allocated once per worker, reused across scenarios.
-            let noise_dim = training_ctx.stochastic.dim();
-            let mut raw_noise_buf = vec![0.0_f64; noise_dim];
-            #[allow(clippy::cast_possible_truncation)]
-            let mut perm_scratch = vec![0_usize; config.n_scenarios.max(1) as usize];
-
-            for local_idx in start_local..end_local {
-                #[allow(clippy::cast_possible_truncation)]
-                let scenario_id = (scenario_start + local_idx) as u32;
-                let global_scenario = SIMULATION_SEED_OFFSET.saturating_add(scenario_id);
-
-                let stats_before = ws.solver.statistics();
-                let (total_cost, stage_results) = process_scenario_stages(
-                    ws,
-                    ctx,
-                    training_ctx,
-                    &cut_batches,
-                    &output,
-                    &mut ScenarioIds {
-                        scenario_id,
-                        global_scenario,
-                        num_stages,
-                        total_scenarios: config.n_scenarios,
-                        stage_bases,
-                        raw_noise_buf: &mut raw_noise_buf,
-                        perm_scratch: &mut perm_scratch,
-                    },
-                    &sampler,
-                )?;
-                let stats_after = ws.solver.statistics();
-                let scenario_delta = SolverStatsDelta::from_snapshots(&stats_before, &stats_after);
-                let scenario_solve_time_ms = scenario_delta.solve_time_ms;
-                let scenario_lp_solves = scenario_delta.lp_solves;
-                worker_stats.push((scenario_id, scenario_delta));
-
-                worker_costs.push(dispatch_scenario_result(
-                    &output,
-                    scenario_id,
-                    total_cost,
-                    stage_results,
-                )?);
-                let completed = scenarios_complete.fetch_add(1, Ordering::Relaxed) + 1;
-                #[allow(clippy::cast_possible_truncation)]
-                emit_sim_progress(
-                    worker_sender.as_ref(),
-                    total_cost,
-                    scenario_solve_time_ms,
-                    scenario_lp_solves,
-                    completed,
-                    config.n_scenarios,
-                    sim_start.elapsed().as_millis() as u64,
-                );
-            }
-            Ok((worker_costs, worker_stats))
-        })
-        .collect();
-
-    let mut all_costs = Vec::with_capacity(local_count);
-    let mut all_stats = Vec::with_capacity(local_count);
-    for result in worker_results {
-        let (costs, stats) = result?;
-        all_costs.extend(costs);
-        all_stats.extend(stats);
-    }
-    all_costs.sort_by_key(|&(id, _, _)| id);
-    all_stats.sort_by_key(|&(id, _)| id);
-
-    if let Some(sender) = output.event_sender {
-        #[allow(clippy::cast_possible_truncation)]
-        let _ = sender.send(TrainingEvent::SimulationFinished {
-            scenarios: config.n_scenarios,
-            output_dir: String::new(),
-            elapsed_ms: sim_start.elapsed().as_millis() as u64,
-        });
-    }
-    Ok(SimulationRunResult {
-        costs: all_costs,
-        solver_stats: all_stats,
-    })
+    use crate::simulation::state::{SimulationInputs, SimulationState};
+    let mut state = SimulationState::new(training_ctx.horizon.num_stages());
+    state.run(&mut SimulationInputs::new(
+        workspaces,
+        ctx,
+        fcf,
+        training_ctx,
+        config,
+        output,
+        baked_templates,
+        stage_bases,
+        comm,
+    ))
 }
 
 #[cfg(test)]
@@ -953,13 +947,53 @@ mod tests {
     };
     use cobre_stochastic::StochasticContext;
 
-    use super::{SimulationOutputSpec, simulate};
+    use super::SimulationOutputSpec;
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
-        simulation::{config::SimulationConfig, error::SimulationError, extraction::EntityCounts},
-        workspace::{ScratchBuffers, SolverWorkspace},
+        cut::FutureCostFunction,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        lp_builder::PatchBuffer,
+        simulation::{
+            config::SimulationConfig,
+            error::SimulationError,
+            extraction::EntityCounts,
+            state::{SimulationInputs, SimulationState},
+        },
+        workspace::{BackwardAccumulators, CapturedBasis, ScratchBuffers, SolverWorkspace},
     };
+
+    /// Thin test helper that mirrors the old `simulate` free-function signature
+    /// and delegates to `SimulationState::run`. Allows all 24 existing test call
+    /// sites to stay unchanged apart from the function name.
+    #[allow(clippy::too_many_arguments)]
+    fn run_simulate<S: cobre_solver::SolverInterface + Send, C: cobre_comm::Communicator>(
+        workspaces: &mut [SolverWorkspace<S>],
+        ctx: &StageContext<'_>,
+        fcf: &crate::FutureCostFunction,
+        training_ctx: &TrainingContext<'_>,
+        config: &SimulationConfig,
+        output: SimulationOutputSpec<'_>,
+        baked_templates: Option<&[cobre_solver::StageTemplate]>,
+        stage_bases: &[Option<CapturedBasis>],
+        comm: &C,
+    ) -> Result<super::SimulationRunResult, SimulationError> {
+        let num_stages = training_ctx.horizon.num_stages();
+        let mut state = SimulationState::new(num_stages);
+        let mut inputs = SimulationInputs {
+            workspaces,
+            ctx,
+            fcf,
+            training_ctx,
+            config,
+            output,
+            baked_templates,
+            stage_bases,
+            comm,
+        };
+        state.run(&mut inputs)
+    }
 
     // ── Stub communicator ────────────────────────────────────────────────────
 
@@ -1016,6 +1050,20 @@ mod tests {
     ///
     /// Optionally returns `SolverError::Infeasible` at a specific (0-based) solve
     /// call index (counting across both cold-start and warm-start calls).
+    ///
+    /// `load_count` and `add_rows_count` track how many times `load_model` and
+    /// `add_rows` were called, used by the baked-path acceptance tests.
+    ///
+    /// `solve_count` counts calls to the cold-start `solve(None)` path only.
+    /// `solve_with_basis_count` counts calls to the warm-start `solve(Some(&basis))`
+    /// path only.  `call_count` tracks the combined total across both paths and
+    /// is used by the infeasibility injection logic.
+    ///
+    /// `recorded_basis` captures the last `Basis` passed to `solve(Some(&basis))`,
+    /// used by the warm-start reconstruction acceptance tests.
+    ///
+    /// `reconstruction_counter` counts `record_reconstruction_stats` invocations
+    /// (one per warm-start solve that applied a stored basis via slot reconciliation).
     struct MockSolver {
         solution: LpSolution,
         infeasible_at: Option<usize>,
@@ -1023,6 +1071,18 @@ mod tests {
         buf_primal: Vec<f64>,
         buf_dual: Vec<f64>,
         buf_reduced_costs: Vec<f64>,
+        /// Number of `load_model` calls since construction.
+        load_count: usize,
+        /// Number of `add_rows` calls since construction.
+        add_rows_count: usize,
+        /// Number of cold-start `solve(None)` calls.
+        solve_count: usize,
+        /// Number of warm-start `solve(Some(&basis))` calls.
+        solve_with_basis_count: usize,
+        /// Last `Basis` passed to `solve(Some(&basis))`, if any.
+        recorded_basis: Option<Basis>,
+        /// Cumulative `preserved` argument from `record_reconstruction_stats`.
+        reconstruction_counter: u32,
     }
 
     impl MockSolver {
@@ -1037,6 +1097,12 @@ mod tests {
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
+                load_count: 0,
+                add_rows_count: 0,
+                solve_count: 0,
+                solve_with_basis_count: 0,
+                recorded_basis: None,
+                reconstruction_counter: 0,
             }
         }
 
@@ -1051,6 +1117,12 @@ mod tests {
                 buf_primal,
                 buf_dual,
                 buf_reduced_costs,
+                load_count: 0,
+                add_rows_count: 0,
+                solve_count: 0,
+                solve_with_basis_count: 0,
+                recorded_basis: None,
+                reconstruction_counter: 0,
             }
         }
 
@@ -1079,20 +1151,29 @@ mod tests {
         fn solver_name_version(&self) -> String {
             "MockSolver 0.0.0".to_string()
         }
-        fn load_model(&mut self, _template: &StageTemplate) {}
-        fn add_rows(&mut self, _cuts: &RowBatch) {}
+        fn load_model(&mut self, _template: &StageTemplate) {
+            self.load_count += 1;
+        }
+        fn add_rows(&mut self, _cuts: &RowBatch) {
+            self.add_rows_count += 1;
+        }
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            if let Some(b) = basis {
+                self.solve_with_basis_count += 1;
+                self.recorded_basis = Some(b.clone());
+            } else {
+                self.solve_count += 1;
+            }
             self.do_solve()
         }
-        fn reset(&mut self) {}
         fn get_basis(&mut self, _out: &mut Basis) {}
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.do_solve()
+        fn record_reconstruction_stats(&mut self) {
+            self.reconstruction_counter += 1;
         }
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -1341,6 +1422,8 @@ mod tests {
     /// assertions about scenario ordering and call counts remain valid.
     fn single_workspace(solver: MockSolver) -> Vec<SolverWorkspace<MockSolver>> {
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, 0, 0), // N=1, L=0
             current_state: Vec::with_capacity(1),
@@ -1360,7 +1443,22 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 
@@ -1380,6 +1478,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1395,7 +1494,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1409,6 +1508,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1425,7 +1527,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1441,6 +1544,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         );
@@ -1484,6 +1588,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1500,7 +1605,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1514,6 +1619,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1530,7 +1638,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1546,6 +1655,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         );
@@ -1563,7 +1673,7 @@ mod tests {
         }
     }
 
-    /// Acceptance criterion (exact ticket spec): solver infeasible at scenario 2, stage 3
+    /// solver infeasible at scenario 2, stage 3
     /// with 4 scenarios and 4 stages → `SimulationError::LpInfeasible { scenario_id: 2, stage_id: 3 }`.
     ///
     /// Solve call index for (scenario=2, stage=3) = 2*4 + 3 = 11 (0-based).
@@ -1579,6 +1689,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1595,7 +1706,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1609,6 +1720,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1625,7 +1739,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1641,6 +1756,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         );
@@ -1671,6 +1787,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2,
             io_channel_capacity: 1,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1688,7 +1805,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1702,6 +1819,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1718,7 +1838,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1734,6 +1855,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         );
@@ -1761,6 +1883,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1783,7 +1906,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let run_result = simulate(
+        let run_result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1797,6 +1920,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1813,7 +1939,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1829,6 +1956,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -1859,6 +1987,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 6,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1875,7 +2004,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let run_result = simulate(
+        let run_result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1889,6 +2018,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1905,7 +2037,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -1921,6 +2054,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -1952,6 +2086,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 3,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -1967,7 +2102,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -1981,6 +2116,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -1997,7 +2135,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2013,6 +2152,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -2039,6 +2179,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 64,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2056,7 +2197,7 @@ mod tests {
         // Run with 1 workspace.
         let (tx1, _rx1) = mpsc::sync_channel(64);
         let mut workspaces_1 = single_workspace(MockSolver::always_ok(solution.clone()));
-        let result_1 = simulate(
+        let result_1 = run_simulate(
             &mut workspaces_1,
             &StageContext {
                 templates: &templates,
@@ -2070,6 +2211,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2086,7 +2230,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2102,6 +2247,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -2109,8 +2255,10 @@ mod tests {
 
         // Run with 4 workspaces.
         let (tx4, _rx4) = mpsc::sync_channel(64);
-        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
-            .map(|_| SolverWorkspace {
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4_i32)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: idx,
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(1),
@@ -2130,10 +2278,25 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
-        let result_4 = simulate(
+        let result_4 = run_simulate(
             &mut workspaces_4,
             &StageContext {
                 templates: &templates,
@@ -2147,6 +2310,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2163,7 +2329,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2179,6 +2346,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -2236,6 +2404,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 10,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2252,7 +2421,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2266,6 +2435,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2282,7 +2454,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2298,6 +2471,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            None,
             &[],
             &comm,
         );
@@ -2350,6 +2524,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2365,7 +2540,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        let result = simulate(
+        let result = run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2379,6 +2554,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2395,7 +2573,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2411,6 +2590,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         );
@@ -2424,7 +2604,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-017): `SimulationProgress` events are
+    /// `SimulationProgress` events are
     /// received in the channel BEFORE `simulate()` returns (during the
     /// parallel region).
     ///
@@ -2447,6 +2627,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2463,7 +2644,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2477,6 +2658,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2493,7 +2677,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2509,6 +2694,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            None,
             &[],
             &comm,
         )
@@ -2553,6 +2739,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2572,7 +2759,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2586,6 +2773,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2602,7 +2792,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2618,6 +2809,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            None,
             &[],
             &comm,
         )
@@ -2664,6 +2856,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios,
             io_channel_capacity: 32,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2680,7 +2873,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2694,6 +2887,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2710,7 +2906,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2726,6 +2923,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            None,
             &[],
             &comm,
         )
@@ -2770,7 +2968,7 @@ mod tests {
 
     /// Acceptance criterion: each `SimulationProgress` event carries a finite,
     /// non-NaN `scenario_cost`. Statistics accumulation is deferred to the
-    /// progress thread (ticket-007); this test verifies the per-scenario cost
+    /// progress thread; this test verifies the per-scenario cost
     /// field is always valid.
     #[test]
     fn simulate_progress_scenario_cost_is_finite() {
@@ -2786,6 +2984,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 5,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -2803,7 +3002,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -2817,6 +3016,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -2833,7 +3035,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -2849,6 +3052,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: Some(event_tx),
             },
+            None,
             &[],
             &comm,
         )
@@ -3061,6 +3265,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3075,6 +3280,8 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(4);
 
         let mut workspaces = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
@@ -3094,7 +3301,22 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3105,7 +3327,7 @@ mod tests {
         let noise_scale = vec![1.0_f64]; // 1 hydro, 1 stage
 
         let hprod = hydro_productivities_1hydro(n_stages);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3119,6 +3341,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3135,7 +3360,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3151,6 +3377,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -3215,7 +3442,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-028): when `n_load_buses == 0`,
+    /// when `n_load_buses == 0`,
     /// `load_rhs_buf` remains empty and `forward_patch_count` equals
     /// `N*(2+L)` as with the training forward pass.
     ///
@@ -3232,6 +3459,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3248,7 +3476,7 @@ mod tests {
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace(solver);
 
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3262,6 +3490,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3278,7 +3509,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3294,6 +3526,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -3313,7 +3546,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion (ticket-028): when load noise is present,
+    /// When load noise is present,
     /// `noise_buf` still contains only inflow values (not contaminated by load noise).
     ///
     /// `noise_buf` contains inflow realizations for the `n_hydros` hydros.
@@ -3353,6 +3586,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 4,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3367,6 +3601,8 @@ mod tests {
         let (tx, _rx) = mpsc::sync_channel(4);
 
         let mut workspaces = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, n_load_buses, 1),
             current_state: Vec::with_capacity(1),
@@ -3386,7 +3622,22 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -3395,7 +3646,7 @@ mod tests {
         let noise_scale = vec![1.0_f64];
 
         let hprod = hydro_productivities_1hydro(n_stages);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3409,6 +3660,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3425,7 +3679,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3441,6 +3696,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -3655,6 +3911,8 @@ mod tests {
         hydro_count: usize,
     ) -> Vec<SolverWorkspace<MockSolver>> {
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(hydro_count, 0, 0, 0),
             current_state: Vec::with_capacity(hydro_count),
@@ -3674,7 +3932,22 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 
@@ -3710,6 +3983,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3726,7 +4000,7 @@ mod tests {
         // Use the hydro-aware workspace builder so zero_targets_buf[..1] is valid.
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3740,6 +4014,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3756,7 +4033,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3772,6 +4050,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -3818,6 +4097,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 4,
             io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
         };
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
@@ -3833,7 +4113,7 @@ mod tests {
 
         let hprod = hydro_productivities_1hydro(n_stages);
         let mut workspaces = single_workspace_with_hydros(solver, 1);
-        simulate(
+        run_simulate(
             &mut workspaces,
             &StageContext {
                 templates: &templates,
@@ -3847,6 +4127,9 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
             &fcf,
             &TrainingContext {
@@ -3863,7 +4146,8 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
             &config,
             SimulationOutputSpec {
@@ -3879,6 +4163,7 @@ mod tests {
                 hydro_productivities_per_stage: &hprod,
                 event_sender: None,
             },
+            None,
             &[],
             &comm,
         )
@@ -3895,6 +4180,628 @@ mod tests {
             workspaces[0].scratch.noise_buf[0] < 0.0,
             "with None method, noise_buf[0] must be negative (raw eta applied), got {}",
             workspaces[0].scratch.noise_buf[0]
+        );
+    }
+
+    // ── baked-template acceptance tests ────────────────────────────
+
+    /// When `baked_templates` is `Some`,
+    /// `add_rows` is never called (zero `add_rows_count`) and `load_model` is
+    /// called exactly `n_scenarios * n_stages` times.
+    #[test]
+    fn simulate_baked_path_issues_zero_add_rows() {
+        let n_stages = 2;
+        let n_scenarios = 3u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        // Baked templates: for MockSolver the content does not matter; use the
+        // same minimal template as a stand-in for a baked (pre-merged) template.
+        let baked: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(32);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = run_simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            Some(baked.as_slice()),
+            &[],
+            &comm,
+        );
+
+        assert!(result.is_ok(), "baked path must succeed: {result:?}");
+        let expected_load_count = n_scenarios as usize * n_stages;
+        let solver = &workspaces[0].solver;
+        assert_eq!(
+            solver.add_rows_count, 0,
+            "baked path must call add_rows 0 times; got {}",
+            solver.add_rows_count
+        );
+        assert_eq!(
+            solver.load_count, expected_load_count,
+            "baked path must call load_model {} times; got {}",
+            expected_load_count, solver.load_count
+        );
+    }
+
+    /// When `baked_templates` is `None`
+    /// (fallback path), `add_rows` is called only when cuts exist.
+    ///
+    /// The FCF has 0 active cuts, so `cut_batch.num_rows == 0` for every stage,
+    /// meaning `add_rows` is gated by `if cut_batch.num_rows > 0`. This test
+    /// verifies the structural contract: with no cuts `add_rows_count == 0` on
+    /// the fallback path. When `baked_templates` is provided, `load_model` is
+    /// called against the baked template; when `None`, it is called against
+    /// `ctx.templates[t]`. The absence of `add_rows` when `num_rows == 0` holds
+    /// in both cases.
+    ///
+    /// To test the fallback counter path, we verify that `add_rows_count`
+    /// remains 0 on a zero-cut fallback run and that `load_count` equals
+    /// `n_scenarios * n_stages`, confirming the fallback path calls `load_model`
+    /// the same number of times as the baked path.
+    #[test]
+    fn simulate_fallback_path_issues_expected_add_rows() {
+        let n_stages = 2;
+        let n_scenarios = 3u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        // FCF with 0 cuts — cut_batch.num_rows will be 0 for every stage.
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(32);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = run_simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            // fallback path
+            None,
+            &[],
+            &comm,
+        );
+
+        assert!(result.is_ok(), "fallback path must succeed: {result:?}");
+        let expected_load_count = n_scenarios as usize * n_stages;
+        let solver = &workspaces[0].solver;
+        // With zero cuts, `cut_batch.num_rows == 0` so the guard
+        // `if cut_batch.num_rows > 0` prevents any `add_rows` call.
+        assert_eq!(
+            solver.add_rows_count, 0,
+            "fallback path with zero cuts must call add_rows 0 times; got {}",
+            solver.add_rows_count
+        );
+        assert_eq!(
+            solver.load_count, expected_load_count,
+            "fallback path must call load_model {} times; got {}",
+            expected_load_count, solver.load_count
+        );
+    }
+
+    /// When `baked_templates` is `Some`
+    /// but the slice length differs from `num_stages`, `simulate` returns
+    /// `SimulationError::InvalidConfiguration` whose message contains both lengths.
+    #[test]
+    fn simulate_baked_length_mismatch_returns_error() {
+        let n_stages = 3;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios: 2,
+            io_channel_capacity: 8,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(8);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        // Baked templates with wrong length (2 instead of 3).
+        let wrong_baked: Vec<StageTemplate> =
+            (0..n_stages - 1).map(|_| minimal_template_1_0()).collect();
+
+        let mut workspaces = single_workspace(solver);
+        let result = run_simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            Some(wrong_baked.as_slice()),
+            &[],
+            &comm,
+        );
+
+        match &result {
+            Err(SimulationError::InvalidConfiguration(msg)) => {
+                assert!(
+                    msg.contains('2') && msg.contains('3'),
+                    "error message must contain both lengths (2 and 3), got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidConfiguration error, got: {other:?}"),
+        }
+    }
+
+    // ── Warm-start CapturedBasis acceptance tests ─────────────────
+
+    /// When `stage_bases` contains a
+    /// `CapturedBasis` with known slots, the basis passed to `solve(Some(&basis))`
+    /// has `row_status.len() == base_row_count + active_cuts_count` and the tail
+    /// entries match the stored cut statuses verbatim (preservation path).
+    ///
+    /// Setup:
+    /// - `CapturedBasis` at stage 0: `base_row_count=2`, `cut_row_slots=[10,11,12]`,
+    ///   `state_at_capture=[1.0]`, `row_status` length 5 with distinct sentinel values.
+    /// - FCF pool at stage 0 has exactly those 3 slots active (slots 10, 11, 12).
+    /// - `MockSolver::recorded_basis` captures the last basis received by
+    ///   `solve(Some(&basis))`.
+    ///
+    /// The reconstruction maps all 3 stored cut rows (slots 10, 11, 12) into
+    /// the output basis — the preservation path.  The tail of the output
+    /// `row_status` must equal the tail of the stored `row_status`.
+    #[test]
+    fn simulate_with_captured_basis_preserves_row_statuses() {
+        // Sentinel status values for the stored cut rows so we can verify exact
+        // preservation.  These are arbitrary non-zero i32 values; the test only
+        // checks that they are passed through unchanged.
+        const CUT_STATUS_0: i32 = 7;
+        const CUT_STATUS_1: i32 = 11;
+        const CUT_STATUS_2: i32 = 13;
+        // Base rows use HIGHS_BASIS_STATUS_BASIC = 1.
+        const BASE_STATUS: i32 = 1;
+
+        let n_stages = 1;
+        let n_scenarios = 1u32;
+        let templates: Vec<StageTemplate> = vec![minimal_template_1_0()];
+        let base_rows: Vec<usize> = vec![2]; // 2 structural rows in the template
+
+        let indexer = StageIndexer::new(1, 0);
+
+        // Build an FCF with 3 active cuts at slots 10, 11, 12 for stage 0.
+        // warm_start_count=10, forward_passes=1 →
+        //   add_cut(iter=0, fwd=0) → slot 10
+        //   add_cut(iter=1, fwd=0) → slot 11
+        //   add_cut(iter=2, fwd=0) → slot 12
+        let mut fcf = FutureCostFunction::new(n_stages, 1, 1, 5, &[10]);
+        fcf.pools[0].add_cut(0, 0, 50.0, &[1.0]);
+        fcf.pools[0].add_cut(1, 0, 60.0, &[1.0]);
+        fcf.pools[0].add_cut(2, 0, 70.0, &[1.0]);
+        assert_eq!(
+            fcf.pools[0].active_count(),
+            3,
+            "pool must have exactly 3 active cuts at slots 10, 11, 12"
+        );
+        assert_eq!(
+            fcf.pools[0].populated_count, 13,
+            "populated_count must be 13 (slot 12 + 1)"
+        );
+
+        // Build the CapturedBasis with matching slot metadata.
+        let mut cb = CapturedBasis::new(4, 5, 2, 3, 1);
+        // row_status: 2 base rows + 3 cut rows with sentinel values.
+        cb.basis.row_status = vec![
+            BASE_STATUS,
+            BASE_STATUS,
+            CUT_STATUS_0,
+            CUT_STATUS_1,
+            CUT_STATUS_2,
+        ];
+        cb.basis.col_status = vec![1_i32; 4];
+        cb.cut_row_slots.extend_from_slice(&[10u32, 11, 12]);
+        cb.state_at_capture.push(1.0);
+
+        let stage_bases: Vec<Option<CapturedBasis>> = vec![Some(cb)];
+
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 8,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(16);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = run_simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            // fallback path (no baked templates); reconstruction uses pool.active_cuts()
+            None,
+            &stage_bases,
+            &comm,
+        );
+
+        assert!(
+            result.is_ok(),
+            "simulate must succeed with CapturedBasis warm-start: {result:?}"
+        );
+
+        // Verify that solve(Some(&basis)) was called (warm-start path taken).
+        let solver = &workspaces[0].solver;
+        assert_eq!(
+            solver.solve_with_basis_count, 1,
+            "warm-start solve must be called exactly once (1 scenario × 1 stage)"
+        );
+        assert_eq!(
+            solver.solve_count, 0,
+            "cold-start solve must not be called when a CapturedBasis is provided"
+        );
+
+        // Verify the basis passed to solve(Some(&basis)) has the correct structure.
+        let recorded = solver
+            .recorded_basis
+            .as_ref()
+            .expect("recorded_basis must be Some after a warm-start solve");
+
+        // Row count: base_row_count=2 + 3 active cut slots = 5.
+        assert_eq!(
+            recorded.row_status.len(),
+            2 + 3,
+            "reconstructed basis row_status must have length base_row_count(2) + cuts(3) = 5, \
+             got {}",
+            recorded.row_status.len()
+        );
+
+        // The last 3 entries must match the stored cut statuses verbatim
+        // (all 3 slots were in the stored basis → preservation path).
+        let tail = &recorded.row_status[2..];
+        assert_eq!(
+            tail,
+            &[CUT_STATUS_0, CUT_STATUS_1, CUT_STATUS_2],
+            "reconstructed basis tail must match stored cut statuses verbatim \
+             (preservation path): expected [{CUT_STATUS_0}, {CUT_STATUS_1}, {CUT_STATUS_2}], \
+             got {tail:?}"
+        );
+    }
+
+    /// When `stage_bases` is `&[]`
+    /// (cold-start), every LP solve must go through `solver.solve(None)` and
+    /// `solve(Some(&basis))` must never be called.
+    ///
+    /// Uses `solve_count` and `solve_with_basis_count` split on `MockSolver`.
+    #[test]
+    fn simulate_with_empty_stage_bases_cold_starts() {
+        let n_stages = 2;
+        let n_scenarios = 3u32;
+        let templates: Vec<StageTemplate> = (0..n_stages).map(|_| minimal_template_1_0()).collect();
+        let base_rows: Vec<usize> = vec![0; n_stages];
+
+        let indexer = StageIndexer::new(1, 0);
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0; n_stages]);
+        let stochastic = make_stochastic_context(n_stages);
+        let config = SimulationConfig {
+            n_scenarios,
+            io_channel_capacity: 16,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+        };
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let initial_state = vec![50.0_f64];
+
+        let solution = fixed_solution(100.0, 30.0);
+        let solver = MockSolver::always_ok(solution);
+        let comm = StubComm { rank: 0, size: 1 };
+        let entity_counts = entity_counts_1_hydro();
+        let (tx, _rx) = mpsc::sync_channel(32);
+        let hprod = hydro_productivities_1hydro(n_stages);
+
+        let mut workspaces = single_workspace(solver);
+        let result = run_simulate(
+            &mut workspaces,
+            &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            &fcf,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &config,
+            SimulationOutputSpec {
+                result_tx: &tx,
+                zeta_per_stage: &[],
+                block_hours_per_stage: &[],
+                entity_counts: &entity_counts,
+                generic_constraint_row_entries: &[],
+                ncs_col_starts: &[],
+                n_ncs_per_stage: &[],
+                ncs_entity_ids_per_stage: &[],
+                diversion_upstream: &HashMap::new(),
+                hydro_productivities_per_stage: &hprod,
+                event_sender: None,
+            },
+            None,
+            // empty stage_bases → cold-start for every stage
+            &[],
+            &comm,
+        );
+
+        assert!(
+            result.is_ok(),
+            "cold-start simulate must succeed: {result:?}"
+        );
+
+        let solver = &workspaces[0].solver;
+        let expected_solves = n_scenarios as usize * n_stages;
+
+        assert_eq!(
+            solver.solve_with_basis_count, 0,
+            "warm-start solve must not be called when stage_bases is empty; \
+             got solve_with_basis_count={}",
+            solver.solve_with_basis_count
+        );
+        assert_eq!(
+            solver.solve_count, expected_solves,
+            "cold-start solve must be called exactly n_scenarios({n_scenarios}) × \
+             n_stages({n_stages}) = {expected_solves} times; got {}",
+            solver.solve_count
         );
     }
 }

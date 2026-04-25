@@ -1,17 +1,7 @@
-//! Stopping rule abstractions for the SDDP training loop.
+//! Stopping rules for the SDDP training loop.
 //!
-//! This module defines [`StoppingRule`] (five individual rule variants),
-//! [`StoppingRuleSet`] (composition layer), and [`MonitorState`] (the
-//! read-only snapshot of convergence monitor quantities consumed by rule
-//! evaluation).
-//!
-//! ## Design
-//!
-//! Rules use enum dispatch (`match self`) consistent with the other
-//! algorithm abstraction points in this crate. The [`StoppingRuleSet`]
-//! composes multiple rules with configurable boolean logic (`Any` / `All`).
-//! [`StoppingRule::GracefulShutdown`] is always evaluated first and bypasses
-//! the composition logic entirely.
+//! Defines stopping rule variants, composition logic, and convergence state.
+//! Rules use enum dispatch; [`StoppingRuleSet`] composes them with AND/OR logic.
 //!
 //! ## Usage
 //!
@@ -35,6 +25,8 @@
 //! assert!(result.triggered);
 //! assert_eq!(result.rule_name, "iteration_limit");
 //! ```
+
+use std::borrow::Cow;
 
 use cobre_core::StoppingRuleResult;
 
@@ -204,24 +196,22 @@ impl StoppingRule {
         match self {
             Self::IterationLimit { limit } => {
                 let triggered = state.iteration >= *limit;
-                let detail = format!("iteration {}/{}", state.iteration, limit);
                 StoppingRuleResult {
-                    rule_name: RULE_ITERATION_LIMIT.to_string(),
+                    rule_name: RULE_ITERATION_LIMIT,
                     triggered,
-                    detail,
+                    detail: Cow::Owned(format!("iteration {}/{}", state.iteration, limit)),
                 }
             }
 
             Self::TimeLimit { seconds } => {
                 let triggered = state.wall_time_seconds >= *seconds;
-                let detail = format!(
-                    "elapsed {:.1}s / {:.1}s limit",
-                    state.wall_time_seconds, seconds
-                );
                 StoppingRuleResult {
-                    rule_name: RULE_TIME_LIMIT.to_string(),
+                    rule_name: RULE_TIME_LIMIT,
                     triggered,
-                    detail,
+                    detail: Cow::Owned(format!(
+                        "elapsed {:.1}s / {:.1}s limit",
+                        state.wall_time_seconds, seconds
+                    )),
                 }
             }
 
@@ -239,15 +229,14 @@ impl StoppingRule {
 
             Self::GracefulShutdown => {
                 let triggered = state.shutdown_requested;
-                let detail = if triggered {
-                    "shutdown signal received".to_string()
-                } else {
-                    "no shutdown signal".to_string()
-                };
                 StoppingRuleResult {
-                    rule_name: RULE_GRACEFUL_SHUTDOWN.to_string(),
+                    rule_name: RULE_GRACEFUL_SHUTDOWN,
                     triggered,
-                    detail,
+                    detail: if triggered {
+                        Cow::Borrowed("shutdown signal received")
+                    } else {
+                        Cow::Borrowed("no shutdown signal")
+                    },
                 }
             }
         }
@@ -269,13 +258,13 @@ impl StoppingRule {
         let window = iterations as usize;
         if state.lower_bound_history.len() < window {
             return StoppingRuleResult {
-                rule_name: RULE_BOUND_STALLING.to_string(),
+                rule_name: RULE_BOUND_STALLING,
                 triggered: false,
-                detail: format!(
+                detail: Cow::Owned(format!(
                     "insufficient history: {}/{} iterations",
                     state.lower_bound_history.len(),
                     window
-                ),
+                )),
             };
         }
 
@@ -289,16 +278,15 @@ impl StoppingRule {
         let delta = (lb_current - lb_window_start) / denominator;
 
         let triggered = delta.abs() < tolerance;
-        let detail = format!(
-            "relative improvement {:.6} / tolerance {:.6} over {} iterations",
-            delta.abs(),
-            tolerance,
-            window
-        );
         StoppingRuleResult {
-            rule_name: RULE_BOUND_STALLING.to_string(),
+            rule_name: RULE_BOUND_STALLING,
             triggered,
-            detail,
+            detail: Cow::Owned(format!(
+                "relative improvement {:.6} / tolerance {:.6} over {} iterations",
+                delta.abs(),
+                tolerance,
+                window
+            )),
         }
     }
 
@@ -315,9 +303,12 @@ impl StoppingRule {
         // Only evaluate at multiples of `period`.
         if period == 0 || state.iteration % period != 0 {
             return StoppingRuleResult {
-                rule_name: RULE_SIMULATION_BASED.to_string(),
+                rule_name: RULE_SIMULATION_BASED,
                 triggered: false,
-                detail: format!("not a check iteration ({}/{})", state.iteration, period),
+                detail: Cow::Owned(format!(
+                    "not a check iteration ({}/{})",
+                    state.iteration, period
+                )),
             };
         }
 
@@ -326,18 +317,18 @@ impl StoppingRule {
         // the bound stability pre-filter passed and simulations were run.
         let Some(ref current_costs) = state.simulation_costs else {
             return StoppingRuleResult {
-                rule_name: RULE_SIMULATION_BASED.to_string(),
+                rule_name: RULE_SIMULATION_BASED,
                 triggered: false,
-                detail:
-                    "no simulation results available (bound stability check failed or first check)"
-                        .to_string(),
+                detail: Cow::Borrowed(
+                    "no simulation results available (bound stability check failed or first check)",
+                ),
             };
         };
 
         // `simulation_costs` carries the NEW costs; the convergence monitor
         // stores the PREVIOUS costs externally. At this stage we only have
         // one snapshot — triggered = false (requires two consecutive snapshots).
-        // Full two-snapshot comparison is wired in Epic 05.
+        // Full two-snapshot comparison is deferred (requires two consecutive snapshots).
         // For now: if costs are available, compute distance against a zero
         // baseline (conservative: never triggers on first evaluation).
         // This stub is correct: the simulation cost comparison requires two
@@ -353,12 +344,12 @@ impl StoppingRule {
             .sqrt();
 
         let triggered = distance < distance_tolerance;
-        let detail =
-            format!("simulation distance {distance:.6} / tolerance {distance_tolerance:.6}");
         StoppingRuleResult {
-            rule_name: RULE_SIMULATION_BASED.to_string(),
+            rule_name: RULE_SIMULATION_BASED,
             triggered,
-            detail,
+            detail: Cow::Owned(format!(
+                "simulation distance {distance:.6} / tolerance {distance_tolerance:.6}"
+            )),
         }
     }
 }

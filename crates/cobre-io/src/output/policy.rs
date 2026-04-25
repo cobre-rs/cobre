@@ -86,8 +86,6 @@ pub struct PolicyCutRecord<'a> {
     pub coefficients: &'a [f64],
     /// Whether this cut is currently active in the LP.
     pub is_active: bool,
-    /// Domination count for cut selection bookkeeping.
-    pub domination_count: u32,
 }
 
 /// One stage's solver basis for policy checkpoint serialization.
@@ -228,7 +226,6 @@ const CUT_FIELD_INTERCEPT: u16 = 14;
 const CUT_FIELD_COEFFICIENTS: u16 = 16;
 const CUT_FIELD_STATE_AT_GENERATION: u16 = 18;
 const CUT_FIELD_IS_ACTIVE: u16 = 20;
-const CUT_FIELD_DOMINATION_COUNT: u16 = 22;
 
 const STAGE_CUTS_FIELD_STAGE_ID: u16 = 4;
 const STAGE_CUTS_FIELD_STATE_DIMENSION: u16 = 6;
@@ -275,7 +272,6 @@ fn build_cut_table(
     builder.push_slot_always(CUT_FIELD_COEFFICIENTS, coefficients_vec);
     builder.push_slot_always(CUT_FIELD_STATE_AT_GENERATION, state_at_gen_vec);
     builder.push_slot_always::<bool>(CUT_FIELD_IS_ACTIVE, cut.is_active);
-    builder.push_slot_always::<u32>(CUT_FIELD_DOMINATION_COUNT, cut.domination_count);
 
     builder.end_table(tab)
 }
@@ -315,7 +311,6 @@ fn build_cut_table(
 ///     intercept: 42.0,
 ///     coefficients: &[1.0, 2.0, 3.0],
 ///     is_active: true,
-///     domination_count: 0,
 /// };
 /// let buf = serialize_stage_cuts(0, 3, 100, 0, &[cut], &[0], 1);
 /// assert!(!buf.is_empty());
@@ -541,7 +536,6 @@ pub struct StageCutsPayload<'a> {
 ///     intercept: 42.0,
 ///     coefficients: &coefficients,
 ///     is_active: true,
-///     domination_count: 0,
 /// };
 /// let stage_cuts = [StageCutsPayload {
 ///     stage_id: 0,
@@ -654,8 +648,6 @@ pub struct OwnedPolicyCutRecord {
     pub coefficients: Vec<f64>,
     /// Whether this cut is currently active in the LP.
     pub is_active: bool,
-    /// Domination count for cut selection bookkeeping.
-    pub domination_count: u32,
 }
 
 /// Owned version of [`PolicyBasisRecord`] returned by [`deserialize_stage_basis`].
@@ -935,7 +927,6 @@ fn read_table_vector_positions(buf: &[u8], vec_pos: usize) -> Option<Vec<usize>>
 ///     intercept: 42.0,
 ///     coefficients: &[1.0, 2.0, 3.0],
 ///     is_active: true,
-///     domination_count: 0,
 /// };
 /// let buf = serialize_stage_cuts(2, 3, 100, 0, &[cut], &[0], 1);
 /// let result = deserialize_stage_cuts(&buf).expect("round-trip must succeed");
@@ -1049,10 +1040,6 @@ fn deserialize_cut_table(buf: &[u8], cut_table_pos: usize) -> Option<OwnedPolicy
         .and_then(|p| read_bool_byte(buf, p))
         .unwrap_or(false);
 
-    let domination_count = field_pos(buf, cut_table_pos, vtable_pos, CUT_FIELD_DOMINATION_COUNT)
-        .and_then(|p| read_u32_le(buf, p))
-        .unwrap_or(0);
-
     Some(OwnedPolicyCutRecord {
         cut_id,
         slot_index,
@@ -1061,7 +1048,6 @@ fn deserialize_cut_table(buf: &[u8], cut_table_pos: usize) -> Option<OwnedPolicy
         intercept,
         coefficients,
         is_active,
-        domination_count,
     })
 }
 
@@ -1308,7 +1294,6 @@ mod tests {
             intercept: 42.0,
             coefficients,
             is_active: true,
-            domination_count: 0,
         }
     }
 
@@ -1325,7 +1310,6 @@ mod tests {
             intercept: 42.0,
             coefficients: &coefficients,
             is_active: true,
-            domination_count: 0,
         };
 
         let buf = serialize_stage_cuts(0, 3, 100, 0, &[cut], &[0], 1);
@@ -1387,7 +1371,6 @@ mod tests {
                 intercept: 0.0,
                 coefficients: &coefs,
                 is_active: true,
-                domination_count: 0,
             };
             let buf = serialize_stage_cuts(0, dim, 10, 0, &[cut], &[0], 1);
             assert!(
@@ -1930,7 +1913,6 @@ mod tests {
             intercept: 42.0,
             coefficients: &coefficients,
             is_active: true,
-            domination_count: 11,
         };
 
         let buf = serialize_stage_cuts(0, 3, 100, 0, &[cut], &[0], 1);
@@ -1961,7 +1943,6 @@ mod tests {
             "coefficients must round-trip"
         );
         assert!(c.is_active, "is_active must round-trip");
-        assert_eq!(c.domination_count, 11, "domination_count must round-trip");
     }
 
     #[test]
@@ -1978,7 +1959,6 @@ mod tests {
                 intercept: 100.0,
                 coefficients: &c0,
                 is_active: true,
-                domination_count: 0,
             },
             PolicyCutRecord {
                 cut_id: 20,
@@ -1988,7 +1968,6 @@ mod tests {
                 intercept: 200.0,
                 coefficients: &c1,
                 is_active: false,
-                domination_count: 3,
             },
             PolicyCutRecord {
                 cut_id: 30,
@@ -1998,7 +1977,6 @@ mod tests {
                 intercept: 300.0,
                 coefficients: &c2,
                 is_active: true,
-                domination_count: 7,
             },
         ];
 
@@ -2016,7 +1994,6 @@ mod tests {
         let expected_intercepts = [100.0f64, 200.0, 300.0];
         let expected_coefficients = [&c0[..], &c1[..], &c2[..]];
         let expected_active = [true, false, true];
-        let expected_domination = [0u32, 3, 7];
 
         for (i, cut) in result.cuts.iter().enumerate() {
             assert_eq!(cut.cut_id, expected_cut_ids[i], "cut {i} cut_id");
@@ -2026,10 +2003,6 @@ mod tests {
                 "cut {i} coefficients"
             );
             assert_eq!(cut.is_active, expected_active[i], "cut {i} is_active");
-            assert_eq!(
-                cut.domination_count, expected_domination[i],
-                "cut {i} domination_count"
-            );
         }
     }
 
@@ -2058,7 +2031,6 @@ mod tests {
             intercept: 5.0,
             coefficients: &[],
             is_active: true,
-            domination_count: 0,
         };
         let buf = serialize_stage_cuts(0, 0, 10, 0, &[cut], &[0], 1);
         let result =
@@ -2082,7 +2054,6 @@ mod tests {
             intercept: -99.0,
             coefficients: &coefs,
             is_active: false,
-            domination_count: 5,
         };
         let buf = serialize_stage_cuts(3, dim, 10, 0, &[cut], &[0], 1);
         let result =

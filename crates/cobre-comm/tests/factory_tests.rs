@@ -14,10 +14,10 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Factory tests for builds where no distributed backend feature is compiled in.
 ///
-/// All tests in this module are compiled only when neither `mpi`, `tcp`, nor `shm`
-/// features are enabled, because in those builds `create_communicator()` returns
-/// `Result<LocalBackend, BackendError>`.
-#[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+/// All tests in this module are compiled only when the `mpi` feature is
+/// disabled, because in `mpi` builds `create_communicator()` returns
+/// `Result<CommBackend, BackendError>` instead of `Result<LocalBackend, _>`.
+#[cfg(not(feature = "mpi"))]
 mod no_feature_factory {
     use cobre_comm::{BackendError, Communicator, create_communicator};
 
@@ -76,7 +76,8 @@ mod no_feature_factory {
         }
     }
 
-    /// `COBRE_COMM_BACKEND=tcp` → `Err(BackendNotAvailable)`.
+    /// `COBRE_COMM_BACKEND=tcp` → `Err(InvalidBackend)` (the tcp backend
+    /// name is not declared; the empty `tcp` feature was removed).
     #[test]
     fn test_factory_no_feature_tcp_unavailable() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
@@ -84,10 +85,11 @@ mod no_feature_factory {
         let result = create_communicator();
         unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
         let err = result.expect_err("must fail");
-        assert!(matches!(err, BackendError::BackendNotAvailable { .. }));
+        assert!(matches!(err, BackendError::InvalidBackend { .. }));
     }
 
-    /// `COBRE_COMM_BACKEND=shm` → `Err(BackendNotAvailable)`.
+    /// `COBRE_COMM_BACKEND=shm` → `Err(InvalidBackend)` (the shm backend
+    /// name is not declared; the empty `shm` feature was removed).
     #[test]
     fn test_factory_no_feature_shm_unavailable() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
@@ -95,7 +97,7 @@ mod no_feature_factory {
         let result = create_communicator();
         unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
         let err = result.expect_err("must fail");
-        assert!(matches!(err, BackendError::BackendNotAvailable { .. }));
+        assert!(matches!(err, BackendError::InvalidBackend { .. }));
     }
 
     /// `COBRE_COMM_BACKEND=foobar` → `Err(InvalidBackend)` with `requested=="foobar"`.
@@ -121,8 +123,8 @@ mod no_feature_factory {
 
 // ── any-feature factory tests ─────────────────────────────────────────────────
 
-/// Factory tests for builds with distributed backend features enabled.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+/// Factory tests for builds with the `mpi` backend feature enabled.
+#[cfg(feature = "mpi")]
 mod any_feature_factory {
     use cobre_comm::{BackendError, CommBackend, Communicator, create_communicator};
 
@@ -138,7 +140,8 @@ mod any_feature_factory {
         assert_eq!(backend.rank(), 0);
     }
 
-    /// `COBRE_COMM_BACKEND=tcp` → `Err(BackendNotAvailable)`.
+    /// `COBRE_COMM_BACKEND=tcp` → `Err(InvalidBackend)` (the tcp backend
+    /// name is not declared; the empty `tcp` feature was removed).
     #[test]
     fn test_factory_any_feature_tcp_unavailable() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
@@ -147,11 +150,12 @@ mod any_feature_factory {
         unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
         match result {
             Ok(_) => panic!("must fail"),
-            Err(err) => assert!(matches!(err, BackendError::BackendNotAvailable { .. })),
+            Err(err) => assert!(matches!(err, BackendError::InvalidBackend { .. })),
         }
     }
 
-    /// `COBRE_COMM_BACKEND=shm` → `Err(BackendNotAvailable)`.
+    /// `COBRE_COMM_BACKEND=shm` → `Err(InvalidBackend)` (the shm backend
+    /// name is not declared; the empty `shm` feature was removed).
     #[test]
     fn test_factory_any_feature_shm_unavailable() {
         let _guard = crate::ENV_LOCK.lock().unwrap();
@@ -160,7 +164,7 @@ mod any_feature_factory {
         unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
         match result {
             Ok(_) => panic!("must fail"),
-            Err(err) => assert!(matches!(err, BackendError::BackendNotAvailable { .. })),
+            Err(err) => assert!(matches!(err, BackendError::InvalidBackend { .. })),
         }
     }
 

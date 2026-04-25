@@ -165,6 +165,109 @@ pub struct StageStateConfig {
 }
 
 // ---------------------------------------------------------------------------
+// StageLagTransition (SS12.3.1)
+// ---------------------------------------------------------------------------
+
+/// Pre-encoded contribution of a single stage to the lag accumulator.
+///
+/// Each stage in a multi-resolution study may span a different calendar
+/// duration than the lag period it feeds into (for example, weekly stages
+/// contributing to a monthly lag slot). `StageLagTransition` encodes the
+/// fractional weights and finalization signal that the precomputation
+/// algorithm derives from stage date boundaries, so the hot path can apply
+/// them without recomputing calendar arithmetic at runtime.
+///
+/// A `Vec<StageLagTransition>` indexed by stage index is the canonical way
+/// to carry this information alongside the stage vector.
+///
+/// See [Design Doc — Temporal Resolution Debts §6](../docs/design/temporal-resolution-debts.md).
+// Four boolean flags encode orthogonal hot-path conditions; a state machine enum
+// would require 2^4 = 16 variants with no semantic benefit. Each flag is
+// independently set by the precomputation algorithm and tested by separate
+// if-guards in `accumulate_and_shift_lag_state`.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct StageLagTransition {
+    /// Fraction of this stage's realized value that is added to the
+    /// current lag accumulator bucket.
+    ///
+    /// A value of `1.0` means the stage contributes its full realized value
+    /// to the accumulator. A value between `0.0` and `1.0` indicates a
+    /// partial contribution (for example, a weekly stage that covers only
+    /// part of a monthly lag period). Validation that this value lies in
+    /// `[0.0, 1.0]` is the responsibility of the precomputation algorithm.
+    pub accumulate_weight: f64,
+
+    /// Fraction of this stage's realized value that carries over into the
+    /// next lag accumulator bucket when `finalize_period` is `true`.
+    ///
+    /// When a stage straddles the boundary between two lag periods, the
+    /// portion of the stage value that belongs to the next period is
+    /// captured here. For stages that fall entirely within one lag period,
+    /// this is `0.0`. Validation that `accumulate_weight + spillover_weight`
+    /// is consistent with the stage's temporal position is the
+    /// responsibility of the precomputation algorithm.
+    pub spillover_weight: f64,
+
+    /// Whether this stage marks the end of a complete lag accumulation
+    /// period.
+    ///
+    /// When `true`, the accumulator bucket for the current lag period is
+    /// considered finalized after processing this stage: the accumulated
+    /// value is committed to the lag state vector and the accumulator is
+    /// reset (possibly seeded with the `spillover_weight` contribution).
+    /// When `false`, accumulation continues into the next stage.
+    pub finalize_period: bool,
+
+    /// Whether this stage should also accumulate into a downstream
+    /// (coarser-resolution) ring buffer.
+    ///
+    /// Set to `true` for stages in the pre-transition window when the study
+    /// transitions from a finer to a coarser temporal resolution (for example,
+    /// the last `L_q * 3` monthly stages before a monthly-to-quarterly
+    /// boundary). `false` for all stages in uniform-resolution studies,
+    /// producing zero overhead on the hot path.
+    pub accumulate_downstream: bool,
+
+    /// Fraction of this stage's realized value to accumulate into the
+    /// downstream lag period bucket.
+    ///
+    /// Analogous to `accumulate_weight` but relative to the downstream
+    /// (coarser) lag period boundaries. `0.0` when `accumulate_downstream`
+    /// is `false`.
+    pub downstream_accumulate_weight: f64,
+
+    /// Fraction of this stage's realized value carrying over into the next
+    /// downstream lag period when `downstream_finalize` is `true`.
+    ///
+    /// Analogous to `spillover_weight` but for the downstream period
+    /// boundary. `0.0` when `accumulate_downstream` is `false`.
+    pub downstream_spillover_weight: f64,
+
+    /// Whether this stage marks the end of a complete downstream lag
+    /// accumulation period.
+    ///
+    /// When `true`, the downstream accumulator bucket is finalized and
+    /// pushed to the downstream ring buffer. For example, the last monthly
+    /// stage of a calendar quarter has `downstream_finalize = true` when the
+    /// study transitions to quarterly resolution. `false` when
+    /// `accumulate_downstream` is `false`.
+    pub downstream_finalize: bool,
+
+    /// Whether the lag state must be rebuilt from the downstream ring buffer
+    /// at this stage.
+    ///
+    /// Set to `true` on the first quarterly stage (the transition stage) when
+    /// `downstream_par_order > 0`. When `true`, `accumulate_and_shift_lag_state`
+    /// overwrites `state[lag_start..]` with the completed quarterly lags from the
+    /// downstream ring buffer before resuming primary accumulation at quarterly
+    /// resolution. `false` for all stages in uniform-resolution studies and all
+    /// pre-transition monthly stages, producing zero overhead on the hot path.
+    pub rebuild_from_downstream: bool,
+}
+
+// ---------------------------------------------------------------------------
 // StageRiskConfig (SS12.4)
 // ---------------------------------------------------------------------------
 

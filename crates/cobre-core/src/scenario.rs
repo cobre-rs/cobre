@@ -132,7 +132,7 @@ pub struct ScenarioSource {
 ///
 /// Preserves user intent (list vs range) so that validation and error messages
 /// can reference the original specification form. Expansion into a concrete
-/// year list is deferred to `cobre-io` validation (Tier 1) and Epic 04 library
+/// year list is deferred to `cobre-io` validation (Tier 1) and scenario library
 /// construction.
 ///
 /// When absent (represented as `Option<HistoricalYears>::None` at the
@@ -160,7 +160,7 @@ pub enum HistoricalYears {
 
     /// Inclusive range shorthand (e.g., years 1940 through 2010).
     /// `from` and `to` are both inclusive. Validation of `from <= to`
-    /// is performed by `cobre-io` (ticket-014 Tier 1 validation).
+    /// is performed by `cobre-io`.
     Range {
         /// First year of the range (inclusive).
         from: i32,

@@ -65,9 +65,9 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - Entity ID existence in registries — Layer 3, Epic 06.
-//! - Duplicate `(entity_id, stage_id)` pairs — Epic 06.
-//! - Semantic cross-validation (e.g., penalty ordering constraints) — Epic 06.
+//! - Entity ID existence in registries — Layer 3.
+//! - Duplicate `(entity_id, stage_id)` pairs — deferred.
+//! - Semantic cross-validation (e.g., penalty ordering constraints) — deferred.
 
 use arrow::array::Array;
 use cobre_core::EntityId;

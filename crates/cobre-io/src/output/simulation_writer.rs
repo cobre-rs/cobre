@@ -527,36 +527,11 @@ impl SimulationParquetWriter {
         let sim_dir = self.output_dir.join("simulation");
         let partition_suffix = format!("scenario_id={id:04}");
 
-        // Collect all records across stages.
-        let mut all_costs: Vec<&CostWriteRecord> = Vec::new();
-        let mut all_hydros: Vec<&HydroWriteRecord> = Vec::new();
-        let mut all_thermals: Vec<&ThermalWriteRecord> = Vec::new();
-        let mut all_exchanges: Vec<&ExchangeWriteRecord> = Vec::new();
-        let mut all_buses: Vec<&BusWriteRecord> = Vec::new();
-        let mut all_pumping: Vec<&PumpingWriteRecord> = Vec::new();
-        let mut all_contracts: Vec<&ContractWriteRecord> = Vec::new();
-        let mut all_non_controllables: Vec<&NonControllableWriteRecord> = Vec::new();
-        let mut all_inflow_lags: Vec<&InflowLagWriteRecord> = Vec::new();
-        let mut all_violations: Vec<&GenericViolationWriteRecord> = Vec::new();
-
-        for stage in &result.stages {
-            all_costs.extend(stage.costs.iter());
-            all_hydros.extend(stage.hydros.iter());
-            all_thermals.extend(stage.thermals.iter());
-            all_exchanges.extend(stage.exchanges.iter());
-            all_buses.extend(stage.buses.iter());
-            all_pumping.extend(stage.pumping_stations.iter());
-            all_contracts.extend(stage.contracts.iter());
-            all_non_controllables.extend(stage.non_controllables.iter());
-            all_inflow_lags.extend(stage.inflow_lags.iter());
-            all_violations.extend(stage.generic_violations.iter());
-        }
-
         // costs — always written when there are records.
-        if !all_costs.is_empty() {
+        if result.stages.iter().any(|s| !s.costs.is_empty()) {
             let part_dir = sim_dir.join("costs").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_costs_batch(&all_costs)?;
+            let batch = build_costs_batch(result.stages.iter().flat_map(|s| s.costs.iter()))?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written
@@ -564,10 +539,13 @@ impl SimulationParquetWriter {
         }
 
         // hydros
-        if !all_hydros.is_empty() {
+        if result.stages.iter().any(|s| !s.hydros.is_empty()) {
             let part_dir = sim_dir.join("hydros").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_hydros_batch(&all_hydros, &self.block_durations)?;
+            let batch = build_hydros_batch(
+                result.stages.iter().flat_map(|s| s.hydros.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written
@@ -575,10 +553,13 @@ impl SimulationParquetWriter {
         }
 
         // thermals
-        if !all_thermals.is_empty() {
+        if result.stages.iter().any(|s| !s.thermals.is_empty()) {
             let part_dir = sim_dir.join("thermals").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_thermals_batch(&all_thermals, &self.block_durations)?;
+            let batch = build_thermals_batch(
+                result.stages.iter().flat_map(|s| s.thermals.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -587,11 +568,14 @@ impl SimulationParquetWriter {
         }
 
         // exchanges
-        if !all_exchanges.is_empty() {
+        if result.stages.iter().any(|s| !s.exchanges.is_empty()) {
             let part_dir = sim_dir.join("exchanges").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch =
-                build_exchanges_batch(&all_exchanges, &self.block_durations, &self.loss_factors)?;
+            let batch = build_exchanges_batch(
+                result.stages.iter().flat_map(|s| s.exchanges.iter()),
+                &self.block_durations,
+                &self.loss_factors,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -600,10 +584,13 @@ impl SimulationParquetWriter {
         }
 
         // buses
-        if !all_buses.is_empty() {
+        if result.stages.iter().any(|s| !s.buses.is_empty()) {
             let part_dir = sim_dir.join("buses").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_buses_batch(&all_buses, &self.block_durations)?;
+            let batch = build_buses_batch(
+                result.stages.iter().flat_map(|s| s.buses.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written
@@ -611,10 +598,13 @@ impl SimulationParquetWriter {
         }
 
         // pumping_stations
-        if !all_pumping.is_empty() {
+        if result.stages.iter().any(|s| !s.pumping_stations.is_empty()) {
             let part_dir = sim_dir.join("pumping_stations").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_pumping_batch(&all_pumping, &self.block_durations)?;
+            let batch = build_pumping_batch(
+                result.stages.iter().flat_map(|s| s.pumping_stations.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -623,10 +613,13 @@ impl SimulationParquetWriter {
         }
 
         // contracts
-        if !all_contracts.is_empty() {
+        if result.stages.iter().any(|s| !s.contracts.is_empty()) {
             let part_dir = sim_dir.join("contracts").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_contracts_batch(&all_contracts, &self.block_durations)?;
+            let batch = build_contracts_batch(
+                result.stages.iter().flat_map(|s| s.contracts.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -635,11 +628,20 @@ impl SimulationParquetWriter {
         }
 
         // non_controllables
-        if !all_non_controllables.is_empty() {
+        if result
+            .stages
+            .iter()
+            .any(|s| !s.non_controllables.is_empty())
+        {
             let part_dir = sim_dir.join("non_controllables").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch =
-                build_non_controllables_batch(&all_non_controllables, &self.block_durations)?;
+            let batch = build_non_controllables_batch(
+                result
+                    .stages
+                    .iter()
+                    .flat_map(|s| s.non_controllables.iter()),
+                &self.block_durations,
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -648,10 +650,11 @@ impl SimulationParquetWriter {
         }
 
         // inflow_lags
-        if !all_inflow_lags.is_empty() {
+        if result.stages.iter().any(|s| !s.inflow_lags.is_empty()) {
             let part_dir = sim_dir.join("inflow_lags").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_inflow_lags_batch(&all_inflow_lags)?;
+            let batch =
+                build_inflow_lags_batch(result.stages.iter().flat_map(|s| s.inflow_lags.iter()))?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -660,10 +663,19 @@ impl SimulationParquetWriter {
         }
 
         // violations/generic
-        if !all_violations.is_empty() {
+        if result
+            .stages
+            .iter()
+            .any(|s| !s.generic_violations.is_empty())
+        {
             let part_dir = sim_dir.join("violations/generic").join(&partition_suffix);
             std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;
-            let batch = build_generic_violations_batch(&all_violations)?;
+            let batch = build_generic_violations_batch(
+                result
+                    .stages
+                    .iter()
+                    .flat_map(|s| s.generic_violations.iter()),
+            )?;
             let file_path = part_dir.join("data.parquet");
             write_parquet_atomic(&file_path, &batch, &self.config)?;
             self.partitions_written.push(format!(
@@ -725,38 +737,39 @@ fn block_duration(block_durations: &[Vec<f64>], stage_id: u32, block_id: Option<
 // RecordBatch builders
 // ---------------------------------------------------------------------------
 
-/// Build the costs `RecordBatch` from a slice of cost records.
+/// Build the costs `RecordBatch` from an iterator of cost records.
 #[allow(clippy::cast_possible_wrap)]
-fn build_costs_batch(records: &[&CostWriteRecord]) -> Result<RecordBatch, OutputError> {
+fn build_costs_batch<'a>(
+    records: impl IntoIterator<Item = &'a CostWriteRecord>,
+) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(costs_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut total_cost = Float64Builder::with_capacity(n);
-    let mut immediate_cost = Float64Builder::with_capacity(n);
-    let mut future_cost = Float64Builder::with_capacity(n);
-    let mut discount_factor = Float64Builder::with_capacity(n);
-    let mut thermal_cost = Float64Builder::with_capacity(n);
-    let mut contract_cost = Float64Builder::with_capacity(n);
-    let mut deficit_cost = Float64Builder::with_capacity(n);
-    let mut excess_cost = Float64Builder::with_capacity(n);
-    let mut storage_violation_cost = Float64Builder::with_capacity(n);
-    let mut filling_target_cost = Float64Builder::with_capacity(n);
-    let mut hydro_violation_cost = Float64Builder::with_capacity(n);
-    let mut outflow_violation_below_cost = Float64Builder::with_capacity(n);
-    let mut outflow_violation_above_cost = Float64Builder::with_capacity(n);
-    let mut turbined_violation_cost = Float64Builder::with_capacity(n);
-    let mut generation_violation_cost = Float64Builder::with_capacity(n);
-    let mut evaporation_violation_cost = Float64Builder::with_capacity(n);
-    let mut withdrawal_violation_cost = Float64Builder::with_capacity(n);
-    let mut inflow_penalty_cost = Float64Builder::with_capacity(n);
-    let mut generic_violation_cost = Float64Builder::with_capacity(n);
-    let mut spillage_cost = Float64Builder::with_capacity(n);
-    let mut fpha_turbined_cost = Float64Builder::with_capacity(n);
-    let mut curtailment_cost = Float64Builder::with_capacity(n);
-    let mut exchange_cost = Float64Builder::with_capacity(n);
-    let mut pumping_cost = Float64Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut total_cost = Float64Builder::new();
+    let mut immediate_cost = Float64Builder::new();
+    let mut future_cost = Float64Builder::new();
+    let mut discount_factor = Float64Builder::new();
+    let mut thermal_cost = Float64Builder::new();
+    let mut contract_cost = Float64Builder::new();
+    let mut deficit_cost = Float64Builder::new();
+    let mut excess_cost = Float64Builder::new();
+    let mut storage_violation_cost = Float64Builder::new();
+    let mut filling_target_cost = Float64Builder::new();
+    let mut hydro_violation_cost = Float64Builder::new();
+    let mut outflow_violation_below_cost = Float64Builder::new();
+    let mut outflow_violation_above_cost = Float64Builder::new();
+    let mut turbined_violation_cost = Float64Builder::new();
+    let mut generation_violation_cost = Float64Builder::new();
+    let mut evaporation_violation_cost = Float64Builder::new();
+    let mut withdrawal_violation_cost = Float64Builder::new();
+    let mut inflow_penalty_cost = Float64Builder::new();
+    let mut generic_violation_cost = Float64Builder::new();
+    let mut spillage_cost = Float64Builder::new();
+    let mut fpha_turbined_cost = Float64Builder::new();
+    let mut curtailment_cost = Float64Builder::new();
+    let mut exchange_cost = Float64Builder::new();
+    let mut pumping_cost = Float64Builder::new();
 
     for r in records {
         stage_id.append_value(r.stage_id as i32);
@@ -860,39 +873,39 @@ struct HydroBuilders {
 }
 
 impl HydroBuilders {
-    fn with_capacity(n: usize) -> Self {
+    fn new() -> Self {
         Self {
-            stage_id: Int32Builder::with_capacity(n),
-            block_id: Int32Builder::with_capacity(n),
-            hydro_id: Int32Builder::with_capacity(n),
-            turbined_m3s: Float64Builder::with_capacity(n),
-            spillage_m3s: Float64Builder::with_capacity(n),
-            outflow_m3s: Float64Builder::with_capacity(n),
-            evaporation_m3s: Float64Builder::with_capacity(n),
-            diverted_inflow_m3s: Float64Builder::with_capacity(n),
-            diverted_outflow_m3s: Float64Builder::with_capacity(n),
-            incremental_inflow_m3s: Float64Builder::with_capacity(n),
-            inflow_m3s: Float64Builder::with_capacity(n),
-            storage_initial_hm3: Float64Builder::with_capacity(n),
-            storage_final_hm3: Float64Builder::with_capacity(n),
-            generation_mw: Float64Builder::with_capacity(n),
-            generation_mwh: Float64Builder::with_capacity(n),
-            productivity_mw_per_m3s: Float64Builder::with_capacity(n),
-            spillage_cost: Float64Builder::with_capacity(n),
-            water_value_per_hm3: Float64Builder::with_capacity(n),
-            storage_binding_code: Int8Builder::with_capacity(n),
-            operative_state_code: Int8Builder::with_capacity(n),
-            turbined_slack_m3s: Float64Builder::with_capacity(n),
-            outflow_slack_below_m3s: Float64Builder::with_capacity(n),
-            outflow_slack_above_m3s: Float64Builder::with_capacity(n),
-            generation_slack_mw: Float64Builder::with_capacity(n),
-            storage_violation_below_hm3: Float64Builder::with_capacity(n),
-            filling_target_violation_hm3: Float64Builder::with_capacity(n),
-            evaporation_violation_pos_m3s: Float64Builder::with_capacity(n),
-            evaporation_violation_neg_m3s: Float64Builder::with_capacity(n),
-            inflow_nonnegativity_slack_m3s: Float64Builder::with_capacity(n),
-            water_withdrawal_violation_pos_m3s: Float64Builder::with_capacity(n),
-            water_withdrawal_violation_neg_m3s: Float64Builder::with_capacity(n),
+            stage_id: Int32Builder::new(),
+            block_id: Int32Builder::new(),
+            hydro_id: Int32Builder::new(),
+            turbined_m3s: Float64Builder::new(),
+            spillage_m3s: Float64Builder::new(),
+            outflow_m3s: Float64Builder::new(),
+            evaporation_m3s: Float64Builder::new(),
+            diverted_inflow_m3s: Float64Builder::new(),
+            diverted_outflow_m3s: Float64Builder::new(),
+            incremental_inflow_m3s: Float64Builder::new(),
+            inflow_m3s: Float64Builder::new(),
+            storage_initial_hm3: Float64Builder::new(),
+            storage_final_hm3: Float64Builder::new(),
+            generation_mw: Float64Builder::new(),
+            generation_mwh: Float64Builder::new(),
+            productivity_mw_per_m3s: Float64Builder::new(),
+            spillage_cost: Float64Builder::new(),
+            water_value_per_hm3: Float64Builder::new(),
+            storage_binding_code: Int8Builder::new(),
+            operative_state_code: Int8Builder::new(),
+            turbined_slack_m3s: Float64Builder::new(),
+            outflow_slack_below_m3s: Float64Builder::new(),
+            outflow_slack_above_m3s: Float64Builder::new(),
+            generation_slack_mw: Float64Builder::new(),
+            storage_violation_below_hm3: Float64Builder::new(),
+            filling_target_violation_hm3: Float64Builder::new(),
+            evaporation_violation_pos_m3s: Float64Builder::new(),
+            evaporation_violation_neg_m3s: Float64Builder::new(),
+            inflow_nonnegativity_slack_m3s: Float64Builder::new(),
+            water_withdrawal_violation_pos_m3s: Float64Builder::new(),
+            water_withdrawal_violation_neg_m3s: Float64Builder::new(),
         }
     }
 }
@@ -903,8 +916,8 @@ impl HydroBuilders {
 /// - `outflow_m3s = turbined_m3s + spillage_m3s`
 /// - `generation_mwh = generation_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn fill_hydro_builders(
-    records: &[&HydroWriteRecord],
+fn fill_hydro_builders<'a>(
+    records: impl IntoIterator<Item = &'a HydroWriteRecord>,
     block_durations: &[Vec<f64>],
     b: &mut HydroBuilders,
 ) {
@@ -960,12 +973,12 @@ fn fill_hydro_builders(
 /// Derived columns:
 /// - `generation_mwh = generation_mw * block_duration_hours`
 /// - `outflow_m3s = turbined_m3s + spillage_m3s`
-fn build_hydros_batch(
-    records: &[&HydroWriteRecord],
+fn build_hydros_batch<'a>(
+    records: impl IntoIterator<Item = &'a HydroWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(hydros_schema());
-    let mut b = HydroBuilders::with_capacity(records.len());
+    let mut b = HydroBuilders::new();
     fill_hydro_builders(records, block_durations, &mut b);
     RecordBatch::try_new(
         schema,
@@ -1011,23 +1024,22 @@ fn build_hydros_batch(
 /// Derived column:
 /// - `generation_mwh = generation_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn build_thermals_batch(
-    records: &[&ThermalWriteRecord],
+fn build_thermals_batch<'a>(
+    records: impl IntoIterator<Item = &'a ThermalWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(thermals_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut thermal_id = Int32Builder::with_capacity(n);
-    let mut generation_mw = Float64Builder::with_capacity(n);
-    let mut generation_mwh = Float64Builder::with_capacity(n);
-    let mut generation_cost = Float64Builder::with_capacity(n);
-    let mut is_gnl = BooleanBuilder::with_capacity(n);
-    let mut gnl_committed_mw = Float64Builder::with_capacity(n);
-    let mut gnl_decision_mw = Float64Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut thermal_id = Int32Builder::new();
+    let mut generation_mw = Float64Builder::new();
+    let mut generation_mwh = Float64Builder::new();
+    let mut generation_cost = Float64Builder::new();
+    let mut is_gnl = BooleanBuilder::new();
+    let mut gnl_committed_mw = Float64Builder::new();
+    let mut gnl_decision_mw = Float64Builder::new();
+    let mut operative_state_code = Int8Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1078,25 +1090,24 @@ fn build_thermals_batch(
     clippy::cast_sign_loss,
     clippy::similar_names // MW / MWh builder pairs are semantically paired and intentionally similar
 )]
-fn build_exchanges_batch(
-    records: &[&ExchangeWriteRecord],
+fn build_exchanges_batch<'a>(
+    records: impl IntoIterator<Item = &'a ExchangeWriteRecord>,
     block_durations: &[Vec<f64>],
     loss_factors: &HashMap<i32, f64>,
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(exchanges_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut line_id = Int32Builder::with_capacity(n);
-    let mut direct_flow_mw = Float64Builder::with_capacity(n);
-    let mut reverse_flow_mw = Float64Builder::with_capacity(n);
-    let mut net_flow_mw_col = Float64Builder::with_capacity(n);
-    let mut net_flow_mwh_col = Float64Builder::with_capacity(n);
-    let mut losses_mw_col = Float64Builder::with_capacity(n);
-    let mut losses_mwh_col = Float64Builder::with_capacity(n);
-    let mut exchange_cost = Float64Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut line_id = Int32Builder::new();
+    let mut direct_flow_mw = Float64Builder::new();
+    let mut reverse_flow_mw = Float64Builder::new();
+    let mut net_flow_mw_col = Float64Builder::new();
+    let mut net_flow_mwh_col = Float64Builder::new();
+    let mut losses_mw_col = Float64Builder::new();
+    let mut losses_mwh_col = Float64Builder::new();
+    let mut exchange_cost = Float64Builder::new();
+    let mut operative_state_code = Int8Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1149,23 +1160,22 @@ fn build_exchanges_batch(
 /// - `deficit_mwh = deficit_mw * block_duration_hours`
 /// - `excess_mwh = excess_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn build_buses_batch(
-    records: &[&BusWriteRecord],
+fn build_buses_batch<'a>(
+    records: impl IntoIterator<Item = &'a BusWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(buses_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut bus_id = Int32Builder::with_capacity(n);
-    let mut load_mw = Float64Builder::with_capacity(n);
-    let mut load_mwh = Float64Builder::with_capacity(n);
-    let mut deficit_mw = Float64Builder::with_capacity(n);
-    let mut deficit_mwh = Float64Builder::with_capacity(n);
-    let mut excess_mw = Float64Builder::with_capacity(n);
-    let mut excess_mwh = Float64Builder::with_capacity(n);
-    let mut spot_price = Float64Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut bus_id = Int32Builder::new();
+    let mut load_mw = Float64Builder::new();
+    let mut load_mwh = Float64Builder::new();
+    let mut deficit_mw = Float64Builder::new();
+    let mut deficit_mwh = Float64Builder::new();
+    let mut excess_mw = Float64Builder::new();
+    let mut excess_mwh = Float64Builder::new();
+    let mut spot_price = Float64Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1206,22 +1216,21 @@ fn build_buses_batch(
 /// - `pumped_volume_hm3 = pumped_flow_m3s * block_duration_hours * 3600.0 / 1e6`
 /// - `energy_consumption_mwh = power_consumption_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn build_pumping_batch(
-    records: &[&PumpingWriteRecord],
+fn build_pumping_batch<'a>(
+    records: impl IntoIterator<Item = &'a PumpingWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(pumping_stations_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut pumping_station_id = Int32Builder::with_capacity(n);
-    let mut pumped_flow_m3s = Float64Builder::with_capacity(n);
-    let mut pumped_volume_hm3 = Float64Builder::with_capacity(n);
-    let mut power_consumption_mw = Float64Builder::with_capacity(n);
-    let mut energy_consumption_mwh = Float64Builder::with_capacity(n);
-    let mut pumping_cost = Float64Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut pumping_station_id = Int32Builder::new();
+    let mut pumped_flow_m3s = Float64Builder::new();
+    let mut pumped_volume_hm3 = Float64Builder::new();
+    let mut power_consumption_mw = Float64Builder::new();
+    let mut energy_consumption_mwh = Float64Builder::new();
+    let mut pumping_cost = Float64Builder::new();
+    let mut operative_state_code = Int8Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1260,21 +1269,20 @@ fn build_pumping_batch(
 /// Derived column:
 /// - `energy_mwh = power_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn build_contracts_batch(
-    records: &[&ContractWriteRecord],
+fn build_contracts_batch<'a>(
+    records: impl IntoIterator<Item = &'a ContractWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(contracts_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut contract_id = Int32Builder::with_capacity(n);
-    let mut power_mw = Float64Builder::with_capacity(n);
-    let mut energy_mwh = Float64Builder::with_capacity(n);
-    let mut price_per_mwh = Float64Builder::with_capacity(n);
-    let mut total_cost = Float64Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut contract_id = Int32Builder::new();
+    let mut power_mw = Float64Builder::new();
+    let mut energy_mwh = Float64Builder::new();
+    let mut price_per_mwh = Float64Builder::new();
+    let mut total_cost = Float64Builder::new();
+    let mut operative_state_code = Int8Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1311,23 +1319,22 @@ fn build_contracts_batch(
 /// - `generation_mwh = generation_mw * block_duration_hours`
 /// - `curtailment_mwh = curtailment_mw * block_duration_hours`
 #[allow(clippy::cast_possible_wrap)]
-fn build_non_controllables_batch(
-    records: &[&NonControllableWriteRecord],
+fn build_non_controllables_batch<'a>(
+    records: impl IntoIterator<Item = &'a NonControllableWriteRecord>,
     block_durations: &[Vec<f64>],
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(non_controllables_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut non_controllable_id = Int32Builder::with_capacity(n);
-    let mut generation_mw = Float64Builder::with_capacity(n);
-    let mut generation_mwh = Float64Builder::with_capacity(n);
-    let mut available_mw = Float64Builder::with_capacity(n);
-    let mut curtailment_mw = Float64Builder::with_capacity(n);
-    let mut curtailment_mwh = Float64Builder::with_capacity(n);
-    let mut curtailment_cost = Float64Builder::with_capacity(n);
-    let mut operative_state_code = Int8Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut non_controllable_id = Int32Builder::new();
+    let mut generation_mw = Float64Builder::new();
+    let mut generation_mwh = Float64Builder::new();
+    let mut available_mw = Float64Builder::new();
+    let mut curtailment_mw = Float64Builder::new();
+    let mut curtailment_mwh = Float64Builder::new();
+    let mut curtailment_cost = Float64Builder::new();
+    let mut operative_state_code = Int8Builder::new();
 
     for r in records {
         let dur = block_duration(block_durations, r.stage_id, r.block_id);
@@ -1366,14 +1373,15 @@ fn build_non_controllables_batch(
 ///
 /// No derived columns — all four fields are stored directly.
 #[allow(clippy::cast_possible_wrap)]
-fn build_inflow_lags_batch(records: &[&InflowLagWriteRecord]) -> Result<RecordBatch, OutputError> {
+fn build_inflow_lags_batch<'a>(
+    records: impl IntoIterator<Item = &'a InflowLagWriteRecord>,
+) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(inflow_lags_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut hydro_id = Int32Builder::with_capacity(n);
-    let mut lag_index = Int32Builder::with_capacity(n);
-    let mut inflow_m3s = Float64Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut hydro_id = Int32Builder::new();
+    let mut lag_index = Int32Builder::new();
+    let mut inflow_m3s = Float64Builder::new();
 
     for r in records {
         stage_id.append_value(r.stage_id as i32);
@@ -1398,17 +1406,16 @@ fn build_inflow_lags_batch(records: &[&InflowLagWriteRecord]) -> Result<RecordBa
 ///
 /// No derived columns.
 #[allow(clippy::cast_possible_wrap)]
-fn build_generic_violations_batch(
-    records: &[&GenericViolationWriteRecord],
+fn build_generic_violations_batch<'a>(
+    records: impl IntoIterator<Item = &'a GenericViolationWriteRecord>,
 ) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(generic_violations_schema());
-    let n = records.len();
 
-    let mut stage_id = Int32Builder::with_capacity(n);
-    let mut block_id = Int32Builder::with_capacity(n);
-    let mut constraint_id = Int32Builder::with_capacity(n);
-    let mut slack_value = Float64Builder::with_capacity(n);
-    let mut slack_cost = Float64Builder::with_capacity(n);
+    let mut stage_id = Int32Builder::new();
+    let mut block_id = Int32Builder::new();
+    let mut constraint_id = Int32Builder::new();
+    let mut slack_value = Float64Builder::new();
+    let mut slack_cost = Float64Builder::new();
 
     for r in records {
         stage_id.append_value(r.stage_id as i32);
@@ -1728,8 +1735,8 @@ mod tests {
     fn build_costs_batch_from_two_stages() {
         let r0 = make_cost_record(0, Some(0));
         let r1 = make_cost_record(1, Some(0));
-        let records = vec![&r0, &r1];
-        let batch = build_costs_batch(&records).expect("costs batch must build");
+        let records = [&r0, &r1];
+        let batch = build_costs_batch(records.iter().copied()).expect("costs batch must build");
 
         assert_eq!(batch.num_rows(), 2, "must have 2 rows");
         assert_eq!(batch.num_columns(), 26, "costs schema has 26 columns");
@@ -1750,10 +1757,10 @@ mod tests {
         let mut r0 = make_hydro_record(0, Some(0), 1); // generation_mw = 50.0
         r0.water_withdrawal_violation_pos_m3s = 2.5; // nonzero for round-trip test
         let r1 = make_hydro_record(1, Some(0), 2); // generation_mw = 50.0
-        let records = vec![&r0, &r1];
+        let records = [&r0, &r1];
 
-        let batch =
-            build_hydros_batch(&records, &block_durations).expect("hydros batch must build");
+        let batch = build_hydros_batch(records.iter().copied(), &block_durations)
+            .expect("hydros batch must build");
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 31, "hydros schema has 31 columns");
 
@@ -1828,9 +1835,9 @@ mod tests {
             exchange_cost: 5.0,
             operative_state_code: 1,
         };
-        let records = vec![&r];
+        let records = [&r];
 
-        let batch = build_exchanges_batch(&records, &block_durations, &loss_factors)
+        let batch = build_exchanges_batch(records.iter().copied(), &block_durations, &loss_factors)
             .expect("exchanges batch must build");
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 11, "exchanges schema has 11 columns");
@@ -1865,9 +1872,9 @@ mod tests {
         // block_id=None must produce a null value in the Arrow array.
         let r_with = make_cost_record(0, Some(0));
         let r_without = make_cost_record(1, None);
-        let records = vec![&r_with, &r_without];
+        let records = [&r_with, &r_without];
 
-        let batch = build_costs_batch(&records).expect("costs batch must build");
+        let batch = build_costs_batch(records.iter().copied()).expect("costs batch must build");
         let block_col = batch
             .column_by_name("block_id")
             .expect("block_id column must exist");
@@ -2144,6 +2151,68 @@ mod tests {
         assert!(
             !tmp_file.exists(),
             ".tmp file must not remain after successful atomic write"
+        );
+    }
+
+    /// Verifies that the iterator-based `write_scenario` path runs correctly with
+    /// 3 stages and 2 entity types (costs + hydros) — no flat Vec materialisation.
+    #[test]
+    fn write_scenario_does_not_materialize_flat_vecs() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        std::fs::create_dir_all(tmp.path().join("simulation")).unwrap();
+
+        let system = make_test_system();
+        let config = ParquetWriterConfig::default();
+
+        let mut writer =
+            SimulationParquetWriter::new(tmp.path(), &system, &config).expect("new must succeed");
+
+        // 3 stages × 1 cost + 2 hydros each.
+        let payload = make_scenario_payload(0, 3);
+        writer
+            .write_scenario(payload)
+            .expect("write_scenario must succeed without panicking");
+
+        // 3 stages × 1 cost record each → 3 rows in costs parquet.
+        let costs_path = tmp
+            .path()
+            .join("simulation/costs/scenario_id=0000/data.parquet");
+        assert!(costs_path.exists(), "costs parquet must be written");
+
+        // 3 stages × 2 hydro records each → 6 rows in hydros parquet.
+        let hydros_path = tmp
+            .path()
+            .join("simulation/hydros/scenario_id=0000/data.parquet");
+        assert!(hydros_path.exists(), "hydros parquet must be written");
+
+        let costs_file = std::fs::File::open(&costs_path).expect("costs file must exist");
+        let costs_batch = ParquetRecordBatchReaderBuilder::try_new(costs_file)
+            .expect("builder must succeed")
+            .build()
+            .expect("reader must build")
+            .next()
+            .expect("must have rows")
+            .expect("batch must be Ok");
+        assert_eq!(
+            costs_batch.num_rows(),
+            3,
+            "costs must have 3 rows (3 stages)"
+        );
+
+        let hydros_file = std::fs::File::open(&hydros_path).expect("hydros file must exist");
+        let hydros_batch = ParquetRecordBatchReaderBuilder::try_new(hydros_file)
+            .expect("builder must succeed")
+            .build()
+            .expect("reader must build")
+            .next()
+            .expect("must have rows")
+            .expect("batch must be Ok");
+        assert_eq!(
+            hydros_batch.num_rows(),
+            6,
+            "hydros must have 6 rows (3 stages × 2 hydros)"
         );
     }
 }

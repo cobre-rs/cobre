@@ -14,9 +14,10 @@
 //! 4. Backward pass — Benders cut generation.
 //! 5. Cut sync — `allgatherv` new cuts across ranks.
 //!    5a. Cut selection — optional periodic pool pruning via `CutSelectionStrategy`.
-//!    5b. LB evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
-//! 6. Convergence check — stopping rules evaluated.
-//! 7. (checkpoint — not yet implemented)
+//!    5b. Budget enforcement — active-cut hard cap (every iteration when set).
+//!    5c. Template baking — rebuild per-stage baked LP templates.
+//! 6. Lower bound evaluation — rank 0 solves stage-0 openings, broadcasts scalar.
+//! 7. Convergence check — stopping rules evaluated.
 //! 8. Event emission — `IterationSummary` and per-step events via channel.
 //!
 //! ## Pre-allocation discipline
@@ -26,35 +27,16 @@
 //! iteration loop and reused across all iterations. No heap allocation
 //! occurs on the hot path.
 
-use std::sync::atomic::Ordering;
-use std::sync::mpsc::Sender;
-use std::time::Instant;
-
 use cobre_comm::Communicator;
-use cobre_core::{StageSelectionRecord, TrainingEvent};
-use cobre_solver::Basis;
-use cobre_solver::RowBatch;
-use cobre_solver::SolverInterface;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use cobre_solver::{SolverInterface, StageTemplate};
 
 use crate::{
-    SddpError, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
-    backward::run_backward_pass,
+    SddpError, TrainingConfig,
     context::{StageContext, TrainingContext},
-    convergence::ConvergenceMonitor,
-    cut::CutRowMap,
     cut::fcf::FutureCostFunction,
-    cut_selection::DeactivationSet,
-    cut_sync::CutSyncBuffers,
-    evaluate_lower_bound,
-    forward::{ForwardPassBatch, run_forward_pass, sync_forward},
-    lower_bound::LbEvalSpec,
-    lp_builder::PatchBuffer,
-    risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, SolverStatsEntry, aggregate_solver_statistics},
-    state_exchange::ExchangeBuffers,
-    stopping_rule::RULE_ITERATION_LIMIT,
-    workspace::{BasisStore, WorkspacePool},
+    solver_stats::SolverStatsEntry,
+    training_session::{IterationOutcome, TrainingSession},
+    workspace::CapturedBasis,
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +63,7 @@ pub struct TrainingOutcome {
 }
 
 /// Summary statistics produced when the training loop terminates.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TrainingResult {
     /// Final lower bound at termination.
@@ -104,13 +87,14 @@ pub struct TrainingResult {
     /// Total wall-clock time for the training run, in milliseconds.
     pub total_time_ms: u64,
 
-    /// Per-stage solver basis from the last iteration, indexed 0-based.
+    /// Per-stage captured basis from the last iteration, indexed 0-based.
     ///
-    /// Each entry is `Some(basis)` if the stage was solved at least once
+    /// Each entry is `Some(captured)` if the stage was solved at least once
     /// during the final iteration, or `None` if no solve occurred (e.g.,
     /// the last stage in finite-horizon mode has no successor cuts).
-    /// Used for policy checkpoint persistence.
-    pub basis_cache: Vec<Option<Basis>>,
+    /// Used for policy checkpoint persistence and simulation warm-start
+    /// via slot-tracked reconstruction.
+    pub basis_cache: Vec<Option<CapturedBasis>>,
 
     /// Per-iteration, per-phase solver statistics log.
     ///
@@ -125,31 +109,77 @@ pub struct TrainingResult {
     /// Always populated during training. The caller decides whether to
     /// persist it to the policy checkpoint based on `exports.states`.
     pub visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
+
+    /// Final-iteration baked templates, one per stage.
+    ///
+    /// Always `Some` — templates are baked unconditionally before the first
+    /// iteration of the training loop and never reverted.
+    pub baked_templates: Option<Vec<StageTemplate>>,
+}
+
+impl TrainingResult {
+    /// Construct a `TrainingResult` with explicit field values.
+    ///
+    /// Prefer this constructor over struct-literal syntax for compiler-enforced
+    /// parity when adding new fields.
+    ///
+    /// Structurally independent parameters: each of the 11 fields is the output
+    /// of a distinct training-loop stage (convergence metrics, timing, basis
+    /// cache, solver stats, visited archive, baked templates). Absorbing them
+    /// into a context struct would not reduce the argument count at the call
+    /// sites, because each call site constructs the full `TrainingResult` as
+    /// the terminal value — there is no shared upstream context to forward.
+    // RATIONALE: 11 args map 1-to-1 to distinct output fields of the training result.
+    // No shared context struct can be forwarded from the call sites; each call site
+    // is the terminal aggregation point that collects all training outputs.
+    #[must_use]
+    #[allow(clippy::too_many_arguments, clippy::similar_names)]
+    pub fn new(
+        final_lb: f64,
+        final_ub: f64,
+        final_ub_std: f64,
+        final_gap: f64,
+        iterations: u64,
+        reason: String,
+        total_time_ms: u64,
+        basis_cache: Vec<Option<CapturedBasis>>,
+        solver_stats_log: Vec<SolverStatsEntry>,
+        visited_archive: Option<crate::visited_states::VisitedStatesArchive>,
+        baked_templates: Option<Vec<StageTemplate>>,
+    ) -> Self {
+        Self {
+            final_lb,
+            final_ub,
+            final_ub_std,
+            final_gap,
+            iterations,
+            reason,
+            total_time_ms,
+            basis_cache,
+            solver_stats_log,
+            visited_archive,
+            baked_templates,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Send a training event if the channel is present (ignores `None` or receiver drop).
-#[inline]
-fn emit(sender: Option<&Sender<TrainingEvent>>, event: TrainingEvent) {
-    if let Some(s) = sender {
-        let _ = s.send(event);
-    }
-}
-
-/// Check if a full LP rebuild is needed to purge phantom (bound-zeroed) rows.
+/// Convert a buffer length to `i32` for use as an MPI broadcast count.
 ///
-/// Returns true when the ratio of deactivated rows to total rows exceeds
-/// a threshold, or when a fixed iteration interval has elapsed since the
-/// last rebuild.
-fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) -> bool {
-    let total = row_map.total_cut_rows();
-    let active = row_map.active_count();
-    let phantom = total - active;
-    // Rebuild when phantom rows exceed 20% of total, or every 50 iterations.
-    (total > 0 && phantom * 5 > total) || iterations_since_rebuild >= 50
+/// Returns `Err(SddpError::Communication(CommError::InvalidBufferSize { .. }))`
+/// when `len > i32::MAX`, carrying the operation name, the maximum legal value
+/// (`i32::MAX as usize`), and the actual (oversized) length.
+fn checked_broadcast_len(len: usize, operation: &'static str) -> Result<i32, SddpError> {
+    i32::try_from(len).map_err(|_| {
+        SddpError::Communication(cobre_comm::CommError::InvalidBufferSize {
+            operation,
+            expected: i32::MAX as usize,
+            actual: len,
+        })
+    })
 }
 
 /// Build a `basis_cache` from the canonical global scenario 0, broadcasting
@@ -168,36 +198,46 @@ fn needs_periodic_rebuild(row_map: &CutRowMap, iterations_since_rebuild: u64) ->
 ///
 /// ## Serialization format
 ///
-/// For each stage *t* in `0..num_stages`, the flat `i32` buffer contains:
-/// - `0_i32` sentinel when `basis_store.get(0, t)` is `None`
-/// - `1_i32` sentinel + `col_len: i32` + `row_len: i32` + `col_status[..]`
-///   + `row_status[..]` when `Some(basis)`
+/// Two broadcast buffers per call (four broadcasts total: length then payload
+/// for each):
 ///
-/// This avoids adding `serde` to `cobre-solver` and uses only `i32`
-/// broadcast, which `CommData` supports for all backends.
+/// **i32 buffer** — for each stage *t* in `0..num_stages`:
+/// - `0_i32` sentinel when `basis_store.get(0, t)` is `None`
+/// - When `Some(captured)`: `1_i32` sentinel, then `col_len`, `row_len`,
+///   `base_row_count`, `cut_slot_count`, `state_len` (all `i32`), then
+///   `col_status[..]`, `row_status[..]`, `cut_row_slots[..] as i32`
+///
+/// **f64 buffer** — for each stage *t* in `0..num_stages`:
+/// - When `sentinel == 1`: `state_at_capture[..]` appended sequentially
+/// - When `sentinel == 0`: no entries appended
+///
+/// `u32` slot values are cast to `i32` for transmission; they are always
+/// non-negative (LP pool indices) and fit comfortably in `i32`.
 ///
 /// ## Single-rank optimization
 ///
 /// When `comm.size() == 1` the broadcast is skipped; only the extraction
-/// from local scenario 0 runs.
+/// from local scenario 0 runs. All metadata is preserved via `Clone`.
 ///
 /// # Errors
 ///
-/// Returns `SddpError::Communication` if the `comm.broadcast` call fails.
-// Basis lengths are bounded by LP column/row counts, which fit comfortably
-// in i32 in all realistic cases. The i32<->usize casts here are deliberate:
-// MPI broadcast requires CommData (which requires Copy), ruling out usize.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
-fn broadcast_basis_cache<C: Communicator>(
+/// Returns `SddpError::Communication(CommError::InvalidBufferSize { .. })`
+/// if either buffer length exceeds `i32::MAX` (the MPI count limit).
+/// Buffer length scalars are broadcast as i32 (MPI `CommData` requires Copy,
+/// ruling out usize); the usize→i32 conversions are checked via
+/// [`checked_broadcast_len`] before any MPI call is issued.
+/// Returns `SddpError::Communication` if any `comm.broadcast` call fails.
+/// Returns `SddpError::Validation` if any length prefix is inconsistent with
+/// the received buffer size, naming the offending stage in the message.
+pub(crate) fn broadcast_basis_cache<C: Communicator>(
     basis_store: &crate::workspace::BasisStore,
     num_stages: usize,
     comm: &C,
-) -> Result<Vec<Option<Basis>>, SddpError> {
-    // Single-rank fast path: no communication needed.
+) -> Result<Vec<Option<CapturedBasis>>, SddpError> {
+    // Single-rank fast path: no communication needed — clone the full
+    // CapturedBasis including metadata (cut_row_slots, state_at_capture,
+    // base_row_count) so that simulation reconstruction has full slot
+    // identity on single-rank runs.
     if comm.size() == 1 {
         let cache = (0..num_stages)
             .map(|t| basis_store.get(0, t).cloned())
@@ -205,79 +245,72 @@ fn broadcast_basis_cache<C: Communicator>(
         return Ok(cache);
     }
 
-    // Pack rank 0's scenario-0 bases into a flat i32 buffer that can be
-    // broadcast over the comm layer.
+    // Multi-rank path: pack rank 0's scenario-0 full CapturedBasis into two
+    // flat buffers (one i32 for integer/status fields, one f64 for
+    // state_at_capture) and broadcast both.
     //
-    // Buffer layout per stage:
-    //   [sentinel(0 or 1), <if sentinel==1: col_len, row_len, col_status..., row_status...>]
+    // Wire format is owned by CapturedBasis::to_broadcast_payload /
+    // CapturedBasis::try_from_broadcast_payload. The None case writes a
+    // 0_i32 sentinel directly; the Some case delegates to the method.
     let mut buf: Vec<i32> = Vec::new();
+    let mut f64_buf: Vec<f64> = Vec::new();
     if comm.rank() == 0 {
         for t in 0..num_stages {
             match basis_store.get(0, t) {
                 None => buf.push(0_i32),
-                Some(basis) => {
-                    buf.push(1_i32);
-                    buf.push(basis.col_status.len() as i32);
-                    buf.push(basis.row_status.len() as i32);
-                    buf.extend_from_slice(&basis.col_status);
-                    buf.extend_from_slice(&basis.row_status);
-                }
+                Some(captured) => captured.to_broadcast_payload(&mut buf, &mut f64_buf),
             }
         }
     }
 
-    // Step 1: broadcast the buffer length so all ranks can allocate.
-    let mut len_buf = [buf.len() as i32];
+    // Step 1: broadcast the i32 buffer length so all ranks can allocate.
+    let mut len_buf = [checked_broadcast_len(
+        buf.len(),
+        "broadcast_basis_cache_i32",
+    )?];
     comm.broadcast(&mut len_buf, 0).map_err(SddpError::from)?;
-    let total_len = len_buf[0] as usize;
+    let total_len = usize::try_from(len_buf[0]).map_err(|_| {
+        SddpError::Validation(format!(
+            "broadcast_basis_cache_i32: received negative length {}",
+            len_buf[0]
+        ))
+    })?;
 
-    // Step 2: resize non-root buffers and broadcast the payload.
+    // Step 2: resize non-root i32 buffers and broadcast the i32 payload.
     buf.resize(total_len, 0_i32);
     comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
 
-    // Step 3: deserialize back into Vec<Option<Basis>>.
-    // All index arithmetic is bounds-checked to convert a corrupted broadcast
-    // into a recoverable error instead of an index-out-of-bounds panic.
-    let mut cache: Vec<Option<Basis>> = Vec::with_capacity(num_stages);
+    // Step 3: broadcast the f64 buffer length so all ranks can allocate.
+    let mut f64_len_buf = [checked_broadcast_len(
+        f64_buf.len(),
+        "broadcast_basis_cache_f64",
+    )?];
+    comm.broadcast(&mut f64_len_buf, 0)
+        .map_err(SddpError::from)?;
+    let f64_total_len = usize::try_from(f64_len_buf[0]).map_err(|_| {
+        SddpError::Validation(format!(
+            "broadcast_basis_cache_f64: received negative length {}",
+            f64_len_buf[0]
+        ))
+    })?;
+
+    // Step 4: resize non-root f64 buffers and broadcast the f64 payload.
+    f64_buf.resize(f64_total_len, 0.0_f64);
+    comm.broadcast(&mut f64_buf, 0).map_err(SddpError::from)?;
+
+    // Step 5: deserialize back into Vec<Option<CapturedBasis>>.
+    let mut cache: Vec<Option<CapturedBasis>> = Vec::with_capacity(num_stages);
     let mut pos = 0_usize;
+    let mut f64_pos = 0_usize;
     for stage in 0..num_stages {
-        if pos >= buf.len() {
-            return Err(SddpError::Validation(format!(
-                "broadcast_basis_cache: buffer truncated at stage {stage} (pos={pos}, len={})",
-                buf.len()
-            )));
-        }
-        let sentinel = buf[pos];
-        pos += 1;
-        if sentinel == 0 {
-            cache.push(None);
-        } else {
-            if pos + 2 > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading lengths at stage {stage}"
-                )));
-            }
-            let col_len = buf[pos] as usize;
-            pos += 1;
-            let row_len = buf[pos] as usize;
-            pos += 1;
-            if pos + col_len + row_len > buf.len() {
-                return Err(SddpError::Validation(format!(
-                    "broadcast_basis_cache: buffer truncated reading basis data at stage {stage} \
-                     (need {}, have {})",
-                    col_len + row_len,
-                    buf.len() - pos
-                )));
-            }
-            let col_status = buf[pos..pos + col_len].to_vec();
-            pos += col_len;
-            let row_status = buf[pos..pos + row_len].to_vec();
-            pos += row_len;
-            cache.push(Some(Basis {
-                col_status,
-                row_status,
-            }));
-        }
+        let captured = CapturedBasis::try_from_broadcast_payload(
+            stage,
+            &buf,
+            &mut pos,
+            &f64_buf,
+            &mut f64_pos,
+        )?;
+        cache.push(captured);
     }
 
     Ok(cache)
@@ -302,7 +335,7 @@ fn broadcast_basis_cache<C: Communicator>(
 ///
 /// ## Event channel
 ///
-/// When `config.event_sender` is `Some`, typed [`TrainingEvent`] values are
+/// When `config.event_sender` is `Some`, typed [`cobre_core::TrainingEvent`] values are
 /// emitted at each lifecycle step boundary. Event send failures (receiver
 /// dropped) are silently ignored so they cannot interrupt training.
 ///
@@ -312,7 +345,7 @@ fn broadcast_basis_cache<C: Communicator>(
 /// synchronisation. The strategy's `should_run(iteration)` gate controls the
 /// frequency; at eligible iterations every stage's cut pool is scanned and
 /// inactive cuts are deactivated. When `cut_selection` is `None`, step 5a is
-/// skipped entirely and no [`TrainingEvent::CutSelectionComplete`] events are
+/// skipped entirely and no [`cobre_core::TrainingEvent::PolicySelectionComplete`] events are
 /// emitted.
 ///
 /// # Errors
@@ -325,796 +358,62 @@ fn broadcast_basis_cache<C: Communicator>(
 /// # Examples
 ///
 /// ```rust,ignore
-/// use cobre_sddp::{train, TrainingConfig, FutureCostFunction, StageIndexer};
+/// use cobre_sddp::{train, TrainingConfig, LoopConfig, CutManagementConfig, EventConfig};
 /// use cobre_sddp::{StoppingRuleSet, StoppingRule, RiskMeasure, HorizonMode};
-/// use cobre_sddp::lp_builder::StageTemplate;
 ///
 /// let mut solver = HiggsBackend::new();
-/// let config = TrainingConfig { forward_passes: 100, ..Default::default() };
+/// let config = TrainingConfig {
+///     loop_config: LoopConfig { forward_passes: 100, max_iterations: 100, ..LoopConfig::default() },
+///     cut_management: CutManagementConfig {
+///         risk_measures: vec![RiskMeasure::Expectation; num_stages],
+///         ..CutManagementConfig::default()
+///     },
+///     events: EventConfig::default(),
+/// };
 /// let mut fcf = FutureCostFunction::new(num_stages - 1, n_state, capacity);
-/// let stopping = StoppingRuleSet::any(vec![
-///     StoppingRule::iteration_limit(100),
-///     StoppingRule::relative_gap(0.01),
-/// ]);
-/// let risk = vec![RiskMeasure::Expectation; num_stages];
-/// let horizon = HorizonMode::finite(num_stages);
 ///
 /// let result = train(
-///     &mut solver, config, &mut fcf, &templates, &base_rows,
-///     &indexer, &initial_state, &stochastic,
-///     &horizon, &risk, stopping, &comm,
+///     &mut solver, config, &mut fcf, &stage_ctx, &training_ctx, &comm,
 ///     || HiggsBackend::new(),
 /// )?;
 ///
 /// println!("converged in {} iterations, gap={:.4}", result.result.iterations, result.result.final_gap);
 /// ```
 ///
-/// # Panics (debug builds only)
+/// # Panics
 ///
-/// Panics if `templates.len() != horizon.num_stages()` or if
-/// `risk_measures.len() != horizon.num_stages()` or if
+/// In debug builds, panics if `templates.len() != horizon.num_stages()` or if
+/// `config.cut_management.risk_measures.len() != horizon.num_stages()` or if
 /// `training_ctx.stochastic.opening_tree().n_openings(0) == 0`.
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::similar_names
-)]
+///
+/// Always panics if `comm.rank() > i32::MAX`. MPI world sizes are bounded well
+/// below this on all real systems.
 pub fn train<S: SolverInterface + Send, C: Communicator>(
     solver: &mut S,
     config: TrainingConfig,
     fcf: &mut FutureCostFunction,
     stage_ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    risk_measures: &[RiskMeasure],
-    stopping_rules: StoppingRuleSet,
     comm: &C,
     solver_factory: impl Fn() -> Result<S, cobre_solver::SolverError>,
 ) -> Result<TrainingOutcome, SddpError> {
-    let cut_activity_tolerance = config.cut_activity_tolerance;
-    let n_fwd_threads = config.n_fwd_threads;
-    let max_blocks = config.max_blocks;
-    let horizon = training_ctx.horizon;
-    let indexer = training_ctx.indexer;
-    let initial_state = training_ctx.initial_state;
-    let num_stages = horizon.num_stages();
-    let num_ranks = comm.size();
-    let my_rank = comm.rank();
-    let total_forward_passes = config.forward_passes as usize;
-    let n_state = indexer.n_state;
-
-    // forward_passes is the TOTAL across all ranks. Distribute with
-    // base/remainder: first `remainder` ranks get `base + 1`, rest get `base`.
-    let base_fwd = total_forward_passes / num_ranks;
-    let remainder_fwd = total_forward_passes % num_ranks;
-    let my_actual_fwd = base_fwd + usize::from(my_rank < remainder_fwd);
-    let my_fwd_offset = base_fwd * my_rank + my_rank.min(remainder_fwd);
-    // ExchangeBuffers requires uniform local_count — use the max across ranks.
-    let max_local_fwd = base_fwd + usize::from(remainder_fwd > 0);
-
-    let empty_record = TrajectoryRecord {
-        primal: vec![],
-        dual: vec![],
-        stage_cost: 0.0,
-        state: vec![0.0; n_state],
-    };
-    let mut records = vec![empty_record; max_local_fwd * num_stages];
-
-    // Workspace pool for forward-pass thread parallelism. Each workspace owns
-    // an independent solver, patch buffer, and current-state buffer. The pool
-    // is allocated once and reused across all iterations.
-    let n_threads = n_fwd_threads.max(1);
-    let mut fwd_pool = WorkspacePool::try_new(
-        n_threads,
-        indexer.hydro_count,
-        indexer.max_par_order,
-        n_state,
-        stage_ctx.n_load_buses,
-        max_blocks,
+    let mut session = TrainingSession::new(
+        solver,
+        config,
+        fcf,
+        stage_ctx,
+        training_ctx,
+        comm,
         solver_factory,
-    )
-    .map_err(SddpError::Solver)?;
-
-    // Per-scenario, per-stage basis store. Sized for the maximum local forward
-    // passes so that scenario indices are stable across iterations. The store
-    // is allocated once and reused: the forward pass overwrites entries each
-    // iteration, and the backward pass reads from them read-only.
-    let mut basis_store = BasisStore::new(max_local_fwd, num_stages);
-
-    // Standalone patch buffer for the lower bound evaluation which uses the
-    // single `solver` argument directly. The backward pass uses the workspace
-    // pool's per-thread solvers and patch buffers instead.
-    let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
-    let mut convergence_monitor = ConvergenceMonitor::new(stopping_rules);
-    // Compute the actual per-rank forward pass count for the padded-but-tracked
-    // ExchangeBuffers. First `remainder_fwd` ranks get `base_fwd + 1`, the rest
-    // get `base_fwd`. This mirrors the distribution used in the forward pass.
-    let actual_per_rank: Vec<usize> = (0..num_ranks)
-        .map(|r| base_fwd + usize::from(r < remainder_fwd))
-        .collect();
-    let mut exchange_bufs =
-        ExchangeBuffers::with_actual_counts(n_state, max_local_fwd, num_ranks, &actual_per_rank);
-    let mut cut_sync_bufs =
-        CutSyncBuffers::with_distribution(n_state, max_local_fwd, num_ranks, total_forward_passes);
-
-    // Visited-states archive: allocated only when needed for dominated cut
-    // selection (which reads visited states at pruning time), angular dominance
-    // pruning (which also reads visited states), or when the caller requests
-    // state export to the policy checkpoint.
-    let needs_archive = matches!(
-        config.cut_selection,
-        Some(crate::cut_selection::CutSelectionStrategy::Dominated { .. })
-    ) || config.angular_pruning.is_some()
-        || config.export_states;
-    let mut visited_archive = if needs_archive {
-        Some(crate::visited_states::VisitedStatesArchive::new(
-            num_stages,
-            n_state,
-            config.max_iterations,
-            total_forward_passes,
-        ))
-    } else {
-        None
-    };
-
-    let start_time = Instant::now();
-
-    let TrainingConfig {
-        forward_passes: config_forward_passes,
-        max_iterations,
-        event_sender,
-        cut_selection,
-        shutdown_flag,
-        start_iteration,
-        angular_pruning,
-        budget,
-        ..
-    } = config;
-    let cut_selection = cut_selection.as_ref();
-    let shutdown_flag = shutdown_flag.as_ref();
-    let angular_pruning = angular_pruning.as_ref();
-
-    #[allow(clippy::cast_possible_truncation)]
-    emit(
-        event_sender.as_ref(),
-        TrainingEvent::TrainingStarted {
-            case_name: String::new(),
-            stages: num_stages as u32,
-            hydros: indexer.hydro_count as u32,
-            thermals: 0,
-            ranks: num_ranks as u32,
-            #[allow(clippy::cast_possible_truncation)]
-            threads_per_rank: n_threads as u32,
-            timestamp: String::new(),
-        },
-    );
-
-    let mut final_lb = 0.0;
-    let mut final_ub = 0.0;
-    let mut final_ub_std = 0.0;
-    let mut final_gap = 0.0;
-    let mut completed_iterations = start_iteration;
-    let mut termination_reason = RULE_ITERATION_LIMIT.to_string();
-    let mut solver_stats_log: Vec<SolverStatsEntry> = Vec::new();
-
-    // Pre-allocate RowBatch buffers for cut row construction. Reused across
-    // iterations via build_cut_row_batch_into to eliminate per-iteration
-    // heap allocation (S3 optimization).
-    let mut cut_batches: Vec<RowBatch> = (0..num_stages)
-        .map(|_| RowBatch {
-            num_rows: 0,
-            row_starts: Vec::new(),
-            col_indices: Vec::new(),
-            values: Vec::new(),
-            row_lower: Vec::new(),
-            row_upper: Vec::new(),
-        })
-        .collect();
-    // Extra batch for lower-bound evaluation (stage 0).
-    let mut lb_cut_batch = RowBatch {
-        num_rows: 0,
-        row_starts: Vec::new(),
-        col_indices: Vec::new(),
-        values: Vec::new(),
-        row_lower: Vec::new(),
-        row_upper: Vec::new(),
-    };
-
-    // CutRowMap for the lower bound solver's incremental cut management.
-    // The LB solver is dedicated to stage 0 and persists across iterations,
-    // so it benefits from incremental cut append (S2 optimization).
-    let mut lb_cut_row_map = CutRowMap::new(fcf.pools[0].capacity, stage_ctx.templates[0].num_rows);
-
-    // Track iterations since last full rebuild for the LB solver.
-    let mut lb_iterations_since_rebuild: u64 = 0;
-
-    // Macro to handle mid-iteration errors: emit TrainingFinished, build
-    // partial result, and return Ok(TrainingOutcome { error: Some(e) }).
-    macro_rules! on_error {
-        ($e:expr) => {{
-            #[allow(clippy::cast_possible_truncation)]
-            emit(
-                event_sender.as_ref(),
-                TrainingEvent::TrainingFinished {
-                    reason: "error".to_string(),
-                    iterations: completed_iterations,
-                    final_lb,
-                    final_ub,
-                    total_time_ms: (start_time.elapsed().as_millis() as u64).max(1),
-                    total_cuts: fcf.total_active_cuts() as u64,
-                },
-            );
-            // Extract the canonical basis cache from rank 0's global scenario 0
-            // and broadcast to all ranks. This ensures simulation warm-starts
-            // from the same LP vertex regardless of the number of MPI ranks.
-            let basis_cache = match broadcast_basis_cache(&basis_store, num_stages, comm) {
-                Ok(cache) => cache,
-                Err(comm_err) => return Err(comm_err),
-            };
-            #[allow(clippy::cast_possible_truncation)]
-            let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
-            return Ok(TrainingOutcome {
-                result: TrainingResult {
-                    final_lb,
-                    final_ub,
-                    final_ub_std,
-                    final_gap,
-                    iterations: completed_iterations,
-                    reason: "error".to_string(),
-                    total_time_ms,
-                    basis_cache,
-                    solver_stats_log,
-                    visited_archive: visited_archive.take(),
-                },
-                error: Some($e),
-            });
-        }};
-    }
-
-    // Pre-allocated backward-pass buffers, reused across iterations to avoid
-    // per-iteration allocation. Declared outside the loop so capacity persists.
-    let mut bwd_probabilities_buf: Vec<f64> = Vec::new();
-    let mut bwd_successor_active_slots_buf: Vec<usize> = Vec::new();
-    // Pre-allocated buffer for cut binding metadata allreduce. Sized per
-    // stage to the successor pool's metadata length after sync_packed_cuts.
-    let mut bwd_metadata_sync_buf: Vec<u64> = Vec::new();
-    // Pre-allocated receive buffer for the allreduce(Sum) of binding
-    // increment counts. Reused across stages to avoid per-stage allocation.
-    let mut bwd_global_increments_buf: Vec<u64> = Vec::new();
-    // Pre-allocated buffer for packing real (non-padded) gathered state vectors
-    // when archiving visited states for dominated cut selection (ticket-003).
-    // Pre-sized to the true total forward passes to avoid first-iteration
-    // reallocation; capacity is preserved across iterations.
-    let mut bwd_real_states_buf: Vec<f64> =
-        Vec::with_capacity(exchange_bufs.real_total_scenarios() * n_state);
-
-    for iteration in (start_iteration + 1)..=max_iterations {
-        // Check external shutdown flag before each iteration's convergence
-        // evaluation. The flag is set by signal handlers or test harnesses.
-        if let Some(flag) = shutdown_flag {
-            if flag.load(Ordering::Relaxed) {
-                convergence_monitor.set_shutdown();
-            }
-        }
-
-        let iter_start = Instant::now();
-        let fwd_record_len = my_actual_fwd * num_stages;
-        let fwd_batch = ForwardPassBatch {
-            local_forward_passes: my_actual_fwd,
-            total_forward_passes,
-            iteration,
-            fwd_offset: my_fwd_offset,
-        };
-
-        // Snapshot pool stats before forward pass.
-        let fwd_stats_before = {
-            let pool_stats: Vec<_> = fwd_pool
-                .workspaces
-                .iter()
-                .map(|w| w.solver.statistics())
-                .collect();
-            aggregate_solver_statistics(&pool_stats)
-        };
-
-        let forward_result = match run_forward_pass(
-            &mut fwd_pool.workspaces,
-            &mut basis_store,
-            stage_ctx,
-            fcf,
-            &mut cut_batches,
-            training_ctx,
-            &fwd_batch,
-            &mut records[..fwd_record_len],
-        ) {
-            Ok(r) => r,
-            Err(e) => on_error!(e),
-        };
-
-        // Snapshot pool stats after forward pass and compute delta.
-        let fwd_delta = {
-            let pool_stats: Vec<_> = fwd_pool
-                .workspaces
-                .iter()
-                .map(|w| w.solver.statistics())
-                .collect();
-            let fwd_stats_after = aggregate_solver_statistics(&pool_stats);
-            SolverStatsDelta::from_snapshots(&fwd_stats_before, &fwd_stats_after)
-        };
-        let fwd_solve_time_ms = fwd_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "forward", -1, fwd_delta));
-
-        let forward_elapsed_ms = forward_result.elapsed_ms;
-
-        let local_n = forward_result.scenario_costs.len();
-        let local_cost_sum: f64 = forward_result.scenario_costs.iter().sum();
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::ForwardPassComplete {
-                iteration,
-                scenarios: config_forward_passes,
-                #[allow(clippy::cast_precision_loss)]
-                ub_mean: if local_n > 0 {
-                    local_cost_sum / local_n as f64
-                } else {
-                    0.0
-                },
-                ub_std: 0.0,
-                elapsed_ms: forward_elapsed_ms,
-            },
-        );
-        let sync_result = match sync_forward(&forward_result, comm, total_forward_passes) {
-            Ok(r) => r,
-            Err(e) => on_error!(e),
-        };
-
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::ForwardSyncComplete {
-                iteration,
-                global_ub_mean: sync_result.global_ub_mean,
-                global_ub_std: sync_result.global_ub_std,
-                sync_time_ms: sync_result.sync_time_ms,
-            },
-        );
-        let mut bwd_spec = crate::backward::BackwardPassSpec {
-            exchange: &mut exchange_bufs,
-            records: &records,
-            iteration,
-            local_work: my_actual_fwd,
-            fwd_offset: my_fwd_offset,
-            risk_measures,
-            cut_activity_tolerance,
-            cut_sync_bufs: &mut cut_sync_bufs,
-            probabilities_buf: &mut bwd_probabilities_buf,
-            successor_active_slots_buf: &mut bwd_successor_active_slots_buf,
-            visited_archive: visited_archive.as_mut(),
-            metadata_sync_buf: &mut bwd_metadata_sync_buf,
-            global_increments_buf: &mut bwd_global_increments_buf,
-            real_states_buf: &mut bwd_real_states_buf,
-        };
-
-        let backward_result = match run_backward_pass(
-            &mut fwd_pool.workspaces,
-            &basis_store,
-            stage_ctx,
-            fcf,
-            &mut cut_batches,
-            training_ctx,
-            &mut bwd_spec,
-            comm,
-        ) {
-            Ok(r) => r,
-            Err(e) => on_error!(e),
-        };
-
-        // Buffers are borrowed by bwd_spec and automatically available for
-        // the next iteration after bwd_spec is dropped here.
-
-        // Store per-stage backward deltas and compute aggregate solve time.
-        let bwd_solve_time_ms = {
-            let deltas: Vec<_> = backward_result
-                .stage_stats
-                .iter()
-                .map(|(_, d)| d.clone())
-                .collect();
-            let agg = SolverStatsDelta::aggregate(&deltas);
-            let total_ms = agg.solve_time_ms;
-            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-            for (stage_idx, delta) in &backward_result.stage_stats {
-                solver_stats_log.push((iteration, "backward", *stage_idx as i32, delta.clone()));
-            }
-            total_ms
-        };
-
-        let backward_elapsed_ms = backward_result.elapsed_ms;
-
-        #[allow(clippy::cast_possible_truncation)]
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::BackwardPassComplete {
-                iteration,
-                cuts_generated: backward_result.cuts_generated as u32,
-                stages_processed: num_stages.saturating_sub(1) as u32,
-                elapsed_ms: backward_elapsed_ms,
-                state_exchange_time_ms: backward_result.state_exchange_time_ms,
-                cut_batch_build_time_ms: backward_result.cut_batch_build_time_ms,
-                rayon_overhead_time_ms: backward_result.rayon_overhead_time_ms,
-            },
-        );
-        // Cut sync now happens per-stage inside `run_backward_pass`. The
-        // measured time is returned in `backward_result.cut_sync_time_ms`.
-        #[allow(clippy::cast_possible_truncation)]
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::CutSyncComplete {
-                iteration,
-                cuts_distributed: backward_result.cuts_generated as u32,
-                cuts_active: fcf.total_active_cuts() as u32,
-                cuts_removed: 0,
-                sync_time_ms: backward_result.cut_sync_time_ms,
-            },
-        );
-
-        // Step 4a: Strategy-based cut selection.
-        // We defer the CutSelectionComplete event until after Steps 4b and 4c
-        // so that per_stage records can be annotated with angular and budget
-        // post-step counts before they are emitted.
-        //
-        // sel_state holds (per_stage, cuts_deactivated, selection_time_ms,
-        // stages_processed) when Step 4a ran; None otherwise.
-        let mut sel_state: Option<(Vec<StageSelectionRecord>, u32, u64, u32)> = None;
-
-        if let Some(strategy) = cut_selection {
-            if strategy.should_run(iteration) {
-                let sel_start = Instant::now();
-                let num_sel_stages = num_stages.saturating_sub(1);
-                let mut cuts_deactivated = 0u32;
-                let mut per_stage = Vec::with_capacity(num_sel_stages);
-
-                // Stage 0 is exempt: its cuts are never the "successor" in the
-                // backward pass, so their binding activity is never updated.
-                // Deactivating them would weaken the lower bound approximation.
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    let pool0 = &fcf.pools[0];
-                    let active_0 = pool0.active_count() as u32;
-                    per_stage.push(StageSelectionRecord {
-                        stage: 0,
-                        cuts_populated: pool0.populated_count as u32,
-                        cuts_active_before: active_0,
-                        cuts_deactivated: 0,
-                        cuts_active_after: active_0,
-                        selection_time_ms: 0.0,
-                        active_after_angular: None,
-                        budget_evicted: None,
-                        active_after_budget: None,
-                    });
-                }
-
-                // Compute deactivation sets in parallel across stages.
-                // Selection is the expensive step (O(active * states) for
-                // Dominated); deactivation is O(deactivated) per stage and
-                // requires &mut, so it stays sequential.
-                let archive_ref = visited_archive.as_ref();
-                #[allow(clippy::cast_possible_truncation)]
-                let deactivations: Vec<(usize, DeactivationSet, f64)> = (1..num_sel_stages)
-                    .into_par_iter()
-                    .map(|stage| {
-                        let pool = &fcf.pools[stage];
-                        let states =
-                            archive_ref.map_or(&[] as &[f64], |a| a.states_for_stage(stage));
-                        let start = Instant::now();
-                        let deact =
-                            strategy.select_for_stage(pool, states, iteration, stage as u32);
-                        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        (stage, deact, elapsed_ms)
-                    })
-                    .collect();
-
-                #[allow(clippy::cast_possible_truncation)]
-                for (stage, deact, stage_sel_time_ms) in deactivations {
-                    let pool = &fcf.pools[stage];
-                    let populated = pool.populated_count as u32;
-                    let active_before = pool.active_count() as u32;
-                    let n_deact = deact.indices.len() as u32;
-                    cuts_deactivated += n_deact;
-
-                    fcf.pools[stage].deactivate(&deact.indices);
-
-                    let active_after = fcf.pools[stage].active_count() as u32;
-                    per_stage.push(StageSelectionRecord {
-                        stage: stage as u32,
-                        cuts_populated: populated,
-                        cuts_active_before: active_before,
-                        cuts_deactivated: n_deact,
-                        cuts_active_after: active_after,
-                        selection_time_ms: stage_sel_time_ms,
-                        active_after_angular: None,
-                        budget_evicted: None,
-                        active_after_budget: None,
-                    });
-                }
-
-                #[allow(clippy::cast_possible_truncation)]
-                let selection_time_ms = sel_start.elapsed().as_millis() as u64;
-
-                #[allow(clippy::cast_possible_truncation)]
-                let stages_processed_sel = num_sel_stages as u32;
-
-                sel_state = Some((
-                    per_stage,
-                    cuts_deactivated,
-                    selection_time_ms,
-                    stages_processed_sel,
-                ));
-            }
-        }
-
-        // Step 4b: Angular dominance pruning (stage 1..num_stages-1, stage 0 exempt).
-        if let Some(params) = angular_pruning {
-            if params.should_run(iteration) {
-                let prune_start = Instant::now();
-                let num_prune_stages = num_stages.saturating_sub(1);
-                let archive_ref = visited_archive.as_ref();
-
-                let pruning_results: Vec<(usize, crate::angular_pruning::AngularPruningResult)> =
-                    (1..num_prune_stages)
-                        .into_par_iter()
-                        .map(|stage| {
-                            let pool = &fcf.pools[stage];
-                            let states =
-                                archive_ref.map_or(&[] as &[f64], |a| a.states_for_stage(stage));
-                            let result = crate::angular_pruning::select_angular_dominated(
-                                pool,
-                                states,
-                                params.cosine_threshold,
-                                iteration,
-                            );
-                            (stage, result)
-                        })
-                        .collect();
-
-                let mut total_cuts_deactivated = 0u32;
-                let mut total_clusters_formed = 0u32;
-                let mut total_dominance_checks = 0u32;
-
-                #[allow(clippy::cast_possible_truncation)]
-                for (stage, result) in pruning_results {
-                    total_clusters_formed += result.clusters_formed as u32;
-                    total_dominance_checks += result.dominance_checks as u32;
-                    let n_deact = result.deactivate.len() as u32;
-                    total_cuts_deactivated += n_deact;
-                    if !result.deactivate.is_empty() {
-                        fcf.pools[stage].deactivate(&result.deactivate);
-                    }
-                    // Annotate per-stage records from Step 4a with post-angular counts.
-                    if let Some((ref mut per_stage, _, _, _)) = sel_state {
-                        let active_now = fcf.pools[stage].active_count() as u32;
-                        // per_stage is indexed by insertion order: stage 0 is at index 0,
-                        // stages 1..num_sel_stages-1 are at indices 1, 2, ...
-                        // The pruning loop covers stages 1..num_prune_stages-1, matching
-                        // the selection loop range, so the record index is `stage`.
-                        if let Some(rec) = per_stage.get_mut(stage) {
-                            rec.active_after_angular = Some(active_now);
-                        }
-                    }
-                }
-
-                #[allow(clippy::cast_possible_truncation)]
-                let pruning_time_ms = prune_start.elapsed().as_millis() as u64;
-                #[allow(clippy::cast_possible_truncation)]
-                let stages_processed = num_prune_stages.saturating_sub(1) as u32;
-
-                emit(
-                    event_sender.as_ref(),
-                    TrainingEvent::AngularPruningComplete {
-                        iteration,
-                        cuts_deactivated: total_cuts_deactivated,
-                        clusters_formed: total_clusters_formed,
-                        dominance_checks: total_dominance_checks,
-                        stages_processed,
-                        pruning_time_ms,
-                    },
-                );
-            }
-        }
-
-        // Step 4c: Budget enforcement (every iteration when budget is set).
-        //
-        // Runs unconditionally when `budget` is Some — not gated by
-        // `check_frequency`. The budget is a hard cap that must be maintained
-        // at all times.
-        if let Some(b) = budget {
-            let budget_start = Instant::now();
-            let mut total_evicted = 0u32;
-            for stage in 0..num_stages {
-                #[allow(clippy::cast_possible_truncation)]
-                let result = fcf.pools[stage].enforce_budget(b, iteration, config_forward_passes);
-                total_evicted += result.evicted_count;
-                // Annotate per-stage records with post-budget counts.
-                if let Some((ref mut per_stage, _, _, _)) = sel_state {
-                    if let Some(rec) = per_stage.get_mut(stage) {
-                        rec.budget_evicted = Some(result.evicted_count);
-                        rec.active_after_budget = Some(result.active_after);
-                    }
-                }
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            let enforcement_time_ms = budget_start.elapsed().as_millis() as u64;
-            emit(
-                event_sender.as_ref(),
-                #[allow(clippy::cast_possible_truncation)]
-                TrainingEvent::BudgetEnforcementComplete {
-                    iteration,
-                    cuts_evicted: total_evicted,
-                    stages_processed: num_stages as u32,
-                    enforcement_time_ms,
-                },
-            );
-        }
-
-        // Emit CutSelectionComplete now that all per-stage annotation is done.
-        if let Some((per_stage, cuts_deactivated, selection_time_ms, stages_processed)) = sel_state
-        {
-            emit(
-                event_sender.as_ref(),
-                TrainingEvent::CutSelectionComplete {
-                    iteration,
-                    cuts_deactivated,
-                    stages_processed,
-                    selection_time_ms,
-                    allgatherv_time_ms: 0,
-                    per_stage,
-                },
-            );
-        }
-
-        // Periodic rebuild check for the lower bound solver.
-        // When too many phantom (bound-zeroed) rows accumulate, reset the LP
-        // to purge them. This prevents unbounded row growth from deactivation.
-        lb_iterations_since_rebuild += 1;
-        if comm.rank() == 0 && needs_periodic_rebuild(&lb_cut_row_map, lb_iterations_since_rebuild)
-        {
-            lb_cut_row_map.reset(stage_ctx.templates[0].num_rows);
-            lb_iterations_since_rebuild = 0;
-            // The next evaluate_lower_bound call will see an empty row_map
-            // and do a full load_model + append_all_cuts.
-        }
-
-        // Snapshot solver stats and wall-clock before lower bound evaluation.
-        let lb_wall_start = Instant::now();
-        let lb_stats_before = solver.statistics();
-
-        let lb_spec = LbEvalSpec {
-            template: &stage_ctx.templates[0],
-            base_row: stage_ctx.base_rows[0],
-            noise_scale: stage_ctx.noise_scale,
-            n_hydros: stage_ctx.n_hydros,
-            opening_tree: training_ctx.stochastic.opening_tree(),
-            risk_measure: &risk_measures[0],
-            stochastic: Some(training_ctx.stochastic),
-            n_load_buses: stage_ctx.n_load_buses,
-            ncs_max_gen: stage_ctx.ncs_max_gen,
-            block_count: stage_ctx.block_counts_per_stage[0],
-            ncs_generation: indexer.ncs_generation.clone(),
-            inflow_method: training_ctx.inflow_method,
-        };
-        let lb = match evaluate_lower_bound(
-            solver,
-            fcf,
-            initial_state,
-            indexer,
-            &mut patch_buf,
-            &mut lb_cut_batch,
-            &lb_spec,
-            comm,
-            Some(&mut lb_cut_row_map),
-        ) {
-            Ok(r) => r,
-            Err(e) => on_error!(e),
-        };
-
-        // Snapshot solver stats after lower bound and compute delta.
-        let lb_stats_after = solver.statistics();
-        let lb_lp_solves = lb_stats_after.solve_count - lb_stats_before.solve_count;
-        let lb_delta = SolverStatsDelta::from_snapshots(&lb_stats_before, &lb_stats_after);
-        let lb_solve_time_ms = lb_delta.solve_time_ms;
-        solver_stats_log.push((iteration, "lower_bound", -1, lb_delta));
-        #[allow(clippy::cast_possible_truncation)]
-        let lb_wall_ms = lb_wall_start.elapsed().as_millis() as u64;
-
-        let (should_stop, rule_results) = convergence_monitor.update(lb, &sync_result);
-
-        final_lb = convergence_monitor.lower_bound();
-        final_ub = convergence_monitor.upper_bound();
-        final_ub_std = convergence_monitor.upper_bound_std();
-        final_gap = convergence_monitor.gap();
-
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::ConvergenceUpdate {
-                iteration,
-                lower_bound: final_lb,
-                upper_bound: final_ub,
-                upper_bound_std: convergence_monitor.upper_bound_std(),
-                gap: final_gap,
-                rules_evaluated: rule_results.clone(),
-            },
-        );
-
-        #[allow(clippy::cast_possible_truncation)]
-        let wall_time_ms = start_time.elapsed().as_millis() as u64;
-        #[allow(clippy::cast_possible_truncation)]
-        let iteration_time_ms = iter_start.elapsed().as_millis() as u64;
-
-        emit(
-            event_sender.as_ref(),
-            TrainingEvent::IterationSummary {
-                iteration,
-                lower_bound: final_lb,
-                upper_bound: final_ub,
-                gap: final_gap,
-                wall_time_ms,
-                iteration_time_ms,
-                forward_ms: forward_elapsed_ms,
-                backward_ms: backward_elapsed_ms,
-                lp_solves: forward_result.lp_solves + backward_result.lp_solves + lb_lp_solves,
-                solve_time_ms: fwd_solve_time_ms + bwd_solve_time_ms + lb_solve_time_ms,
-                lower_bound_eval_ms: lb_wall_ms,
-                fwd_rayon_overhead_ms: forward_result.rayon_overhead_ms,
-            },
-        );
-
-        completed_iterations = iteration;
-
-        if should_stop {
-            // Extract the triggered rule name for the reason string.
-            termination_reason = rule_results
-                .iter()
-                .find(|r| r.triggered)
-                .map_or_else(|| "unknown".to_string(), |r| r.rule_name.clone());
-            break;
+    )?;
+    for iteration in session.iteration_range() {
+        match session.run_iteration(iteration) {
+            Ok(IterationOutcome::Continue) => {}
+            Ok(IterationOutcome::Converged | IterationOutcome::Shutdown) => break,
+            Err(e) => return session.finalize_with_error(e),
         }
     }
-
-    #[allow(clippy::cast_possible_truncation)]
-    let total_time_ms = (start_time.elapsed().as_millis() as u64).max(1);
-
-    #[allow(clippy::cast_possible_truncation)]
-    emit(
-        event_sender.as_ref(),
-        TrainingEvent::TrainingFinished {
-            reason: termination_reason.clone(),
-            iterations: completed_iterations,
-            final_lb,
-            final_ub,
-            total_time_ms,
-            total_cuts: fcf.total_active_cuts() as u64,
-        },
-    );
-
-    // Extract the canonical basis cache from rank 0's global scenario 0 and
-    // broadcast to all ranks. Using local scenario 0 on rank 0 (which is
-    // always global scenario 0, since rank 0's my_fwd_offset == 0) guarantees
-    // that all ranks receive an identical basis for simulation warm-start.
-    // Previously this used the last local scenario (my_actual_fwd - 1), which
-    // varied by rank count and caused simulation divergence across MPI configs.
-    let basis_cache = broadcast_basis_cache(&basis_store, num_stages, comm)?;
-
-    Ok(TrainingOutcome {
-        result: TrainingResult {
-            final_lb,
-            final_ub,
-            final_ub_std,
-            final_gap,
-            iterations: completed_iterations,
-            reason: termination_reason,
-            total_time_ms,
-            basis_cache,
-            solver_stats_log,
-            visited_archive,
-        },
-        error: None,
-    })
+    session.finalize()
 }
 
 #[cfg(test)]
@@ -1137,7 +436,7 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent,
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1156,10 +455,16 @@ mod tests {
 
     use super::train;
     use crate::{
-        HorizonMode, InflowNonNegativityMethod, RiskMeasure, SddpError, StageIndexer, StoppingMode,
-        StoppingRule, StoppingRuleSet, TrainingConfig,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+        config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
+        error::SddpError,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
+        solver_stats::SolverStatsDelta,
     };
 
     /// Minimal LP for N=1 hydro, L=0 PAR order.
@@ -1251,7 +556,10 @@ mod tests {
         fn set_row_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
         fn set_col_bounds(&mut self, _i: &[usize], _l: &[f64], _u: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            _basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_first && call == 0 {
@@ -1276,18 +584,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {
-            self.call_count = 0;
-        }
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -1562,25 +859,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1598,6 +901,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -1618,10 +924,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1650,25 +955,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::infeasible();
@@ -1686,6 +997,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -1706,10 +1020,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::infeasible()),
         );
@@ -1737,11 +1050,12 @@ mod tests {
     /// before `IterationLimit(2)` triggers. The receiver must collect exactly:
     ///
     /// - 1 `TrainingStarted`
-    /// - 2 × (`ForwardPassComplete`, `ForwardSyncComplete`, `BackwardPassComplete`,
-    ///   `CutSyncComplete`, `ConvergenceUpdate`, `IterationSummary`)
+    /// - 2 × (`WorkerTiming` (Forward), `ForwardPassComplete`, `ForwardSyncComplete`,
+    ///   `WorkerTiming` (Backward), `BackwardPassComplete`, `PolicySyncComplete`,
+    ///   `PolicyTemplateBakeComplete`, `ConvergenceUpdate`, `IterationSummary`)
     /// - 1 `TrainingFinished`
     ///
-    /// = 1 + 12 + 1 = 14 events.
+    /// = 1 + 18 + 1 = 20 events.
     #[test]
     fn ac_train_emits_correct_event_sequence() {
         let n_stages = 2;
@@ -1754,27 +1068,33 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1792,6 +1112,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -1812,10 +1135,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1825,11 +1147,14 @@ mod tests {
         drop(fcf); // not needed; just for clarity
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
 
-        // 1 TrainingStarted + 2*(6 per-iteration) + 1 TrainingFinished = 14
+        // 1 TrainingStarted + 2*(9 per-iteration) + 1 TrainingFinished = 20
+        // Per-iteration: WorkerTiming(Forward), ForwardPassComplete,
+        //   ForwardSyncComplete, WorkerTiming(Backward), BackwardPassComplete,
+        //   PolicySyncComplete, PolicyTemplateBakeComplete, ConvergenceUpdate, IterationSummary
         assert_eq!(
             events.len(),
-            14,
-            "expected 14 events, got {} ({events:?})",
+            20,
+            "expected 20 events, got {} ({events:?})",
             events.len()
         );
 
@@ -1842,42 +1167,256 @@ mod tests {
             "last event must be TrainingFinished"
         );
 
-        // Check per-iteration event pattern for iteration 1 (events[1..7])
+        // Check per-iteration event pattern for iteration 1 (events[1..10])
         assert!(matches!(
             events[1],
-            TrainingEvent::ForwardPassComplete { .. }
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Forward,
+                ..
+            }
         ));
         assert!(matches!(
             events[2],
-            TrainingEvent::ForwardSyncComplete { .. }
-        ));
-        assert!(matches!(
-            events[3],
-            TrainingEvent::BackwardPassComplete { .. }
-        ));
-        assert!(matches!(events[4], TrainingEvent::CutSyncComplete { .. }));
-        assert!(matches!(events[5], TrainingEvent::ConvergenceUpdate { .. }));
-        assert!(matches!(events[6], TrainingEvent::IterationSummary { .. }));
-
-        // Iteration 2 (events[7..13]) follows the same pattern.
-        assert!(matches!(
-            events[7],
             TrainingEvent::ForwardPassComplete { .. }
         ));
         assert!(matches!(
-            events[8],
+            events[3],
             TrainingEvent::ForwardSyncComplete { .. }
         ));
         assert!(matches!(
-            events[9],
+            events[4],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Backward,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[5],
             TrainingEvent::BackwardPassComplete { .. }
         ));
-        assert!(matches!(events[10], TrainingEvent::CutSyncComplete { .. }));
+        assert!(matches!(
+            events[6],
+            TrainingEvent::PolicySyncComplete { .. }
+        ));
+        assert!(matches!(
+            events[7],
+            TrainingEvent::PolicyTemplateBakeComplete { .. }
+        ));
+        assert!(matches!(events[8], TrainingEvent::ConvergenceUpdate { .. }));
+        assert!(matches!(events[9], TrainingEvent::IterationSummary { .. }));
+
+        // Iteration 2 (events[10..19]) follows the same pattern.
+        assert!(matches!(
+            events[10],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Forward,
+                ..
+            }
+        ));
         assert!(matches!(
             events[11],
+            TrainingEvent::ForwardPassComplete { .. }
+        ));
+        assert!(matches!(
+            events[12],
+            TrainingEvent::ForwardSyncComplete { .. }
+        ));
+        assert!(matches!(
+            events[13],
+            TrainingEvent::WorkerTiming {
+                phase: WorkerTimingPhase::Backward,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[14],
+            TrainingEvent::BackwardPassComplete { .. }
+        ));
+        assert!(matches!(
+            events[15],
+            TrainingEvent::PolicySyncComplete { .. }
+        ));
+        assert!(matches!(
+            events[16],
+            TrainingEvent::PolicyTemplateBakeComplete { .. }
+        ));
+        assert!(matches!(
+            events[17],
             TrainingEvent::ConvergenceUpdate { .. }
         ));
-        assert!(matches!(events[12], TrainingEvent::IterationSummary { .. }));
+        assert!(matches!(events[18], TrainingEvent::IterationSummary { .. }));
+    }
+
+    /// with 4 workers and 1 iteration, exactly
+    /// `2 * n_workers_local = 8` WorkerTiming events are emitted with `rank = 0`
+    /// and `worker_id ∈ {0, 1, 2, 3}`; AND the sum of `timings[BWD_SETUP]` across
+    /// the 4 backward emissions equals `BackwardPassComplete.setup_time_ms` for
+    /// the same iteration (within ±1 ms numerical tolerance).
+    #[test]
+    fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
+        use cobre_core::WorkerTimingPhase;
+
+        let n_stages = 2;
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template(indexer.n_state); n_stages];
+        let base_rows = vec![2usize; n_stages];
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let stages = make_stages(n_stages);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+
+        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+
+        let config = TrainingConfig {
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 4,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(1),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
+        };
+
+        let mut solver = MockSolver::with_fixed(100.0);
+        let comm = StubComm;
+
+        let stage_ctx = StageContext {
+            templates: &templates,
+            base_rows: &base_rows,
+            noise_scale: &[],
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: &[],
+            load_bus_indices: &[],
+            block_counts_per_stage: &[1usize, 1],
+            ncs_max_gen: &[],
+            discount_factors: &[],
+            cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
+        };
+        train(
+            &mut solver,
+            config,
+            &mut fcf,
+            &stage_ctx,
+            &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &initial_state,
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &stages,
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            &comm,
+            || Ok(MockSolver::with_fixed(100.0)),
+        )
+        .unwrap();
+
+        let events: Vec<TrainingEvent> = rx.try_iter().collect();
+
+        // Collect all WorkerTiming events and the BackwardPassComplete event.
+        let worker_events: Vec<&TrainingEvent> = events
+            .iter()
+            .filter(|e| matches!(e, TrainingEvent::WorkerTiming { .. }))
+            .collect();
+        // C2: exactly 8 WorkerTiming events (4 workers × 2 phases × 1 iteration).
+        assert_eq!(
+            worker_events.len(),
+            8,
+            "expected 8 WorkerTiming events (4 workers × 2 phases × 1 iter), got {}",
+            worker_events.len()
+        );
+
+        // C2: rank=0, worker_id ∈ {0,1,2,3}, iteration=1 for every event.
+        let mut fwd_workers = std::collections::BTreeSet::new();
+        let mut bwd_workers = std::collections::BTreeSet::new();
+        let mut bwd_setup_sum_ms = 0.0_f64;
+        for ev in &worker_events {
+            let TrainingEvent::WorkerTiming {
+                rank,
+                worker_id,
+                iteration,
+                phase,
+                timings,
+            } = ev
+            else {
+                unreachable!()
+            };
+            assert_eq!(*rank, 0, "expected rank=0 in single-rank stub");
+            assert!(
+                (0..4).contains(worker_id),
+                "worker_id {worker_id} out of [0,4)"
+            );
+            assert_eq!(*iteration, 1, "expected iteration=1 (max_iterations=1)");
+            match phase {
+                WorkerTimingPhase::Forward => {
+                    assert!(
+                        fwd_workers.insert(*worker_id),
+                        "worker_id {worker_id} duplicated in Forward emissions"
+                    );
+                    // Forward-only fields can be non-zero; backward-only fields must be 0.
+                    assert_eq!(timings.bwd_setup_ms, 0.0);
+                }
+                WorkerTimingPhase::Backward => {
+                    assert!(
+                        bwd_workers.insert(*worker_id),
+                        "worker_id {worker_id} duplicated in Backward emissions"
+                    );
+                    bwd_setup_sum_ms += timings.bwd_setup_ms;
+                    // Backward-only fields can be non-zero; forward-only fields must be 0.
+                    assert_eq!(timings.fwd_setup_ms, 0.0);
+                }
+            }
+        }
+        assert_eq!(fwd_workers.len(), 4, "expected 4 distinct forward workers");
+        assert_eq!(bwd_workers.len(), 4, "expected 4 distinct backward workers");
+
+        // C3: setup-sum invariant — sum of per-worker BWD_SETUP equals
+        // BackwardPassComplete.setup_time_ms within ±1 ms tolerance.
+        // (BackwardPassComplete.setup_time_ms is u64; per-worker timings are f64.)
+        let bwd_setup_total_ms_u64 = events
+            .iter()
+            .find_map(|e| match e {
+                TrainingEvent::BackwardPassComplete { setup_time_ms, .. } => Some(*setup_time_ms),
+                _ => None,
+            })
+            .expect("BackwardPassComplete event must exist");
+        #[allow(clippy::cast_precision_loss)]
+        let bwd_setup_total_ms = bwd_setup_total_ms_u64 as f64;
+        assert!(
+            (bwd_setup_sum_ms - bwd_setup_total_ms).abs() < 1.0,
+            "sum of per-worker BWD_SETUP ({bwd_setup_sum_ms} ms) must match \
+             BackwardPassComplete.setup_time_ms ({bwd_setup_total_ms} ms) within ±1 ms"
+        );
     }
 
     /// AC: `train_result_fields_populated`
@@ -1896,25 +1435,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -1932,6 +1477,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -1952,10 +1500,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -1982,25 +1529,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 2,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 2,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2018,6 +1571,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2038,10 +1594,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         );
@@ -2065,25 +1620,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 1,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 1,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(1),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2101,6 +1662,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2121,10 +1685,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(1),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2141,7 +1704,7 @@ mod tests {
     /// `cut_selection_none_skips_step`
     ///
     /// Given `train` with `cut_selection: None` running for 5 iterations, then
-    /// no `CutSelectionComplete` event is emitted.
+    /// no `PolicySelectionComplete` event is emitted.
     #[test]
     fn cut_selection_none_skips_step() {
         let n_stages = 2;
@@ -2154,27 +1717,33 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2192,6 +1761,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2212,10 +1784,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2224,12 +1795,12 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let cut_sel_count = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .count();
 
         assert_eq!(
             cut_sel_count, 0,
-            "expected no CutSelectionComplete events with cut_selection: None"
+            "expected no PolicySelectionComplete events with cut_selection: None"
         );
     }
 
@@ -2237,7 +1808,7 @@ mod tests {
     ///
     /// Given `train` with `cut_selection: Some(Level1 { threshold: 0,
     /// check_frequency: 3 })` running for 5 iterations, then
-    /// `CutSelectionComplete` is emitted exactly once (at iteration 3).
+    /// `PolicySelectionComplete` is emitted exactly once (at iteration 3).
     #[test]
     fn cut_selection_level1_runs_at_frequency() {
         use crate::cut_selection::CutSelectionStrategy;
@@ -2252,30 +1823,36 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 3,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 3,
+                }),
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2293,6 +1870,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2313,10 +1893,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2325,22 +1904,22 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let sel_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .collect();
 
         assert_eq!(
             sel_events.len(),
             1,
-            "expected exactly 1 CutSelectionComplete event for check_frequency=3 over 5 iterations"
+            "expected exactly 1 PolicySelectionComplete event for check_frequency=3 over 5 iterations"
         );
 
         // Verify the event was emitted at iteration 3.
-        let TrainingEvent::CutSelectionComplete { iteration, .. } = sel_events[0] else {
+        let TrainingEvent::PolicySelectionComplete { iteration, .. } = sel_events[0] else {
             panic!("wrong variant");
         };
         assert_eq!(
             *iteration, 3,
-            "CutSelectionComplete must fire at iteration 3"
+            "PolicySelectionComplete must fire at iteration 3"
         );
     }
 
@@ -2348,7 +1927,7 @@ mod tests {
     ///
     /// Stage 0 is exempt from cut selection because its cuts have no
     /// backward-pass activity tracking. With a 2-stage system, only stage 0
-    /// has cuts, so `cuts_deactivated` must be 0.
+    /// has cuts, so `rows_deactivated` must be 0.
     #[test]
     fn cut_selection_stage0_exempt_preserves_cuts() {
         use crate::cut_selection::CutSelectionStrategy;
@@ -2363,30 +1942,36 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 2,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: Some(CutSelectionStrategy::Level1 {
+                    threshold: 0,
+                    check_frequency: 2,
+                }),
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2404,6 +1989,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         train(
             &mut solver,
@@ -2424,10 +2012,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(2),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2436,18 +2023,18 @@ mod tests {
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
         let sel_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicySelectionComplete { .. }))
             .collect();
 
         assert_eq!(
             sel_events.len(),
             1,
-            "expected exactly 1 CutSelectionComplete event at iteration 2"
+            "expected exactly 1 PolicySelectionComplete event at iteration 2"
         );
 
-        let TrainingEvent::CutSelectionComplete {
+        let TrainingEvent::PolicySelectionComplete {
             iteration,
-            cuts_deactivated,
+            rows_deactivated,
             per_stage,
             ..
         } = sel_events[0]
@@ -2457,7 +2044,7 @@ mod tests {
 
         assert_eq!(*iteration, 2, "selection must fire at iteration 2");
         assert_eq!(
-            *cuts_deactivated, 0,
+            *rows_deactivated, 0,
             "stage 0 is exempt from cut selection, so no cuts should be deactivated"
         );
         // Verify per-stage records are populated and stage 0 is exempt.
@@ -2467,7 +2054,7 @@ mod tests {
         );
         assert_eq!(per_stage[0].stage, 0, "first record must be stage 0");
         assert_eq!(
-            per_stage[0].cuts_deactivated, 0,
+            per_stage[0].rows_deactivated, 0,
             "stage 0 must have zero deactivations"
         );
     }
@@ -2475,7 +2062,7 @@ mod tests {
     /// `existing_train_tests_pass_with_none`
     ///
     /// Verify backward compatibility: calling `train` with `cut_selection:
-    /// None` produces the same result as before this ticket. This is
+    /// None` produces the same result as before. This is
     /// implicitly verified by the existing `ac_train_completes_with_iteration_limit`
     /// test. This test is an explicit additional check with an explicit `None`.
     #[test]
@@ -2490,25 +2077,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 3,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 3,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(3),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2526,6 +2119,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let result = train(
             &mut solver,
@@ -2546,10 +2142,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(3),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2580,27 +2175,33 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         // Mock solver that fails on the Nth call. With 2 stages and 1 forward
@@ -2622,6 +2223,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -2642,10 +2246,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::infeasible()),
         )
@@ -2691,25 +2294,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 3,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 3,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2727,6 +2336,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -2747,10 +2359,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2777,25 +2388,31 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 5,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 5,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 5,
+                start_iteration: 5,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(5),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: None,
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -2813,6 +2430,9 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
         let outcome = train(
             &mut solver,
@@ -2833,10 +2453,9 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
@@ -2871,17 +2490,29 @@ mod tests {
 
         // Populate scenario 0 with col_status=[10,20], row_status=[30].
         for t in 0..num_stages {
-            *store.get_mut(0, t) = Some(Basis {
-                col_status: vec![10_i32 + t as i32, 20_i32 + t as i32],
-                row_status: vec![30_i32 + t as i32],
+            // test shim: zero metadata is acceptable for tests exercising broadcast path
+            *store.get_mut(0, t) = Some(crate::workspace::CapturedBasis {
+                basis: Basis {
+                    col_status: vec![10_i32 + t as i32, 20_i32 + t as i32],
+                    row_status: vec![30_i32 + t as i32],
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
 
         // Populate scenario 3 (last) with completely different values.
         for t in 0..num_stages {
-            *store.get_mut(3, t) = Some(Basis {
-                col_status: vec![99_i32, 88_i32],
-                row_status: vec![77_i32],
+            // test shim: zero metadata is acceptable for tests exercising broadcast path
+            *store.get_mut(3, t) = Some(crate::workspace::CapturedBasis {
+                basis: Basis {
+                    col_status: vec![99_i32, 88_i32],
+                    row_status: vec![77_i32],
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
 
@@ -2890,14 +2521,16 @@ mod tests {
 
         assert_eq!(cache.len(), num_stages);
         for (t, entry) in cache.iter().enumerate() {
-            let basis = entry.as_ref().expect("stage {t} must have a basis");
+            let captured = entry
+                .as_ref()
+                .expect("stage {t} must have a captured basis");
             assert_eq!(
-                basis.col_status,
+                captured.basis.col_status,
                 vec![10_i32 + t as i32, 20_i32 + t as i32],
                 "stage {t} col_status must come from scenario 0, not scenario 3"
             );
             assert_eq!(
-                basis.row_status,
+                captured.basis.row_status,
                 vec![30_i32 + t as i32],
                 "stage {t} row_status must come from scenario 0, not scenario 3"
             );
@@ -2930,112 +2563,543 @@ mod tests {
         }
     }
 
-    // ── Angular pruning integration tests ────────────────────────────────────
-
-    /// `angular_pruning_none_skips_step`
-    ///
-    /// Given `angular_pruning: None` running for 5 iterations, then no
-    /// `AngularPruningComplete` event is emitted.
+    /// `broadcast_basis_cache` with `comm.size() == 1` must clone
+    /// the full `CapturedBasis` including metadata (`cut_row_slots`,
+    /// `state_at_capture`, `base_row_count`), not just the bare basis body.
     #[test]
-    fn angular_pruning_none_skips_step() {
-        let n_stages = 2;
-        let indexer = StageIndexer::new(1, 0);
-        let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
-        let initial_state = vec![0.0_f64; indexer.n_state];
-        let stochastic = make_stochastic_context(n_stages, 1);
-        let stages = make_stages(n_stages);
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
+    fn broadcast_basis_cache_single_rank_preserves_metadata() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
 
-        let (tx, rx) = mpsc::channel::<TrainingEvent>();
+        let num_stages = 2;
+        let mut store = BasisStore::new(1, num_stages);
 
-        let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
-        };
-
-        let mut solver = MockSolver::with_fixed(100.0);
-        let comm = StubComm;
-
-        let stage_ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize, 1],
-            ncs_max_gen: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-        };
-        train(
-            &mut solver,
-            config,
-            &mut fcf,
-            &stage_ctx,
-            &TrainingContext {
-                horizon: &horizon,
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &initial_state,
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &stages,
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                basis_padding_enabled: false,
+        // Populate stage 0 with non-empty metadata.
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2_i32],
+                row_status: vec![3_i32, 4_i32, 5_i32],
             },
-            &risk_measures,
-            iteration_limit_rules(5),
-            &comm,
-            || Ok(MockSolver::with_fixed(100.0)),
-        )
-        .unwrap();
+            base_row_count: 2,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![1.5_f64, 2.5_f64],
+        });
+        // Stage 1 left None.
 
-        let events: Vec<TrainingEvent> = rx.try_iter().collect();
-        let prune_count = events
-            .iter()
-            .filter(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
-            .count();
+        let comm = StubComm; // size == 1
+        let cache = broadcast_basis_cache(&store, num_stages, &comm).unwrap();
 
+        assert_eq!(cache.len(), num_stages);
+        let cb = cache[0].as_ref().expect("stage 0 must have captured basis");
         assert_eq!(
-            prune_count, 0,
-            "expected no AngularPruningComplete events with angular_pruning: None"
+            cb.cut_row_slots.len(),
+            3,
+            "single-rank path must preserve cut_row_slots"
         );
+        assert_eq!(cb.base_row_count, 2, "base_row_count must be preserved");
+        assert_eq!(
+            cb.state_at_capture,
+            vec![1.5_f64, 2.5_f64],
+            "state_at_capture must be preserved"
+        );
+        assert!(cache[1].is_none(), "stage 1 must remain None");
     }
 
-    /// `angular_pruning_runs_at_frequency`
+    /// A discriminated payload stored by `MultiRankMockComm`.
     ///
-    /// Given `angular_pruning: Some(AngularPruningParams { check_frequency: 3,
-    /// .. })` running for 5 iterations, then `AngularPruningComplete` is emitted
-    /// exactly once (at iteration 3).
-    #[test]
-    fn angular_pruning_runs_at_frequency() {
-        use crate::angular_pruning::AngularPruningParams;
+    /// `broadcast_basis_cache` issues exactly four `broadcast` calls:
+    /// two `i32` calls (length then payload) and two `f64` calls (length then
+    /// payload). We store each call as a typed variant so that rank 1 can
+    /// deserialize without any `unsafe` code.
+    #[derive(Clone)]
+    enum MockPayload {
+        Ints(Vec<i32>),
+        Floats(Vec<f64>),
+    }
 
+    /// A multi-rank mock communicator that simulates 2-rank broadcasts.
+    ///
+    /// On rank 0, each `broadcast<T>` call records the outgoing buffer as a
+    /// `MockPayload` variant. On rank 1, each `broadcast<T>` call pops the
+    /// next recorded entry and copies it into the caller's mutable slice.
+    ///
+    /// Only `T = i32` and `T = f64` are supported (matching the wire types
+    /// used by `broadcast_basis_cache`). `allgatherv` and `allreduce` are not
+    /// called by that function and are left as `unreachable!()`.
+    ///
+    /// `Mutex` is used instead of `RefCell` to satisfy the `Sync` bound
+    /// required by `Communicator`.
+    struct MultiRankMockComm {
+        rank: usize,
+        queue: std::sync::Mutex<std::collections::VecDeque<MockPayload>>,
+    }
+
+    impl MultiRankMockComm {
+        fn new_root() -> Self {
+            Self {
+                rank: 0,
+                queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            }
+        }
+
+        /// Build a rank-1 peer by snapshotting the root's recorded queue.
+        ///
+        /// Must be called **after** `broadcast_basis_cache` has returned on
+        /// rank 0 so the snapshot contains all four recorded payloads.
+        fn new_peer(root: &MultiRankMockComm) -> Self {
+            Self {
+                rank: 1,
+                queue: std::sync::Mutex::new(root.queue.lock().unwrap().clone()),
+            }
+        }
+
+        /// Build a rank-1 peer from an explicit replay queue.
+        ///
+        /// Used by corruption tests that tamper with the recorded payloads
+        /// before replaying them to rank 1.
+        fn new_peer_from_queue(queue: std::collections::VecDeque<MockPayload>) -> Self {
+            Self {
+                rank: 1,
+                queue: std::sync::Mutex::new(queue),
+            }
+        }
+
+        /// Extract a snapshot of the recorded queue (for corruption tests).
+        fn snapshot(&self) -> std::collections::VecDeque<MockPayload> {
+            self.queue.lock().unwrap().clone()
+        }
+    }
+
+    impl Communicator for MultiRankMockComm {
+        fn allgatherv<T: CommData>(
+            &self,
+            _send: &[T],
+            _recv: &mut [T],
+            _counts: &[usize],
+            _displs: &[usize],
+        ) -> Result<(), CommError> {
+            unreachable!("broadcast_basis_cache does not call allgatherv")
+        }
+
+        fn allreduce<T: CommData>(
+            &self,
+            _send: &[T],
+            _recv: &mut [T],
+            _op: ReduceOp,
+        ) -> Result<(), CommError> {
+            unreachable!("broadcast_basis_cache does not call allreduce")
+        }
+
+        fn broadcast<T: CommData>(&self, buf: &mut [T], root: usize) -> Result<(), CommError> {
+            // We need MockRecord to dispatch safely. We cannot add that bound
+            // to the Communicator trait, so we use a private helper that
+            // downcasts via a local trait object. This is the only clean safe
+            // approach without unsafe in a forbid-unsafe crate.
+            //
+            // The actual dispatch is done by calling into a monomorphic helper
+            // through a function pointer selected at the call site where T is
+            // known. We implement this by defining a local function that takes
+            // &dyn Any and casts it:
+            self.broadcast_typed(buf, root)
+        }
+
+        fn barrier(&self) -> Result<(), CommError> {
+            Ok(())
+        }
+
+        fn rank(&self) -> usize {
+            self.rank
+        }
+
+        fn size(&self) -> usize {
+            2
+        }
+
+        fn abort(&self, code: i32) -> ! {
+            std::process::exit(code)
+        }
+    }
+
+    impl MultiRankMockComm {
+        // Result<(), CommError> is required to match the Communicator::broadcast
+        // return type this delegates to, even though the body always returns Ok(()).
+        #[allow(clippy::unnecessary_wraps)]
+        fn broadcast_typed<T: CommData>(
+            &self,
+            buf: &mut [T],
+            _root: usize,
+        ) -> Result<(), CommError> {
+            use std::any::Any;
+            // T: CommData implies T: 'static + Copy, so Box<T>: Any.
+            // We identify the concrete type by boxing a probe value (Default
+            // if the slice is empty) and downcasting. No raw pointer casts.
+            let probe: Box<dyn Any> = Box::new(T::default());
+
+            if probe.downcast_ref::<i32>().is_some() {
+                // T == i32
+                if self.rank == 0 {
+                    let ints: Vec<i32> = buf
+                        .iter()
+                        .map(|v| {
+                            *Box::<dyn Any>::from(Box::new(*v))
+                                .downcast::<i32>()
+                                .expect("T proved i32 above")
+                        })
+                        .collect();
+                    self.queue
+                        .lock()
+                        .unwrap()
+                        .push_back(MockPayload::Ints(ints));
+                } else {
+                    let payload = self
+                        .queue
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("MultiRankMockComm: no payload to replay for i32 broadcast");
+                    let MockPayload::Ints(src) = payload else {
+                        panic!("MultiRankMockComm: expected Ints payload for i32 broadcast");
+                    };
+                    assert_eq!(src.len(), buf.len(), "i32 replay length mismatch");
+                    for (dst, v) in buf.iter_mut().zip(src.iter()) {
+                        let boxed: Box<dyn Any> = Box::new(*v);
+                        *dst = *boxed.downcast::<T>().expect("T proved i32 above");
+                    }
+                }
+            } else if probe.downcast_ref::<f64>().is_some() {
+                // T == f64
+                if self.rank == 0 {
+                    let floats: Vec<f64> = buf
+                        .iter()
+                        .map(|v| {
+                            *Box::<dyn Any>::from(Box::new(*v))
+                                .downcast::<f64>()
+                                .expect("T proved f64 above")
+                        })
+                        .collect();
+                    self.queue
+                        .lock()
+                        .unwrap()
+                        .push_back(MockPayload::Floats(floats));
+                } else {
+                    let payload = self
+                        .queue
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("MultiRankMockComm: no payload to replay for f64 broadcast");
+                    let MockPayload::Floats(src) = payload else {
+                        panic!("MultiRankMockComm: expected Floats payload for f64 broadcast");
+                    };
+                    assert_eq!(src.len(), buf.len(), "f64 replay length mismatch");
+                    for (dst, v) in buf.iter_mut().zip(src.iter()) {
+                        let boxed: Box<dyn Any> = Box::new(*v);
+                        *dst = *boxed.downcast::<T>().expect("T proved f64 above");
+                    }
+                }
+            } else {
+                panic!("MultiRankMockComm: unsupported broadcast type (expected i32 or f64)");
+            }
+            Ok(())
+        }
+    }
+
+    /// `broadcast_basis_cache` with `size=2` must transmit the
+    /// full `CapturedBasis` metadata (`cut_row_slots`, `state_at_capture`,
+    /// `base_row_count`) to rank 1. The `MultiRankMockComm` pair records
+    /// rank-0's four broadcasts and replays them exactly to rank 1.
+    #[test]
+    fn broadcast_basis_cache_multi_rank_round_trips_full_metadata() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let mut store = BasisStore::new(1, 2);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2_i32, 3_i32],
+                row_status: vec![10_i32, 20_i32],
+            },
+            base_row_count: 4,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![1.5_f64, 2.5_f64],
+        });
+        // Stage 1 left None.
+
+        // Step 1: run broadcast_basis_cache from rank-0's perspective.
+        // This populates the mock's recorded buffers.
+        let root_comm = MultiRankMockComm::new_root();
+        let _cache_rank0 = broadcast_basis_cache(&store, 2, &root_comm).unwrap();
+
+        // Step 2: build a rank-1 peer that replays rank-0's recorded buffers.
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        // Rank 1's basis_store is empty — all data must come from the broadcast.
+        let empty_store = BasisStore::new(1, 2);
+        let cache = broadcast_basis_cache(&empty_store, 2, &peer_comm).unwrap();
+
+        assert_eq!(cache.len(), 2);
+        let cb0 = cache[0]
+            .as_ref()
+            .expect("stage 0 must deserialise into CapturedBasis on rank 1");
+        assert_eq!(
+            cb0.basis.col_status,
+            vec![1_i32, 2_i32, 3_i32],
+            "col_status must round-trip"
+        );
+        assert_eq!(
+            cb0.basis.row_status,
+            vec![10_i32, 20_i32],
+            "row_status must round-trip"
+        );
+        assert_eq!(
+            cb0.cut_row_slots,
+            vec![10_u32, 11_u32, 12_u32],
+            "cut_row_slots must round-trip on non-root rank"
+        );
+        assert_eq!(
+            cb0.state_at_capture,
+            vec![1.5_f64, 2.5_f64],
+            "state_at_capture must round-trip on non-root rank"
+        );
+        assert_eq!(
+            cb0.base_row_count, 4,
+            "base_row_count must round-trip on non-root rank"
+        );
+        assert!(cache[1].is_none(), "stage 1 had no basis → None");
+    }
+
+    /// When rank 0's `CapturedBasis` has an empty `cut_row_slots`
+    /// (legitimate for stages that never produced cuts), the round-trip must
+    /// produce `cut_row_slots.is_empty()` on rank 1 without error.
+    #[test]
+    fn broadcast_basis_cache_empty_cut_slots_round_trips_ok() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![5_i32, 6_i32],
+                row_status: vec![7_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![], // deliberately empty
+            state_at_capture: vec![3.75_f64],
+        });
+
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+
+        let peer_comm = MultiRankMockComm::new_peer(&root_comm);
+        let empty_store = BasisStore::new(1, 1);
+        let cache = broadcast_basis_cache(&empty_store, 1, &peer_comm).unwrap();
+
+        assert_eq!(cache.len(), 1);
+        let cb = cache[0]
+            .as_ref()
+            .expect("stage 0 must be Some after broadcast");
+        assert!(
+            cb.cut_row_slots.is_empty(),
+            "empty cut_row_slots must round-trip without error or panic"
+        );
+        assert_eq!(
+            cb.state_at_capture,
+            vec![3.75_f64],
+            "state_at_capture must still round-trip when cut_row_slots is empty"
+        );
+        assert_eq!(cb.base_row_count, 1, "base_row_count must round-trip");
+    }
+
+    /// When the i32 broadcast buffer is truncated mid-
+    /// `cut_row_slots`, `broadcast_basis_cache` must return
+    /// `SddpError::Validation` with a message containing "cut_row_slots" and
+    /// the stage index.
+    ///
+    /// The queue produced by a successful rank-0 run contains four payloads:
+    ///   [0] Ints(i32-len-scalar)   — one i32 (the total i32 count)
+    ///   [1] Ints(i32-payload)      — all the integer data
+    ///   [2] Ints(f64-len-scalar)   — one i32 (the total f64 count)
+    ///   [3] Floats(f64-payload)    — all the f64 state data
+    ///
+    /// To simulate a truncated i32 payload we replace entry [1] with a
+    /// shorter `Ints` vector (missing the last cut slot) and patch entry [0]
+    /// to reflect the new count, so that rank 1 allocates the right buffer
+    /// size but then fails the `cut_row_slots` bounds check.
+    #[test]
+    fn broadcast_basis_cache_truncated_cut_slots_returns_validation() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        // Build a store with cut_row_slots = [10, 11, 12].
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![10_u32, 11_u32, 12_u32],
+            state_at_capture: vec![0.0_f64],
+        });
+
+        // Record rank-0 payloads.
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+        let mut snapshot = root_comm.snapshot();
+
+        // snapshot[1] is the Ints(payload) entry. Remove the last i32 value
+        // (the last cut slot) to simulate a truncated buffer. Also patch
+        // snapshot[0] (the length scalar) to match the reduced count.
+        let truncated_len = {
+            let entry = snapshot.get_mut(1).expect("i32 payload entry must exist");
+            let MockPayload::Ints(ref mut ints) = *entry else {
+                panic!("entry [1] must be Ints");
+            };
+            ints.pop(); // remove one cut slot
+            ints.len() as i32
+        };
+        // Patch the length scalar (entry [0]).
+        let len_entry = snapshot.get_mut(0).expect("i32 length entry must exist");
+        let MockPayload::Ints(ref mut len_vec) = *len_entry else {
+            panic!("entry [0] must be Ints");
+        };
+        assert_eq!(len_vec.len(), 1, "length entry must hold a single scalar");
+        len_vec[0] = truncated_len;
+
+        let peer_comm = MultiRankMockComm::new_peer_from_queue(snapshot);
+        let empty_store = BasisStore::new(1, 1);
+        let result = broadcast_basis_cache(&empty_store, 1, &peer_comm);
+
+        match result {
+            Err(SddpError::Validation(msg)) => {
+                assert!(
+                    msg.contains("cut_row_slots"),
+                    "error message must mention 'cut_row_slots', got: {msg}"
+                );
+                assert!(
+                    msg.contains('0'),
+                    "error message must contain stage index 0, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    /// When the f64 broadcast buffer is truncated mid-
+    /// `state_at_capture`, `broadcast_basis_cache` must return
+    /// `SddpError::Validation` with a message containing "state_at_capture"
+    /// and the stage index.
+    ///
+    /// We truncate entry [3] (Floats payload) and patch entry [2] (f64-len
+    /// scalar) to match, so rank 1 allocates a shorter f64 buffer and the
+    /// `state_at_capture` bounds check fires.
+    #[test]
+    fn broadcast_basis_cache_truncated_state_returns_validation() {
+        use super::broadcast_basis_cache;
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let mut store = BasisStore::new(1, 1);
+        *store.get_mut(0, 0) = Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![1.0_f64, 2.0_f64, 3.0_f64],
+        });
+
+        let root_comm = MultiRankMockComm::new_root();
+        let _ = broadcast_basis_cache(&store, 1, &root_comm).unwrap();
+        let mut snapshot = root_comm.snapshot();
+
+        // snapshot[3] is the Floats(f64-payload) entry with 3 values.
+        // Keep only 1 value so that rank 1's buffer is too short for the
+        // state_len=3 embedded in the i32 payload.
+        let truncated_f64_len = {
+            let entry = snapshot.get_mut(3).expect("f64 payload entry must exist");
+            let MockPayload::Floats(ref mut floats) = *entry else {
+                panic!("entry [3] must be Floats");
+            };
+            floats.truncate(1); // keep only 1 f64
+            floats.len() as i32
+        };
+        // Patch entry [2] (f64 length scalar).
+        let f64_len_entry = snapshot.get_mut(2).expect("f64 length entry must exist");
+        let MockPayload::Ints(ref mut f64_len_vec) = *f64_len_entry else {
+            panic!("entry [2] must be Ints (f64 length is broadcast as i32)");
+        };
+        assert_eq!(
+            f64_len_vec.len(),
+            1,
+            "f64 length entry must hold a single scalar"
+        );
+        f64_len_vec[0] = truncated_f64_len;
+
+        let peer_comm = MultiRankMockComm::new_peer_from_queue(snapshot);
+        let empty_store = BasisStore::new(1, 1);
+        let result = broadcast_basis_cache(&empty_store, 1, &peer_comm);
+
+        match result {
+            Err(SddpError::Validation(msg)) => {
+                assert!(
+                    msg.contains("state_at_capture"),
+                    "error message must mention 'state_at_capture', got: {msg}"
+                );
+                assert!(
+                    msg.contains('0'),
+                    "error message must contain stage index 0, got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    /// Regression test for the i32-truncation guard in `broadcast_basis_cache`.
+    ///
+    /// A buffer length that exceeds `i32::MAX` must be rejected by
+    /// `checked_broadcast_len` before any MPI broadcast call is issued.
+    /// The returned error must be
+    /// `SddpError::Communication(CommError::InvalidBufferSize { .. })`
+    /// with `actual == (i32::MAX as usize) + 1` and the operation string
+    /// `"broadcast_basis_cache_i32"`.
+    #[test]
+    fn broadcast_basis_cache_rejects_oversized_i32_payload() {
+        use super::checked_broadcast_len;
+
+        let oversized: usize = (i32::MAX as usize) + 1;
+        let result = checked_broadcast_len(oversized, "broadcast_basis_cache_i32");
+
+        match result {
+            Err(SddpError::Communication(CommError::InvalidBufferSize {
+                operation,
+                expected,
+                actual,
+            })) => {
+                assert_eq!(actual, oversized, "actual must equal the oversized length");
+                assert_eq!(
+                    expected,
+                    i32::MAX as usize,
+                    "expected must equal i32::MAX as usize"
+                );
+                assert_eq!(
+                    operation, "broadcast_basis_cache_i32",
+                    "operation string must be 'broadcast_basis_cache_i32'"
+                );
+            }
+            other => panic!(
+                "expected SddpError::Communication(CommError::InvalidBufferSize {{ .. }}), got: {other:?}"
+            ),
+        }
+    }
+
+    /// AC: `template_bake_event_emitted`
+    ///
+    /// Verify that `PolicyTemplateBakeComplete` is emitted exactly once per iteration
+    /// with the correct `stages_processed` count. Also verifies that
+    /// `total_rows_baked > 0` on iteration 2 (because the backward pass on
+    /// iteration 1 generates cuts before step 4c runs on that same iteration).
+    #[test]
+    fn template_bake_event_emitted() {
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
         let templates = vec![minimal_template(indexer.n_state); n_stages];
@@ -3046,30 +3110,33 @@ mod tests {
         let horizon = HorizonMode::Finite {
             num_stages: n_stages,
         };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
         let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
 
         let (tx, rx) = mpsc::channel::<TrainingEvent>();
 
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: Some(AngularPruningParams {
-                cosine_threshold: 0.999,
-                check_frequency: 3,
-            }),
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                start_iteration: 0,
+                n_fwd_threads: 1,
+                max_blocks: 1,
+                stopping_rules: iteration_limit_rules(2),
+            },
+            cut_management: CutManagementConfig {
+                cut_selection: None,
+                budget: None,
+                cut_activity_tolerance: 0.0,
+                basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+                warm_start_cuts: 0,
+                risk_measures: vec![RiskMeasure::Expectation; n_stages],
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: None,
+                shutdown_flag: None,
+                export_states: false,
+            },
         };
 
         let mut solver = MockSolver::with_fixed(100.0);
@@ -3087,7 +3154,11 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
+
         train(
             &mut solver,
             config,
@@ -3107,150 +3178,122 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &risk_measures,
-            iteration_limit_rules(5),
             &comm,
             || Ok(MockSolver::with_fixed(100.0)),
         )
         .unwrap();
 
         let events: Vec<TrainingEvent> = rx.try_iter().collect();
-        let prune_events: Vec<&TrainingEvent> = events
+
+        // Collect all PolicyTemplateBakeComplete events.
+        let bake_events: Vec<&TrainingEvent> = events
             .iter()
-            .filter(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
+            .filter(|e| matches!(e, TrainingEvent::PolicyTemplateBakeComplete { .. }))
             .collect();
 
+        // Exactly one per iteration (2 iterations).
         assert_eq!(
-            prune_events.len(),
-            1,
-            "expected exactly 1 AngularPruningComplete event for check_frequency=3 over 5 \
-             iterations"
+            bake_events.len(),
+            2,
+            "expected exactly 2 PolicyTemplateBakeComplete events, got {}",
+            bake_events.len()
         );
 
-        let TrainingEvent::AngularPruningComplete { iteration, .. } = prune_events[0] else {
-            panic!("wrong variant");
+        // Each event must report stages_processed == n_stages.
+        for event in &bake_events {
+            let TrainingEvent::PolicyTemplateBakeComplete {
+                stages_processed, ..
+            } = event
+            else {
+                panic!("wrong variant")
+            };
+            assert_eq!(
+                *stages_processed, n_stages as u32,
+                "stages_processed must equal num_stages"
+            );
+        }
+
+        // On iteration 2, the backward pass from iteration 1 will have added
+        // cuts, so total_rows_baked must be > 0.
+        let second_bake = bake_events[1];
+        let TrainingEvent::PolicyTemplateBakeComplete {
+            total_rows_baked, ..
+        } = second_bake
+        else {
+            panic!("wrong variant")
         };
-        assert_eq!(
-            *iteration, 3,
-            "AngularPruningComplete must fire at iteration 3"
+        assert!(
+            *total_rows_baked > 0,
+            "iteration 2 bake must have baked at least one cut row (backward pass \
+             generated cuts on iteration 1)"
         );
     }
 
-    /// `angular_pruning_after_cut_selection_ordering`
+    /// `TrainingResult::new` assigns every field correctly.
     ///
-    /// Given both `cut_selection` (check_frequency=3) and `angular_pruning`
-    /// (check_frequency=3) enabled with the same frequency, at the firing
-    /// iteration the event log shows `AngularPruningComplete` before
-    /// `CutSelectionComplete`. Step 4a runs selection logic and saves records
-    /// to a deferred buffer; Step 4b runs angular pruning and emits
-    /// `AngularPruningComplete`; only after all sub-steps does Step 4 emit
-    /// `CutSelectionComplete` with fully annotated per-stage records.
+    /// Calls the canonical constructor with 11 explicit, distinct values and
+    /// asserts each field on the returned struct. The test fails at compile time
+    /// if any field is renamed, reordered, or removed without a corresponding
+    /// update to the constructor signature.
     #[test]
-    fn angular_pruning_after_cut_selection_ordering() {
-        use crate::angular_pruning::AngularPruningParams;
-        use crate::cut_selection::CutSelectionStrategy;
+    fn ac_training_result_new_assigns_all_fields() {
+        use crate::workspace::CapturedBasis;
 
-        let n_stages = 2;
-        let indexer = StageIndexer::new(1, 0);
-        let templates = vec![minimal_template(indexer.n_state); n_stages];
-        let base_rows = vec![2usize; n_stages];
-        let initial_state = vec![0.0_f64; indexer.n_state];
-        let stochastic = make_stochastic_context(n_stages, 1);
-        let stages = make_stages(n_stages);
-        let horizon = HorizonMode::Finite {
-            num_stages: n_stages,
-        };
-        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
-        let mut fcf = make_fcf(n_stages, indexer.n_state, 1, 10);
-
-        let (tx, rx) = mpsc::channel::<TrainingEvent>();
-
-        let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 0.0,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: Some(CutSelectionStrategy::Level1 {
-                threshold: 0,
-                check_frequency: 3,
-            }),
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: Some(AngularPruningParams {
-                cosine_threshold: 0.999,
-                check_frequency: 3,
-            }),
-            budget: None,
-            basis_padding_enabled: false,
-        };
-
-        let mut solver = MockSolver::with_fixed(100.0);
-        let comm = StubComm;
-
-        let stage_ctx = StageContext {
-            templates: &templates,
-            base_rows: &base_rows,
-            noise_scale: &[],
-            n_hydros: 0,
-            n_load_buses: 0,
-            load_balance_row_starts: &[],
-            load_bus_indices: &[],
-            block_counts_per_stage: &[1usize, 1],
-            ncs_max_gen: &[],
-            discount_factors: &[],
-            cumulative_discount_factors: &[],
-        };
-        train(
-            &mut solver,
-            config,
-            &mut fcf,
-            &stage_ctx,
-            &TrainingContext {
-                horizon: &horizon,
-                indexer: &indexer,
-                inflow_method: &InflowNonNegativityMethod::None,
-                stochastic: &stochastic,
-                initial_state: &initial_state,
-                inflow_scheme: SamplingScheme::InSample,
-                load_scheme: SamplingScheme::InSample,
-                ncs_scheme: SamplingScheme::InSample,
-                stages: &stages,
-                historical_library: None,
-                external_inflow_library: None,
-                external_load_library: None,
-                external_ncs_library: None,
-                basis_padding_enabled: false,
+        let basis_cache = vec![Some(CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32],
+                row_status: vec![2_i32],
             },
-            &risk_measures,
-            iteration_limit_rules(5),
-            &comm,
-            || Ok(MockSolver::with_fixed(100.0)),
-        )
-        .unwrap();
+            base_row_count: 3,
+            cut_row_slots: vec![4_u32],
+            state_at_capture: vec![5.0_f64],
+        })];
+        // SolverStatsEntry is a 7-tuple:
+        // (iteration: u64, phase: &'static str, stage: i32, opening: i32,
+        //  rank: i32, worker_id: i32, delta: SolverStatsDelta)
+        let solver_stats_log = vec![(
+            7_u64,
+            "forward",
+            -1_i32,
+            -1_i32,
+            0_i32,
+            -1_i32,
+            SolverStatsDelta::default(),
+        )];
 
-        let events: Vec<TrainingEvent> = rx.try_iter().collect();
-
-        // Find the position of CutSelectionComplete and AngularPruningComplete.
-        let sel_pos = events
-            .iter()
-            .position(|e| matches!(e, TrainingEvent::CutSelectionComplete { .. }))
-            .expect("expected at least one CutSelectionComplete event");
-        let prune_pos = events
-            .iter()
-            .position(|e| matches!(e, TrainingEvent::AngularPruningComplete { .. }))
-            .expect("expected at least one AngularPruningComplete event");
-
-        assert!(
-            prune_pos < sel_pos,
-            "AngularPruningComplete (pos={prune_pos}) must appear before \
-             CutSelectionComplete (pos={sel_pos})"
+        let result = super::TrainingResult::new(
+            1.5_f64,                       // final_lb
+            2.5_f64,                       // final_ub
+            0.25_f64,                      // final_ub_std
+            0.1_f64,                       // final_gap
+            42_u64,                        // iterations
+            "iteration_limit".to_string(), // reason
+            9_999_u64,                     // total_time_ms
+            basis_cache,
+            solver_stats_log,
+            None, // visited_archive
+            None, // baked_templates
         );
+
+        assert_eq!(result.final_lb, 1.5_f64, "final_lb");
+        assert_eq!(result.final_ub, 2.5_f64, "final_ub");
+        assert_eq!(result.final_ub_std, 0.25_f64, "final_ub_std");
+        assert_eq!(result.final_gap, 0.1_f64, "final_gap");
+        assert_eq!(result.iterations, 42_u64, "iterations");
+        assert_eq!(result.reason, "iteration_limit", "reason");
+        assert_eq!(result.total_time_ms, 9_999_u64, "total_time_ms");
+        assert_eq!(result.basis_cache.len(), 1, "basis_cache length");
+        let captured = result.basis_cache[0].as_ref().expect("basis_cache[0]");
+        assert_eq!(captured.base_row_count, 3, "basis_cache[0].base_row_count");
+        assert_eq!(result.solver_stats_log.len(), 1, "solver_stats_log length");
+        assert_eq!(
+            result.solver_stats_log[0].0, 7_u64,
+            "solver_stats_log[0].0 (iteration)"
+        );
+        assert!(result.visited_archive.is_none(), "visited_archive");
+        assert!(result.baked_templates.is_none(), "baked_templates");
     }
 }

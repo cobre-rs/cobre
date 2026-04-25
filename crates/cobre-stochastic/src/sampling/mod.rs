@@ -30,8 +30,8 @@ pub mod window;
 
 pub use class_sampler::{ClassSampleRequest, ClassSampler};
 pub use external::{
-    ExternalScenarioLibrary, standardize_external_inflow, standardize_external_load,
-    standardize_external_ncs, validate_external_library,
+    ExternalScenarioLibrary, pad_library_to_uniform, standardize_external_inflow,
+    standardize_external_load, standardize_external_ncs, validate_external_library,
 };
 pub use historical::{
     HistoricalScenarioLibrary, standardize_historical_windows, validate_historical_library,
@@ -172,6 +172,13 @@ pub struct SampleRequest<'b> {
     pub perm_scratch: &'b mut [usize],
     /// Total scenario count across all ranks (for LHS stratification).
     pub total_scenarios: u32,
+    /// Noise group identifier for seed derivation (noise-group sharing).
+    ///
+    /// Stages within the same `(season_id, year)` bucket share the same
+    /// `noise_group_id` so that their noise draws are identical (noise-group sharing
+    /// sharing). Callers supply
+    /// `stage.id as u32` to preserve current per-stage seed behaviour.
+    pub noise_group_id: u32,
 }
 
 impl ForwardSampler<'_> {
@@ -226,6 +233,7 @@ impl ForwardSampler<'_> {
             stage: req.stage,
             stage_idx: req.stage_idx,
             total_scenarios: req.total_scenarios,
+            noise_group_id: req.noise_group_id,
         };
 
         self.inflow.fill(&class_req, inflow_buf, req.perm_scratch)?;
@@ -986,7 +994,13 @@ mod tests {
             n_load_buses: ctx.n_load_buses(),
             n_ncs: ctx.n_stochastic_ncs(),
         };
-        let lib = ExternalScenarioLibrary::new(stages.len(), 10, n_hydros, "inflow");
+        let lib = ExternalScenarioLibrary::new(
+            stages.len(),
+            10,
+            n_hydros,
+            "inflow",
+            vec![10usize; stages.len()],
+        );
         let config = super::ForwardSamplerConfig {
             class_schemes: ClassSchemes {
                 inflow: Some(SamplingScheme::External),
@@ -1085,6 +1099,7 @@ mod tests {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 5,
+            noise_group_id: 0,
         });
         let noise = result.expect("expected Ok from InSample sample()");
         assert_eq!(
@@ -1117,6 +1132,7 @@ mod tests {
                 noise_buf: &mut buf_a,
                 perm_scratch: &mut perm_a,
                 total_scenarios: 5,
+                noise_group_id: 0,
             })
             .unwrap();
         let b = sampler
@@ -1128,15 +1144,12 @@ mod tests {
                 noise_buf: &mut buf_b,
                 perm_scratch: &mut perm_b,
                 total_scenarios: 5,
+                noise_group_id: 0,
             })
             .unwrap();
 
         assert_eq!(a.as_slice(), b.as_slice());
     }
-
-    // -----------------------------------------------------------------------
-    // New composite tests required by ticket-027
-    // -----------------------------------------------------------------------
 
     /// AC: composite with three `InSample` class samplers fills each segment
     /// from the correct tree region.
@@ -1188,6 +1201,7 @@ mod tests {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 3,
+            noise_group_id: 0,
         });
 
         let noise = result.expect("expected Ok from composite InSample sample()");
@@ -1232,6 +1246,7 @@ mod tests {
             noise_buf: &mut noise_buf,
             perm_scratch: &mut perm_scratch,
             total_scenarios: 5,
+            noise_group_id: 0,
         });
 
         let noise = result.expect("expected Ok from OutOfSample sample()");
@@ -1270,6 +1285,7 @@ mod tests {
                 noise_buf: &mut buf_a,
                 perm_scratch: &mut perm_a,
                 total_scenarios: 5,
+                noise_group_id: 0,
             })
             .unwrap();
         let b = sampler
@@ -1281,6 +1297,7 @@ mod tests {
                 noise_buf: &mut buf_b,
                 perm_scratch: &mut perm_b,
                 total_scenarios: 5,
+                noise_group_id: 0,
             })
             .unwrap();
 
@@ -1288,6 +1305,79 @@ mod tests {
             a.as_slice(),
             b.as_slice(),
             "composite sample() must be deterministic for same inputs"
+        );
+    }
+
+    /// `noise_group_id` propagates through `ForwardSampler::sample`
+    /// to the underlying `ClassSampler`. Two calls with the same `noise_group_id`
+    /// but different `stage` produce identical `OutOfSample` noise; different
+    /// `noise_group_id` values produce different noise.
+    #[test]
+    fn test_sample_request_propagates_noise_group_id() {
+        let (ctx, stages) = build_test_ctx(Some(42));
+        let sampler = build_forward_sampler(all_classes_config(
+            SamplingScheme::OutOfSample,
+            &ctx,
+            &stages,
+        ))
+        .unwrap();
+        let dim = ctx.dim();
+
+        // Two calls: same noise_group_id=7, different stage → identical noise.
+        let mut buf_a = vec![0.0f64; dim];
+        let mut buf_b = vec![0.0f64; dim];
+        let mut perm_a = vec![0usize; 5];
+        let mut perm_b = vec![0usize; 5];
+
+        let a = sampler
+            .sample(SampleRequest {
+                iteration: 2,
+                scenario: 3,
+                stage: 0,
+                stage_idx: 0,
+                noise_buf: &mut buf_a,
+                perm_scratch: &mut perm_a,
+                total_scenarios: 5,
+                noise_group_id: 7,
+            })
+            .unwrap();
+        let b = sampler
+            .sample(SampleRequest {
+                iteration: 2,
+                scenario: 3,
+                stage: 1,
+                stage_idx: 0,
+                noise_buf: &mut buf_b,
+                perm_scratch: &mut perm_b,
+                total_scenarios: 5,
+                noise_group_id: 7,
+            })
+            .unwrap();
+        assert_eq!(
+            a.as_slice(),
+            b.as_slice(),
+            "same noise_group_id with different stage must produce identical OutOfSample noise"
+        );
+
+        // Different noise_group_id=8 → different noise.
+        let mut buf_c = vec![0.0f64; dim];
+        let mut perm_c = vec![0usize; 5];
+        let c = sampler
+            .sample(SampleRequest {
+                iteration: 2,
+                scenario: 3,
+                stage: 0,
+                stage_idx: 0,
+                noise_buf: &mut buf_c,
+                perm_scratch: &mut perm_c,
+                total_scenarios: 5,
+                noise_group_id: 8,
+            })
+            .unwrap();
+        let any_differ = a.as_slice().iter().zip(c.as_slice()).any(|(x, y)| x != y);
+        assert!(
+            any_differ,
+            "different noise_group_id must produce different OutOfSample noise"
         );
     }
 }

@@ -1,7 +1,43 @@
 {
   "$defs": {
+    "RawHydroPastInflows": {
+      "description": "Past inflow values for PAR(p) lag initialization for one hydro plant.",
+      "properties": {
+        "hydro_id": {
+          "description": "Hydro plant identifier. Must be unique within `past_inflows`.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "season_ids": {
+          "default": null,
+          "description": "Optional season IDs corresponding to each lag entry in `values_m3s`,\none per entry. When present, length must equal `values_m3s.length`.\nEach value must reference a season ID defined in `season_definitions`.\nAbsent from legacy JSON files (backward compatible).",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "values_m3s": {
+          "description": "Past inflow values [m³/s], ordered from most recent (lag 1, index 0) to\noldest (lag p, index p-1). Must have length >= the hydro's PAR order.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hydro_id",
+        "values_m3s"
+      ],
+      "type": "object"
+    },
     "RawHydroStorage": {
-      "description": "Intermediate type for one hydro storage entry.",
+      "description": "Initial reservoir volume for one hydro plant, in hm³.",
       "properties": {
         "hydro_id": {
           "description": "Hydro plant identifier. Must be unique within its array.",
@@ -11,46 +47,74 @@
         "value_hm3": {
           "description": "Reservoir volume [hm³]. Must be >= 0.0.",
           "format": "double",
-          "minimum": 0.0,
           "type": "number"
         }
       },
-      "required": ["hydro_id", "value_hm3"],
+      "required": [
+        "hydro_id",
+        "value_hm3"
+      ],
       "type": "object"
     },
-    "RawHydroPastInflows": {
-      "description": "Past inflow values for PAR(p) lag initialization for one hydro plant.",
+    "RawRecentObservation": {
+      "description": "Observed inflow for a single hydro plant over a specific date range.\n\nUsed to seed the lag accumulator when a study begins mid-season (before the\nfirst lag-period boundary). Each entry covers one hydro over one\nobservation period. Multiple entries per hydro are allowed for rolling\nrevisions.",
       "properties": {
+        "end_date": {
+          "description": "End of the observation period (exclusive), as an ISO 8601 date\n(YYYY-MM-DD). Must be after `start_date`.",
+          "type": "string"
+        },
         "hydro_id": {
-          "description": "Hydro plant identifier. Must be unique within past_inflows.",
+          "description": "Hydro plant identifier. Must reference a hydro entity in the system.",
           "format": "int32",
           "type": "integer"
         },
-        "values_m3s": {
-          "description": "Past inflow values [m³/s], ordered from most recent (lag 1, index 0) to oldest (lag p, index p-1). Must have length >= the hydro's PAR order.",
-          "items": {
-            "format": "double",
-            "minimum": 0.0,
-            "type": "number"
-          },
-          "type": "array"
+        "start_date": {
+          "description": "Start of the observation period (inclusive), as an ISO 8601 date\n(YYYY-MM-DD).",
+          "type": "string"
+        },
+        "value_m3s": {
+          "description": "Average inflow observed during the period [m³/s]. Must be finite and\nnon-negative.",
+          "format": "double",
+          "type": "number"
         }
       },
-      "required": ["hydro_id", "values_m3s"],
+      "required": [
+        "hydro_id",
+        "start_date",
+        "end_date",
+        "value_m3s"
+      ],
       "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Initial reservoir storage conditions and past inflow values for all hydro plants in the case.\n\nTwo arrays specify starting volumes at simulation time zero:\n- `storage` — operating hydros (those participating in generation dispatch).\n- `filling_storage` — filling hydros (reservoirs under construction or filling).\n\nAn optional array provides past inflow values for PAR(p) lag initialization:\n- `past_inflows` — ordered from most recent (lag 1) to oldest (lag p).\n\nA hydro may appear in at most one of the two storage arrays. Duplicate `hydro_id`\nvalues within the same array are rejected. Cross-reference validation\n(checking that IDs exist in the hydro registry) is deferred to Layer 3.",
+  "description": "Initial reservoir storage conditions, past inflow values, and recent\nobservations for all hydro plants in the case.\n\nTwo arrays specify starting volumes at simulation time zero:\n- `storage` — operating hydros (those participating in generation dispatch).\n- `filling_storage` — filling hydros (reservoirs under construction or filling).\n\nAn optional array provides past inflow values for PAR(p) lag initialization:\n- `past_inflows` — ordered from most recent (lag 1) to oldest (lag p).\n\nAn optional array provides observed inflow data for mid-season study starts:\n- `recent_observations` — date-ranged observations that seed the lag accumulator.\n\nA hydro may appear in at most one of the two storage arrays. Duplicate\n`hydro_id` values within the same array are rejected. Cross-reference\nvalidation (checking that IDs exist in the hydro registry) is deferred to\na later validation layer.",
   "properties": {
     "$schema": {
       "description": "JSON schema URI — informational, not validated.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "filling_storage": {
       "description": "Initial reservoir volumes for filling hydros [hm³].\nA filling hydro may not also appear in `storage`.",
       "items": {
         "$ref": "#/$defs/RawHydroStorage"
+      },
+      "type": "array"
+    },
+    "past_inflows": {
+      "description": "Past inflow values for PAR(p) lag initialization [m³/s], one entry per\nhydro. For each hydro, `values_m3s[0]` is the most recent past inflow\n(lag 1) and `values_m3s[p-1]` is the oldest (lag p). Required when\n`inflow_lags` is enabled and the PAR order is > 0. Optional; defaults\nto empty.",
+      "items": {
+        "$ref": "#/$defs/RawHydroPastInflows"
+      },
+      "type": "array"
+    },
+    "recent_observations": {
+      "description": "Observed inflow data for partial periods before the study start\n[m³/s per date range per hydro]. Used to seed the lag accumulator when\na study begins mid-season. Date ranges for the same hydro must not\noverlap; adjacent ranges (start == previous end) are accepted.\nOptional; defaults to empty.",
+      "items": {
+        "$ref": "#/$defs/RawRecentObservation"
       },
       "type": "array"
     },
@@ -60,16 +124,12 @@
         "$ref": "#/$defs/RawHydroStorage"
       },
       "type": "array"
-    },
-    "past_inflows": {
-      "description": "Past inflow values for PAR(p) lag initialization [m³/s], one entry per hydro.\nFor each hydro, values_m3s[0] is the most recent past inflow (lag 1)\nand values_m3s[p-1] is the oldest (lag p). Required when inflow_lags is\nenabled and the PAR order is > 0. Optional; defaults to empty.",
-      "items": {
-        "$ref": "#/$defs/RawHydroPastInflows"
-      },
-      "type": "array"
     }
   },
-  "required": ["storage", "filling_storage"],
+  "required": [
+    "storage",
+    "filling_storage"
+  ],
   "title": "RawInitialConditions",
   "type": "object"
 }

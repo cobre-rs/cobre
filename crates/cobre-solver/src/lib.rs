@@ -34,7 +34,6 @@
     )
 )]
 
-#[cfg(feature = "highs")]
 pub mod ffi;
 
 pub mod trait_def;
@@ -45,11 +44,11 @@ pub use types::{
     Basis, LpSolution, RowBatch, SolutionView, SolverError, SolverStatistics, StageTemplate,
 };
 
-#[cfg(feature = "highs")]
+pub mod baking;
+pub use baking::bake_rows_into_template;
+
 pub mod highs;
-#[cfg(feature = "highs")]
 pub use highs::HighsSolver;
-#[cfg(feature = "highs")]
 pub use highs::highs_version;
 
 #[cfg(feature = "test-support")]

@@ -5,7 +5,7 @@
 //! backend according to:
 //!
 //! 1. The `COBRE_COMM_BACKEND` environment variable (runtime override).
-//! 2. The Cargo feature flags compiled into the binary (`mpi`, `tcp`, `shm`).
+//! 2. The Cargo feature flags compiled into the binary (`mpi`).
 //! 3. A fallback to [`LocalBackend`](crate::LocalBackend) when no distributed backend
 //!    is available.
 //!
@@ -31,7 +31,7 @@
 /// # Future variants
 ///
 /// `Tcp` and `Shm` will be added when the corresponding backend crates are
-/// implemented. They are deliberately excluded from this ticket because no
+/// implemented. They are deliberately excluded because no
 /// concrete `TcpBackend` or `ShmBackend` types exist yet.
 ///
 /// # Examples
@@ -65,19 +65,15 @@ pub enum BackendKind {
 ///
 /// # Design rationale
 ///
-/// [`crate::Communicator`] carries generic methods (`allgatherv<T>`, `allreduce<T>`,
-/// `broadcast<T>`) that make the trait intentionally not object-safe — writing
-/// `Box<dyn Communicator>` does not compile. Enum dispatch is used for closed
-/// variant sets (avoids `Box<dyn>`; enum dispatch for closed variant sets): a `match` arm delegates
-/// each method call to the inner concrete type. The dispatch overhead is a
-/// single branch predictor–friendly integer comparison (spec SS4.3), negligible
-/// compared to the cost of the MPI collective or LP solve it wraps.
+/// [`crate::Communicator`] carries generic methods that make the trait not object-safe.
+/// Enum dispatch for closed variant sets avoids `Box<dyn>`: a `match` arm delegates
+/// each method call to the inner concrete type. The dispatch overhead is negligible
+/// compared to the MPI collective or LP solve it wraps.
 ///
 /// # Availability
 ///
-/// This enum is only present in builds where at least one distributed backend
-/// feature is compiled in (`mpi`, `tcp`, or `shm`). In no-feature builds,
-/// callers use [`crate::LocalBackend`] directly.
+/// This enum is only present in builds where the `mpi` feature is compiled in.
+/// In no-feature builds, callers use [`crate::LocalBackend`] directly.
 ///
 /// # Variants
 ///
@@ -87,13 +83,10 @@ pub enum BackendKind {
 /// # Thread safety
 ///
 /// `CommBackend: Send + Sync` because all inner backend types are `Send + Sync`.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 pub enum CommBackend {
     /// MPI backend powered by ferrompi.
-    ///
-    /// Only compiled when the `mpi` Cargo feature is enabled.
-    #[cfg(feature = "mpi")]
-    Mpi(crate::FerrompiBackend),
+    Mpi(Box<crate::FerrompiBackend>),
 
     /// Single-process local backend.
     ///
@@ -102,18 +95,14 @@ pub enum CommBackend {
     Local(crate::LocalBackend),
 }
 
-// SAFETY: All inner backend types (FerrompiBackend, LocalBackend) are Send + Sync.
-// CommBackend is a sum type wrapping exactly one of them, so the composite is also
-// Send + Sync. LocalBackend is a ZST with no interior state. FerrompiBackend has an
-// explicit `unsafe impl Send + Sync` with documented invariants in ferrompi.rs.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
-unsafe impl Send for CommBackend {}
+#[cfg(feature = "mpi")]
+#[allow(dead_code)]
+const fn _assert_comm_backend_send_sync() {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<CommBackend>();
+}
 
-// SAFETY: See Send justification above. All inner types are Sync.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
-unsafe impl Sync for CommBackend {}
-
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 impl crate::Communicator for CommBackend {
     fn allgatherv<T: crate::CommData>(
         &self,
@@ -187,7 +176,7 @@ impl crate::Communicator for CommBackend {
     }
 }
 
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 impl crate::SharedMemoryProvider for CommBackend {
     /// Both `LocalBackend` and `FerrompiBackend` use `HeapRegion<T>` as their
     /// `Region<T>` type (`HeapFallback` semantics per spec SS4.7). Using
@@ -224,7 +213,7 @@ impl crate::SharedMemoryProvider for CommBackend {
     }
 }
 
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 impl crate::TopologyProvider for CommBackend {
     fn topology(&self) -> &crate::ExecutionTopology {
         match self {
@@ -237,8 +226,7 @@ impl crate::TopologyProvider for CommBackend {
 
 /// Returns all backend names compiled into this binary.
 ///
-/// Always includes `"local"`. Conditionally includes `"mpi"` (feature `mpi`),
-/// `"tcp"` (feature `tcp`), and `"shm"` (feature `shm`).
+/// Always includes `"local"`. Conditionally includes `"mpi"` (feature `mpi`).
 ///
 /// # Examples
 ///
@@ -254,10 +242,6 @@ pub fn available_backends() -> Vec<String> {
     let mut backends = Vec::new();
     #[cfg(feature = "mpi")]
     backends.push("mpi".to_string());
-    #[cfg(feature = "tcp")]
-    backends.push("tcp".to_string());
-    #[cfg(feature = "shm")]
-    backends.push("shm".to_string());
     backends.push("local".to_string());
     backends
 }
@@ -274,10 +258,7 @@ pub fn available_backends() -> Vec<String> {
 ///
 /// In no-feature builds this function is not called from production code
 /// (only from tests), so dead-code lint is suppressed for that configuration.
-#[cfg_attr(
-    not(any(feature = "mpi", feature = "tcp", feature = "shm")),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "mpi"), allow(dead_code))]
 fn mpi_launch_detected() -> bool {
     const MPI_ENV_VARS: [&str; 6] = [
         "PMI_RANK",
@@ -294,11 +275,11 @@ fn mpi_launch_detected() -> bool {
 
 /// Construct the active communication backend (no-feature build).
 ///
-/// When no distributed backend features (`mpi`, `tcp`, `shm`) are compiled in,
-/// this function always returns a [`crate::LocalBackend`] or an error:
+/// When the `mpi` feature is not compiled in, this function always returns a
+/// [`crate::LocalBackend`] or an error:
 ///
 /// - `COBRE_COMM_BACKEND` unset, `"auto"`, or `"local"` → `Ok(LocalBackend)`
-/// - A known distributed backend name (`"mpi"`, `"tcp"`, `"shm"`) →
+/// - A known distributed backend name (`"mpi"`) →
 ///   `Err(BackendError::BackendNotAvailable)`
 /// - An unknown name → `Err(BackendError::InvalidBackend)`
 ///
@@ -312,7 +293,7 @@ fn mpi_launch_detected() -> bool {
 /// # Examples
 ///
 /// ```rust
-/// # #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+/// # #[cfg(not(feature = "mpi"))]
 /// # {
 /// use cobre_comm::create_communicator;
 ///
@@ -323,18 +304,18 @@ fn mpi_launch_detected() -> bool {
 /// assert_eq!(backend.size(), 1);
 /// # }
 /// ```
-#[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+#[cfg(not(feature = "mpi"))]
 pub fn create_communicator() -> Result<crate::LocalBackend, crate::BackendError> {
     let requested = std::env::var("COBRE_COMM_BACKEND").unwrap_or_else(|_| "auto".to_string());
     match requested.as_str() {
         "auto" | "local" => Ok(crate::LocalBackend),
-        "mpi" | "tcp" | "shm" => Err(crate::BackendError::BackendNotAvailable {
+        "mpi" => Err(crate::BackendError::BackendNotAvailable {
             requested,
             available: available_backends(),
         }),
         _ => Err(crate::BackendError::InvalidBackend {
             requested,
-            available: vec!["auto", "mpi", "tcp", "shm", "local"]
+            available: vec!["auto", "mpi", "local"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -342,24 +323,19 @@ pub fn create_communicator() -> Result<crate::LocalBackend, crate::BackendError>
     }
 }
 
-/// Construct the active communication backend (distributed-feature build).
+/// Construct the active communication backend (MPI build).
 ///
-/// When at least one distributed backend feature (`mpi`, `tcp`, `shm`) is
-/// compiled in, this function returns a [`CommBackend`] selected according to
-/// the `COBRE_COMM_BACKEND` environment variable:
+/// When the `mpi` feature is compiled in, this function returns a
+/// [`CommBackend`] selected according to the `COBRE_COMM_BACKEND` environment
+/// variable:
 ///
 /// - Unset or `"auto"` → auto-detect priority chain
-/// - `"mpi"` (feature compiled) → `CommBackend::Mpi(FerrompiBackend::new()?)`
-/// - `"mpi"` (feature absent), `"tcp"`, or `"shm"` →
-///   `Err(BackendError::BackendNotAvailable)` (no concrete implementation in
-///   the minimal viable phase)
+/// - `"mpi"` → `CommBackend::Mpi(FerrompiBackend::new()?)`
 /// - `"local"` → `CommBackend::Local(LocalBackend)`
 /// - Unknown name → `Err(BackendError::InvalidBackend)`
 ///
 /// # Errors
 ///
-/// - [`crate::BackendError::BackendNotAvailable`]: the backend is not compiled
-///   in, or has no concrete implementation yet (tcp, shm).
 /// - [`crate::BackendError::InvalidBackend`]: `COBRE_COMM_BACKEND` contains an
 ///   unrecognized value.
 /// - [`crate::BackendError::InitializationFailed`]: the selected backend failed
@@ -368,7 +344,7 @@ pub fn create_communicator() -> Result<crate::LocalBackend, crate::BackendError>
 /// # Examples
 ///
 /// ```rust
-/// # #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+/// # #[cfg(feature = "mpi")]
 /// # {
 /// use cobre_comm::{create_communicator, Communicator};
 ///
@@ -381,30 +357,16 @@ pub fn create_communicator() -> Result<crate::LocalBackend, crate::BackendError>
 /// unsafe { std::env::remove_var("COBRE_COMM_BACKEND") };
 /// # }
 /// ```
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 pub fn create_communicator() -> Result<CommBackend, crate::BackendError> {
     let requested = std::env::var("COBRE_COMM_BACKEND").unwrap_or_else(|_| "auto".to_string());
     match requested.as_str() {
         "auto" => auto_detect(),
-        #[cfg(feature = "mpi")]
-        "mpi" => Ok(CommBackend::Mpi(crate::FerrompiBackend::new()?)),
-        #[cfg(not(feature = "mpi"))]
-        "mpi" => Err(crate::BackendError::BackendNotAvailable {
-            requested,
-            available: available_backends(),
-        }),
-        "tcp" => Err(crate::BackendError::BackendNotAvailable {
-            requested,
-            available: available_backends(),
-        }),
-        "shm" => Err(crate::BackendError::BackendNotAvailable {
-            requested,
-            available: available_backends(),
-        }),
+        "mpi" => Ok(CommBackend::Mpi(Box::new(crate::FerrompiBackend::new()?))),
         "local" => Ok(CommBackend::Local(crate::LocalBackend)),
         _ => Err(crate::BackendError::InvalidBackend {
             requested,
-            available: vec!["auto", "mpi", "tcp", "shm", "local"]
+            available: vec!["auto", "mpi", "local"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
@@ -419,18 +381,15 @@ pub fn create_communicator() -> Result<CommBackend, crate::BackendError> {
 ///    returns `true`.
 /// 2. Local — unconditional fallback.
 ///
-/// TCP and SHM steps are skipped because no concrete implementations exist in
-/// the minimal viable phase.
-///
 /// # Errors
 ///
 /// Returns [`crate::BackendError::InitializationFailed`] if the MPI backend is
 /// selected but [`crate::FerrompiBackend::new`] fails.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 fn auto_detect() -> Result<CommBackend, crate::BackendError> {
     #[cfg(feature = "mpi")]
     if mpi_launch_detected() {
-        return Ok(CommBackend::Mpi(crate::FerrompiBackend::new()?));
+        return Ok(CommBackend::Mpi(Box::new(crate::FerrompiBackend::new()?)));
     }
     Ok(CommBackend::Local(crate::LocalBackend))
 }
@@ -458,7 +417,7 @@ mod tests {
 
     /// In a no-feature build `available_backends()` returns exactly `["local"]`.
     #[test]
-    #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+    #[cfg(not(feature = "mpi"))]
     fn test_available_backends_no_feature_exact() {
         assert_eq!(available_backends(), vec!["local".to_string()]);
     }
@@ -532,7 +491,7 @@ mod tests {
     /// No-feature build: unset `COBRE_COMM_BACKEND` → `Ok(LocalBackend)` with
     /// rank 0 and size 1.
     #[test]
-    #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+    #[cfg(not(feature = "mpi"))]
     fn test_create_communicator_no_feature_auto() {
         use crate::Communicator;
 
@@ -545,7 +504,7 @@ mod tests {
 
     /// No-feature build: `COBRE_COMM_BACKEND=foobar` → `Err(InvalidBackend)`.
     #[test]
-    #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+    #[cfg(not(feature = "mpi"))]
     fn test_create_communicator_no_feature_invalid() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("COBRE_COMM_BACKEND", "foobar") };
@@ -565,7 +524,7 @@ mod tests {
     /// No-feature build: `COBRE_COMM_BACKEND=mpi` → `Err(BackendNotAvailable)`
     /// where `requested == "mpi"` and `available` contains `"local"`.
     #[test]
-    #[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+    #[cfg(not(feature = "mpi"))]
     fn test_create_communicator_no_feature_unavailable() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("COBRE_COMM_BACKEND", "mpi") };
@@ -613,7 +572,7 @@ mod tests {
         assert_eq!(BackendKind::Local, BackendKind::Local);
     }
 
-    #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+    #[cfg(feature = "mpi")]
     #[allow(clippy::float_cmp)]
     mod comm_backend {
         use super::super::CommBackend;

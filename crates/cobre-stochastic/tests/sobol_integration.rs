@@ -30,6 +30,7 @@ use cobre_core::{
         StageStateConfig,
     },
 };
+use cobre_stochastic::tree::generate::OpeningTreeGenerationInputs;
 use cobre_stochastic::{
     ClassDimensions, ClassSchemes, OpeningTreeInputs, build_stochastic_context,
     correlation::resolve::DecomposedCorrelation,
@@ -345,8 +346,16 @@ fn sobol_2d_star_discrepancy() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(42, &stages, 2, &corr, &entity_order, dims, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        42,
+        &stages,
+        2,
+        &corr,
+        &entity_order,
+        dims,
+        &OpeningTreeGenerationInputs::default(),
+    )
+    .expect("generate_opening_tree must succeed");
 
     assert_eq!(tree.n_stages(), 1);
     assert_eq!(tree.n_openings(0), n);
@@ -402,8 +411,16 @@ fn sobol_normal_statistics() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(12345, &stages, dim, &corr, &entity_order, dims, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        12345,
+        &stages,
+        dim,
+        &corr,
+        &entity_order,
+        dims,
+        &OpeningTreeGenerationInputs::default(),
+    )
+    .expect("generate_opening_tree must succeed");
 
     let values: Vec<f64> = (0..n).map(|o| tree.opening(0, o)[0]).collect();
 
@@ -443,8 +460,16 @@ fn sobol_correlation_applied() {
         n_load_buses: 0,
         n_ncs: 0,
     };
-    let tree = generate_opening_tree(54321, &stages, 2, &corr, &entity_order, dims, None)
-        .expect("generate_opening_tree must succeed");
+    let tree = generate_opening_tree(
+        54321,
+        &stages,
+        2,
+        &corr,
+        &entity_order,
+        dims,
+        &OpeningTreeGenerationInputs::default(),
+    )
+    .expect("generate_opening_tree must succeed");
 
     let pairs: Vec<(f64, f64)> = (0..n)
         .map(|o| {

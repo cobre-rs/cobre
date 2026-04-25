@@ -48,12 +48,10 @@ not during forward synchronization.
 │          allgatherv shares each rank's newly generated cuts so that all  │
 │          ranks maintain an identical FCF at the end of each iteration.  │
 │                                                                         │
-│  Step 5a Cut management pipeline (optional, three stages)               │
+│  Step 5a Cut management pipeline (optional, two stages)                 │
 │          S1: Strategy-based selection (Level1/LML1/Dominated) —         │
 │              runs at multiples of check_frequency.                      │
-│          S2: Angular diversity pruning — clusters cuts by cosine        │
-│              similarity and performs within-cluster dominance checks.    │
-│          S3: Budget enforcement — hard cap on active cuts per stage,    │
+│          S2: Budget enforcement — hard cap on active cuts per stage,    │
 │              runs every iteration when max_active_per_stage is set.     │
 │                                                                         │
 │  Step 5b LB evaluation                                                  │
@@ -89,46 +87,46 @@ near zero.
 
 ## Module overview
 
-| Module                | Responsibility                                                                                                                                                                                                                                                                                |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `training`            | `train`: the top-level loop orchestrator; wires all steps together                                                                                                                                                                                                                            |
-| `forward`             | `run_forward_pass`, `sync_forward`: step 1 and step 2                                                                                                                                                                                                                                         |
-| `state_exchange`      | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                                                                                                                                                                                                                             |
-| `backward`            | `run_backward_pass`: step 4 Benders cut generation with work-stealing parallelism                                                                                                                                                                                                              |
-| `cut_sync`            | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                                                                                                                                                                                                   |
-| `cut_selection`       | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a Stage 1 pool pruning                                                                                                                                                                                                        |
-| `angular_pruning`     | `AngularPruningParams`, `select_angular_dominated`: step 5a Stage 2 — cosine-based clustering with within-cluster dominance verification                                                                                                                                                      |
-| `lower_bound`         | `evaluate_lower_bound`: step 5b risk-adjusted LB computation (parallelized across openings)                                                                                                                                                                                                   |
-| `convergence`         | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                                                                                                                                                                                                      |
-| `cut`                 | `CutPool`, `FutureCostFunction`, `CutRowMap`, `WARM_START_ITERATION`: cut data structures, wire format, and LP row mapping                                                                                                                                                                    |
-| `basis_padding`       | `pad_basis_for_cuts`: Strategy S3 basis-aware warm-start padding — evaluates new cuts at warm-start state and assigns informed basis status                                                                                                                                                   |
-| `config`              | `TrainingConfig`: algorithm parameters                                                                                                                                                                                                                                                        |
-| `context`             | `StageContext`, `TrainingContext`: hot-path argument bundles that absorb parameters into context structs                                                                                                                                                                                       |
-| `stopping_rule`       | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                                                                                                                                                                                                       |
-| `risk_measure`        | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                                                                                                                                                                                                                           |
-| `horizon_mode`        | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` currently)                                                                                                                                                                                                                    |
-| `indexer`             | `StageIndexer`, `EquipmentCounts`, `FphaColumnLayout`: LP column/row offset arithmetic for stage subproblems                                                                                                                                                                                  |
-| `lp_builder`          | `build_stage_templates`, `StageTemplates`, `PatchBuffer`: stage template construction, LP scaling, and row-bound patch arrays                                                                                                                                                                 |
-| `workspace`           | `SolverWorkspace`, `WorkspacePool`, `BasisStore`: per-worker solver instances with pre-allocated scratch buffers and basis storage                                                                                                                                                             |
-| `trajectory`          | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                                                                                                                                                                                               |
-| `noise`               | Noise-to-RHS-patch logic shared across forward, backward, and simulation passes                                                                                                                                                                                                               |
-| `solver_stats`        | `SolverStatsEntry`, `SolverStatsDelta`, `aggregate_solver_statistics`: per-phase solver statistics delta computation and cross-worker aggregation                                                                                                                                              |
-| `scaling_report`      | `ScalingReport`, `StageScalingReport`, `CoefficientRange`: LP prescaling diagnostics written to JSON                                                                                                                                                                                          |
-| `simulation`          | Full simulation pipeline with stage-major loop; all result types (`SimulationHydroResult`, etc.); `simulate`, `aggregate_simulation`                                                                                                                                                          |
-| `error`               | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                                                                                                                                                                                                          |
-| `fpha_fitting`        | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry                                                                                                                                                                                |
-| `hydro_models`        | `prepare_hydro_models`, `EvaporationModel`, `FphaPlane`, `ResolvedProductionModel`: hydro model preprocessing at initialization                                                                                                                                                               |
-| `generic_constraints` | Generic constraint row entries — user-defined linear constraints with 20 variable types                                                                                                                                                                                                       |
-| `inflow_method`       | `InflowNonNegativityMethod`: Truncation, Penalty, TruncationWithPenalty, and None strategies                                                                                                                                                                                                  |
-| `estimation`          | `EstimationReport`, `LagScaleWarning`, `StdRatioDivergence`: PAR estimation pipeline outputs                                                                                                                                                                                                  |
-| `provenance`          | `ModelProvenanceReport`, `build_provenance_report`: round-trip audit trail for model preprocessing                                                                                                                                                                                            |
-| `stochastic_summary`  | `StochasticSummary`, `build_stochastic_summary`: human-readable summary of stochastic preprocessing                                                                                                                                                                                           |
-| `visited_states`      | `VisitedStatesArchive`: forward-pass trial point storage for cut selection and policy diagnostics                                                                                                                                                                                              |
-| `policy_export`       | Policy checkpoint writing (FlatBuffers cuts, basis, states, metadata)                                                                                                                                                                                                                         |
-| `policy_load`         | `build_basis_cache_from_checkpoint`, `validate_policy_compatibility`: policy loading for warm-start and resume                                                                                                                                                                                 |
-| `training_output`     | `build_training_output`: assembles all training results for the output writers                                                                                                                                                                                                                 |
-| `conversion`          | Type conversion utilities between internal and I/O representations                                                                                                                                                                                                                            |
-| `setup`               | `StudySetup`, `StudyParams`, `prepare_stochastic`: pre-built study state; holds four optional scenario libraries (`historical_library`, `external_inflow_library`, `external_load_library`, `external_ncs_library`) built conditionally from per-class `SamplingScheme` selections             |
+| Module                | Responsibility                                                                                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `training`            | `train`: the top-level loop orchestrator; wires all steps together                                                                                                                                                                                                                 |
+| `forward`             | `run_forward_pass`, `sync_forward`: step 1 and step 2                                                                                                                                                                                                                              |
+| `state_exchange`      | `ExchangeBuffers`: step 3 allgatherv of trial point state vectors                                                                                                                                                                                                                  |
+| `backward`            | `run_backward_pass`: step 4 Benders cut generation with work-stealing parallelism                                                                                                                                                                                                  |
+| `cut_sync`            | `CutSyncBuffers`: step 5 allgatherv of new cut wire records                                                                                                                                                                                                                        |
+| `cut_selection`       | `CutSelectionStrategy`, `CutMetadata`, `DeactivationSet`: step 5a Stage 1 pool pruning                                                                                                                                                                                             |
+| `lower_bound`         | `evaluate_lower_bound`: step 5b risk-adjusted LB computation (parallelized across openings)                                                                                                                                                                                        |
+| `convergence`         | `ConvergenceMonitor`: step 6 bound tracking and stopping rule evaluation                                                                                                                                                                                                           |
+| `cut`                 | `CutPool`, `FutureCostFunction`, `CutRowMap`, `WARM_START_ITERATION`: cut data structures, wire format, and LP row mapping                                                                                                                                                         |
+| `basis_reconstruct`   | `reconstruct_basis`: slot-tracked warm-start basis reconstruction — reconciles stored cut rows by slot identity and classifies newly added cuts at the capture-time state                                                                                                          |
+| `config`              | `TrainingConfig`: algorithm parameters                                                                                                                                                                                                                                             |
+| `context`             | `StageContext`, `TrainingContext`: hot-path argument bundles that absorb parameters into context structs                                                                                                                                                                           |
+| `stopping_rule`       | `StoppingRule`, `StoppingRuleSet`, `MonitorState`: termination criteria                                                                                                                                                                                                            |
+| `risk_measure`        | `RiskMeasure`, `BackwardOutcome`: risk-neutral and CVaR aggregation                                                                                                                                                                                                                |
+| `horizon_mode`        | `HorizonMode`: finite vs. cyclic stage traversal (only `Finite` currently)                                                                                                                                                                                                         |
+| `indexer`             | `StageIndexer`, `EquipmentCounts`, `FphaColumnLayout`: LP column/row offset arithmetic for stage subproblems                                                                                                                                                                       |
+| `lp_builder`          | `build_stage_templates`, `StageTemplates`, `PatchBuffer`: stage template construction, LP scaling, and row-bound patch arrays                                                                                                                                                      |
+| `workspace`           | `SolverWorkspace`, `WorkspacePool`, `BasisStore`, `CapturedBasis`: per-worker solver instances with pre-allocated scratch buffers and slot-tracked basis storage                                                                                                                   |
+| `trajectory`          | `TrajectoryRecord`: forward pass LP solution record (primal, dual, state, cost)                                                                                                                                                                                                    |
+| `noise`               | Noise-to-RHS-patch logic shared across forward, backward, and simulation passes; includes `accumulate_and_shift_lag_state` for sub-monthly lag accumulation                                                                                                                        |
+| `lag_transition`      | `precompute_stage_lag_transitions`: builds per-stage `StageLagTransition` configs from stage dates and lag period boundaries; accumulator seeding from `RecentObservation` for mid-season starts                                                                                   |
+| `solver_stats`        | `SolverStatsEntry`, `SolverStatsDelta`, `aggregate_solver_statistics`: per-phase solver statistics delta computation and cross-worker aggregation                                                                                                                                  |
+| `scaling_report`      | `ScalingReport`, `StageScalingReport`, `CoefficientRange`: LP prescaling diagnostics written to JSON                                                                                                                                                                               |
+| `simulation`          | Full simulation pipeline with stage-major loop; all result types (`SimulationHydroResult`, etc.); `simulate`, `aggregate_simulation`                                                                                                                                               |
+| `error`               | `SddpError`: unified error type aggregating solver, comm, stochastic, and I/O errors                                                                                                                                                                                               |
+| `fpha_fitting`        | FPHA fitting pipeline — computes piecewise-linear hydroelectric production hyperplanes from reservoir geometry                                                                                                                                                                     |
+| `hydro_models`        | `prepare_hydro_models`, `EvaporationModel`, `FphaPlane`, `ResolvedProductionModel`: hydro model preprocessing at initialization                                                                                                                                                    |
+| `generic_constraints` | Generic constraint row entries — user-defined linear constraints with 20 variable types                                                                                                                                                                                            |
+| `inflow_method`       | `InflowNonNegativityMethod`: Truncation, Penalty, TruncationWithPenalty, and None strategies                                                                                                                                                                                       |
+| `estimation`          | `EstimationReport`, `LagScaleWarning`, `StdRatioDivergence`: PAR estimation pipeline outputs                                                                                                                                                                                       |
+| `provenance`          | `ModelProvenanceReport`, `build_provenance_report`: round-trip audit trail for model preprocessing                                                                                                                                                                                 |
+| `stochastic_summary`  | `StochasticSummary`, `build_stochastic_summary`: human-readable summary of stochastic preprocessing                                                                                                                                                                                |
+| `visited_states`      | `VisitedStatesArchive`: forward-pass trial point storage for cut selection and policy diagnostics                                                                                                                                                                                  |
+| `policy_export`       | Policy checkpoint writing (FlatBuffers cuts, basis, states, metadata)                                                                                                                                                                                                              |
+| `policy_load`         | `build_basis_cache_from_checkpoint`, `validate_policy_compatibility`, `load_boundary_cuts`, `inject_boundary_cuts`: policy loading for warm-start, resume, and terminal boundary cut injection from external checkpoints                                                           |
+| `training_output`     | `build_training_output`: assembles all training results for the output writers                                                                                                                                                                                                     |
+| `conversion`          | Type conversion utilities between internal and I/O representations                                                                                                                                                                                                                 |
+| `setup`               | `StudySetup`, `StudyParams`, `prepare_stochastic`: pre-built study state; holds four optional scenario libraries (`historical_library`, `external_inflow_library`, `external_load_library`, `external_ncs_library`) built conditionally from per-class `SamplingScheme` selections |
 
 ## Configuration
 
@@ -138,17 +136,15 @@ near zero.
 and must be set explicitly — there is no `Default` implementation, preventing
 silent misconfigurations.
 
-| Field                    | Type                            | Description                                                         |
-| ------------------------ | ------------------------------- | ------------------------------------------------------------------- |
-| `forward_passes`         | `u32`                           | Scenarios per rank per iteration (must be >= 1)                     |
-| `max_iterations`         | `u64`                           | Safety bound on total iterations; also sizes the cut pool           |
-| `checkpoint_interval`    | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled              |
-| `warm_start_cuts`        | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file                  |
-| `event_sender`           | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent            |
-| `cut_selection`          | `Option<CutSelectionStrategy>`  | Stage 1 cut selection strategy; `None` = no selection               |
-| `angular_pruning`        | `Option<AngularPruningParams>`  | Stage 2 angular diversity pruning; `None` = disabled                |
-| `budget`                 | `Option<u32>`                   | Stage 3 max active cuts per stage; `None` = no budget               |
-| `basis_padding_enabled`  | `bool`                          | Strategy S3 basis-aware warm-start padding                          |
+| Field                 | Type                            | Description                                               |
+| --------------------- | ------------------------------- | --------------------------------------------------------- |
+| `forward_passes`      | `u32`                           | Scenarios per rank per iteration (must be >= 1)           |
+| `max_iterations`      | `u64`                           | Safety bound on total iterations; also sizes the row pool |
+| `checkpoint_interval` | `Option<u64>`                   | Write checkpoint every N iterations; `None` = disabled    |
+| `warm_start_cuts`     | `Vec<u32>`                      | Per-stage pre-loaded cut counts from a policy file        |
+| `event_sender`        | `Option<Sender<TrainingEvent>>` | Channel for real-time monitoring events; `None` = silent  |
+| `cut_selection`       | `Option<CutSelectionStrategy>`  | Stage 1 cut selection strategy; `None` = no selection     |
+| `budget`              | `Option<u32>`                   | Stage 2 max active cuts per stage; `None` = no budget     |
 
 ### `StoppingRuleSet`
 
@@ -201,8 +197,8 @@ assigned per stage from the `stages.json` configuration field `risk_measure`.
 ### `CutSelectionStrategy`
 
 Cut selection is optional. When configured, it forms Stage 1 of the
-three-stage cut management pipeline that also includes angular pruning
-(Stage 2) and budget enforcement (Stage 3). See the user-facing
+two-stage cut management pipeline that also includes budget enforcement
+(Stage 2). See the user-facing
 [Performance Accelerators](../guide/performance-accelerators.md#cut-management-pipeline)
 guide for the full pipeline description.
 
@@ -377,18 +373,17 @@ structured data for real-time display in the TUI or CLI layers.
 
 Key events emitted during training:
 
-| Event variant               | When emitted                                                  |
-| --------------------------- | ------------------------------------------------------------- |
-| `ForwardPassComplete`       | After step 1 completes for all local scenarios                |
-| `ForwardSyncComplete`       | After step 2 global UB statistics are merged                  |
-| `BackwardPassComplete`      | After step 4 cut generation for all trial points              |
-| `CutSyncComplete`           | After step 5 cut allgatherv                                   |
-| `CutSelectionComplete`      | After step 5a Stage 1 selection (when strategy is set)        |
-| `AngularPruningComplete`    | After step 5a Stage 2 angular pruning (when enabled)          |
-| `BudgetEnforcementComplete` | After step 5a Stage 3 budget enforcement (when budget is set) |
-| `ConvergenceUpdate`         | After step 6 stopping rules evaluated                         |
-| `IterationSummary`          | At the end of each iteration (LB, UB, gap, timing)            |
-| `TrainingFinished`          | When a stopping rule triggers                                 |
+| Event variant                     | When emitted                                                  |
+| --------------------------------- | ------------------------------------------------------------- |
+| `ForwardPassComplete`             | After step 1 completes for all local scenarios                |
+| `ForwardSyncComplete`             | After step 2 global UB statistics are merged                  |
+| `BackwardPassComplete`            | After step 4 row generation for all trial points              |
+| `PolicySyncComplete`              | After step 5 policy-row allgatherv                            |
+| `PolicySelectionComplete`         | After step 5a Stage 1 selection (when strategy is set)        |
+| `PolicyBudgetEnforcementComplete` | After step 5a Stage 2 budget enforcement (when budget is set) |
+| `ConvergenceUpdate`               | After step 6 stopping rules evaluated                         |
+| `IterationSummary`                | At the end of each iteration (LB, UB, gap, timing)            |
+| `TrainingFinished`                | When a stopping rule triggers                                 |
 
 ## Quick start (pseudocode)
 
@@ -493,10 +488,12 @@ region to preserve bit-for-bit determinism across thread counts.
 
 ### Model persistence and incremental cuts
 
-`CutRowMap` provides O(1) bidirectional mapping between cut pool slots and LP
-row indices. Deactivated cuts become "phantom rows" (bounds zeroed) rather than
-triggering a full LP rebuild. Periodic rebuild occurs when phantoms exceed 20%
-of total rows or 50 iterations elapse.
+`CutRowMap` provides O(1) slot-to-row lookup for the persistent lower-bound
+LP so the append path skips cuts that are already present. The LB LP is
+strictly append-only: cuts are never removed from it, which keeps the lower
+bound monotonically non-decreasing. The shared row pool's active/inactive
+bit is not propagated to the LB LP — pool-deactivated rows remain as LP
+rows in the LB solver.
 
 ### Cut wire format
 
@@ -504,6 +501,18 @@ The cut wire format used by `CutSyncBuffers` is a fixed-size record:
 24 bytes of header (slot index, iteration, forward pass index, intercept)
 followed by `n_state * 8` bytes of coefficients. The record size is
 `cut_wire_size(n_state) = 24 + n_state * 8` bytes.
+
+### Basis cache wire format
+
+`CapturedBasis` owns the pack/unpack layout for broadcasting a stored
+basis via `to_broadcast_payload` and `try_from_broadcast_payload`. Each
+stage's payload is either a `0_i32` absent-sentinel or a `1_i32`
+present-sentinel followed by five length fields, the `col_status` and
+`row_status` slices, the `cut_row_slots` indices cast to `i32`, and the
+`state_at_capture` values carried in a separate `f64` buffer.
+`broadcast_basis_cache` in `training` issues four broadcasts per
+transfer — i32 length, i32 payload, f64 length, f64 payload — wrapping
+the single-stage serialisation in a stage-major loop.
 
 ### Communication-free parallelism
 

@@ -76,9 +76,9 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - Entity ID existence in registries — Layer 3, Epic 06.
-//! - Duplicate `(entity_id, stage_id)` pairs — Epic 06.
-//! - Semantic cross-validation (e.g., min < max) — Epic 06.
+//! - Entity ID existence in registries — Layer 3.
+//! - Duplicate `(entity_id, stage_id)` pairs — deferred.
+//! - Semantic cross-validation (e.g., min < max) — deferred.
 
 use arrow::array::Array;
 use cobre_core::EntityId;
@@ -132,7 +132,7 @@ pub struct ThermalBoundsRow {
     /// Dispatch cost override (`$/MWh`). Overrides `Thermal.cost_per_mwh` when `Some` and
     /// `block_id` is `None`. Ignored when `block_id` is `Some`.
     pub cost_per_mwh: Option<f64>,
-    /// Reserved for future per-block cost support (DECOMP). Rows with non-null `block_id`
+    /// Reserved for future per-block cost support. Rows with non-null `block_id`
     /// are parsed but silently ignored during bounds resolution.
     pub block_id: Option<i32>,
 }
@@ -1109,7 +1109,7 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    /// AC1 (ticket-002): parquet with cost_per_mwh and block_id columns — values read correctly.
+    /// Parquet with cost_per_mwh and block_id columns — values read correctly.
     #[test]
     fn test_thermal_cost_and_block_id_columns_read() {
         let schema = Arc::new(Schema::new(vec![
@@ -1147,7 +1147,7 @@ mod tests {
         assert!(rows[1].block_id.is_none());
     }
 
-    /// AC2 (ticket-002): parquet without cost_per_mwh and block_id columns — all rows have None.
+    /// Parquet without cost_per_mwh and block_id columns — all rows have None.
     #[test]
     fn test_thermal_missing_cost_and_block_id_columns_are_none() {
         // Use the existing make_thermal_batch which builds the old schema (no cost/block_id).
@@ -1167,7 +1167,7 @@ mod tests {
         assert!(rows[1].block_id.is_none());
     }
 
-    /// AC3 (ticket-002): parquet row with non-null block_id is parsed with block_id = Some(_).
+    /// Parquet row with non-null block_id is parsed with block_id = Some(_).
     #[test]
     fn test_thermal_non_null_block_id_is_parsed() {
         let schema = Arc::new(Schema::new(vec![
@@ -1198,7 +1198,7 @@ mod tests {
         assert_eq!(rows[0].cost_per_mwh, Some(75.0));
     }
 
-    /// AC4 (ticket-002): NaN in cost_per_mwh -> SchemaError mentioning "cost_per_mwh" and "finite".
+    /// NaN in cost_per_mwh -> SchemaError mentioning "cost_per_mwh" and "finite".
     #[test]
     fn test_thermal_nan_cost_per_mwh() {
         let schema = Arc::new(Schema::new(vec![

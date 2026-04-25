@@ -38,7 +38,7 @@
 //! (SS1 spec): it always comes from the global default.
 //!
 //! Cross-reference validation (e.g., checking that bus IDs are referenced by
-//! thermals, lines, hydros) is deferred to Layer 3 (Epic 06).
+//! thermals, lines, hydros) is deferred to Layer 3.
 
 use cobre_core::{
     EntityId,

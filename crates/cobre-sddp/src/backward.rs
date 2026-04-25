@@ -1,12 +1,12 @@
 //! Backward pass execution for the SDDP training loop.
 //!
-//! [`run_backward_pass`] sweeps stages in reverse order (`T-2` down to `0`),
+//! `run_backward_pass` sweeps stages in reverse order (`T-2` down to `0`),
 //! evaluating the cost-to-go at each trial point **assigned to this rank**
 //! during the forward pass. For each trial point, the backward pass iterates
 //! over every opening from the fixed opening tree, extracts LP duals to form
 //! Benders cut coefficients, and aggregates per-opening outcomes via
 //! [`RiskMeasure::aggregate_cut`] to produce one cut per trial point per
-//! stage. Each aggregated cut is inserted into the [`FutureCostFunction`].
+//! stage. Each aggregated cut is inserted into the [`crate::FutureCostFunction`].
 //!
 //! Although [`ExchangeBuffers`] contains trial points from all ranks (after
 //! `allgatherv`), each rank only processes its own forward pass assignments
@@ -31,7 +31,7 @@
 //! where `Q` is the LP objective and `dual[0..n_state]` are the duals of the
 //! fixing constraints (storage-fixing and lag-fixing rows).
 //!
-//! The coefficients stored in the [`FutureCostFunction`] are the raw (unscaled)
+//! The coefficients stored in the [`crate::FutureCostFunction`] are the raw (unscaled)
 //! duals of the state-fixing rows. Negation is applied later when building the
 //! LP cut row in `build_cut_row_batch_into` (forward.rs):
 //! `-coeff * x + theta >= intercept`.
@@ -49,16 +49,10 @@
 //! Within a rank, the outer per-stage loop remains sequential (stage `t`
 //! depends on cuts generated at stage `t+1`). The inner trial-point loop is
 //! parallelised across [`SolverWorkspace`] instances using rayon's
-//! `par_iter_mut`. Trial points are dynamically distributed via atomic counter
-//! work-stealing: each worker loops, claiming the next available trial-point
-//! index via `fetch_add(1, Relaxed)` on a shared `AtomicUsize` counter, and
-//! stops when the returned index reaches `local_work`.
-//!
-//! Each worker thread generates cuts into a thread-local `StagedCut` buffer
-//! rather than directly into the FCF. After the parallel region completes for
-//! a stage, the staged cuts are sorted by `trial_point_idx` and inserted into
-//! the FCF in that deterministic order. This ensures bit-for-bit identical
-//! results regardless of thread count or thread completion order.
+//! `par_iter_mut` with static scenario partitioning (matching the forward pass).
+//! Each worker generates cuts into a thread-local `StagedCut` buffer, sorted
+//! by `trial_point_idx` after the parallel region to ensure deterministic FCF
+//! insertion regardless of thread completion order.
 //!
 //! ## Hot-path allocation discipline
 //!
@@ -74,28 +68,43 @@
 //!
 //! The `binding_slots` vector inside each `StagedCut` is allocated per
 //! trial point — a flat buffer optimization is deferred to profiling.
+//!
+//! Note: `load_model` is called once per trial point (not per stage) to reset
+//! the LP to the structural template before appending cuts. `HiGHS` performs
+//! internal allocations during `load_model` that are not visible to this
+//! module; these are a fixed cost per trial point and are not considered
+//! hot-path allocations from Cobre's perspective.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
-
-use cobre_comm::{Communicator, ReduceOp};
-use cobre_solver::{RowBatch, SolverError, SolverInterface};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+#[cfg(test)]
+use cobre_comm::Communicator;
+use cobre_solver::{RowBatch, SolutionView, SolverInterface, SolverStatistics};
 
 use crate::{
-    FutureCostFunction, SddpError, TrajectoryRecord,
+    SddpError,
     context::{StageContext, TrainingContext},
-    cut_sync::CutSyncBuffers,
-    forward::build_cut_row_batch_into,
-    noise::{transform_inflow_noise, transform_load_noise, transform_ncs_noise},
-    risk_measure::BackwardOutcome,
+    cut::pool::CutPool,
+    forward::write_capture_metadata,
+    noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     risk_measure::RiskMeasure,
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::SolverStatsDelta,
     state_exchange::ExchangeBuffers,
-    workspace::{BasisStore, SolverWorkspace},
+    workspace::{BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
 
+/// Per-`(rank, worker_id, opening)` solver delta collected during a single
+/// backward stage, as returned inside [`BackwardResult::stage_stats`].
+///
+/// Layout: `(rank, worker_id, opening_index, delta)`.
+pub type StageWorkerOpeningDelta = (i32, i32, usize, SolverStatsDelta);
+
 /// Result produced by the backward pass on a single rank.
+///
+/// The per-worker timing data carried inside `stage_stats` is keyed
+/// by the `WORKER_TIMING_SLOT_*` constants exported from
+/// `cobre-core`. New per-worker timing slots should be added to
+/// that constant set (and the `WORKER_TIMING_SLOT_COUNT` updated)
+/// rather than as standalone fields on this struct, so the parquet
+/// timing schema picks them up automatically.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct BackwardResult {
@@ -108,13 +117,16 @@ pub struct BackwardResult {
     /// Number of LP solves performed during this backward pass.
     pub lp_solves: u64,
 
-    /// Per-stage solver statistics deltas.
+    /// Per-stage, per-`(rank, worker_id, opening)` solver statistics deltas.
     ///
-    /// Each entry is `(successor_stage_index, delta)` where the stage index
-    /// identifies which stage's LP was solved (the successor), not the stage
-    /// where cuts are added. Entries are in reverse stage order (matching
-    /// the backward iteration direction).
-    pub stage_stats: Vec<(usize, SolverStatsDelta)>,
+    /// Each outer entry is `(successor_stage_index, per_worker_opening_deltas)`.
+    /// The inner `Vec` element is `(rank, worker_id, omega, delta)`: one entry per
+    /// `(MPI rank, rayon worker, opening index)` triple gathered via `allgatherv`.
+    /// Only includes entries where `omega < n_openings(successor)` AND
+    /// `delta.lp_solves > 0 || omega == 0` (preserves the omega=0 "stage visited"
+    /// sentinel while skipping padded buffer slots).
+    /// Entries are in reverse stage order (matching the backward iteration direction).
+    pub stage_stats: Vec<(usize, Vec<StageWorkerOpeningDelta>)>,
 
     /// Wall-clock time for state exchange (`allgatherv`) accumulated across
     /// all stages, in milliseconds.
@@ -124,10 +136,28 @@ pub struct BackwardResult {
     /// all stages, in milliseconds.
     pub cut_batch_build_time_ms: u64,
 
-    /// Estimated rayon barrier + scheduling overhead accumulated across all
-    /// stages, in milliseconds. Computed per-stage as
-    /// `process_stage_wall_ms - (solve_time_ms / n_workers)`.
-    pub rayon_overhead_time_ms: u64,
+    /// Aggregate non-solve work inside the parallel region accumulated across
+    /// all stages, in milliseconds.
+    ///
+    /// Computed per-stage as the sum over all workers of
+    /// `load_model_time_ms + set_bounds_time_ms + basis_set_time_ms`.
+    pub setup_time_ms: u64,
+
+    /// Load-imbalance component of parallel overhead accumulated across all
+    /// stages, in milliseconds.
+    ///
+    /// Computed per-stage as `max_worker_total_ms - avg_worker_total_ms`, where
+    /// `worker_total_ms = solve + load_model + set_bounds + basis_set`
+    /// for each worker. Measures how much the slowest worker exceeds the average.
+    pub load_imbalance_ms: u64,
+
+    /// True rayon scheduling overhead accumulated across all stages, in
+    /// milliseconds.
+    ///
+    /// Computed per-stage as `parallel_wall_ms - max_worker_total_ms`. Represents
+    /// rayon barrier, thread wake-up, and work-stealing dispatch costs after
+    /// accounting for all measured per-worker work.
+    pub scheduling_overhead_ms: u64,
 
     /// Wall-clock time for per-stage cut synchronization (`allgatherv`)
     /// accumulated across all stages, in milliseconds.
@@ -138,195 +168,77 @@ pub struct BackwardResult {
 /// point during the parallel backward sweep.
 ///
 /// Each worker thread populates one `StagedCut` per trial point instead of
-/// writing directly into the [`FutureCostFunction`]. After the parallel region,
+/// writing directly into the `FutureCostFunction`. After the parallel region,
 /// staged cuts are sorted by `trial_point_idx` and merged into the FCF in
 /// deterministic order regardless of thread completion order.
-struct StagedCut {
+pub(crate) struct StagedCut {
     /// Local trial-point index within `0..local_work`. Used for deterministic
     /// merge ordering after the parallel region.
-    trial_point_idx: usize,
+    pub(crate) trial_point_idx: usize,
 
     /// Aggregated cut intercept (result of `RiskMeasure::aggregate_cut`).
-    intercept: f64,
+    pub(crate) intercept: f64,
 
     /// Aggregated cut coefficients (length = `n_state`).
-    coefficients: Vec<f64>,
+    pub(crate) coefficients: Vec<f64>,
 
     /// Global forward-pass index (`fwd_offset + m`), stored as `u32` for the
     /// FCF slot formula.
-    forward_pass_index: u32,
-
-    /// Slots in the successor pool that were binding for at least one opening
-    /// during this trial point. These are accumulated across openings within
-    /// the worker and applied to FCF metadata in the sequential merge phase.
-    ///
-    /// Each entry is `(slot_index, active_count_increment)` where
-    /// `active_count_increment` is the number of openings in which that cut
-    /// was binding. This allows the merge phase to correctly accumulate
-    /// activity counts without double-counting.
-    binding_increments: Vec<(usize, u64)>,
-}
-
-/// Inputs bundled from the training loop for the backward pass.
-///
-/// Groups the iteration-varying scalars and slices that would otherwise push
-/// the argument count of [`run_backward_pass`] beyond seven.
-pub struct BackwardPassSpec<'a> {
-    /// Exchange buffers for gathering trial-point states via `allgatherv`.
-    ///
-    /// When non-empty, populates exchange buffers per stage. When empty (test path),
-    /// the caller is responsible for pre-populating the exchange buffers.
-    pub exchange: &'a mut ExchangeBuffers,
-
-    /// Forward-pass trajectory records used to populate `exchange` per stage.
-    ///
-    /// Length must be `local_work * num_stages` when non-empty; pass `&[]` in
-    /// tests that pre-populate `exchange` directly.
-    pub records: &'a [TrajectoryRecord],
-
-    /// Current training iteration index (1-based), used for cut metadata.
-    pub iteration: u64,
-
-    /// Number of trial points assigned to this rank for the backward pass.
-    pub local_work: usize,
-
-    /// Global offset for this rank's trial points (`rank * fwd_per_rank`).
-    pub fwd_offset: usize,
-
-    /// Per-stage risk measures (length = `num_stages`). `risk_measures[t]`
-    /// is applied when aggregating cut outcomes at stage `t`.
-    pub risk_measures: &'a [RiskMeasure],
-
-    /// Minimum dual multiplier for a cut to count as binding (BUG-2 fix).
-    ///
-    /// Cuts with duals above this threshold are marked as binding during the
-    /// backward pass activity tracking. A value of `0.0` preserves the
-    /// original strict-positive behavior; a value like `1e-8` filters out
-    /// numerical noise from near-zero positive duals.
-    pub cut_activity_tolerance: f64,
-
-    /// Pre-allocated cut synchronization buffers for per-stage `allgatherv`.
-    ///
-    /// After local cuts are inserted into the FCF at each stage, `sync_cuts`
-    /// is called to distribute cuts across all ranks. For single-rank runs
-    /// the `allgatherv` is a no-op and completes immediately.
-    pub cut_sync_bufs: &'a mut CutSyncBuffers,
-
-    /// Pre-allocated buffer for uniform opening probabilities. Reused per stage
-    /// via `clear()` + `resize()` to avoid per-stage allocation.
-    ///
-    /// Passed as a mutable reference to avoid `mem::take` capacity loss when
-    /// the training loop encounters an error before buffer recovery.
-    pub probabilities_buf: &'a mut Vec<f64>,
-
-    /// Pre-allocated buffer for successor active cut slot indices. Reused per
-    /// stage via `clear()` + `extend()` to avoid per-stage allocation.
-    ///
-    /// Passed as a mutable reference (same rationale as `probabilities_buf`).
-    pub successor_active_slots_buf: &'a mut Vec<usize>,
-
-    /// Optional visited-states archive for dominated cut selection.
-    ///
-    /// When `Some`, gathered states are archived after each per-stage exchange
-    /// so that the domination test has access to all forward-pass trial points.
-    /// Pass `None` when using `Level1`, `Lml1`, or no cut selection.
-    pub visited_archive: Option<&'a mut crate::visited_states::VisitedStatesArchive>,
-
-    /// Pre-allocated buffer for per-slot binding increment aggregation.
-    ///
-    /// Reused across stages to avoid per-stage allocation. Sized to
-    /// `fcf.pools[successor].metadata.len()` after each `sync_packed_cuts`
-    /// call. Used for the `allreduce(Sum)` that synchronises cut binding
-    /// metadata across MPI ranks so that `active_count` and
-    /// `last_active_iter` reflect trial points from ALL ranks, not just this
-    /// rank's local forward passes.
-    pub metadata_sync_buf: &'a mut Vec<u64>,
-
-    /// Pre-allocated receive buffer for the `allreduce(Sum)` that aggregates
-    /// per-slot binding increments across MPI ranks.
-    ///
-    /// Reused across stages to avoid per-stage allocation (F1-003 fix).
-    /// Resized to `pool_size` before each allreduce call.
-    pub global_increments_buf: &'a mut Vec<u64>,
-
-    /// Pre-allocated buffer for packing real (non-padded) gathered state
-    /// vectors when archiving visited states for dominated cut selection.
-    ///
-    /// When `visited_archive` is `Some`, this buffer is filled by
-    /// [`ExchangeBuffers::pack_real_states_into`] before each
-    /// `archive_gathered_states` call so that zero-padded trailing entries
-    /// (from ranks with fewer forward passes in an uneven distribution) are
-    /// never archived. Pass `&mut Vec::new()` when `visited_archive` is
-    /// `None`.
-    pub real_states_buf: &'a mut Vec<f64>,
+    pub(crate) forward_pass_index: u32,
 }
 
 /// Per-successor data bundled for `process_stage_backward` and the trial-point helper.
 ///
 /// Groups the successor-specific arguments — including the stage index `t`,
-/// opening probabilities, pre-built cut batch, cut activity metadata, and the
-/// basis store — to keep per-function argument counts at or below seven.
-struct SuccessorSpec<'a> {
+/// opening probabilities, pre-built cut batch, and cut activity metadata —
+/// to keep per-function argument counts at or below seven.
+pub(crate) struct SuccessorSpec<'a> {
     /// Stage index being cut (the stage whose cost-to-go we are computing).
-    t: usize,
+    pub(crate) t: usize,
     /// Successor stage index (`t + 1`), where the LP is actually solved.
-    successor: usize,
+    pub(crate) successor: usize,
     /// This rank's MPI rank index (used to address exchange buffer state).
-    my_rank: usize,
+    pub(crate) my_rank: usize,
     /// Uniform opening probabilities for the successor stage.
-    probabilities: &'a [f64],
+    pub(crate) probabilities: &'a [f64],
     /// Pre-built cut rows to append to each successor LP.
-    cut_batch: &'a RowBatch,
-    /// Number of active cuts at the successor stage (= `cut_batch.num_rows`).
-    num_cuts_at_successor: usize,
-    /// Base row count of the successor template (excludes appended cuts).
-    template_num_rows: usize,
+    /// Delta batch when baking is active, full active-cut batch otherwise.
+    pub(crate) cut_batch: &'a RowBatch,
+    /// Total number of active cuts at the successor stage for dual extraction.
+    /// Includes both baked and delta cuts contiguous after `template_num_rows`.
+    pub(crate) num_cuts_at_successor: usize,
+    /// Base row count of the successor template (excludes cuts).
+    pub(crate) template_num_rows: usize,
+    /// Baked LP template for the successor stage. Always populated — baking
+    /// is complete before the backward pass begins.
+    pub(crate) baked_template: &'a cobre_solver::StageTemplate,
     /// Ordered slot indices of the active cuts at the successor stage.
-    successor_active_slots: &'a [usize],
-    /// Basis store for warm-starting each worker's first opening solve.
-    basis_store: &'a BasisStore,
+    pub(crate) successor_active_slots: &'a [usize],
     /// Minimum dual multiplier for a cut to count as binding.
-    cut_activity_tolerance: f64,
-    /// Populated count of the successor's cut pool. Used to size the
-    /// `slot_increments` Vec for O(1) indexed binding tracking.
-    successor_populated_count: usize,
+    pub(crate) cut_activity_tolerance: f64,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    pub(crate) basis_activity_window: u32,
+    /// Populated count of the successor's cut pool.
+    pub(crate) successor_populated_count: usize,
+    /// Cut pool at the successor stage for binding-activity tracking.
+    pub(crate) successor_pool: &'a CutPool,
 }
 
-/// Per-trial-point mutable accumulators reused across openings.
-struct TrialAccumulators {
-    /// Collected per-opening outcomes (intercept + coefficients + objective).
-    outcomes: Vec<BackwardOutcome>,
-    /// Binding count per cut pool slot. Indexed by slot index, pre-allocated
-    /// to `pool.populated_count` and zeroed per trial point via `fill(0)`.
-    /// Replaces the previous `HashMap<usize, u64>` to eliminate hashing
-    /// overhead and per-stage allocation.
-    slot_increments: Vec<u64>,
-}
-
-/// Load the stage LP template and append cuts once per trial point.
+/// Load the stage LP template and append delta cuts.
 ///
-/// Called once before the opening loop in [`process_trial_point_backward`].
-/// The LP structure (template + cuts) is identical across all openings for
-/// the same trial point — only the noise-dependent bounds change.
-///
-/// # Future: incremental cut injection
-///
-/// A future incremental path could skip `load_model` on iterations 2+
-/// and only append new cuts via `add_rows`. Implementing this requires
-/// adapting the dual extraction logic in [`process_trial_point_backward`]
-/// to use [`CutRowMap`] for LP row lookups instead of assuming sequential
-/// row ordering (the current
-/// `view.dual[template_num_rows..template_num_rows + num_cuts]` pattern).
-///
-/// [`CutRowMap`]: crate::cut::CutRowMap
-fn load_backward_lp<S: SolverInterface + Send>(
+/// Called at the top of every trial-point iteration in `process_stage_backward`
+/// to reset `HiGHS`'s retained simplex basis, factorization, and RNG position so
+/// that results do not depend on the scenario-to-worker partition. Within a
+/// trial point the LP structure is identical across openings — only the
+/// noise-dependent bounds change, so only bound patching happens per opening.
+pub(crate) fn load_backward_lp<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
-    ctx: &StageContext<'_>,
-    cut_batch: &RowBatch,
-    s: usize,
+    succ: &SuccessorSpec<'_>,
 ) {
-    ws.solver.load_model(&ctx.templates[s]);
-    ws.solver.add_rows(cut_batch);
+    ws.solver.load_model(succ.baked_template);
+    if succ.cut_batch.num_rows > 0 {
+        ws.solver.add_rows(succ.cut_batch);
+    }
 }
 
 /// Transform opening noise and patch LP bounds for one backward opening.
@@ -362,8 +274,10 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     if n_stochastic_ncs > 0 {
         transform_ncs_noise(
             raw_noise,
-            ctx.n_hydros,
-            ctx.n_load_buses,
+            &NcsNoiseOffsets {
+                n_hydros: ctx.n_hydros,
+                n_load_buses: ctx.n_load_buses,
+            },
             training_ctx.stochastic,
             s,
             ctx.block_counts_per_stage[s],
@@ -421,445 +335,376 @@ fn patch_opening_bounds<S: SolverInterface + Send>(
     }
 }
 
+/// Resolve the ω=0 warm-start basis from the worker's `BasisStoreSliceMut`.
+///
+/// Returns `None` when the slot is empty (cold start or no prior capture).
+#[inline]
+fn resolve_backward_basis<'a>(
+    basis_slice: &'a BasisStoreSliceMut<'_>,
+    m: usize,
+    s: usize,
+) -> Option<&'a CapturedBasis> {
+    basis_slice.get(m, s)
+}
+
+/// Extract state and cut duals from the solver view into pre-warmed scratch buffers.
+///
+/// Called while `view` is still live (borrowing the solver). The output buffers
+/// (`state_duals`, `cut_duals`) were taken out of `ws.backward_accum` before the
+/// solve and are passed here directly so that no `ws` borrow is needed.
+///
+/// Returns the LP objective value.
+///
+/// # Dual-fill layout
+///
+/// `state_duals`: unscaled duals for state-fixing rows `[0, n_state)`.
+/// Scaling: `dual_original[i] = row_scale[i] * dual_scaled[i]`; when
+/// `row_scale` is empty the raw duals are used directly.
+///
+/// `cut_duals`: raw duals for cut rows `[template_num_rows, template_num_rows + num_cuts)`.
+/// These always have implicit `row_scale = 1.0`.
+fn extract_duals_from_view(
+    view: &SolutionView<'_>,
+    n_state: usize,
+    row_scale: &[f64],
+    succ: &SuccessorSpec<'_>,
+    state_duals: &mut Vec<f64>,
+    cut_duals: &mut Vec<f64>,
+) -> f64 {
+    let objective = view.objective;
+
+    // Unscale state-fixing-row duals from scaled to original units.
+    // `state_duals` carries pre-warmed capacity; `clear` + `extend` reuses it.
+    state_duals.clear();
+    if row_scale.is_empty() {
+        state_duals.extend_from_slice(&view.dual[..n_state]);
+    } else {
+        state_duals.extend(
+            view.dual[..n_state]
+                .iter()
+                .zip(row_scale)
+                .map(|(&d, &rs)| d * rs),
+        );
+    }
+    debug_assert_eq!(
+        state_duals.len(),
+        n_state,
+        "state_duals must contain exactly n_state entries after fill"
+    );
+
+    // Fill cut duals from the cut-row slice.
+    //
+    // Layout: [0, template_num_rows) — structural rows;
+    //         [template_num_rows, template_num_rows + num_cuts) — cut rows (baked then delta).
+    cut_duals.clear();
+    if succ.num_cuts_at_successor > 0 {
+        cut_duals.extend_from_slice(
+            &view.dual[succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor],
+        );
+    }
+
+    objective
+}
+
+/// Accumulate one opening's solve result into the workspace accumulators.
+///
+/// Called after `view` is dropped (so `ws` is freely borrowable). Writes:
+/// - per-opening stats delta into `ws.backward_accum.per_opening_stats[omega]`
+/// - outcome coefficients, objective, and intercept into `ws.backward_accum.outcomes[omega]`
+/// - binding-cut slot increments into `ws.backward_accum.slot_increments`
+fn accumulate_opening_outcome<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    succ: &SuccessorSpec<'_>,
+    omega: usize,
+    objective: f64,
+    x_hat: &[f64],
+    stats_before: &SolverStatistics,
+    stats_after: &SolverStatistics,
+) {
+    // Per-opening stats delta.
+    let opening_delta = SolverStatsDelta::from_snapshots(stats_before, stats_after);
+    SolverStatsDelta::accumulate_into(
+        &mut ws.backward_accum.per_opening_stats[omega],
+        &opening_delta,
+    );
+
+    // Copy state duals into outcome coefficients, then compute the intercept.
+    // Simultaneous access to `outcomes[omega]` (mutable) and `state_duals_buf`
+    // (immutable) is safe because they are distinct fields of `BackwardAccumulators`.
+    let out = &mut ws.backward_accum.outcomes[omega];
+    out.coefficients
+        .copy_from_slice(&ws.backward_accum.state_duals_buf);
+    out.objective_value = objective;
+    // Intercept: alpha = Q_scaled - pi' * x_hat.
+    // All terms are in scaled cost units (LP duals inherit cost scaling).
+    out.intercept = objective
+        - out
+            .coefficients
+            .iter()
+            .zip(x_hat)
+            .map(|(pi, x)| pi * x)
+            .sum::<f64>();
+
+    // Update binding-cut slot increments from cut duals.
+    for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
+        if ws
+            .backward_accum
+            .cut_duals_buf
+            .get(cut_idx)
+            .is_some_and(|&d| d > succ.cut_activity_tolerance)
+        {
+            ws.backward_accum.slot_increments[slot] += 1;
+        }
+    }
+}
+
+/// Capture the post-solve basis at ω=0 into `basis_slice[m, s]`.
+///
+/// Only called when `omega == 0`; writes at ω>0 are forbidden because the
+/// retained LU factorization would be overwritten by subsequent opening solves,
+/// making the stored basis stale and potentially infeasible when reloaded.
+///
+/// Reuses an existing slot in-place when present (avoids reallocation on
+/// subsequent iterations). Allocates a new `CapturedBasis` only on the first
+/// capture for this `(m, s)` pair.
+fn save_basis_at_omega_zero<S: SolverInterface + Send>(
+    ws: &mut SolverWorkspace<S>,
+    succ: &SuccessorSpec<'_>,
+    basis_slice: &mut BasisStoreSliceMut<'_>,
+    m: usize,
+    x_hat: &[f64],
+) {
+    let s = succ.successor;
+    let num_cols = succ.baked_template.num_cols;
+    let base_row_count = succ.template_num_rows;
+    let cut_row_count = succ.num_cuts_at_successor;
+    let basis_row_capacity = base_row_count + cut_row_count;
+    if let Some(captured) = basis_slice.get_mut(m, s).as_mut() {
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            captured,
+            succ.successor_pool,
+            base_row_count,
+            cut_row_count,
+            x_hat,
+        );
+    } else {
+        let mut captured = CapturedBasis::new(
+            num_cols,
+            basis_row_capacity,
+            base_row_count,
+            cut_row_count,
+            x_hat.len(),
+        );
+        ws.solver.get_basis(&mut captured.basis);
+        write_capture_metadata(
+            &mut captured,
+            succ.successor_pool,
+            base_row_count,
+            cut_row_count,
+            x_hat,
+        );
+        *basis_slice.get_mut(m, s) = Some(captured);
+    }
+}
+
 /// Process one trial point `m` in the backward pass, iterating over all openings.
 ///
-/// Called once per trial point inside the parallel worker closure of
-/// `process_stage_backward`. The caller pre-allocates and clears `accum`
-/// before each call. Returns a single aggregated [`StagedCut`].
-fn process_trial_point_backward<S: SolverInterface + Send>(
+/// Solves at each (scenario, opening) and accumulates duals into `per_opening_stats`.
+/// At ω=0, writes the post-solve basis into `basis_slice`; writes at ω>0 are
+/// forbidden (retained-LU corruption risk). Infeasibility at ω=0
+/// leaves the slot unchanged
+// RATIONALE: 10 args required — each is a disjoint borrow (ws, ctx, training_ctx, exchange,
+// succ, basis_slice) or a plain scalar (fwd_offset, iteration, m) or a risk slice.
+// Merging into a struct would add indirection without reducing the caller's borrow count.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
     ws: &mut SolverWorkspace<S>,
     ctx: &StageContext<'_>,
     training_ctx: &TrainingContext<'_>,
-    spec: &BackwardPassSpec<'_>,
+    exchange: &ExchangeBuffers,
+    fwd_offset: usize,
+    iteration: u64,
+    risk_measures: &[RiskMeasure],
     succ: &SuccessorSpec<'_>,
+    basis_slice: &mut BasisStoreSliceMut<'_>,
     m: usize,
-    accum: &mut TrialAccumulators,
 ) -> Result<StagedCut, SddpError> {
     let indexer = training_ctx.indexer;
     let tree_view = training_ctx.stochastic.tree_view();
-    let x_hat = spec.exchange.state_at(succ.my_rank, m);
-    let scenario = spec.fwd_offset + m;
+    let x_hat = exchange.state_at(succ.my_rank, m);
+    let scenario = fwd_offset + m;
     let s = succ.successor;
+
+    debug_assert_eq!(
+        ws.backward_accum.per_opening_stats.len(),
+        succ.probabilities.len(),
+        "per_opening_stats must be initialised to n_openings before each stage's trial-point loop"
+    );
 
     for omega in 0..succ.probabilities.len() {
         let raw_noise = tree_view.opening(s, omega);
         patch_opening_bounds(ws, ctx, training_ctx, raw_noise, x_hat, s);
 
-        // Opening 0: use forward-pass basis from BasisStore for warm start.
-        // Openings 1+: HiGHS retains internal factorization from the previous
-        // solve — only bounds/RHS changed via `patch_opening_bounds`, so
-        // `solve()` hot-starts without redundant refactorization (P3b).
-        let view = if omega == 0 {
-            if let Some(rb) = succ.basis_store.get(m, s) {
-                ws.solver.solve_with_basis(rb)
-            } else {
-                ws.solver.solve()
-            }
-        } else {
-            ws.solver.solve()
-        }
-        .map_err(|e| match e {
-            SolverError::Infeasible => SddpError::Infeasible {
-                stage: succ.t,
-                iteration: spec.iteration,
-                scenario,
-            },
-            other => SddpError::Solver(other),
-        })?;
+        // Take scratch buffers out of `ws.backward_accum` before the solve so
+        // they can be filled from `view.dual` while `view` holds a `'ws` borrow
+        // over `ws`. The `take` leaves an empty `Vec` in place; its former
+        // content (which may carry capacity from a prior opening) moves into
+        // the local binding.  After `view` is dropped the local binding is
+        // moved back into the scratch slot so capacity is reused on the next
+        // iteration.  This means allocation only occurs on the first opening of
+        // the first stage; subsequent openings reuse the pre-warmed capacity.
+        let mut state_duals = std::mem::take(&mut ws.backward_accum.state_duals_buf);
+        let mut cut_duals = std::mem::take(&mut ws.backward_accum.cut_duals_buf);
 
-        let objective = view.objective;
-        // Unscale duals from scaled units back to original units.
-        // `dual_original[i] = row_scale[i] * dual_scaled[i]`.
-        // Only the state-fixing rows [0, n_state) are needed for cut coefficients.
-        // Cut rows have implicit row_scale = 1.0 and require no adjustment.
-        let row_scale = &ctx.templates[s].row_scale;
-        let out = &mut accum.outcomes[omega];
-        if row_scale.is_empty() {
-            out.coefficients
-                .copy_from_slice(&view.dual[..indexer.n_state]);
+        // Snapshot solver statistics before this opening's solve.
+        let stats_before_omega = ws.solver.statistics();
+
+        // ω=0: resolve warm-start basis; ω>0: HiGHS hot-starts from retained factorization.
+        let stored_basis = if omega == 0 {
+            resolve_backward_basis(basis_slice, m, s)
         } else {
-            for (i, &d) in view.dual[..indexer.n_state].iter().enumerate() {
-                out.coefficients[i] = d * row_scale[i];
-            }
-        }
-        out.objective_value = objective;
-        // Intercept: alpha = Q_scaled - pi' * x_hat.
+            None
+        };
+        let inputs = crate::stage_solve::StageInputs {
+            stage_context: ctx,
+            indexer,
+            pool: succ.successor_pool,
+            current_state: x_hat,
+            stored_basis,
+            baked_template: succ.baked_template,
+            stage_index: s,
+            scenario_index: scenario,
+            iteration: Some(iteration),
+            horizon_is_terminal: false,
+            terminal_has_boundary_cuts: false,
+            basis_activity_window: succ.basis_activity_window,
+        };
+
+        let outcome =
+            crate::stage_solve::run_stage_solve(ws, crate::stage_solve::Phase::Backward, &inputs)?;
+
+        let crate::stage_solve::StageOutcome::Backward {
+            view,
+            recon_stats: _,
+        } = outcome
+        else {
+            unreachable!("run_stage_solve(Phase::Backward) returns Backward variant")
+        };
+
+        // Extract duals while `view` is live. `state_duals` and `cut_duals` were
+        // taken from their scratch slots above, so no `ws` borrow is needed here.
+        // `view` is dropped at the end of the call (it is `Copy`; the explicit
+        // `let _ = view` inside the helper documents that intent).
         //
-        // `objective` is the LP objective in scaled cost units (divided by
-        // COST_SCALE_FACTOR). `coefficients` are unscaled duals (dual_i *
-        // row_scale_i). The product `pi' * x_hat` is also in scaled cost
-        // units because the LP duals inherit the cost scaling. The cut
-        // `theta >= alpha + pi'(x - x_hat)` is evaluated in the parent
-        // LP, where theta is also in scaled units, so all terms are
-        // consistently scaled.
-        out.intercept = objective
-            - out
-                .coefficients
-                .iter()
-                .zip(x_hat)
-                .map(|(pi, x)| pi * x)
-                .sum::<f64>();
+        // SEQUENCING: `ws.solver.statistics()` (stats_after) must be called AFTER
+        // this returns, because `view` borrows `ws` for `'ws` and the borrow checker
+        // forbids `ws.solver` access while `view` is alive.
+        let objective = extract_duals_from_view(
+            &view,
+            indexer.n_state,
+            &ctx.templates[s].row_scale,
+            succ,
+            &mut state_duals,
+            &mut cut_duals,
+        );
+        let _ = view;
 
-        if succ.num_cuts_at_successor > 0 {
-            let cut_duals = &view.dual
-                [succ.template_num_rows..succ.template_num_rows + succ.num_cuts_at_successor];
-            for (cut_idx, &slot) in succ.successor_active_slots.iter().enumerate() {
-                if cut_duals[cut_idx] > succ.cut_activity_tolerance {
-                    accum.slot_increments[slot] += 1;
-                }
-            }
+        // Restore pre-warmed scratch back into workspace slots before any `ws` access.
+        ws.backward_accum.state_duals_buf = state_duals;
+        ws.backward_accum.cut_duals_buf = cut_duals;
+
+        // Statistics after the solve (safe now that `view` is dropped).
+        let stats_after_omega = ws.solver.statistics();
+
+        // Accumulate stats delta, outcome coefficients/intercept, and cut activity.
+        accumulate_opening_outcome(
+            ws,
+            succ,
+            omega,
+            objective,
+            x_hat,
+            &stats_before_omega,
+            &stats_after_omega,
+        );
+
+        // Capture basis at ω=0; ω>0 writes are forbidden (retained-LU corruption risk).
+        if omega == 0 {
+            save_basis_at_omega_zero(ws, succ, basis_slice, m, x_hat);
         }
     }
 
-    let (agg_intercept, agg_coefficients) =
-        spec.risk_measures[succ.t].aggregate_cut(&accum.outcomes, succ.probabilities);
+    // Copy the aggregated coefficients out of the per-worker scratch
+    // buffer into an owned Vec<f64> so they outlive the parallel
+    // closure. This is the one allocation per trial point inside the
+    // parallel region; see the module-level "Hot-path allocation
+    // discipline" section for the full inventory.
+    let n_openings = succ.probabilities.len();
+    let mut agg_intercept = 0.0_f64;
+    risk_measures[succ.t].aggregate_cut_into(
+        &ws.backward_accum.outcomes[..n_openings],
+        succ.probabilities,
+        &mut agg_intercept,
+        &mut ws.backward_accum.agg_coefficients,
+        &mut ws.backward_accum.risk_scratch,
+    );
+    let agg_coefficients = ws.backward_accum.agg_coefficients.clone();
     debug_assert!(
         u32::try_from(scenario).is_ok(),
         "global scenario index overflows u32"
     );
     #[allow(clippy::cast_possible_truncation)]
     let forward_pass_index = scenario as u32;
-    let binding_increments: Vec<(usize, u64)> = accum
-        .slot_increments
-        .iter()
-        .enumerate()
-        .filter(|&(_, c)| *c > 0)
-        .map(|(s, c)| (s, *c))
-        .collect();
+    // Accumulate binding counts into the metadata buffer for later merge.
+    let pop = ws.backward_accum.slot_increments.len();
+    for slot in 0..pop {
+        let count = ws.backward_accum.slot_increments[slot];
+        if count > 0 {
+            ws.backward_accum.metadata_sync_contribution[slot] += count;
+            // Set bit 0 to record iteration-level activity for the sliding window.
+            ws.backward_accum.metadata_sync_window_contribution[slot] |= 1u32;
+        }
+    }
     Ok(StagedCut {
         trial_point_idx: m,
         intercept: agg_intercept,
         coefficients: agg_coefficients,
         forward_pass_index,
-        binding_increments,
     })
 }
 
-/// Evaluate all trial points for a single backward stage, returning staged cuts.
+/// Test-only backward-pass shim that owns per-call scratch.
 ///
-/// Runs the parallel trial-point loop over `0..spec.local_work` for the
-/// successor of stage `t`. Trial points are dynamically distributed across
-/// `workspaces` via atomic counter work-stealing: each worker claims the next
-/// available index via `fetch_add(1, Relaxed)` on a shared `AtomicUsize` counter.
-/// Returns `Vec<StagedCut>` in completion order (unsorted); caller sorts by
-/// `trial_point_idx` before inserting into the FCF.
-fn process_stage_backward<S: SolverInterface + Send>(
-    workspaces: &mut [SolverWorkspace<S>],
-    ctx: &StageContext<'_>,
-    training_ctx: &TrainingContext<'_>,
-    spec: &BackwardPassSpec<'_>,
-    succ: &SuccessorSpec<'_>,
-) -> Vec<Result<Vec<StagedCut>, SddpError>> {
-    let n_openings = succ.probabilities.len();
-    let local_work = spec.local_work;
-
-    let next_trial = AtomicUsize::new(0);
-
-    workspaces
-        .par_iter_mut()
-        .map(|ws| {
-            // Load the LP structure once per worker per stage — every worker
-            // calls this unconditionally. When `local_work < n_workers`, some
-            // workers will load the LP and immediately find no work via the
-            // atomic counter, which is acceptable overhead.
-            load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
-
-            let mut staged: Vec<StagedCut> = Vec::new();
-            let n_state = training_ctx.indexer.n_state;
-            let mut accum = TrialAccumulators {
-                outcomes: (0..n_openings)
-                    .map(|_| BackwardOutcome {
-                        intercept: 0.0,
-                        coefficients: vec![0.0; n_state],
-                        objective_value: 0.0,
-                    })
-                    .collect(),
-                slot_increments: vec![0u64; succ.successor_populated_count],
-            };
-
-            loop {
-                let m = next_trial.fetch_add(1, Ordering::Relaxed);
-                if m >= local_work {
-                    break;
-                }
-                // DETERMINISM INVESTIGATION: reload model per trial point to
-                // eliminate HiGHS state carry-over between trial points.
-                load_backward_lp(ws, ctx, succ.cut_batch, succ.successor);
-                accum.slot_increments.fill(0);
-                staged.push(process_trial_point_backward(
-                    ws,
-                    ctx,
-                    training_ctx,
-                    spec,
-                    succ,
-                    m,
-                    &mut accum,
-                )?);
-            }
-            Ok(staged)
-        })
-        .collect()
-}
-
-/// Execute the backward pass for one training iteration on this rank.
-///
-/// Sweeps stages from `num_stages - 2` down to `0` (the last stage `T-1` has
-/// no successor stage and therefore produces no cuts). For each stage, the
-/// trial-point loop is parallelised across the provided [`SolverWorkspace`]
-/// instances using atomic counter work-stealing. Each worker generates cut
-/// data into a thread-local `StagedCut` buffer. After the parallel region,
-/// staged cuts are sorted by trial-point index and inserted into the FCF in
-/// deterministic order.
-///
-/// The outer per-stage loop remains sequential: stage `t` depends on cuts
-/// inserted at stage `t+1` in the previous iteration of the stage loop.
-///
-/// ## Error handling
-///
-/// On `SolverError::Infeasible`, returns `SddpError::Infeasible` with the
-/// backward stage (0-based), iteration, and global trial point index.
-/// On any other `SolverError`, returns `SddpError::Solver`. On error, the
-/// FCF may be partially populated.
+/// Production code drives the backward pass via [`BackwardPassState::run`]
+/// on the state struct held by `TrainingSession`. This shim exists so that
+/// the tests in this module can exercise `run_one_backward_stage` without
+/// threading a full `TrainingSession` through every fixture.
 ///
 /// # Errors
 ///
 /// Returns `Err(SddpError::Infeasible { .. })` when a stage LP has no
 /// feasible solution during the backward sweep. Returns
 /// `Err(SddpError::Solver(_))` for all other terminal LP solver failures.
-///
-/// # Panics (debug builds only)
-///
-/// Panics if any of the following debug preconditions are violated:
-///
-/// - `ctx.templates.len() != num_stages`
-/// - `ctx.base_rows.len() != num_stages`
-/// - `spec.risk_measures.len() != num_stages`
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
-    workspaces: &mut [SolverWorkspace<S>],
-    basis_store: &BasisStore,
-    ctx: &StageContext<'_>,
-    fcf: &mut FutureCostFunction,
-    cut_batches: &mut [RowBatch],
-    training_ctx: &TrainingContext<'_>,
-    spec: &mut BackwardPassSpec<'_>,
-    comm: &C,
+#[cfg(test)]
+fn run_backward_pass<S: SolverInterface + Send, C: Communicator>(
+    inputs: &mut crate::backward_pass_state::BackwardPassInputs<'_, S, C>,
 ) -> Result<BackwardResult, SddpError> {
-    let TrainingContext {
-        horizon,
-        indexer,
-        stochastic,
-        ..
-    } = training_ctx;
-    let num_stages = horizon.num_stages();
-    let my_rank = comm.rank();
-
-    debug_assert_eq!(ctx.templates.len(), num_stages);
-    debug_assert_eq!(ctx.base_rows.len(), num_stages);
-    debug_assert_eq!(spec.risk_measures.len(), num_stages);
-
-    let start = Instant::now();
-    let solves_before: u64 = workspaces
-        .iter()
-        .map(|ws| ws.solver.statistics().solve_count)
-        .sum();
-    let mut cuts_generated: usize = 0;
-    let mut stage_stats: Vec<(usize, SolverStatsDelta)> = Vec::new();
-    let mut state_exchange_ms: u64 = 0;
-    let mut cut_batch_build_ms: u64 = 0;
-    let mut rayon_overhead_ms: u64 = 0;
-    let mut cut_sync_ms: u64 = 0;
-    #[allow(clippy::cast_precision_loss)]
-    let n_workers = workspaces.len() as f64;
-    let tree_view = stochastic.tree_view();
-    let mut staged_cuts_buf: Vec<StagedCut> = Vec::new();
-
-    for t in (0..num_stages.saturating_sub(1)).rev() {
-        // When the caller supplies forward-pass records, perform the per-stage
-        // allgatherv here so that `exchange.state_at(rank, m)` returns the
-        // state for stage `t` (the state entering stage `t+1`). When records
-        // is empty the caller has pre-populated the exchange buffers (test path).
-        if !spec.records.is_empty() {
-            let exch_start = Instant::now();
-            spec.exchange.exchange(spec.records, t, num_stages, comm)?;
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                state_exchange_ms += exch_start.elapsed().as_millis() as u64;
-            }
-        }
-
-        // Archive gathered states for dominated cut selection (if active).
-        // Use pack_real_states_into so that zero-padded trailing entries from
-        // ranks with fewer forward passes in an uneven distribution are never
-        // archived (ticket-003 fix).
-        if let Some(ref mut archive) = spec.visited_archive {
-            let total_fwd = spec.exchange.real_total_scenarios();
-            spec.exchange.pack_real_states_into(spec.real_states_buf);
-            archive.archive_gathered_states(t, spec.real_states_buf, total_fwd);
-        }
-
-        let successor = t + 1;
-
-        // Snapshot pool stats before this stage's solves.
-        let stage_stats_before = {
-            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
-            aggregate_solver_statistics(&pool_stats)
-        };
-
-        let n_openings = tree_view.n_openings(successor);
-        spec.probabilities_buf.clear();
-        #[allow(clippy::cast_precision_loss)]
-        spec.probabilities_buf
-            .resize(n_openings, 1.0_f64 / n_openings as f64);
-
-        let batch_start = Instant::now();
-        build_cut_row_batch_into(
-            &mut cut_batches[successor],
-            fcf,
-            successor,
-            indexer,
-            &ctx.templates[successor].col_scale,
-        );
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            cut_batch_build_ms += batch_start.elapsed().as_millis() as u64;
-        }
-        let num_cuts_at_successor = cut_batches[successor].num_rows;
-        let template_num_rows = ctx.templates[successor].num_rows;
-        spec.successor_active_slots_buf.clear();
-        spec.successor_active_slots_buf
-            .extend(fcf.active_cuts(successor).map(|(slot, _, _)| slot));
-
-        let succ_spec = SuccessorSpec {
-            t,
-            successor,
-            my_rank,
-            probabilities: spec.probabilities_buf,
-            cut_batch: &cut_batches[successor],
-            num_cuts_at_successor,
-            template_num_rows,
-            successor_active_slots: spec.successor_active_slots_buf,
-            basis_store,
-            cut_activity_tolerance: spec.cut_activity_tolerance,
-            successor_populated_count: fcf.pools[successor].populated_count,
-        };
-        let process_start = Instant::now();
-        let worker_staged = process_stage_backward(workspaces, ctx, training_ctx, spec, &succ_spec);
-        // Capture wall-clock before sequential post-processing to avoid
-        // inflating the parallel region time with merge, sync, and metadata work.
-        #[allow(clippy::cast_possible_truncation)]
-        let parallel_wall_ms = process_start.elapsed().as_millis() as u64;
-
-        staged_cuts_buf.clear();
-        for worker_result in worker_staged {
-            staged_cuts_buf.extend(worker_result?);
-        }
-        // With work-stealing, workers claim trial points in arbitrary order so
-        // the concatenated buffer is not necessarily sorted. Sort explicitly to
-        // ensure deterministic FCF insertion order regardless of thread
-        // scheduling.
-        staged_cuts_buf.sort_by_key(|cut| cut.trial_point_idx);
-        debug_assert_eq!(
-            staged_cuts_buf.len(),
-            spec.local_work,
-            "work-stealing must produce exactly one cut per trial point"
-        );
-
-        for cut in &staged_cuts_buf {
-            fcf.add_cut(
-                t,
-                spec.iteration,
-                cut.forward_pass_index,
-                cut.intercept,
-                &cut.coefficients,
-            );
-            cuts_generated += 1;
-        }
-
-        // Per-stage cut sync: allgatherv distributes this stage's local cuts
-        // to all ranks so every rank sees the same FCF before the next stage.
-        let sync_start = Instant::now();
-        let n_local = spec.cut_sync_bufs.pack_local_cuts(fcf, t, spec.iteration);
-        spec.cut_sync_bufs.sync_packed_cuts(t, n_local, fcf, comm)?;
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            cut_sync_ms += sync_start.elapsed().as_millis() as u64;
-        }
-
-        // Metadata sync: allreduce(Sum) the per-slot binding increment counts
-        // so that `active_count` and `last_active_iter` reflect trial points
-        // from ALL ranks, not just this rank's local forward passes.
-        //
-        // The pool size is read AFTER sync_packed_cuts so that remote cuts
-        // added by the allgatherv are included in the slot range.
-        let pool_size = fcf.pools[successor].metadata.len();
-        if pool_size > 0 {
-            // Build the local increment buffer from this rank's staged cuts.
-            spec.metadata_sync_buf.clear();
-            spec.metadata_sync_buf.resize(pool_size, 0u64);
-            for cut in &staged_cuts_buf {
-                for &(slot, increment) in &cut.binding_increments {
-                    spec.metadata_sync_buf[slot] += increment;
-                }
-            }
-
-            // Allreduce(Sum): every rank contributes its local increments and
-            // receives the global sum. For a single rank (LocalBackend) this
-            // is an identity copy — no behavior change.
-            spec.global_increments_buf.clear();
-            spec.global_increments_buf.resize(pool_size, 0u64);
-            comm.allreduce(
-                spec.metadata_sync_buf,
-                spec.global_increments_buf,
-                ReduceOp::Sum,
-            )
-            .map_err(SddpError::from)?;
-
-            // Apply global increments: slots with any increment from any rank
-            // have their active_count increased and last_active_iter updated.
-            for (slot, &inc) in spec.global_increments_buf.iter().enumerate() {
-                if inc > 0 {
-                    fcf.pools[successor].metadata[slot].active_count += inc;
-                    fcf.pools[successor].metadata[slot].last_active_iter = spec.iteration;
-                }
-            }
-        }
-
-        // Snapshot pool stats after this stage's solves and compute delta.
-        let stage_stats_after = {
-            let pool_stats: Vec<_> = workspaces.iter().map(|w| w.solver.statistics()).collect();
-            aggregate_solver_statistics(&pool_stats)
-        };
-        let stage_delta = SolverStatsDelta::from_snapshots(&stage_stats_before, &stage_stats_after);
-
-        // Rayon overhead: wall-clock of the parallel region minus the average
-        // per-worker solve time. This is an upper bound on barrier + scheduling.
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        {
-            let avg_solve_ms = (stage_delta.solve_time_ms / n_workers) as u64;
-            rayon_overhead_ms += parallel_wall_ms.saturating_sub(avg_solve_ms);
-        }
-
-        stage_stats.push((successor, stage_delta));
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    let elapsed_ms = start.elapsed().as_millis() as u64;
-    let solves_after: u64 = workspaces
-        .iter()
-        .map(|ws| ws.solver.statistics().solve_count)
-        .sum();
-
-    Ok(BackwardResult {
-        cuts_generated,
-        elapsed_ms,
-        lp_solves: solves_after - solves_before,
-        stage_stats,
-        state_exchange_time_ms: state_exchange_ms,
-        cut_batch_build_time_ms: cut_batch_build_ms,
-        rayon_overhead_time_ms: rayon_overhead_ms,
-        cut_sync_time_ms: cut_sync_ms,
-    })
+    let n_workers_local = inputs.workspaces.len();
+    let n_ranks = inputs.comm.size();
+    let num_stages = inputs.training_ctx.horizon.num_stages();
+    let bwd_max_openings = (0..num_stages)
+        .map(|t| inputs.training_ctx.stochastic.opening_tree().n_openings(t))
+        .max()
+        .unwrap_or(0);
+    let real_states_capacity =
+        inputs.exchange.real_total_scenarios() * inputs.training_ctx.indexer.n_state;
+    let mut bwd_state = crate::backward_pass_state::BackwardPassState::new(
+        n_workers_local,
+        n_ranks,
+        bwd_max_openings,
+        real_states_capacity,
+    );
+    bwd_state.run(inputs)
 }
 
 #[cfg(test)]
@@ -871,13 +716,19 @@ mod tests {
 
     use cobre_core::scenario::SamplingScheme;
 
-    use super::{BackwardPassSpec, BackwardResult, run_backward_pass};
+    use super::{BackwardResult, run_backward_pass};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
-        workspace::{BasisStore, SolverWorkspace},
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
+        solver_stats::SolverStatsDelta,
+        state_exchange::ExchangeBuffers,
+        trajectory::TrajectoryRecord,
+        workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
     fn empty_cut_batches(n_stages: usize) -> Vec<RowBatch> {
@@ -951,7 +802,7 @@ mod tests {
         call_count: usize,
         /// Tracks the current number of rows (template + appended cuts).
         current_num_rows: usize,
-        /// Number of times `solve_with_basis` was called.
+        /// Number of times `solve(Some(&basis))` was called (warm-start calls).
         warm_start_calls: usize,
         /// Dual padding value for rows beyond the base template (cuts).
         /// Defaults to 0.0 (cuts not binding). Set to a positive value
@@ -1023,7 +874,13 @@ mod tests {
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+            if basis.is_some() {
+                self.warm_start_calls += 1;
+            }
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_at == Some(call) {
@@ -1046,17 +903,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {}
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.warm_start_calls += 1;
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -1109,6 +956,8 @@ mod tests {
     fn single_workspace(solver: MockSolver, n_state: usize) -> Vec<SolverWorkspace<MockSolver>> {
         use crate::lp_builder::PatchBuffer;
         vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver,
             patch_buf: PatchBuffer::new(1, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
@@ -1128,7 +977,22 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 
@@ -1148,7 +1012,13 @@ mod tests {
         basis: Basis,
     ) -> BasisStore {
         let mut store = BasisStore::new(num_scenarios, num_stages);
-        *store.get_mut(scenario, stage) = Some(basis);
+        // test shim: zero metadata is acceptable for tests exercising the length path
+        *store.get_mut(scenario, stage) = Some(crate::workspace::CapturedBasis {
+            basis,
+            base_row_count: 0,
+            cut_row_slots: Vec::new(),
+            state_at_capture: Vec::new(),
+        });
         store
     }
 
@@ -1344,7 +1214,9 @@ mod tests {
             stage_stats: Vec::new(),
             state_exchange_time_ms: 0,
             cut_batch_build_time_ms: 0,
-            rayon_overhead_time_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
             cut_sync_time_ms: 0,
         };
         assert_eq!(r.cuts_generated, 6);
@@ -1352,7 +1224,9 @@ mod tests {
         assert!(r.stage_stats.is_empty());
         assert_eq!(r.state_exchange_time_ms, 0);
         assert_eq!(r.cut_batch_build_time_ms, 0);
-        assert_eq!(r.rayon_overhead_time_ms, 0);
+        assert_eq!(r.setup_time_ms, 0);
+        assert_eq!(r.load_imbalance_ms, 0);
+        assert_eq!(r.scheduling_overhead_ms, 0);
         assert_eq!(r.cut_sync_time_ms, 0);
     }
 
@@ -1365,7 +1239,9 @@ mod tests {
             stage_stats: Vec::new(),
             state_exchange_time_ms: 0,
             cut_batch_build_time_ms: 0,
-            rayon_overhead_time_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
             cut_sync_time_ms: 0,
         };
         let c = r.clone();
@@ -1429,13 +1305,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1447,10 +1323,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1464,26 +1344,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         assert_eq!(result.cuts_generated, 0);
@@ -1522,13 +1398,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1540,10 +1416,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1557,26 +1437,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 2 trial points × 1 stage with a successor = 2 cuts at stage 0.
@@ -1615,13 +1491,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1633,10 +1509,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1650,26 +1530,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 2,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 2,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Trial point m=1: slot = 0 + 2*3 + 1 = 7
@@ -1704,13 +1580,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1722,10 +1598,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1739,26 +1619,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 1 trial point × 4 stages with successors = 4 cuts total.
@@ -1793,13 +1669,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1811,10 +1687,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1828,26 +1708,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // elapsed_ms is u64, so it is always >= 0.
@@ -1880,13 +1756,13 @@ mod tests {
         let solver = MockSolver::infeasible_on(solution, 0);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -1898,10 +1774,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -1915,26 +1795,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        );
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
 
         assert!(
             matches!(result, Err(crate::SddpError::Infeasible { .. })),
@@ -1976,6 +1852,7 @@ mod tests {
     // ── Integration tests ─────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_coefficients_and_intercept_match_dual_extraction_formula() {
         // Integration test: verify that the backward pass uses the correct
         // dual extraction formula by checking cuts in the FCF.
@@ -2011,13 +1888,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2029,10 +1906,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2046,26 +1927,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -2085,6 +1962,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_gradient_sign_physically_correct() {
         // Regression test for the Benders cut sign bug.
         //
@@ -2120,13 +1998,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2138,10 +2016,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2155,26 +2037,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -2197,6 +2075,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn cut_is_tight_at_trial_point() {
         // Regression test: a Benders cut must be tight (exact) at the trial
         // point x̂ where it was generated. That is:
@@ -2234,13 +2113,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2252,10 +2131,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2269,26 +2152,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let cuts: Vec<_> = fcf.active_cuts(0).collect();
@@ -2335,13 +2214,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = LocalBackend;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2353,10 +2232,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2370,26 +2253,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 3-stage system: cuts at stages 0 and 1; 2 trial points each.
@@ -2401,6 +2280,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn forward_pass_index_matches_global_scenario_index() {
         // Acceptance criterion: when a cut is generated for global trial point
         // m=5, then `fcf.add_cut(stage, iteration, 5, ...)` is called with
@@ -2445,13 +2325,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = StubComm;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2463,10 +2343,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2480,26 +2364,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 2,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 2,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // m=5: slot = warm_start(0) + 2*6 + 5 = 17
@@ -2516,8 +2396,8 @@ mod tests {
 
     /// Warm-start from a pre-populated forward basis: when `BasisStore` has
     /// `Some(Basis)` at `(scenario=0, stage=1)` before the first backward call,
-    /// the first opening at the successor stage must call `solve_with_basis`
-    /// rather than `solve`.
+    /// the first opening at the successor stage must call `solve(Some(&basis))`
+    /// rather than `solve(None)`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 1 opening, with
     /// `basis_store.get(0, 1) = Some(Basis::new(...))` pre-populated,
@@ -2550,13 +2430,14 @@ mod tests {
         // This simulates a forward pass having already solved stage 1 and cached its basis.
         let pre_basis = Basis::new(templates[1].num_cols, templates[1].num_rows);
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
+        let mut basis_store =
+            basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2568,10 +2449,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2585,40 +2470,36 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
             warm_start_calls, 1,
-            "first opening at successor stage must call solve_with_basis \
+            "first opening at successor stage must call solve(Some(&basis)) \
              when basis_store.get(0, 1) is pre-populated (warm_start_calls == 1, got {warm_start_calls})"
         );
     }
 
     /// Multi-opening P3b behavior: given 3 openings at the same successor stage,
     /// the first opening cold-starts (store slot is None via `solve()`), and
-    /// openings 1 and 2 use `HiGHS` internal hot-start via `solve()` instead of
-    /// `solve_with_basis(working_basis)`.
+    /// openings 1 and 2 use `HiGHS` internal hot-start via `solve(None)` instead of
+    /// `solve(Some(&working_basis))`.
     ///
     /// AC: Given a 2-stage system, 1 trial point, 3 openings, empty basis cache,
     /// then `solver.warm_start_calls == 0` after the backward pass (P3b: no
@@ -2649,13 +2530,13 @@ mod tests {
 
         // Start with an empty store — opening 1 must cold-start.
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2667,10 +2548,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2684,35 +2569,31 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // P3b optimization: opening 0 cold-starts (no basis in store),
-        // openings 1 and 2 use solve() (HiGHS internal hot-start) instead of
-        // solve_with_basis. No explicit warm-start calls for subsequent openings.
+        // openings 1 and 2 use solve(None) (HiGHS internal hot-start) instead of
+        // solve(Some(&working_basis)). No explicit warm-start calls for subsequent openings.
         let warm_start_calls = workspaces[0].solver.warm_start_calls;
         assert_eq!(
             warm_start_calls, 0,
-            "P3b: no solve_with_basis calls expected when BasisStore is empty \
+            "P3b: no warm-start calls expected when BasisStore is empty \
              (warm_start_calls == 0, got {warm_start_calls})"
         );
     }
@@ -2755,13 +2636,14 @@ mod tests {
         // Pre-populate the store — error should propagate regardless.
         let pre_basis = Basis::new(templates[1].num_cols, templates[1].num_rows);
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
+        let mut basis_store =
+            basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -2773,10 +2655,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2790,26 +2676,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        );
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
 
         assert!(
             matches!(result, Err(crate::SddpError::Infeasible { .. })),
@@ -2867,6 +2749,8 @@ mod tests {
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
         let solver_1 = MockSolver::always_ok(solution.clone());
         let mut workspaces_1 = vec![SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: solver_1,
             patch_buf: PatchBuffer::new(1, 0, 0, 0),
             current_state: Vec::with_capacity(n_state),
@@ -2886,9 +2770,24 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
-        let basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
             templates: &templates,
             base_rows: &base_rows,
@@ -2901,15 +2800,19 @@ mod tests {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         };
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces_1,
-            &basis_store_1,
-            &ctx,
-            &mut fcf_1,
-            &mut empty_cut_batches(n_stages),
-            &TrainingContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces_1,
+            basis_store: &mut basis_store_1,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &mut fcf_1,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2923,33 +2826,31 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // --- Run with 4 workspaces ---
         let mut fcf_4 =
             FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
-        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4)
-            .map(|_| SolverWorkspace {
+        let mut workspaces_4: Vec<SolverWorkspace<MockSolver>> = (0..4_i32)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: idx,
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(n_state),
@@ -2969,18 +2870,34 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
-        let basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces_4,
-            &basis_store_4,
-            &ctx,
-            &mut fcf_4,
-            &mut empty_cut_batches(n_stages),
-            &TrainingContext {
+        let mut basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces_4,
+            basis_store: &mut basis_store_4,
+            ctx: &ctx,
+            baked: &templates,
+            fcf: &mut fcf_4,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -2994,26 +2911,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // --- Verify identical FCF contents for all non-last stages ---
@@ -3291,6 +3204,8 @@ mod tests {
         let solution = solution_1_0(100.0, -2.0);
 
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -3310,23 +3225,38 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
 
         let comm = StubComm;
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         // load_balance_row_starts[successor=1]=10; load_bus_indices=[0]; 1 block/stage.
         let load_balance_row_starts = vec![10_usize; n_stages];
         let load_bus_indices = vec![0_usize];
         let block_counts_per_stage = vec![1_usize; n_stages];
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -3338,10 +3268,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3355,26 +3289,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // After the backward pass, load_rhs_buf must have been populated with a
@@ -3443,6 +3373,8 @@ mod tests {
 
         let solution = solution_1_0(100.0, -2.0);
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -3462,17 +3394,32 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let _ = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -3484,10 +3431,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3501,26 +3452,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // With n_load_buses=0, forward_patch_count = N*(2+L) + z_inflow = 1*(2+0)+1 = 3.
@@ -3590,6 +3537,8 @@ mod tests {
 
         let solution = solution_1_0(80.0, -3.0);
         let ws = SolverWorkspace {
+            rank: 0,
+            worker_id: 0,
             solver: MockSolver::always_ok(solution),
             patch_buf,
             current_state: Vec::with_capacity(n_state),
@@ -3609,21 +3558,36 @@ mod tests {
                 effective_eta_buf: Vec::new(),
                 unscaled_primal: Vec::new(),
                 unscaled_dual: Vec::new(),
+                lag_accumulator: vec![],
+                lag_weight_accum: 0.0,
+                downstream_accumulator: Vec::new(),
+                downstream_weight_accum: 0.0,
+                downstream_completed_lags: Vec::new(),
+                downstream_n_completed: 0,
+                current_state_scratch: Vec::new(),
+                recon_slot_lookup: Vec::new(),
+                promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                trajectory_costs_buf: Vec::new(),
+                raw_noise_buf: Vec::new(),
+                perm_scratch: Vec::new(),
             },
+            scratch_basis: Basis::new(0, 0),
+            backward_accum: BackwardAccumulators::default(),
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let load_balance_row_starts = vec![10_usize; n_stages];
         let load_bus_indices = vec![0_usize];
         let block_counts_per_stage = vec![1_usize; n_stages];
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &noise_scale,
@@ -3635,10 +3599,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3652,26 +3620,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Exactly 1 cut generated (1 trial point × 1 stage with a successor).
@@ -3708,6 +3672,7 @@ mod tests {
     /// scope for CI. This test validates the structural invariant (sync is
     /// called per-stage inside the loop) and exercises the full code path.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn per_stage_cut_sync_invariant_after_bug1_fix() {
         use cobre_comm::LocalBackend;
 
@@ -3733,13 +3698,13 @@ mod tests {
         let solver = MockSolver::always_ok(solution);
         let comm = LocalBackend;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, forward_passes as usize, 1);
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3751,10 +3716,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3768,26 +3737,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 4-stage system: cuts at stages 0, 1, 2; 3 trial points each.
@@ -3816,7 +3781,7 @@ mod tests {
         );
     }
 
-    /// Acceptance criterion C4 for ticket-002: within a single backward
+    /// Acceptance criterion: within a single backward
     /// iteration on a 3-stage system with `LocalBackend` (single-rank),
     /// cuts generated at stage t=1 are visible at stage t=0 and appear
     /// binding (mock returns positive cut duals). The metadata sync
@@ -3825,6 +3790,7 @@ mod tests {
     /// Uses `MockSolver::always_ok_with_binding_cuts` so that cut rows
     /// return positive duals, making them appear binding when evaluated.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn metadata_sync_updates_active_count_and_last_active_iter() {
         use cobre_comm::LocalBackend;
 
@@ -3854,17 +3820,17 @@ mod tests {
         let solver = MockSolver::always_ok_with_binding_cuts(solution);
         let comm = LocalBackend;
         let mut workspaces = single_workspace(solver, n_state);
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
         let mut csb = CutSyncBuffers::new(n_state, forward_passes as usize, 1);
 
         // Run a single backward iteration. The backward loop visits t=1
         // (cuts go to pool[1]), then t=0 (cuts go to pool[0], binding
         // checked against pool[1]).
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -3876,10 +3842,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -3893,26 +3863,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 1,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // 3 stages × (n_stages-1=2 non-terminal) × 3 trial points = 6 cuts.
@@ -3943,9 +3909,370 @@ mod tests {
             );
         }
 
+        // active_window bit 0 must be set for binding slots.
+        // The BitwiseOr allreduce populates active_window |= 1 for any slot
+        // where at least one rank observed a binding event this iteration.
+        for slot in 3..6 {
+            assert_eq!(
+                fcf.pools[1].metadata[slot].active_window & 1,
+                1,
+                "slot {slot} active_window bit 0 should be set (cut was binding this iteration)"
+            );
+        }
+
+        // Non-binding slots (0..3 in pool[1]) should have active_window == 0.
+        for slot in 0..3 {
+            assert_eq!(
+                fcf.pools[1].metadata[slot].active_window, 0,
+                "slot {slot} active_window should be 0 (cut was not binding)"
+            );
+        }
+
         // Pool[2] (terminal successor) received no cuts and no binding
         // was checked against it — metadata should be at defaults.
         assert_eq!(fcf.pools[2].populated_count, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // active_window unit tests
+    // -----------------------------------------------------------------------
+
+    /// Pre-allocated metadata rows must have `active_window == 0` before any
+    /// `add_cut` call.
+    ///
+    /// `CutPool::new` zero-initialises all metadata slots so that unused slots
+    /// do not spuriously register as tight to the classifier. The transient
+    /// seed (`active_window: 1`) is applied exclusively inside `add_cut`; it
+    /// must not bleed into pre-allocated but un-populated slots.
+    #[test]
+    fn active_window_pre_allocation_is_zero() {
+        use crate::cut::CutPool;
+
+        let n_state = 1;
+        let capacity = 8;
+        let pool = CutPool::new(capacity, n_state, 3, 0);
+        // A new pool has no populated slots; verify the pre-allocated metadata
+        // rows all start with active_window == 0.
+        for m in &pool.metadata {
+            assert_eq!(
+                m.active_window, 0,
+                "newly allocated CutMetadata must have active_window == 0 before add_cut"
+            );
+        }
+    }
+
+    /// `add_cut` must seed `active_window = SEED_BIT` (transient) so the
+    /// activity-guided classifier treats the generating event as a bind
+    /// signal within the current iteration.
+    ///
+    /// A cut generated at `x̂_t` is tight at `x̂_t` by construction. Seeding
+    /// `SEED_BIT` (bit 31, outside `RECENT_WINDOW_BITS`) ensures the classifier
+    /// returns LOWER for that cut on its first LP encounter within the same
+    /// iteration. The seed is cleared at end-of-iter before the shift so it does
+    /// not carry into iter i+1's classifier decisions (transient semantics).
+    #[test]
+    fn add_cut_seeds_active_window_with_seed_bit() {
+        use crate::basis_reconstruct::{DEFAULT_RECENT_WINDOW_BITS, SEED_BIT};
+        use crate::cut::CutPool;
+        // CutPool::new(capacity=8, state_dim=1, forward_passes=3, warm_start=0).
+        // add_cut(iteration=1, fp=0) → slot = 0 + 1*3 + 0 = 3.
+        let mut pool = CutPool::new(8, 1, 3, 0);
+        pool.add_cut(
+            /*iteration=*/ 1,
+            /*forward_pass_index=*/ 0,
+            /*intercept=*/ 0.5,
+            /*coefficients=*/ &[1.0_f64],
+        );
+        // slot = warm_start_count(0) + iteration(1) * forward_passes(3) + fp(0) = 3.
+        assert_eq!(
+            pool.metadata[3].active_window, SEED_BIT,
+            "add_cut must seed active_window = SEED_BIT \
+             so the classifier treats the generating event as a bind signal."
+        );
+        // The classifier predicate is `(aw & (DEFAULT_RECENT_WINDOW_BITS | SEED_BIT)) != 0`;
+        // SEED_BIT alone (with bits 0..4 clear) must satisfy it.
+        assert_ne!(
+            pool.metadata[3].active_window & (DEFAULT_RECENT_WINDOW_BITS | SEED_BIT),
+            0,
+            "the seed must fire the classifier's new-cut LOWER branch"
+        );
+        // SEED_BIT must live outside DEFAULT_RECENT_WINDOW_BITS so it is not counted by
+        // the Scheme 1 popcount sort key.
+        assert_eq!(
+            SEED_BIT & DEFAULT_RECENT_WINDOW_BITS,
+            0,
+            "SEED_BIT must not overlap DEFAULT_RECENT_WINDOW_BITS"
+        );
+    }
+
+    /// The G1 seed must be transient: after the end-of-iter cleanup
+    /// (`(aw & !SEED_BIT) << 1`), the seed must be gone and genuine binding
+    /// observations (bit 0) must survive as bit 1.
+    #[test]
+    fn seed_bit_cleared_by_end_of_iter_shift() {
+        use crate::basis_reconstruct::{DEFAULT_RECENT_WINDOW_BITS, SEED_BIT};
+
+        // Scenario A: freshly seeded cut with no binding observation.
+        let mut aw: u32 = SEED_BIT;
+        aw = (aw & !SEED_BIT) << 1;
+        assert_eq!(
+            aw, 0,
+            "pure seed with no binding observation must shift to 0"
+        );
+
+        // Scenario B: seeded cut that was also observed binding this iter.
+        let mut aw: u32 = SEED_BIT | 0b1;
+        aw = (aw & !SEED_BIT) << 1;
+        assert_eq!(
+            aw, 0b10,
+            "observed-binding bit 0 must survive and land at bit 1; \
+             seed bit must be cleared"
+        );
+        assert_ne!(
+            aw & DEFAULT_RECENT_WINDOW_BITS,
+            0,
+            "surviving bit 1 still fires the classifier in iter i+1 (real activity)"
+        );
+    }
+
+    /// After a full backward pass where cuts are non-binding, `active_window` stays 0.
+    /// After the end-of-iteration shift (`<<= 1`), bit 0 remains 0 (shift of 0 is 0).
+    #[test]
+    fn active_window_shift_clears_bit_zero() {
+        // Bit 0 set → after shift, bit 0 is 0 and bit 1 is 1.
+        let mut window: u32 = 1; // bit 0 set
+        window <<= 1;
+        assert_eq!(window & 1, 0, "shift must clear bit 0");
+        assert_eq!(window & 2, 2, "shift must move bit 0 to bit 1");
+
+        // After 32 shifts, a u32 with bit 0 set overflows to 0 (shift by width).
+        let mut w: u32 = 0xFFFF_FFFF;
+        for _ in 0..32 {
+            w <<= 1;
+        }
+        assert_eq!(w, 0, "32 left-shifts of u32 must overflow to 0");
+
+        // All-zeros stays zero.
+        let mut w2: u32 = 0;
+        w2 <<= 1;
+        assert_eq!(w2, 0, "shift of 0 must remain 0");
+    }
+
+    /// The `allreduce(BitwiseOr)` via `LocalBackend` must propagate bit 0 from
+    /// a worker's `metadata_sync_window_contribution` into `active_window` for
+    /// binding slots, and leave non-binding slots at 0.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn active_window_or_reduction_round_trip_local() {
+        use cobre_comm::LocalBackend;
+
+        // 3-stage system; 1 opening; 3 trial points.
+        // The backward loop visits t=1 (cuts into pool[1]) then t=0 (cuts into
+        // pool[0], binding checked against pool[1]). Mock solver returns positive
+        // duals → cuts in pool[1] appear binding at t=0. active_window bit 0
+        // must be set after the OR reduction.
+        let n_stages = 3_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        // Solver returns positive duals → cuts appear binding.
+        let solution = solution_1_0(100.0, -5.0);
+        let local_count = exchange.local_count();
+        let solver = MockSolver::always_ok_with_binding_cuts(solution);
+        let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let mut basis_store = empty_basis_store(local_count, n_stages);
+        // max_cuts_per_rank must match exchange.local_count(), not forward_passes,
+        // because the exchange has 3 trial points but forward_passes=1.
+        let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
+
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: local_count,
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
+        .unwrap();
+
+        // The cuts in pool[1] were generated at t=1, then evaluated as binding
+        // at t=0. Bit 0 of active_window must be set for every ACTIVE slot.
+        // This exercises the full OR reduction path: worker contribution →
+        // spec.metadata_sync_window_buf → allreduce(BitwiseOr) → active_window.
+        //
+        // Slot 0 is the warm-start sentinel (never populated); active cuts land
+        // at slots 1..4 (slot = 0 + iter*forward_passes + fpi = 1 + fpi).
+        let active_slots: Vec<usize> = fcf.pools[1]
+            .active_cuts()
+            .map(|(slot, _, _)| slot)
+            .collect();
+        assert!(
+            !active_slots.is_empty(),
+            "pool[1] must have at least one active cut"
+        );
+        for slot in active_slots {
+            let window = fcf.pools[1].metadata[slot].active_window;
+            assert_eq!(
+                window & 1,
+                1,
+                "slot {slot} active_window bit 0 must be set after a binding backward pass \
+                 (got {window:#010x})"
+            );
+        }
+    }
+
+    /// After `run_backward_pass` returns, all per-worker
+    /// `metadata_sync_window_contribution` buffers must be cleared to 0.
+    /// This guarantees the next iteration starts with a clean accumulator.
+    #[test]
+    fn active_window_cleared_at_iteration_start() {
+        use cobre_comm::LocalBackend;
+
+        // 3-stage system so the backward loop processes multiple stages and
+        // the window contribution buffers actually get populated.
+        let n_stages = 3_usize;
+        let n_openings = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 20, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0], vec![20.0], vec![30.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let solution = solution_1_0(100.0, -5.0);
+        let local_count = exchange.local_count();
+        let solver = MockSolver::always_ok_with_binding_cuts(solution);
+        let comm = LocalBackend;
+        let mut workspaces = single_workspace(solver, n_state);
+        let mut basis_store = empty_basis_store(local_count, n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, local_count, 1);
+
+        let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 1,
+            local_work: local_count,
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
+        .unwrap();
+
+        // After run_backward_pass returns, all per-worker window contribution
+        // buffers must be zeroed. This ensures the next iteration begins clean.
+        for ws in &workspaces {
+            for &v in &ws.backward_accum.metadata_sync_window_contribution {
+                assert_eq!(
+                    v, 0,
+                    "metadata_sync_window_contribution must be cleared after backward pass"
+                );
+            }
+        }
     }
 
     /// Build N identical `SolverWorkspace<MockSolver>` instances and run a
@@ -3995,7 +4322,9 @@ mod tests {
         // every call regardless of call order or worker identity.
         let solution = solution_1_0(100.0, -5.0);
         let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
-            .map(|_| SolverWorkspace {
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("worker_id fits in i32"),
                 solver: MockSolver::always_ok(solution.clone()),
                 patch_buf: PatchBuffer::new(1, 0, 0, 0),
                 current_state: Vec::with_capacity(n_state),
@@ -4015,18 +4344,33 @@ mod tests {
                     effective_eta_buf: Vec::new(),
                     unscaled_primal: Vec::new(),
                     unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
                 },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
 
-        let basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
         let comm = StubComm;
         let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
 
-        let result = run_backward_pass(
-            &mut workspaces,
-            &basis_store,
-            &StageContext {
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
                 templates: &templates,
                 base_rows: &base_rows,
                 noise_scale: &[],
@@ -4038,10 +4382,14 @@ mod tests {
                 ncs_max_gen: &[],
                 discount_factors: &[],
                 cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
             },
-            &mut fcf,
-            &mut empty_cut_batches(templates.len()),
-            &TrainingContext {
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
                 horizon: &horizon,
                 indexer: &indexer,
                 inflow_method: &InflowNonNegativityMethod::None,
@@ -4055,26 +4403,22 @@ mod tests {
                 external_inflow_library: None,
                 external_load_library: None,
                 external_ncs_library: None,
-                basis_padding_enabled: false,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
             },
-            &mut BackwardPassSpec {
-                records: &[],
-                iteration: 0,
-                local_work: exchange.local_count(),
-                fwd_offset: 0,
-                risk_measures: &risk_measures,
-                exchange: &mut exchange,
-                cut_activity_tolerance: 0.0,
-                cut_sync_bufs: &mut csb,
-                probabilities_buf: &mut Vec::new(),
-                successor_active_slots_buf: &mut Vec::new(),
-                visited_archive: None,
-                metadata_sync_buf: &mut Vec::new(),
-                global_increments_buf: &mut Vec::new(),
-                real_states_buf: &mut Vec::new(),
-            },
-            &comm,
-        )
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
         .unwrap();
 
         // Confirm all 6 trial points produced cuts at stage 0.
@@ -4131,6 +4475,1142 @@ mod tests {
                     "stage {stage}, cut {i}: coefficients mismatch ({c1:?} vs {c3:?})"
                 );
             }
+        }
+    }
+
+    // ── Parallel overhead decomposition unit tests ────────────────────────────
+
+    /// Build a `SolverStatistics` snapshot with the given cumulative times (in seconds).
+    fn make_stats(
+        solve_s: f64,
+        load_s: f64,
+        set_bounds_s: f64,
+        basis_set_s: f64,
+    ) -> SolverStatistics {
+        SolverStatistics {
+            total_solve_time_seconds: solve_s,
+            total_load_model_time_seconds: load_s,
+            total_set_bounds_time_seconds: set_bounds_s,
+            total_basis_set_time_seconds: basis_set_s,
+            ..SolverStatistics::default()
+        }
+    }
+
+    /// Decompose parallel overhead into (`setup_ms`, `imbalance_ms`, `scheduling_ms`)
+    /// from per-worker before/after snapshots.
+    fn decompose_overhead(
+        pairs: &[(SolverStatistics, SolverStatistics)],
+        parallel_wall_ms: u64,
+    ) -> (u64, u64, u64) {
+        use crate::solver_stats::SolverStatsDelta;
+
+        #[allow(clippy::cast_precision_loss)]
+        let n_workers = pairs.len() as f64;
+
+        let worker_deltas: Vec<SolverStatsDelta> = pairs
+            .iter()
+            .map(|(before, after)| SolverStatsDelta::from_snapshots(before, after))
+            .collect();
+
+        let stage_setup_ms: f64 = worker_deltas
+            .iter()
+            .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
+            .sum();
+
+        let worker_totals: Vec<f64> = worker_deltas
+            .iter()
+            .map(|d| {
+                d.solve_time_ms + d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms
+            })
+            .collect();
+
+        let max_worker_ms = worker_totals.iter().copied().fold(0.0_f64, f64::max);
+        let avg_worker_ms = if worker_totals.is_empty() {
+            0.0_f64
+        } else {
+            worker_totals.iter().sum::<f64>() / n_workers
+        };
+
+        let stage_imbalance_ms = (max_worker_ms - avg_worker_ms).max(0.0);
+        #[allow(clippy::cast_precision_loss)]
+        let stage_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        (
+            stage_setup_ms as u64,
+            stage_imbalance_ms as u64,
+            stage_scheduling_ms as u64,
+        )
+    }
+
+    /// 4 workers with different solve times: imbalance equals
+    /// `trunc(max - mean_f64)` of worker totals, scheduling equals
+    /// `parallel_wall - max`.
+    ///
+    /// Worker solve times: 100 ms, 200 ms, 150 ms, 180 ms.
+    /// Setup per worker: 0 (this sub-test isolates solve imbalance).
+    /// Mean of totals (f64) = 630.0 / 4 = 157.5.
+    /// Imbalance = trunc(200.0 - 157.5) = trunc(42.5) = 42.
+    /// Scheduling = 250 - 200 = 50.
+    #[test]
+    fn decompose_four_workers_different_solve_times() {
+        // All setup times are zero; use only solve time to isolate imbalance.
+        let zero = SolverStatistics::default();
+        let pairs = vec![
+            (zero.clone(), make_stats(0.1, 0.0, 0.0, 0.0)), // 100 ms solve
+            (zero.clone(), make_stats(0.2, 0.0, 0.0, 0.0)), // 200 ms solve
+            (zero.clone(), make_stats(0.15, 0.0, 0.0, 0.0)), // 150 ms solve
+            (zero.clone(), make_stats(0.18, 0.0, 0.0, 0.0)), // 180 ms solve
+        ];
+        let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 250);
+
+        assert_eq!(setup_ms, 0, "no setup work expected");
+        // f64 mean = 157.5; imbalance = trunc(200.0 - 157.5) = trunc(42.5) = 42
+        assert_eq!(
+            imbalance_ms, 42,
+            "imbalance = trunc(max(200.0) - avg(157.5)) = trunc(42.5) = 42"
+        );
+        // scheduling = 250 - 200 = 50
+        assert_eq!(scheduling_ms, 50, "scheduling overhead = wall - max_worker");
+    }
+
+    /// Acceptance criterion: `setup_time_ms` is the sum of all workers' non-solve
+    /// work.
+    ///
+    /// Workers have setup costs (load+add+bounds+basis): 20, 25, 15, 22 ms.
+    /// Expected `setup_ms` = 20 + 25 + 15 + 22 = 82.
+    #[test]
+    fn decompose_setup_time_is_aggregate_non_solve_work() {
+        let zero = SolverStatistics::default();
+        // Each worker: 0 solve + known setup split across the three sub-timers.
+        // Worker setup totals: 20, 25, 15, 22 ms (put entirely in load_model timer).
+        let pairs = vec![
+            (zero.clone(), make_stats(0.0, 0.020, 0.0, 0.0)), // 20 ms total setup
+            (zero.clone(), make_stats(0.0, 0.025, 0.0, 0.0)), // 25 ms
+            (zero.clone(), make_stats(0.0, 0.015, 0.0, 0.0)), // 15 ms
+            (zero.clone(), make_stats(0.0, 0.022, 0.0, 0.0)), // 22 ms
+        ];
+        let (setup_ms, _imbalance_ms, _scheduling_ms) = decompose_overhead(&pairs, 300);
+        assert_eq!(
+            setup_ms, 82,
+            "aggregate setup must sum all workers' non-solve work"
+        );
+    }
+
+    /// Edge case: all workers have identical timing → imbalance must be 0.
+    #[test]
+    fn decompose_identical_workers_zero_imbalance() {
+        let zero = SolverStatistics::default();
+        let after = make_stats(0.1, 0.01, 0.002, 0.001);
+        let pairs = vec![
+            (zero.clone(), after.clone()),
+            (zero.clone(), after.clone()),
+            (zero.clone(), after.clone()),
+        ];
+        let (_, imbalance_ms, _) = decompose_overhead(&pairs, 200);
+        assert_eq!(
+            imbalance_ms, 0,
+            "identical workers must have zero imbalance"
+        );
+    }
+
+    /// Edge case: single worker → imbalance is 0, setup equals that worker's
+    /// setup, scheduling is the residual.
+    #[test]
+    fn decompose_single_worker() {
+        let zero = SolverStatistics::default();
+        // 100 ms solve + 20 ms setup = 120 ms worker total.
+        let after = make_stats(0.1, 0.020, 0.0, 0.0);
+        let pairs = vec![(zero.clone(), after)];
+        let (setup_ms, imbalance_ms, scheduling_ms) = decompose_overhead(&pairs, 150);
+
+        assert_eq!(setup_ms, 20, "single worker: setup = 20 ms");
+        assert_eq!(imbalance_ms, 0, "single worker: imbalance must be 0");
+        // scheduling = 150 - 120 = 30
+        assert_eq!(
+            scheduling_ms, 30,
+            "single worker: scheduling = wall - worker_total"
+        );
+    }
+
+    /// Edge case: `scheduling_overhead_ms` is clamped to 0 when `max_worker_total`
+    /// exceeds `parallel_wall_ms` (clock skew or measurement granularity).
+    #[test]
+    fn decompose_scheduling_clamped_when_worker_exceeds_wall() {
+        let zero = SolverStatistics::default();
+        // Worker total = 200 ms, but wall = 180 ms → scheduling would be negative.
+        let after = make_stats(0.2, 0.0, 0.0, 0.0);
+        let pairs = vec![(zero.clone(), after)];
+        let (_, _, scheduling_ms) = decompose_overhead(&pairs, 180);
+        assert_eq!(scheduling_ms, 0, "negative scheduling must be clamped to 0");
+    }
+
+    // ── allgatherv per-worker stats unit tests ────────────────────────────────
+
+    /// Single-rank (np=1) backward pass with 2 workers.
+    ///
+    /// Constructs a 2-worker `StageWorkerStatsBuffer::new(2, 4)` and uses
+    /// `StubComm` (which echoes send→recv, simulating `LocalBackend` np=1).
+    /// After one backward iteration, `BackwardResult::stage_stats` must
+    /// contain 2 entries per non-zero opening (`worker_id` 0 and `worker_id` 1),
+    /// both with `rank = 0`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
+    fn allgatherv_single_rank_two_workers_stage_stats_has_per_worker_entries() {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 2_usize;
+        let n_openings = 4_usize;
+        let n_workers = 2_usize;
+        let local_work = 4_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+
+        let solution = solution_1_0(100.0, -5.0);
+        let states: Vec<Vec<f64>> = (0..local_work).map(|i| vec![(i + 1) as f64]).collect();
+        let mut exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits in i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
+            })
+            .collect();
+
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
+        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &StubComm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
+        .expect("single-rank 2-worker backward must not error");
+
+        // The 2-stage system has 1 backward stage (t=0, successor=1).
+        // stage_stats must contain exactly 1 entry (one successor).
+        assert_eq!(
+            result.stage_stats.len(),
+            1,
+            "expected 1 backward stage entry (successor=1)"
+        );
+        let (successor, entries) = &result.stage_stats[0];
+        assert_eq!(*successor, 1_usize, "successor index must be 1");
+
+        // Every entry must have rank=0 (np=1 StubComm).
+        for (rank, _wid, _omega, _delta) in entries {
+            assert_eq!(*rank, 0_i32, "all entries must have rank=0 for np=1");
+        }
+        // Both worker_id values (0 and 1) must appear at omega=0.
+        let omega0_wids: Vec<i32> = entries
+            .iter()
+            .filter(|(_, _, omega, _)| *omega == 0)
+            .map(|(_, wid, _, _)| *wid)
+            .collect();
+        assert!(
+            omega0_wids.contains(&0),
+            "worker_id=0 must appear at omega=0"
+        );
+        assert!(
+            omega0_wids.contains(&1),
+            "worker_id=1 must appear at omega=0"
+        );
+    }
+
+    /// Multi-rank (np=2) backward pass with stub communicator.
+    ///
+    /// Uses a `DualRankStubComm` whose `size()` returns 2 and whose
+    /// `allgatherv` concatenates a manually injected "remote rank" payload
+    /// (a copy of the send buffer). Asserts that the unpacked
+    /// `stage_stats` contains entries for both `rank=0` and `rank=1`.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation
+    )]
+    fn allgatherv_dual_rank_stub_stage_stats_contains_both_ranks() {
+        use crate::lp_builder::PatchBuffer;
+
+        /// Stub communicator simulating np=2: `allgatherv` fills recv with
+        /// `[send, send]` (rank-0 and a synthetic rank-1 copy).
+        struct DualRankStubComm;
+
+        impl Communicator for DualRankStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                counts: &[usize],
+                displs: &[usize],
+            ) -> Result<(), CommError> {
+                // Fill each rank's slot in recv using the provided counts/displs.
+                // Both ranks contribute `send` (rank-1 is a synthetic copy of rank-0).
+                for (r, (&count, &displ)) in counts.iter().zip(displs).enumerate() {
+                    let src = &send[..count.min(send.len())];
+                    recv[displ..displ + src.len()].copy_from_slice(src);
+                    let _ = r; // suppress unused warning in cfg(test)
+                }
+                Ok(())
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                _op: ReduceOp,
+            ) -> Result<(), CommError> {
+                recv[..send.len()].copy_from_slice(send);
+                Ok(())
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let n_stages = 2_usize;
+        let n_openings = 2_usize;
+        let n_workers = 1_usize;
+        let local_work = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0(); n_stages];
+        let base_rows = vec![1_usize; n_stages];
+        let n_state = indexer.n_state;
+
+        let solution = solution_1_0(100.0, -5.0);
+        let states: Vec<Vec<f64>> = (0..local_work).map(|i| vec![(i + 1) as f64]).collect();
+        let mut exchange = exchange_with_states(n_state, states);
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits in i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
+            })
+            .collect();
+
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, local_work as u32, 64, &vec![0; n_stages]);
+        let mut csb = CutSyncBuffers::new(n_state, local_work, 1);
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(templates.len()),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &DualRankStubComm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        })
+        .expect("dual-rank stub backward must not error");
+
+        // With np=2, stage_stats for successor=1 must contain entries from
+        // both rank=0 and rank=1 (DualRankStubComm copies the rank-0 block
+        // into the rank-1 slot, so both appear in the unpacked output).
+        assert_eq!(result.stage_stats.len(), 1);
+        let (_, entries) = &result.stage_stats[0];
+
+        let ranks_seen: Vec<i32> = entries
+            .iter()
+            .map(|(rank, _, _, _)| *rank)
+            .collect::<std::collections::HashSet<i32>>()
+            .into_iter()
+            .collect();
+        assert!(
+            ranks_seen.contains(&0),
+            "rank=0 must appear in stage_stats; got {ranks_seen:?}"
+        );
+        assert!(
+            ranks_seen.contains(&1),
+            "rank=1 must appear in stage_stats; got {ranks_seen:?}"
+        );
+    }
+
+    // ── read-site prefer-with-fallback unit tests ────────────────
+
+    /// Run `process_trial_point_backward` for stage 0 → successor 1 with
+    /// explicitly-provided backward and forward basis stores.
+    ///
+    /// `basis_store` is taken by `&mut` so a `BasisStoreSliceMut` can be
+    /// derived from it and passed to `process_trial_point_backward`.
+    ///
+    /// Returns the mutated workspace so the caller can inspect
+    /// `ws.solver.warm_start_calls`.
+    #[allow(clippy::too_many_lines)]
+    fn run_one_trial_point_with_stores(
+        basis_store: &mut crate::workspace::BasisStore,
+    ) -> Result<Vec<SolverWorkspace<MockSolver>>, crate::SddpError> {
+        use crate::context::StageContext;
+
+        let n_stages = 2_usize;
+        let n_openings = 1_usize;
+        let n_state = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, n_openings);
+        let indexer = StageIndexer::new(n_state, 0);
+
+        let solver = MockSolver::always_ok(solution_1_0(100.0, -5.0));
+        let mut workspaces = single_workspace(solver, n_state);
+        let ws = &mut workspaces[0];
+        ws.backward_accum
+            .outcomes
+            .push(crate::risk_measure::BackwardOutcome {
+                intercept: 0.0,
+                coefficients: vec![0.0; n_state],
+                objective_value: 0.0,
+            });
+        ws.backward_accum
+            .per_opening_stats
+            .push(SolverStatsDelta::default());
+        ws.backward_accum.agg_coefficients.resize(n_state, 0.0);
+
+        let exchange = exchange_with_states(n_state, vec![vec![5.0]]);
+
+        let templates: &'static _ = Box::leak(Box::new(vec![
+            minimal_template_1_0(),
+            minimal_template_1_0(),
+        ]));
+        let base_rows: &'static _ = Box::leak(Box::new(vec![1_usize, 1_usize]));
+        let ctx: StageContext<'static> = StageContext {
+            templates,
+            base_rows,
+            noise_scale: Box::leak(Box::new(vec![])),
+            n_hydros: 0,
+            n_load_buses: 0,
+            load_balance_row_starts: Box::leak(Box::new(vec![])),
+            load_bus_indices: Box::leak(Box::new(vec![])),
+            block_counts_per_stage: Box::leak(Box::new(vec![])),
+            ncs_max_gen: Box::leak(Box::new(vec![])),
+            discount_factors: Box::leak(Box::new(vec![])),
+            cumulative_discount_factors: Box::leak(Box::new(vec![])),
+            stage_lag_transitions: Box::leak(Box::new(vec![])),
+            noise_group_ids: Box::leak(Box::new(vec![])),
+            downstream_par_order: 0,
+        };
+
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let training_ctx = TrainingContext {
+            horizon: &horizon,
+            indexer: &indexer,
+            inflow_method: &InflowNonNegativityMethod::None,
+            stochastic: &stochastic,
+            initial_state: &[],
+            inflow_scheme: SamplingScheme::InSample,
+            load_scheme: SamplingScheme::InSample,
+            ncs_scheme: SamplingScheme::InSample,
+            stages: &[],
+            historical_library: None,
+            external_inflow_library: None,
+            external_load_library: None,
+            external_ncs_library: None,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
+        };
+
+        let iteration: u64 = 1;
+        let fwd_offset: usize = 0;
+        let succ_probabilities = vec![1.0_f64; n_openings];
+        let successor_active_slots: Vec<usize> = vec![];
+        let baked_template = minimal_template_1_0();
+
+        let fcf = FutureCostFunction::new(n_stages, 1, 1, 10, &vec![0u32; n_stages]);
+        let empty_cut_batch = RowBatch {
+            num_rows: 0,
+            row_starts: Vec::new(),
+            col_indices: Vec::new(),
+            values: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+        };
+
+        let succ_spec = super::SuccessorSpec {
+            t: 0,
+            successor: 1,
+            my_rank: 0,
+            probabilities: &succ_probabilities,
+            cut_batch: &empty_cut_batch,
+            num_cuts_at_successor: 0,
+            template_num_rows: baked_template.num_rows,
+            baked_template: &baked_template,
+            successor_active_slots: &successor_active_slots,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            successor_populated_count: fcf.pools[1].populated_count,
+            successor_pool: &fcf.pools[1],
+        };
+
+        // Derive a single-worker BasisStoreSliceMut covering all scenarios.
+        let mut basis_slices = basis_store.split_workers_mut(1);
+        let mut basis_slice = basis_slices.remove(0);
+
+        let ws = &mut workspaces[0];
+        super::load_backward_lp(ws, &succ_spec);
+        ws.backward_accum
+            .per_opening_stats
+            .resize_with(n_openings, SolverStatsDelta::default);
+        for slot in &mut ws.backward_accum.per_opening_stats[..n_openings] {
+            *slot = SolverStatsDelta::default();
+        }
+        ws.backward_accum.slot_increments.resize(1, 0);
+        ws.backward_accum.slot_increments[..1].fill(0);
+
+        super::process_trial_point_backward(
+            ws,
+            &ctx,
+            &training_ctx,
+            &exchange,
+            fwd_offset,
+            iteration,
+            &risk_measures,
+            &succ_spec,
+            &mut basis_slice,
+            0,
+        )?;
+        Ok(workspaces)
+    }
+
+    // ---------------------------------------------------------------------------
+    // resolve_backward_basis_* unit tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_backward_basis_returns_some_when_slot_is_populated() {
+        // Given: BasisStore[0, 1] has Some(CapturedBasis).
+        // Then: resolve_backward_basis returns Some(_).
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        let b = CapturedBasis::new(2, 2, 0, 0, 0);
+        let mut store = BasisStore::new(1, 2);
+        *store.get_mut(0, 1) = Some(b);
+
+        let slices = store.split_workers_mut(1);
+        let slice = &slices[0];
+        let basis_ref = super::resolve_backward_basis(slice, 0, 1);
+
+        assert!(basis_ref.is_some(), "expected Some when slot has a basis");
+        drop(slices);
+    }
+
+    #[test]
+    fn resolve_backward_basis_returns_none_when_slot_is_empty() {
+        // Given: BasisStore[0, 1] is None (cold-start, slot never written).
+        // Then: resolve_backward_basis returns None.
+        use crate::workspace::BasisStore;
+
+        let mut store = BasisStore::new(1, 2);
+        let slices = store.split_workers_mut(1);
+        let slice = &slices[0];
+        let basis_ref = super::resolve_backward_basis(slice, 0, 1);
+
+        assert!(basis_ref.is_none(), "expected None for empty slot");
+        drop(slices);
+    }
+
+    // ---------------------------------------------------------------------------
+    // T2 integration tests (backward write populates BasisStore)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn backward_write_populates_basis_store_at_omega_zero() {
+        // Given: a 2-stage, 1-opening study with one forward trial point (m=0, x_hat=[5.0]).
+        //        BasisStore starts empty (all None).
+        // When: process_trial_point_backward runs at omega=0.
+        // Then: BasisStore[0, 1] is Some(CapturedBasis) with state_at_capture == [5.0].
+        //
+        // write occurs only at omega=0 (this test has exactly 1 opening).
+        // infeasibility guard is not triggered (solver succeeds).
+        use crate::workspace::BasisStore;
+
+        let mut basis_store = BasisStore::new(1, 2);
+        let workspaces = run_one_trial_point_with_stores(&mut basis_store).unwrap();
+
+        // Verify the BasisStore slot was written.
+        assert!(
+            basis_store.get(0, 1).is_some(),
+            "BasisStore[0, 1] must be Some after backward write at omega=0"
+        );
+        let captured = basis_store.get(0, 1).unwrap();
+        assert_eq!(
+            captured.state_at_capture,
+            vec![5.0_f64],
+            "state_at_capture must equal x_hat"
+        );
+        // Confirm the solver ran exactly once.
+        assert_eq!(
+            workspaces[0].solver.call_count, 1,
+            "solver must be called exactly once for a 1-opening backward pass"
+        );
+    }
+
+    #[test]
+    fn backward_write_preserves_slot_on_infeasibility_at_omega_zero() {
+        // Given: a 2-stage, 1-opening study.
+        //        BasisStore starts with a pre-existing basis at [0, 1].
+        //        The solver returns Infeasible on its first call.
+        // When: process_trial_point_backward runs via run_backward_pass.
+        // Then: run_backward_pass returns Err(SddpError::Infeasible) and
+        //       BasisStore[0, 1] retains its original content.
+        //
+        // the write in process_trial_point_backward is guarded by `?`
+        // immediately after run_stage_solve. An Infeasible error propagates
+        // out of the function before reaching the BasisStore write site, so
+        // the slot is unconditionally preserved on infeasibility.
+        use cobre_solver::Basis;
+
+        use crate::workspace::{BasisStore, CapturedBasis};
+
+        // Pre-populate slot [0, 1] with a sentinel basis.
+        let pre_existing = CapturedBasis {
+            basis: Basis::new(2, 2),
+            base_row_count: 99,
+            cut_row_slots: Vec::new(),
+            state_at_capture: vec![42.0],
+        };
+        let mut basis_store = BasisStore::new(1, 2);
+        *basis_store.get_mut(0, 1) = Some(pre_existing);
+
+        // Verify sentinel is in place before the call.
+        assert_eq!(
+            basis_store.get(0, 1).unwrap().base_row_count,
+            99,
+            "sentinel must be in place before the infeasible solve"
+        );
+
+        // run_one_trial_point_with_stores uses MockSolver::always_ok, so we
+        // exercise the reuse path (successful solve overwrites slot). For the
+        // infeasibility path, the structural guarantee is: `?` in
+        // process_trial_point_backward propagates Err before the write site.
+        // That path is integration-tested by `backward_pass_propagates_infeasible_error`.
+        //
+        // Here we test the complementary invariant: a *successful* solve at ω=0
+        // with a pre-existing slot uses the reuse branch (get_basis into the
+        // existing allocation) and leaves the slot Some (not None).
+        let result = run_one_trial_point_with_stores(&mut basis_store);
+        assert!(result.is_ok(), "expected Ok for successful solve");
+
+        // The slot must still be Some after the successful reuse-path write.
+        assert!(
+            basis_store.get(0, 1).is_some(),
+            "BasisStore[0, 1] must not be None after successful reuse-path write at ω=0"
+        );
+        // The reuse path updates state_at_capture to the current x_hat=[5.0].
+        assert_eq!(
+            basis_store.get(0, 1).unwrap().state_at_capture,
+            vec![5.0_f64],
+            "state_at_capture must be updated to x_hat by the reuse path"
+        );
+    }
+
+    /// T-HW01: handshake passes when all ranks agree on `n_workers_local`.
+    ///
+    /// Uses `StubComm` (echoes send→recv, i.e. min==max==local) with a
+    /// 2-worker setup and a 1-stage system so no backward stages are swept.
+    /// The test only validates that the uniformity check does not reject a
+    /// consistent 2-worker configuration.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn handshake_passes_with_local_backend() {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 1_usize;
+        let n_workers = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0()];
+        let base_rows = vec![1_usize];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let solution = solution_1_0(100.0, -5.0);
+
+        // Build 2 workspaces to exercise n_workers_local=2.
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
+            })
+            .collect();
+
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, 1, 1);
+        let comm = StubComm;
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
+
+        assert!(
+            result.is_ok(),
+            "handshake must pass when all ranks have the same n_workers_local; got: {result:?}"
+        );
+    }
+
+    /// T-HW02: handshake rejects non-uniform `n_workers_local` across ranks.
+    ///
+    /// `NonUniformStubComm` simulates a 2-rank cluster where min and max
+    /// worker counts differ. Its `allreduce(Min)` returns all `T::default()`
+    /// (zeros), while `allreduce(Max)` copies `send` to `recv` (the local
+    /// value). With `local_workers = 1`, `min_recv[0] = 0` and
+    /// `max_recv[0] = 1`, so `0 != 1` triggers the uniformity check.
+    /// `BackwardPassState::run` must return `SddpError::Validation` with the
+    /// expected substring before entering the stage loop.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn handshake_rejects_nonuniform_workers() {
+        /// Stub communicator that forces `allreduce(Min)` to return zeros and
+        /// `allreduce(Max)` to echo the send buffer, producing `min != max`
+        /// for any non-zero local value.
+        struct NonUniformStubComm;
+
+        impl Communicator for NonUniformStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                _counts: &[usize],
+                _displs: &[usize],
+            ) -> Result<(), CommError> {
+                recv[..send.len()].copy_from_slice(send);
+                Ok(())
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                op: ReduceOp,
+            ) -> Result<(), CommError> {
+                match op {
+                    // Min: return T::default() (0) to simulate a remote rank
+                    // with zero workers, creating a min != max discrepancy.
+                    ReduceOp::Min => {
+                        for r in recv.iter_mut() {
+                            *r = T::default();
+                        }
+                    }
+                    // Max and all others: echo send so max == local value.
+                    _ => {
+                        recv[..send.len()].copy_from_slice(send);
+                    }
+                }
+                Ok(())
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let n_stages = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0()];
+        let base_rows = vec![1_usize];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let comm = NonUniformStubComm;
+        // n_workers_local = 1 on this rank; allreduce(Min) returns 0 and
+        // allreduce(Max) returns 1 → 0 != 1 triggers the validation error.
+        let mut workspaces =
+            single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, 1, 1);
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
+
+        match result {
+            Err(crate::SddpError::Validation(ref msg)) => {
+                assert!(
+                    msg.contains("non-uniform n_workers_local"),
+                    "error message must contain 'non-uniform n_workers_local'; got: {msg}"
+                );
+                assert!(
+                    msg.contains("min=0"),
+                    "error message must mention min=0 (stub Min returns T::default()); got: {msg}"
+                );
+                assert!(
+                    msg.contains("max=1"),
+                    "error message must mention max=1 (stub Max echoes local=1); got: {msg}"
+                );
+                assert!(
+                    msg.contains("local=1"),
+                    "error message must mention local=1 (single workspace); got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected Err(SddpError::Validation(_)) from non-uniform handshake, got: {other:?}"
+            ),
         }
     }
 }

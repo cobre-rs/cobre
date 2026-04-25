@@ -1,36 +1,23 @@
 {
   "$defs": {
-    "AngularPruningConfig": {
-      "description": "Angular diversity pruning settings\n(`config.json → training.cut_selection.angular_pruning`).\n\nAngular pruning uses cosine similarity clustering as a computational\naccelerator for pointwise dominance verification — it is **not** a\nstandalone pruning criterion. This preserves Assumption (H2) from\nGuigues 2017 and finite convergence of the stochastic programming algorithm.\n\nAll fields are `Option` so the struct can be absent from `config.json`\nwithout causing a deserialization error.",
+    "BoundaryPolicy": {
+      "description": "Boundary-row configuration for terminal-stage FCF coupling.\n\nWhen present, the solver loads rows from a source Cobre policy\ncheckpoint and injects them as fixed boundary conditions at the\nterminal stage of the current study.",
       "properties": {
-        "check_frequency": {
-          "default": null,
-          "description": "Iterations between angular pruning runs.\n\nWhen `None`, inherits from the parent\n[`CutSelectionConfig::check_frequency`], or defaults to `5` if that\nis also `None`.\n\nMust be `> 0` when specified.",
+        "path": {
+          "description": "Path to the source policy checkpoint directory.",
+          "type": "string"
+        },
+        "source_stage": {
+          "description": "0-based stage index in the source checkpoint to load rows from.",
           "format": "uint32",
           "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "cosine_threshold": {
-          "default": null,
-          "description": "Cosine similarity threshold in `(0.0, 1.0]`.\n\nCuts whose cosine similarity exceeds this threshold are considered\ncandidates for pointwise dominance verification. Higher values make\nthe clustering more conservative (fewer candidates per cluster).\n\nDefault when enabled: `0.999`.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "enabled": {
-          "default": null,
-          "description": "Enable angular diversity pruning. When `None` or `false`, angular\npruning is disabled and the other fields are ignored.\n\nDefault: `None` (disabled).",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "integer"
         }
       },
+      "required": [
+        "path",
+        "source_stage"
+      ],
       "type": "object"
     },
     "CheckpointingConfig": {
@@ -84,16 +71,17 @@
       "type": "object"
     },
     "CutSelectionConfig": {
-      "description": "Cut selection settings (`config.json → training.cut_selection`).",
+      "description": "Row-selection settings (`config.json → training.row_selection`).",
       "properties": {
-        "angular_pruning": {
-          "$ref": "#/$defs/AngularPruningConfig",
-          "default": {
-            "check_frequency": null,
-            "cosine_threshold": null,
-            "enabled": null
-          },
-          "description": "Angular diversity pruning settings (stage 2 of the cut selection pipeline).\n\nUses cosine similarity clustering as a computational accelerator for\npointwise dominance verification. When absent from `config.json`, serde\napplies `AngularPruningConfig::default()` (all fields `None`), which\ndisables angular pruning."
+        "basis_activity_window": {
+          "default": null,
+          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `activity_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "check_frequency": {
           "default": null,
@@ -107,7 +95,7 @@
         },
         "cut_activity_tolerance": {
           "default": null,
-          "description": "Minimum dual multiplier for a cut to count as binding.",
+          "description": "Minimum dual multiplier for a row to count as binding.",
           "format": "double",
           "type": [
             "number",
@@ -125,7 +113,7 @@
         },
         "enabled": {
           "default": null,
-          "description": "Enable cut pruning.",
+          "description": "Enable row pruning.",
           "type": [
             "boolean",
             "null"
@@ -133,7 +121,7 @@
         },
         "max_active_per_stage": {
           "default": null,
-          "description": "Maximum number of active cuts per stage (stage 3 of the cut selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active cuts\nper stage after strategy selection and angular pruning have completed.\nCuts are evicted in order of staleness (`last_active_iter` ascending),\ntie-broken by usage frequency (`active_count` ascending).\nCuts generated in the current iteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
+          "description": "Maximum number of active rows per stage (stage 2 of the row-selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active rows\nper stage after strategy selection has completed. Rows are evicted in\norder of staleness (`last_active_iter` ascending), tie-broken by usage\nfrequency (`active_count` ascending). Rows generated in the current\niteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -224,7 +212,7 @@
         },
         "cuts": {
           "default": true,
-          "description": "Export cut pool (outer approximation).",
+          "description": "Export row pool (piecewise-linear envelope).",
           "type": "boolean"
         },
         "forward_detail": {
@@ -349,6 +337,18 @@
     "PolicyConfig": {
       "description": "Policy directory settings (`config.json → policy`).",
       "properties": {
+        "boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoundaryPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional boundary-row policy for terminal-stage coupling."
+        },
         "checkpointing": {
           "$ref": "#/$defs/CheckpointingConfig",
           "default": {
@@ -367,7 +367,7 @@
         },
         "path": {
           "default": "./policy",
-          "description": "Directory for policy data (cuts, states, vertices, basis).",
+          "description": "Directory for policy data (rows, states, vertices, basis).",
           "type": "string"
         },
         "validate_compatibility": {
@@ -379,7 +379,7 @@
       "type": "object"
     },
     "PolicyMode": {
-      "description": "Policy initialization mode (`config.json → policy.mode`).\n\nControls whether the training phase starts from scratch, warm-starts from\na prior policy's cuts, or resumes a checkpointed training run.",
+      "description": "Policy initialization mode (`config.json → policy.mode`).\n\nControls whether the training phase starts from scratch, warm-starts from\na prior policy's rows, or resumes a checkpointed training run.",
       "oneOf": [
         {
           "const": "fresh",
@@ -388,7 +388,7 @@
         },
         {
           "const": "warm_start",
-          "description": "Load cuts from a prior policy checkpoint and continue training.",
+          "description": "Load rows from a prior policy checkpoint and continue training.",
           "type": "string"
         },
         {
@@ -446,7 +446,7 @@
       "description": "Intermediate serde type for `historical_years` in `config.json`.\n\nHandles two JSON representations via `#[serde(untagged)]`:\n- Array: `[1940, 1953, 1971]` → [`RawHistoricalYearsConfig::List`]\n- Object: `{\"from\": 1940, \"to\": 2010}` → [`RawHistoricalYearsConfig::Range`]\n\nThe `List` variant must be declared first so serde tries it before `Range`\n(an integer array is tried before an object)."
     },
     "RawScenarioSourceConfig": {
-      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nStructurally identical to `RawScenarioSource` in `stages.rs` but scoped to\n`config.json` fields (`training.scenario_source` / `simulation.scenario_source`).\nThe two types are kept separate during the transition to per-phase sampling config\n(Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.",
+      "description": "Intermediate serde type for per-class scenario source configuration in `config.json`.\n\nScoped to `config.json` fields (`training.scenario_source` /\n`simulation.scenario_source`).",
       "properties": {
         "historical_years": {
           "anyOf": [
@@ -548,7 +548,7 @@
         },
         "policy_type": {
           "default": "outer",
-          "description": "Policy representation: `\"outer\"` (cuts) or `\"inner\"` (vertices).",
+          "description": "Policy representation: `\"outer\"` (envelope rows) or `\"inner\"` (vertices).",
           "type": "string"
         },
         "scenario_source": {
@@ -687,7 +687,7 @@
       "properties": {
         "cut_formulation": {
           "default": null,
-          "description": "Cut formulation: `\"single\"` or `\"multi\"`.",
+          "description": "Row formulation: `\"single\"` or `\"multi\"`.",
           "type": [
             "string",
             "null"
@@ -696,11 +696,7 @@
         "cut_selection": {
           "$ref": "#/$defs/CutSelectionConfig",
           "default": {
-            "angular_pruning": {
-              "check_frequency": null,
-              "cosine_threshold": null,
-              "enabled": null
-            },
+            "basis_activity_window": null,
             "check_frequency": null,
             "cut_activity_tolerance": null,
             "domination_epsilon": null,
@@ -710,7 +706,7 @@
             "method": null,
             "threshold": null
           },
-          "description": "Cut selection settings."
+          "description": "Row-selection settings."
         },
         "enabled": {
           "default": true,
@@ -896,6 +892,7 @@
     "policy": {
       "$ref": "#/$defs/PolicyConfig",
       "default": {
+        "boundary": null,
         "checkpointing": {
           "compress": null,
           "enabled": null,

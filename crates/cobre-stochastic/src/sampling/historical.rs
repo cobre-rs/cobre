@@ -58,7 +58,7 @@ use crate::{
 /// # Construction
 ///
 /// Use [`HistoricalScenarioLibrary::new`], which allocates zero-filled
-/// buffers. Population is done by ticket-019.
+/// buffers.
 ///
 /// # Examples
 ///
@@ -211,7 +211,7 @@ impl HistoricalScenarioLibrary {
 
     /// Returns a mutable `n_hydros`-length slice of eta values for `(window, stage)`.
     ///
-    /// Used by the eta-standardisation pass (ticket-019) to populate the library.
+    /// Used by the eta-standardisation pass to populate the library.
     ///
     /// # Panics
     ///
@@ -260,7 +260,7 @@ impl HistoricalScenarioLibrary {
     /// Returns a mutable `max_order * n_hydros`-length slice of pre-study lag
     /// values for `window`.
     ///
-    /// Used by the library-population pass (ticket-025) to write lag values.
+    /// Used by the library-population pass to write lag values.
     #[must_use]
     #[inline]
     pub fn lag_slice_mut(&mut self, window: usize) -> &mut [f64] {
@@ -292,8 +292,7 @@ impl HistoricalScenarioLibrary {
 /// where `raw_lag[ℓ]` is the **raw historical inflow** at lag `ℓ` (BR6 —
 /// not a PAR-reconstructed value). When `σ = 0` and the observation matches
 /// the deterministic value exactly, `η = 0.0` is stored; when they disagree,
-/// `f64::NEG_INFINITY` is stored (data quality issue, caught by V2.8
-/// validation in ticket-020).
+/// `f64::NEG_INFINITY` is stored (data quality issue).
 ///
 /// The function additionally writes the `max_order` pre-study raw inflow
 /// observations into `library.lag_slice_mut(w)` in the layout
@@ -307,7 +306,7 @@ impl HistoricalScenarioLibrary {
 /// - `hydro_ids` — canonical-order hydro entity IDs (must match `par`)
 /// - `stages` — study stages (non-negative IDs) with `season_id`
 /// - `par` — precomputed PAR coefficient cache
-/// - `window_years` — valid starting years from window discovery (ticket-018)
+/// - `window_years` — valid starting years from window discovery
 /// - `season_map` — controls how observation dates outside the study range are
 ///   mapped to season IDs (same three-tier fallback as
 ///   [`discover_historical_windows`](super::window::discover_historical_windows)):
@@ -322,7 +321,7 @@ impl HistoricalScenarioLibrary {
 ///
 /// Panics in debug builds if dimension mismatches between `library`, `par`,
 /// and `stages` are detected. Does not panic for valid inputs where all
-/// windows were pre-validated by ticket-018.
+/// windows were pre-validated
 #[allow(clippy::too_many_lines)]
 pub fn standardize_historical_windows(
     library: &mut HistoricalScenarioLibrary,
@@ -475,7 +474,7 @@ pub fn standardize_historical_windows(
                 let order_h = par.order(h);
                 for (l, slot) in lag_buf.iter_mut().enumerate().take(order_h) {
                     debug_assert!(
-                        max_order + t >= l + 1,
+                        max_order + t > l,
                         "lag index underflow: t={t}, l={l}, max_order={max_order}",
                     );
                     let seq_idx = max_order + t - (l + 1);
@@ -511,8 +510,8 @@ pub fn standardize_historical_windows(
 /// Validate a [`HistoricalScenarioLibrary`] against construction inputs.
 ///
 /// This is the Tier 2 validation gate for the historical scenario library.
-/// It runs after window discovery (ticket-018) and eta standardization
-/// (ticket-019), confirming that the library is well-formed before it is
+/// It runs after window discovery and eta standardization
+/// , confirming that the library is well-formed before it is
 /// stored on `StudySetup`.
 ///
 /// Validation uses **fail-fast** semantics: the first failed check immediately
@@ -784,7 +783,7 @@ mod tests {
     // Helpers for standardize_historical_windows tests
     // -----------------------------------------------------------------------
 
-    use chrono::NaiveDate;
+    use chrono::{Datelike, NaiveDate};
     use cobre_core::{
         EntityId,
         scenario::{InflowHistoryRow, InflowModel},
@@ -1644,6 +1643,32 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Helper: quarterly_history
+    // -----------------------------------------------------------------------
+
+    /// Build a quarterly history for `hydro_id` spanning years [`from_year`, `to_year`].
+    ///
+    /// One row per quarter per year, dated on the 1st of Jan, Apr, Jul, Oct.
+    /// All `value_m3s` values default to 100.0; callers overwrite specific years
+    /// when they need distinctive per-quarter observations.
+    fn quarterly_history(
+        hydro_id: EntityId,
+        from_year: i32,
+        to_year: i32,
+    ) -> Vec<InflowHistoryRow> {
+        let quarter_months = [1u32, 4, 7, 10];
+        (from_year..=to_year)
+            .flat_map(|y| {
+                quarter_months.iter().map(move |&m| InflowHistoryRow {
+                    hydro_id,
+                    date: NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
+                    value_m3s: 100.0,
+                })
+            })
+            .collect()
+    }
+
+    // -----------------------------------------------------------------------
     // Test 8: None season_map backward compatibility
     // -----------------------------------------------------------------------
 
@@ -1678,5 +1703,138 @@ mod tests {
             (eta - expected).abs() < 1e-10,
             "None season_map backward compat: expected eta={expected}, got {eta}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 9: quarterly SeasonMap produces correctly season-aligned eta values
+    //         for 2 hydros using `standardize_historical_windows`
+    // -----------------------------------------------------------------------
+
+    /// Given a quarterly (4-season Custom) `SeasonMap` and quarterly history for
+    /// 2 hydros from 1990–2010, calling `standardize_historical_windows` with
+    /// `season_map = Some(&quarterly_sm)` must produce eta values correctly
+    /// aligned to quarterly season boundaries.
+    ///
+    /// This verifies that the primary `season_map.season_for_date()` path (tier
+    /// 2) is taken for lag observations outside the study stage date ranges, and
+    /// that the `month0()` fallback (tier 3) is NOT reached.
+    ///
+    /// Concretely: quarterly observations are dated on Jan 1 (Q1), Apr 1 (Q2),
+    /// Jul 1 (Q3), and Oct 1 (Q4). With the quarterly `SeasonMap`, these map to
+    /// season IDs 0, 1, 2, 3 respectively. If `month0()` were erroneously used,
+    /// Apr 1 → month0=3, Jul 1 → month0=6 (out of range for `n_seasons`=4) and
+    /// Oct 1 → month0=9 (out of range), so Q2/Q3/Q4 observations would be
+    /// silently dropped and eta would equal 0.0 (missing-observation fallback)
+    /// rather than the correct season-aligned value.
+    ///
+    /// Setup:
+    ///   - 2 hydros (h1 and h2), quarterly history 1990–2010 (`max_order`=0).
+    ///   - 4 quarterly stages (`season_ids` 0–3, AR(0)).
+    ///   - Distinct mean per season so each quarter's eta is independently
+    ///     verifiable.
+    ///   - Window year 2000: h1 obs (90, 110, 115, 120), h2 obs (85, 95, 105, 125).
+    ///
+    /// Expected eta (AR(0), eta = (obs - mean) / std):
+    ///   h1: Q1=(90-80)/10=1.0, Q2=(110-90)/10=2.0, Q3=(115-100)/10=1.5, Q4=(120-110)/10=1.0
+    ///   h2: Q1=(85-80)/10=0.5, Q2=(95-90)/10=0.5, Q3=(105-100)/10=0.5, Q4=(125-110)/10=1.5
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[test]
+    fn test_quarterly_standardize_historical_windows() {
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+
+        // 4 quarterly stages: Q1–Q4, season_ids 0–3, AR(0).
+        let stages: Vec<Stage> = (0..4).map(|i| make_quarterly_stage(i, i)).collect();
+
+        // Distinct mean per season (identical std=10) so quarter-alignment can
+        // be confirmed independently for each season.
+        let mean_per_season = [80.0_f64, 90.0, 100.0, 110.0];
+        let std_per_season = [10.0_f64; 4];
+
+        // Build AR(0) PAR models for both hydros (same parameters).
+        let mut models: Vec<InflowModel> = Vec::new();
+        for &hydro in &[h1, h2] {
+            for (i, &mean) in mean_per_season.iter().enumerate() {
+                models.push(InflowModel {
+                    hydro_id: hydro,
+                    stage_id: i as i32,
+                    mean_m3s: mean,
+                    std_m3s: std_per_season[i],
+                    ar_coefficients: vec![],
+                    residual_std_ratio: 1.0,
+                });
+            }
+        }
+        let par = PrecomputedPar::build(&models, &stages, &[h1, h2]).unwrap();
+
+        let sm = quarterly_season_map();
+
+        // Build quarterly history 1990–2010 for both hydros.
+        // Default value 100.0 for all observations except window year 2000,
+        // where we overwrite with distinctive per-quarter values.
+        let quarter_months = [1u32, 4, 7, 10];
+        let h1_obs_2000 = [90.0_f64, 110.0, 115.0, 120.0]; // Q1–Q4
+        let h2_obs_2000 = [85.0_f64, 95.0, 105.0, 125.0]; // Q1–Q4
+
+        let mut history: Vec<InflowHistoryRow> = quarterly_history(h1, 1990, 2010);
+        history.extend(quarterly_history(h2, 1990, 2010));
+
+        // Overwrite the 2000 observations for h1 and h2 with the test values.
+        for row in &mut history {
+            if row.date.year() == 2000 {
+                let q = quarter_months
+                    .iter()
+                    .position(|&m| m == row.date.month())
+                    .expect("date month must be a quarter month");
+                if row.hydro_id == h1 {
+                    row.value_m3s = h1_obs_2000[q];
+                } else if row.hydro_id == h2 {
+                    row.value_m3s = h2_obs_2000[q];
+                }
+            }
+        }
+
+        // Use a single window year (2000) with max_order=0 for clarity.
+        let window_years = vec![2000_i32];
+        let n_hydros = 2;
+        let n_stages = 4;
+        let mut lib =
+            HistoricalScenarioLibrary::new(1, n_stages, n_hydros, 0, window_years.clone());
+
+        standardize_historical_windows(
+            &mut lib,
+            &history,
+            &[h1, h2],
+            &stages,
+            &par,
+            &window_years,
+            Some(&sm),
+        );
+
+        // Verify eta values for the single window (w=0).
+        // h1 expected: Q1=1.0, Q2=2.0, Q3=1.5, Q4=1.0
+        let h1_expected = [1.0_f64, 2.0, 1.5, 1.0];
+        // h2 expected: Q1=0.5, Q2=0.5, Q3=0.5, Q4=1.5
+        let h2_expected = [0.5_f64, 0.5, 0.5, 1.5];
+
+        for t in 0..n_stages {
+            let eta = lib.eta_slice(0, t);
+            assert!(
+                (eta[0] - h1_expected[t]).abs() < 1e-10,
+                "h1 stage {t} (Q{}): expected eta={}, got {} — \
+                 seasonal alignment via quarterly SeasonMap must be correct",
+                t + 1,
+                h1_expected[t],
+                eta[0]
+            );
+            assert!(
+                (eta[1] - h2_expected[t]).abs() < 1e-10,
+                "h2 stage {t} (Q{}): expected eta={}, got {} — \
+                 seasonal alignment via quarterly SeasonMap must be correct",
+                t + 1,
+                h2_expected[t],
+                eta[1]
+            );
+        }
     }
 }

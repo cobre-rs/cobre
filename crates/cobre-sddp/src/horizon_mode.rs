@@ -5,7 +5,7 @@
 //! implemented; `Cyclic` horizon is deferred to a future release.
 //!
 //! Discount factors are computed from the [`PolicyGraph`](cobre_core::PolicyGraph)
-//! at setup time and stored in [`StageTemplates`](crate::StageTemplates).
+//! at setup time and stored in `StageTemplates`.
 //!
 //! ## Stage indexing convention
 //!
@@ -38,8 +38,7 @@ use crate::SddpError;
 ///
 /// A single `HorizonMode` value governs the structural topology of the entire
 /// training run. The enum is matched at each forward and backward pass stage to
-/// select the correct traversal behaviour (enum dispatch for closed variant sets,
-/// avoids `Box<dyn>`; enum dispatch for closed variant sets).
+/// select the correct traversal behaviour (enum dispatch for closed variant sets, avoiding `Box<dyn>`).
 ///
 /// ## Variants
 ///

@@ -9,21 +9,18 @@ members = [
     "crates/cobre-comm",
     "crates/cobre-sddp",
     "crates/cobre-cli",
+    "crates/cobre-mcp",
+    "crates/cobre-tui",
 ]
-# cobre-mcp and cobre-tui are todo!() stubs excluded from workspace-wide
-# operations until they have real implementations. Build explicitly with
-# `-p cobre-mcp` or `-p cobre-tui`.
 # cobre-python requires a Python interpreter with PyO3 and is built separately
 # via maturin. Excluding it from the workspace prevents cargo-dist and
 # `cargo test --workspace` from requiring a compatible Python installation.
 exclude = [
-    "crates/cobre-mcp",
     "crates/cobre-python",
-    "crates/cobre-tui",
 ]
 
 [workspace.package]
-version = "0.4.4"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.86"
 license = "Apache-2.0"
@@ -36,9 +33,21 @@ authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]
 unsafe_code = "forbid"
 missing_docs = "warn"
 
+[profile.release]
+strip = "symbols"
+
+# Opt-in profile for flamegraph/DHAT — keeps line-number debug info so samples
+# resolve to source locations. Use with `cargo build --profile profiling` or
+# `cargo flamegraph --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = "none"
+
 [profile.dist]
 inherits = "release"
 lto = "thin"
+strip = "symbols"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -46,3 +55,4 @@ pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "warn"
 panic = "warn"
+too_many_arguments = "deny"

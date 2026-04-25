@@ -191,7 +191,6 @@ main() {
     else
         log "RESULT: convergence.parquet files DIFFER across rank counts."
         log "        Floating-point non-associativity in allreduce is confirmed."
-        log "        Proceed with ticket-009 (canonical upper-bound summation)."
         exit 1
     fi
 }

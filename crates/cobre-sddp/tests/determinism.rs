@@ -39,10 +39,20 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    EntityCounts, ForwardResult, FutureCostFunction, HorizonMode, InflowNonNegativityMethod,
-    PatchBuffer, RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace,
-    StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
-    TrainingContext, simulate, sync_forward, train,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    forward::{ForwardResult, sync_forward},
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    lp_builder::PatchBuffer,
+    risk_measure::RiskMeasure,
+    simulate,
+    simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    train,
+    workspace::{SolverWorkspace, WorkspaceSizing},
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -146,7 +156,10 @@ impl SolverInterface for MockSolver3H {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         Ok(cobre_solver::SolutionView {
             objective: self.objective,
             primal: PRIMAL_3H,
@@ -157,16 +170,7 @@ impl SolverInterface for MockSolver3H {
         })
     }
 
-    fn reset(&mut self) {}
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -491,21 +495,28 @@ fn run_training(
     let comm = StubComm;
 
     let config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: n_iterations,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: None,
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: n_iterations,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(n_iterations),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            budget: None,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            warm_start_cuts: 0,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: None,
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     // Use an isolated thread pool so that tests with different workspace counts
@@ -527,6 +538,9 @@ fn run_training(
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = pool
         .install(|| {
@@ -548,11 +562,10 @@ fn run_training(
                     external_inflow_library: None,
                     external_load_library: None,
                     external_ncs_library: None,
-                    basis_padding_enabled: false,
                     stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
                 },
-                &fx.risk_measures,
-                iteration_limit(n_iterations),
                 &comm,
                 || Ok(MockSolver3H::new(100.0)),
             )
@@ -574,10 +587,11 @@ fn run_simulation(
     fx: &Fixture3H,
     fcf: &FutureCostFunction,
     n_scenarios: u32,
-) -> Vec<(u32, f64, cobre_sddp::ScenarioCategoryCosts)> {
+) -> Vec<(u32, f64, cobre_sddp::simulation::ScenarioCategoryCosts)> {
     let sim_config = SimulationConfig {
         n_scenarios,
         io_channel_capacity: 64,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
     };
     let entity_counts = EntityCounts {
         hydro_ids: vec![1, 2, 3],
@@ -592,15 +606,21 @@ fn run_simulation(
 
     // Build a workspace pool of `n_workspaces` independently allocated workspaces.
     let mut workspaces: Vec<SolverWorkspace<MockSolver3H>> = (0..n_workspaces)
-        .map(|_| {
+        .map(|idx| {
             SolverWorkspace::new(
+                0,
+                i32::try_from(idx).expect("worker_id fits in i32"),
                 MockSolver3H::new(100.0),
                 PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
                 fx.indexer.n_state,
-                fx.indexer.hydro_count,
-                fx.indexer.max_par_order,
-                0,
-                0,
+                WorkspaceSizing {
+                    hydro_count: fx.indexer.hydro_count,
+                    max_par_order: fx.indexer.max_par_order,
+                    n_load_buses: 0,
+                    max_blocks: 0,
+                    downstream_par_order: 0,
+                    ..WorkspaceSizing::default()
+                },
             )
         })
         .collect();
@@ -638,6 +658,9 @@ fn run_simulation(
                     ncs_max_gen: &[],
                     discount_factors: &[],
                     cumulative_discount_factors: &[],
+                    stage_lag_transitions: &[],
+                    noise_group_ids: &[],
+                    downstream_par_order: 0,
                 },
                 fcf,
                 &TrainingContext {
@@ -653,8 +676,9 @@ fn run_simulation(
                     external_inflow_library: None,
                     external_load_library: None,
                     external_ncs_library: None,
-                    basis_padding_enabled: false,
                     stages: &[],
+                    recent_accum_seed: &[],
+                    recent_weight_seed: 0.0,
                 },
                 &sim_config,
                 SimulationOutputSpec {
@@ -670,6 +694,7 @@ fn run_simulation(
                     hydro_productivities_per_stage: &vec![vec![1.0, 1.0, 1.0]; fx.n_stages],
                     event_sender: None,
                 },
+                None,
                 &[],
                 &comm,
             )
@@ -876,7 +901,7 @@ impl Communicator for MultiRankMockComm {
 /// ranks.
 ///
 /// This is the CI-compatible regression gate for the canonical upper bound
-/// summation fix (ticket-009). After that fix, `sync_forward` uses `allgatherv`
+/// summation fix. After that fix, `sync_forward` uses `allgatherv`
 /// to assemble a flat global cost vector in rank order, then sums it
 /// sequentially. The sequential summation order is identical regardless of how
 /// many ranks contribute (because the costs always appear in global scenario
@@ -901,7 +926,10 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS.to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &StubComm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -913,7 +941,10 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..4].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };
@@ -925,7 +956,10 @@ fn test_canonical_ub_determinism_across_rank_counts() {
             scenario_costs: ALL_COSTS[..2].to_vec(),
             elapsed_ms: 0,
             lp_solves: 0,
-            rayon_overhead_ms: 0,
+            setup_time_ms: 0,
+            load_imbalance_ms: 0,
+            scheduling_overhead_ms: 0,
+            stage_stats: Vec::new(),
         };
         sync_forward(&local, &comm, TOTAL_FWD_PASSES).unwrap()
     };

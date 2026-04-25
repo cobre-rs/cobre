@@ -1,8 +1,7 @@
-//! Postcard-serializable broadcast types for MPI communication.
+//! Postcard-serializable types for MPI broadcast.
 //!
-//! These types wrap SDDP configuration, stopping rules, cut selection,
-//! and opening tree data into postcard-compatible structs that can be
-//! broadcast from rank 0 to all ranks via `broadcast_value`.
+//! Wraps SDDP configuration, stopping rules, row-selection strategy, and opening tree
+//! data for broadcast from rank 0 to all ranks.
 
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
@@ -27,80 +26,6 @@ pub(crate) enum BroadcastStoppingMode {
     All,
 }
 
-/// Postcard-serializable cut selection strategy.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) enum BroadcastCutSelection {
-    Disabled,
-    Level1 {
-        threshold: u64,
-        check_frequency: u64,
-    },
-    Lml1 {
-        memory_window: u64,
-        check_frequency: u64,
-    },
-    Dominated {
-        threshold: f64,
-        check_frequency: u64,
-    },
-}
-
-impl BroadcastCutSelection {
-    pub(crate) fn from_strategy(strategy: Option<&CutSelectionStrategy>) -> Self {
-        match strategy {
-            None => Self::Disabled,
-            Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }) => Self::Level1 {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }) => Self::Lml1 {
-                memory_window: *memory_window,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }) => Self::Dominated {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-        }
-    }
-
-    pub(crate) fn into_strategy(self) -> Option<CutSelectionStrategy> {
-        match self {
-            Self::Disabled => None,
-            Self::Level1 {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }),
-            Self::Lml1 {
-                memory_window,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }),
-            Self::Dominated {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }),
-        }
-    }
-}
-
 /// Configuration snapshot broadcast from rank 0 to all ranks.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BroadcastConfig {
@@ -112,10 +37,10 @@ pub(crate) struct BroadcastConfig {
     pub(crate) io_channel_capacity: u32,
     pub(crate) policy_path: String,
     pub(crate) inflow_method: InflowNonNegativityMethod,
-    pub(crate) cut_selection: BroadcastCutSelection,
+    pub(crate) cut_selection: Option<CutSelectionStrategy>,
     pub(crate) cut_activity_tolerance: f64,
-    /// Optional angular-accelerated dominance pruning parameters.
-    pub(crate) angular_pruning: Option<cobre_sddp::angular_pruning::AngularPruningParams>,
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    pub(crate) basis_activity_window: u32,
     /// Whether the training phase is enabled. When `false`, all ranks skip
     /// training and proceed directly to simulation (or exit).
     pub(crate) training_enabled: bool,
@@ -123,7 +48,7 @@ pub(crate) struct BroadcastConfig {
     pub(crate) policy_mode: cobre_io::PolicyMode,
     /// Whether the visited-states archive should be allocated for export.
     pub(crate) export_states: bool,
-    /// Maximum number of active cuts per stage (hard cap on LP size).
+    /// Maximum number of active rows per stage (hard cap on LP size).
     ///
     /// `None` means no cap is enforced. Derived from
     /// `config.training.cut_selection.max_active_per_stage`.
@@ -170,8 +95,8 @@ impl BroadcastConfig {
                 // only and are not broadcastable; fold into iteration limit for
                 // non-root ranks. Warn so the user knows the rule was substituted.
                 StoppingRule::SimulationBased { .. } | StoppingRule::GracefulShutdown => {
-                    eprintln!(
-                        "warning: stopping rule not broadcastable, \
+                    tracing::warn!(
+                        "stopping rule not broadcastable, \
                          substituting IterationLimit({DEFAULT_MAX_ITERATIONS})"
                     );
                     BroadcastStoppingRule::IterationLimit {
@@ -186,7 +111,7 @@ impl BroadcastConfig {
             StoppingMode::Any => BroadcastStoppingMode::Any,
         };
 
-        let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
+        let cut_selection = params.cut_selection.clone();
 
         Ok(Self {
             seed: params.seed,
@@ -199,7 +124,7 @@ impl BroadcastConfig {
             inflow_method: params.inflow_method,
             cut_selection,
             cut_activity_tolerance: params.cut_activity_tolerance,
-            angular_pruning: params.angular_pruning,
+            basis_activity_window: params.basis_activity_window,
             training_enabled: config.training.enabled,
             policy_mode: config.policy.mode,
             export_states: config.exports.states,
@@ -212,10 +137,7 @@ impl BroadcastConfig {
 
 /// Postcard-serializable wrapper for [`OpeningTree`] broadcast.
 ///
-/// [`OpeningTree`] does not implement `serde::Serialize + Deserialize` to avoid
-/// adding a serde dependency to `cobre-stochastic`. This wrapper holds the three
-/// constituent parts (`data`, `openings_per_stage`, `dim`) that are sufficient
-/// to reconstruct the tree via [`OpeningTree::from_parts`] on all ranks.
+/// Reconstructs the tree via [`OpeningTree::from_parts`] on all ranks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BroadcastOpeningTree {
     pub(crate) data: Vec<f64>,
@@ -254,8 +176,8 @@ pub(crate) fn stopping_rules_from_broadcast(cfg: &BroadcastConfig) -> StoppingRu
 
 /// Broadcast a serializable value from rank 0 to all ranks.
 ///
-/// Serializes on rank 0, broadcasts length and bytes. Non-rank-0 deserializes.
-/// A length of 0 signals failure on rank 0, allowing all ranks to participate.
+/// Rank 0 serializes and broadcasts length + bytes; non-root ranks deserialize.
+/// Length 0 signals rank 0 failure, allowing all ranks to participate.
 ///
 /// # Errors
 ///
@@ -457,6 +379,84 @@ mod tests {
             !bcast.training_enabled,
             "training_enabled should be false when config.training.enabled is false"
         );
+    }
+
+    /// Postcard serialization round-trip for `BroadcastConfig`.
+    #[test]
+    fn broadcast_config_roundtrips_via_postcard() {
+        use cobre_core::scenario::{SamplingScheme, ScenarioSource};
+
+        use super::BroadcastConfig;
+
+        let json = r#"{
+            "training": {
+                "forward_passes": 4,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 10 }
+                ]
+            }
+        }"#;
+        let config: cobre_io::Config = serde_json::from_str(json).unwrap();
+        let original = BroadcastConfig::from_config(&config).unwrap();
+
+        let bytes = postcard::to_allocvec(&original)
+            .expect("postcard serialization of BroadcastConfig must succeed");
+        let decoded: BroadcastConfig = postcard::from_bytes(&bytes)
+            .expect("postcard deserialization of BroadcastConfig must succeed");
+
+        assert_eq!(decoded.seed, original.seed);
+        assert_eq!(decoded.seed, 42u64);
+        assert_eq!(decoded.forward_passes, original.forward_passes);
+        assert_eq!(decoded.forward_passes, 4u32);
+        assert_eq!(decoded.n_scenarios, original.n_scenarios);
+        assert_eq!(decoded.n_scenarios, 0u32);
+        assert_eq!(decoded.training_source, original.training_source);
+        let default_source = ScenarioSource::default();
+        assert_eq!(
+            decoded.training_source.inflow_scheme,
+            default_source.inflow_scheme
+        );
+        assert_eq!(
+            decoded.training_source.inflow_scheme,
+            SamplingScheme::InSample
+        );
+        assert_eq!(decoded.simulation_source, original.simulation_source);
+        assert_eq!(
+            decoded.simulation_source.inflow_scheme,
+            SamplingScheme::InSample
+        );
+    }
+
+    /// Guardrail: `BroadcastConfig` postcard bytes exclude stale field names.
+    ///
+    /// If a future serializer switches to named fields, this catches regressions.
+    #[test]
+    fn broadcast_config_wire_excludes_deleted_fields() {
+        use super::BroadcastConfig;
+
+        let json = r#"{
+            "training": {
+                "forward_passes": 4,
+                "stopping_rules": [
+                    { "type": "iteration_limit", "limit": 10 }
+                ]
+            }
+        }"#;
+        let config: cobre_io::Config = serde_json::from_str(json).unwrap();
+        let bcast = BroadcastConfig::from_config(&config).unwrap();
+        let bytes = postcard::to_allocvec(&bcast).expect("postcard serialization must succeed");
+
+        let as_string = String::from_utf8_lossy(&bytes);
+        for stale in [
+            "warm_start_basis_mode",
+            "canonical_state_strategy",
+            "basis_padding",
+        ] {
+            assert!(
+                !as_string.contains(stale),
+                "BroadcastConfig postcard bytes must not contain '{stale}'"
+            );
+        }
     }
 
     /// `BroadcastOpeningTree` wrapped in `Option` round-trips via `broadcast_value`

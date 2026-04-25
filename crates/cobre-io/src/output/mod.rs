@@ -23,15 +23,17 @@ pub mod solver_stats_writer;
 pub mod stochastic;
 pub mod training_writer;
 
-pub use convergence_reader::{ConvergenceSummary, read_convergence_summary};
+pub use convergence_reader::{
+    ConvergenceSummary, read_convergence_summary, read_initial_gap_percent,
+};
 pub use dictionary::write_dictionaries;
 pub use error::OutputError;
 pub use hydro_models::write_fpha_hyperplanes;
 pub use manifest::{
-    DistributionInfo, MetadataConfiguration, MetadataConvergence, MetadataCuts, MetadataIterations,
-    MetadataProblemDimensions, MetadataScenarios, OutputContext, SimulationMetadata,
-    TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,
-    write_simulation_metadata, write_training_metadata,
+    DistributionInfo, MetadataConfiguration, MetadataConvergence, MetadataIterations,
+    MetadataProblemDimensions, MetadataRowPool, MetadataScenarios, OutputContext,
+    SimulationMetadata, TrainingMetadata, get_hostname, now_iso8601, read_simulation_metadata,
+    read_training_metadata, write_simulation_metadata, write_training_metadata,
 };
 pub use parquet_config::ParquetWriterConfig;
 pub use provenance::write_provenance_report;
@@ -44,7 +46,7 @@ pub use stochastic::{
     write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
     write_load_seasonal_stats, write_noise_openings,
 };
-pub use training_writer::{TrainingParquetWriter, write_cut_selection_records};
+pub use training_writer::{TrainingParquetWriter, write_row_selection_records};
 
 /// One row of convergence data corresponding to a single training iteration.
 ///
@@ -69,13 +71,13 @@ pub struct IterationRecord {
     /// `None` when the lower bound is zero or negative (gap is ill-defined).
     pub gap_percent: Option<f64>,
 
-    /// Number of cuts added to the cut pool during this iteration.
+    /// Number of rows added to the row pool during this iteration.
     pub cuts_added: u32,
 
-    /// Number of cuts removed from the cut pool during this iteration.
+    /// Number of rows removed from the row pool during this iteration.
     pub cuts_removed: u32,
 
-    /// Total number of active cuts in the pool after this iteration.
+    /// Total number of active rows in the pool after this iteration.
     pub cuts_active: u32,
 
     /// Wall-clock time spent in the forward pass for this iteration (ms).
@@ -97,7 +99,7 @@ pub struct IterationRecord {
     /// Maps to `backward_wall_ms` in `training/timing/iterations.parquet`.
     pub time_backward_wall_ms: u64,
 
-    /// Wall-clock time for the cut selection phase (ms).
+    /// Wall-clock time for the row-selection phase (ms).
     ///
     /// Maps to `cut_selection_ms` in `training/timing/iterations.parquet`.
     pub time_cut_selection_ms: u64,
@@ -107,7 +109,7 @@ pub struct IterationRecord {
     /// Maps to `mpi_allreduce_ms` in `training/timing/iterations.parquet`.
     pub time_mpi_allreduce_ms: u64,
 
-    /// Wall-clock time for per-stage cut sync allgatherv (ms).
+    /// Wall-clock time for per-stage row-sync allgatherv (ms).
     ///
     /// Sub-component of the backward pass wall-clock.
     /// Maps to `cut_sync_ms` in `training/timing/iterations.parquet`.
@@ -124,25 +126,47 @@ pub struct IterationRecord {
     /// Maps to `state_exchange_ms` in `training/timing/iterations.parquet`.
     pub time_state_exchange_ms: u64,
 
-    /// Wall-clock time for cut batch assembly in the backward pass (ms).
+    /// Wall-clock time for row-batch assembly in the backward pass (ms).
     ///
     /// Sub-component of the backward pass wall-clock.
     /// Maps to `cut_batch_build_ms` in `training/timing/iterations.parquet`.
     pub time_cut_batch_build_ms: u64,
 
-    /// Estimated rayon overhead in the backward pass (ms).
+    /// Thread-pool setup time before the parallel backward pass loop began (ms).
     ///
-    /// Computed as `parallel_wall - (solve_cpu / n_workers)`. Captures load
-    /// imbalance, non-solve parallel work, and scheduling overhead.
     /// Sub-component of the backward pass wall-clock.
-    /// Maps to `bwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
-    pub time_bwd_rayon_overhead_ms: u64,
+    /// Maps to `bwd_setup_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_setup_ms: u64,
 
-    /// Estimated rayon overhead in the forward pass (ms).
+    /// Estimated load imbalance across worker threads in the backward pass (ms).
     ///
-    /// Same formula as backward. Sub-component of the forward pass wall-clock.
-    /// Maps to `fwd_rayon_overhead_ms` in `training/timing/iterations.parquet`.
-    pub time_fwd_rayon_overhead_ms: u64,
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `bwd_load_imbalance_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_load_imbalance_ms: u64,
+
+    /// Scheduling and synchronisation overhead in the backward pass (ms).
+    ///
+    /// Sub-component of the backward pass wall-clock.
+    /// Maps to `bwd_scheduling_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_bwd_scheduling_overhead_ms: u64,
+
+    /// Thread-pool setup time before the forward pass parallel loop began (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_setup_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_setup_ms: u64,
+
+    /// Estimated load imbalance across worker threads in the forward pass (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_load_imbalance_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_load_imbalance_ms: u64,
+
+    /// Scheduling and synchronisation overhead in the forward pass (ms).
+    ///
+    /// Sub-component of the forward pass wall-clock.
+    /// Maps to `fwd_scheduling_overhead_ms` in `training/timing/iterations.parquet`.
+    pub time_fwd_scheduling_overhead_ms: u64,
 
     /// Residual wall-clock time not attributed to any specific phase (ms).
     ///
@@ -161,27 +185,27 @@ pub struct IterationRecord {
     pub solve_time_ms: f64,
 }
 
-/// Summary statistics for the cut pool at the end of a training run.
+/// Summary statistics for the row pool at the end of a training run.
 ///
 /// Carried inside [`TrainingOutput`] and written to `training/timing/cut_stats.parquet`.
 #[derive(Debug, Clone)]
-pub struct CutStatistics {
-    /// Total number of cuts generated over the entire training run.
+pub struct RowPoolStatistics {
+    /// Total number of rows generated over the entire training run.
     pub total_generated: u64,
 
-    /// Number of cuts still active in the pool at the end of training.
+    /// Number of rows still active in the pool at the end of training.
     pub total_active: u64,
 
-    /// Highest number of active cuts observed at any point during training.
+    /// Highest number of active rows observed at any point during training.
     pub peak_active: u64,
 }
 
 /// One row in `training/cut_selection/iterations.parquet`.
 ///
-/// Represents per-stage cut selection statistics for a single iteration.
-/// Only populated when cut selection is enabled.
+/// Represents per-stage row-selection statistics for a single iteration.
+/// Only populated when row selection is enabled.
 #[derive(Debug, Clone)]
-pub struct CutSelectionRecord {
+pub struct RowSelectionRecord {
     /// Iteration number (1-based).
     pub iteration: u32,
     /// 0-based stage index.
@@ -196,18 +220,41 @@ pub struct CutSelectionRecord {
     pub cuts_active_after: u32,
     /// Wall-clock time for selection at this stage, in milliseconds.
     pub selection_time_ms: f64,
-    /// Cuts evicted by budget enforcement (Step 4c) at this stage.
+    /// Cuts evicted by budget enforcement (Step 4b) at this stage.
     ///
     /// `None` when budget enforcement is disabled (`max_active_per_stage` is absent).
     pub budget_evicted: Option<u32>,
-    /// Active cuts after angular dominance pruning (Step 4b).
-    ///
-    /// `None` when angular pruning is disabled.
-    pub active_after_angular: Option<u32>,
-    /// Active cuts after budget enforcement (Step 4c).
+    /// Active cuts after budget enforcement (Step 4b).
     ///
     /// `None` when budget enforcement is disabled.
     pub active_after_budget: Option<u32>,
+}
+
+/// One row in `training/timing/iterations.parquet`.
+///
+/// The timing parquet stores multiple rows per iteration:
+///
+/// - One **rank-aggregated** row per `(iteration, rank)` carrying rank-only
+///   timing columns (`worker_id = None`). Per-worker slots are `0` on this row.
+/// - One **per-worker** row per `(iteration, rank, worker_id)` carrying
+///   per-worker slots (`forward_wall_ms`, `backward_wall_ms`, `bwd_setup_ms`,
+///   `fwd_setup_ms`). Rank-only slots are `0` on these rows.
+///
+/// `SUM(col) GROUP BY iteration` across all rows recovers the
+/// single-row-per-iteration value for each of the 16 timing columns.
+#[derive(Debug, Clone)]
+pub struct WorkerTimingRecord {
+    /// Training iteration (1-based).
+    pub iteration: u32,
+    /// MPI rank that produced this row.
+    pub rank: i32,
+    /// Rayon worker index within the rank's pool, or `None` for rank-aggregated rows.
+    pub worker_id: Option<i32>,
+    /// Fixed-size timing payload matching the 16 timing columns of
+    /// `iteration_timing_schema()` (positions 3–18, after `iteration`, `rank`,
+    /// `worker_id`). Slot indices correspond to the `WORKER_TIMING_SLOT_*`
+    /// constants defined in `cobre-core`.
+    pub timings: [u64; 16],
 }
 
 /// Aggregate type carrying all training data needed for output writing.
@@ -245,14 +292,24 @@ pub struct TrainingOutput {
     /// Total elapsed wall-clock time for the entire training run (ms).
     pub total_time_ms: u64,
 
-    /// Summary cut pool statistics for the run.
-    pub cut_stats: CutStatistics,
+    /// Summary row pool statistics for the run.
+    pub cut_stats: RowPoolStatistics,
 
-    /// Per-stage cut selection records for Parquet output.
+    /// Per-stage row-selection records for Parquet output.
     ///
-    /// Empty when cut selection is disabled. When non-empty, written to
+    /// Empty when row selection is disabled. When non-empty, written to
     /// `training/cut_selection/iterations.parquet`.
-    pub cut_selection_records: Vec<CutSelectionRecord>,
+    pub cut_selection_records: Vec<RowSelectionRecord>,
+
+    /// Per-worker timing records for `training/timing/iterations.parquet`.
+    ///
+    /// Each entry is either a rank-aggregated row
+    /// (`worker_id = None`) or a per-worker row (`worker_id = Some(w)`).
+    /// Empty when timing data was not collected (e.g. single-threaded runs
+    /// without the instrumentation wired). Written in iteration-major order:
+    /// rank-aggregated row first, then per-worker rows sorted by
+    /// `(rank, worker_id)`.
+    pub worker_timing_records: Vec<WorkerTimingRecord>,
 }
 
 /// Aggregate type carrying simulation completion data for output writing.
@@ -381,7 +438,7 @@ impl SimulationOutput {
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::{write_results, TrainingOutput, CutStatistics};
+/// use cobre_io::{write_results, TrainingOutput, RowPoolStatistics};
 /// use std::path::Path;
 ///
 /// # fn main() -> Result<(), cobre_io::OutputError> {
@@ -396,12 +453,13 @@ impl SimulationOutput {
 ///     converged: true,
 ///     termination_reason: "gap tolerance reached".to_string(),
 ///     total_time_ms: 3_000,
-///     cut_stats: CutStatistics {
+///     cut_stats: RowPoolStatistics {
 ///         total_generated: 200,
 ///         total_active: 80,
 ///         peak_active: 95,
 ///     },
 ///     cut_selection_records: Vec::new(),
+///     worker_timing_records: Vec::new(),
 /// };
 /// write_results(Path::new("/tmp/out"), &training, None, system, config)?;
 /// # Ok(())
@@ -442,8 +500,12 @@ mod tests {
                 time_lower_bound_ms: 0,
                 time_state_exchange_ms: 0,
                 time_cut_batch_build_ms: 0,
-                time_bwd_rayon_overhead_ms: 0,
-                time_fwd_rayon_overhead_ms: 0,
+                time_bwd_setup_ms: 0,
+                time_bwd_load_imbalance_ms: 0,
+                time_bwd_scheduling_overhead_ms: 0,
+                time_fwd_setup_ms: 0,
+                time_fwd_load_imbalance_ms: 0,
+                time_fwd_scheduling_overhead_ms: 0,
                 time_overhead_ms: 0,
                 solve_time_ms: 0.0,
             })
@@ -457,12 +519,13 @@ mod tests {
             converged: true,
             termination_reason: "relative gap < 1%".to_string(),
             total_time_ms: 12_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 300,
                 total_active: 120,
                 peak_active: 150,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
         };
 
         assert_eq!(output.convergence_records.len(), 5);
@@ -502,8 +565,12 @@ mod tests {
             time_lower_bound_ms: 4,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_bwd_rayon_overhead_ms: 0,
-            time_fwd_rayon_overhead_ms: 0,
+            time_bwd_setup_ms: 0,
+            time_bwd_load_imbalance_ms: 0,
+            time_bwd_scheduling_overhead_ms: 0,
+            time_fwd_setup_ms: 0,
+            time_fwd_load_imbalance_ms: 0,
+            time_fwd_scheduling_overhead_ms: 0,
             // overhead = 400 - (150 + 250 + 5 + 3 + 4) = 0 (saturating)
             time_overhead_ms: 400u64.saturating_sub(150 + 250 + 5 + 3 + 4),
             solve_time_ms: 0.0,
@@ -551,8 +618,8 @@ mod tests {
     }
 
     #[test]
-    fn cut_statistics_construction() {
-        let stats = CutStatistics {
+    fn row_pool_statistics_construction() {
+        let stats = RowPoolStatistics {
             total_generated: 500,
             total_active: 200,
             peak_active: 250,

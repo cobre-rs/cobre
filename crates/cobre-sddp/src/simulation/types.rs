@@ -480,8 +480,6 @@ pub struct SimulationSummary {
     pub total_spillage_mwh: f64,
     /// Number of scenarios simulated (across all ranks).
     pub n_scenarios: u32,
-    /// Optional per-stage aggregate statistics. Present at Stage-level or Full detail level; `None` at Summary level.
-    pub stage_stats: Option<Vec<StageSummaryStats>>,
 }
 
 /// Per-category cost statistics for one cost category (SS4.2).
@@ -509,25 +507,6 @@ pub struct CategoryCostStats {
     pub frequency: f64,
 }
 
-/// Per-stage aggregate statistics (SS3.4.4).
-///
-/// Present in [`SimulationSummary::stage_stats`] when the output detail
-/// level is Stage-level or Full. Absent (`None`) at Summary detail level.
-#[derive(Debug)]
-pub struct StageSummaryStats {
-    /// Stage index (0-based).
-    pub stage_id: u32,
-
-    /// Mean total cost at this stage across all scenarios.
-    pub mean_cost: f64,
-
-    /// Mean total storage (hm³) across all hydro plants and scenarios.
-    pub mean_storage_hm3: f64,
-
-    /// Mean total generation (MW) across all sources and scenarios.
-    pub mean_generation_mw: f64,
-}
-
 const _: fn() = || {
     fn assert_send<T: Send>() {}
     assert_send::<SimulationScenarioResult>();
@@ -540,7 +519,7 @@ mod tests {
         SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,
         SimulationHydroResult, SimulationInflowLagResult, SimulationNonControllableResult,
         SimulationPumpingResult, SimulationScenarioResult, SimulationStageResult,
-        SimulationSummary, SimulationThermalResult, StageSummaryStats,
+        SimulationSummary, SimulationThermalResult,
     };
 
     #[test]
@@ -908,21 +887,6 @@ mod tests {
     }
 
     #[test]
-    fn stage_summary_stats_construction() {
-        let stats = StageSummaryStats {
-            stage_id: 3,
-            mean_cost: 100_000.0,
-            mean_storage_hm3: 750.0,
-            mean_generation_mw: 1200.0,
-        };
-
-        assert_eq!(stats.stage_id, 3);
-        assert_eq!(stats.mean_cost, 100_000.0);
-        assert_eq!(stats.mean_storage_hm3, 750.0);
-        assert_eq!(stats.mean_generation_mw, 1200.0);
-    }
-
-    #[test]
     fn simulation_summary_construction() {
         let category_stats: Vec<CategoryCostStats> = (0_i32..5)
             .map(|i| CategoryCostStats {
@@ -930,15 +894,6 @@ mod tests {
                 mean: f64::from(i) * 100.0,
                 max: f64::from(i) * 500.0,
                 frequency: 0.1 * f64::from(i),
-            })
-            .collect();
-
-        let stage_stats: Vec<StageSummaryStats> = (0_u32..12)
-            .map(|i| StageSummaryStats {
-                stage_id: i,
-                mean_cost: f64::from(i) * 1000.0,
-                mean_storage_hm3: 800.0,
-                mean_generation_mw: 1500.0,
             })
             .collect();
 
@@ -954,7 +909,6 @@ mod tests {
             total_deficit_mwh: 12_500.0,
             total_spillage_mwh: 3_200.0,
             n_scenarios: 2000,
-            stage_stats: Some(stage_stats),
         };
 
         assert_eq!(summary.mean_cost, 1_500_000.0);
@@ -968,48 +922,5 @@ mod tests {
         assert_eq!(summary.total_deficit_mwh, 12_500.0);
         assert_eq!(summary.total_spillage_mwh, 3_200.0);
         assert_eq!(summary.n_scenarios, 2000);
-        assert!(summary.stage_stats.is_some());
-        assert_eq!(summary.stage_stats.as_ref().unwrap().len(), 12);
-    }
-
-    #[test]
-    fn simulation_summary_optional_stage_stats() {
-        let summary_none = SimulationSummary {
-            mean_cost: 0.0,
-            std_cost: 0.0,
-            min_cost: 0.0,
-            max_cost: 0.0,
-            cvar: 0.0,
-            cvar_alpha: 0.95,
-            category_stats: vec![],
-            deficit_frequency: 0.0,
-            total_deficit_mwh: 0.0,
-            total_spillage_mwh: 0.0,
-            n_scenarios: 100,
-            stage_stats: None,
-        };
-        assert!(summary_none.stage_stats.is_none());
-
-        let summary_some = SimulationSummary {
-            mean_cost: 0.0,
-            std_cost: 0.0,
-            min_cost: 0.0,
-            max_cost: 0.0,
-            cvar: 0.0,
-            cvar_alpha: 0.95,
-            category_stats: vec![],
-            deficit_frequency: 0.0,
-            total_deficit_mwh: 0.0,
-            total_spillage_mwh: 0.0,
-            n_scenarios: 100,
-            stage_stats: Some(vec![StageSummaryStats {
-                stage_id: 0,
-                mean_cost: 0.0,
-                mean_storage_hm3: 0.0,
-                mean_generation_mw: 0.0,
-            }]),
-        };
-        assert!(summary_some.stage_stats.is_some());
-        assert_eq!(summary_some.stage_stats.unwrap().len(), 1);
     }
 }

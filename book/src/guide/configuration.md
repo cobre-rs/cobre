@@ -173,11 +173,11 @@ combine:
 
 Controls the optional post-training simulation phase.
 
-| Field           | Type      | Default   | Description                                                                       |
-| --------------- | --------- | --------- | --------------------------------------------------------------------------------- |
-| `enabled`       | boolean   | `false`   | Enable the simulation phase after training.                                       |
-| `num_scenarios` | integer   | `2000`    | Number of independent Monte Carlo simulation scenarios to evaluate.               |
-| `policy_type`   | `"outer"` | `"outer"` | Policy representation for simulation. `"outer"` uses the cut pool (Benders cuts). |
+| Field           | Type      | Default   | Description                                                                                    |
+| --------------- | --------- | --------- | ---------------------------------------------------------------------------------------------- |
+| `enabled`       | boolean   | `false`   | Enable the simulation phase after training.                                                    |
+| `num_scenarios` | integer   | `2000`    | Number of independent Monte Carlo simulation scenarios to evaluate.                            |
+| `policy_type`   | `"outer"` | `"outer"` | Policy representation for simulation. `"outer"` uses the piecewise-linear envelope (row pool). |
 
 When `simulation.enabled` is `false` or `num_scenarios` is `0`, the simulation
 phase is skipped entirely.
@@ -274,54 +274,42 @@ Example:
 
 ## `cut_selection`
 
-Controls the cut management pipeline for managing cut pool growth. The
-pipeline has up to three stages: strategy-based selection, angular
-diversity pruning, and budget enforcement. Cut management periodically
-scans the cut pool and deactivates cuts that are unlikely to improve the
-policy, reducing LP size without sacrificing convergence quality. For a
-detailed explanation of each stage, see
+Controls the row management pipeline for managing row pool growth. The
+pipeline has up to two stages: strategy-based selection and budget
+enforcement. Row management periodically scans the row pool and
+deactivates rows that are unlikely to improve the policy, reducing LP
+size without sacrificing convergence quality. For a detailed explanation
+of each stage, see
 [Performance Accelerators](./performance-accelerators.md#cut-management-pipeline).
 
 ### Core Fields
 
-| Field                    | Type    | Default | Description                                                                                                |
-| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `enabled`                | boolean | `false` | Enable cut pruning.                                                                                        |
-| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                 |
-| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate cuts with `active_count <= threshold`.                            |
-| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate cuts not active within this many iterations. Overrides `threshold`.    |
-| `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                   |
-| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stages 1 and 2).                                                        |
-| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a cut to count as binding.                                                     |
-| `max_active_per_stage`   | integer | `null`  | Hard cap on active cuts per stage (Stage 3 budget enforcement). `null` = no budget.                        |
-| `basis_padding`          | boolean | `false` | Enable basis-aware warm-start padding (Strategy S3). See [Basis Warm-Start](./performance-accelerators.md#basis-warm-start). |
+| Field                    | Type    | Default | Description                                                                                                                                                                                                                                                                                                                             |
+| ------------------------ | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                | boolean | `false` | Enable row pruning.                                                                                                                                                                                                                                                                                                                     |
+| `method`                 | string  | --      | Selection method: `"level1"`, `"lml1"`, or `"domination"`.                                                                                                                                                                                                                                                                              |
+| `threshold`              | integer | `0`     | Activity threshold for Level1: deactivate rows with `active_count <= threshold`.                                                                                                                                                                                                                                                        |
+| `memory_window`          | integer | `null`  | Sliding window for LML1: deactivate rows not active within this many iterations. Overrides `threshold`.                                                                                                                                                                                                                                 |
+| `domination_epsilon`     | float   | `1e-6`  | Tolerance for domination comparisons (Dominated method).                                                                                                                                                                                                                                                                                |
+| `check_frequency`        | integer | `1`     | Iterations between pruning checks (Stage 1).                                                                                                                                                                                                                                                                                            |
+| `cut_activity_tolerance` | float   | `1e-6`  | Minimum dual multiplier for a row to count as binding.                                                                                                                                                                                                                                                                                  |
+| `basis_activity_window`  | integer | `5`     | Sliding-window size (1-31 iterations) for tracking recent row binding activity. Controls the warm-start classifier: rows bound within the last `basis_activity_window` iterations are guessed tight on basis reconstruction. See [Performance Accelerators — Basis Reconstruction](./performance-accelerators.md#basis-reconstruction). |
+| `max_active_per_stage`   | integer | `null`  | Hard cap on active rows per stage (Stage 2 budget enforcement). `null` = no budget.                                                                                                                                                                                                                                                     |
 
 **Methods:**
 
-- `"level1"` -- deactivates cuts that have never been binding (cumulative
+- `"level1"` -- deactivates rows that have never been binding (cumulative
   binding count at or below `threshold`). Least aggressive; preserves
   convergence guarantee.
-- `"lml1"` -- deactivates cuts that have not been binding within a sliding
+- `"lml1"` -- deactivates rows that have not been binding within a sliding
   window of `memory_window` iterations (falls back to `threshold` if
   `memory_window` is not set).
-- `"domination"` -- deactivates cuts that are dominated at every visited
+- `"domination"` -- deactivates rows that are dominated at every visited
   forward-pass trial point. Most aggressive; requires the visited-states
   archive (always collected during training). The `domination_epsilon`
   parameter controls the tolerance for domination comparisons.
 
-### `angular_pruning`
-
-Optional second stage of the cut management pipeline. Clusters cuts by
-cosine similarity and performs within-cluster dominance verification.
-Gated by its own `check_frequency`.
-
-| Field              | Type    | Default | Description                                                         |
-| ------------------ | ------- | ------- | ------------------------------------------------------------------- |
-| `enabled`          | boolean | `false` | Enable angular diversity pruning.                                   |
-| `cosine_threshold` | float   | `0.999` | Cosine similarity threshold for clustering coefficient vectors.     |
-| `check_frequency`  | integer | `1`     | Iterations between angular pruning checks.                          |
-
-Example with all three pipeline stages:
+Example with both pipeline stages:
 
 ```json
 {
@@ -332,13 +320,7 @@ Example with all three pipeline stages:
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "angular_pruning": {
-        "enabled": true,
-        "cosine_threshold": 0.999,
-        "check_frequency": 5
-      },
-      "max_active_per_stage": 500,
-      "basis_padding": false
+      "max_active_per_stage": 500
     }
   }
 }
@@ -382,6 +364,7 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 | `path`                   | string                                   | `"./policy"` | Directory where policy data (cuts, states) is stored.                                                                                       |
 | `mode`                   | `"fresh"`, `"warm_start"`, or `"resume"` | `"fresh"`    | Initialization mode. `"fresh"` starts from scratch; `"warm_start"` loads cuts from a previous run; `"resume"` continues an interrupted run. |
 | `validate_compatibility` | boolean                                  | `true`       | When loading a policy, verify that entity counts, stage counts, and cut dimensions match the current system.                                |
+| `boundary`               | object or null                           | `null`       | Terminal boundary cut configuration for coupling with an outer model's FCF. See below.                                                      |
 
 ### `checkpointing`
 
@@ -393,6 +376,144 @@ Controls policy persistence (checkpoint saving and warm-start loading).
 | `store_basis`         | boolean | `false` | Include LP basis in checkpoints for warm-start. |
 | `compress`            | boolean | `false` | Compress checkpoint files.                      |
 
+### `boundary`
+
+Optional configuration for loading terminal-stage boundary cuts from a
+different Cobre policy checkpoint. When present, the solver loads cuts from
+the source checkpoint and injects them as fixed boundary conditions at the
+terminal stage of the current study. The imported cuts are not updated by
+training — they remain fixed throughout.
+
+This enables Cobre-to-Cobre model coupling: a monthly study produces a
+policy checkpoint, and a weekly+monthly DECOMP study loads that checkpoint's
+cuts as its terminal-stage future cost function.
+
+| Field          | Type    | Description                                                     |
+| -------------- | ------- | --------------------------------------------------------------- |
+| `path`         | string  | Path to the source policy checkpoint directory.                 |
+| `source_stage` | integer | 0-based stage index in the source checkpoint to load cuts from. |
+
+Example — load stage 2's cuts from a monthly policy as terminal boundary:
+
+```json
+{
+  "policy": {
+    "mode": "fresh",
+    "boundary": {
+      "path": "../monthly_study/policy",
+      "source_stage": 2
+    }
+  }
+}
+```
+
+See [Policy Management — Boundary Cuts](./policy-management.md#boundary-cuts)
+for a full explanation of the coupling workflow.
+
+---
+
+## Temporal Resolution
+
+Cobre does not have dedicated `config.json` fields for temporal resolution. The
+resolution of each stage is determined entirely by the date boundaries in
+`stages.json`. However, when `stages.json` defines stages at different temporal
+resolutions — for example, four weekly stages within a month followed by monthly
+stages, or monthly stages transitioning to quarterly stages — three mechanisms
+activate automatically that users should understand.
+
+### Noise Group Sharing
+
+When multiple SDDP stages share the same `season_id` within the same calendar
+period (for example, four weekly stages all assigned `season_id: 0` for
+January), they receive identical PAR noise draws. This ensures that sub-monthly
+stages present an inflow trajectory consistent with the monthly PAR model they
+were fitted from, rather than fabricating independent weekly variability that
+the historical record does not support.
+
+### Observation Aggregation
+
+When the study includes stages at different resolutions (for example, monthly
+and quarterly), Cobre automatically aggregates fine-grained historical
+observations into coarser season buckets before PAR fitting. A user supplying
+monthly `inflow_history.parquet` for a study that includes quarterly stages does
+not need to pre-aggregate the data; Cobre derives one observation per
+(entity, season, year) at the appropriate coarser resolution. Aggregating in the
+opposite direction (disaggregating coarser observations to a finer resolution)
+is not supported and will produce a validation error at case load time.
+
+### Lag Resolution Transition
+
+For studies that transition from monthly to quarterly stages, the PAR lag state
+changes resolution at the boundary. During the monthly phase, each monthly
+inflow is accumulated into a ring buffer indexed by the downstream (quarterly)
+lag. When the first quarterly stage is reached, the ring buffer contains a
+complete set of duration-weighted monthly contributions, and the lag state is
+rebuilt automatically. This transition is transparent to the LP and the cut
+representation; it introduces no additional LP variables.
+
+### Example: Weekly Stages Within a Month
+
+The following `stages.json` excerpt shows four weekly stages within January
+(stages 0-3, all with `season_id: 0`) followed by a normal monthly stage for
+February (`season_id: 1`). Stages 0-3 share the same `season_id` and will
+therefore receive identical PAR noise draws during training:
+
+```json
+[
+  {
+    "id": 0,
+    "start_date": "2024-01-01",
+    "end_date": "2024-01-08",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 1,
+    "start_date": "2024-01-08",
+    "end_date": "2024-01-15",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 2,
+    "start_date": "2024-01-15",
+    "end_date": "2024-01-22",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 3,
+    "start_date": "2024-01-22",
+    "end_date": "2024-02-01",
+    "season_id": 0,
+    "num_scenarios": 50
+  },
+  {
+    "id": 4,
+    "start_date": "2024-02-01",
+    "end_date": "2024-03-01",
+    "season_id": 1,
+    "num_scenarios": 50
+  }
+]
+```
+
+### Recommended Alternative: Weekly Blocks Within a Monthly Stage
+
+When weekly dispatch granularity is needed but true weekly-resolution noise
+data is unavailable, the recommended approach is to use a single monthly SDDP
+stage with chronological blocks rather than four separate weekly SDDP stages.
+This provides weekly LP granularity while keeping one noise realization per
+month — consistent with the data resolution — and avoids the lag-accumulation
+complications that arise with multiple independent weekly stages. See
+[Stochastic Modeling — Temporal Resolution and PAR](./stochastic-modeling.md#temporal-resolution-and-par)
+for the full explanation and a `stages.json` example of the block pattern.
+
+### See Also (Temporal Resolution)
+
+- [Stochastic Modeling — Multi-Resolution Studies](./stochastic-modeling.md#multi-resolution-studies) — detailed mechanism descriptions including the noise group precomputation algorithm, observation aggregation internals, and lag ring buffer design
+- [Stochastic Modeling — Temporal Resolution and PAR](./stochastic-modeling.md#temporal-resolution-and-par) — the honest representation principle, the recommended weekly-block pattern, and validation rules 27-31
+
 ---
 
 ## `exports`
@@ -402,7 +523,7 @@ Controls which outputs are written to the results directory.
 | Field             | Type                           | Default | Description                                                                     |
 | ----------------- | ------------------------------ | ------- | ------------------------------------------------------------------------------- |
 | `training`        | boolean                        | `true`  | Write training convergence data (Parquet).                                      |
-| `cuts`            | boolean                        | `true`  | Write the cut pool (FlatBuffers).                                               |
+| `cuts`            | boolean                        | `true`  | Write the row pool (FlatBuffers).                                               |
 | `states`          | boolean                        | `false` | Write visited forward-pass trial points to the policy checkpoint (FlatBuffers). |
 | `vertices`        | boolean                        | `true`  | Write inner approximation vertices when applicable (Parquet).                   |
 | `simulation`      | boolean                        | `true`  | Write per-entity simulation results (Parquet).                                  |
@@ -438,13 +559,7 @@ Controls which outputs are written to the results directory.
       "threshold": 0,
       "check_frequency": 5,
       "cut_activity_tolerance": 1e-6,
-      "angular_pruning": {
-        "enabled": false,
-        "cosine_threshold": 0.999,
-        "check_frequency": 5
-      },
-      "max_active_per_stage": null,
-      "basis_padding": false
+      "max_active_per_stage": null
     }
   },
   "modeling": {
@@ -498,3 +613,4 @@ and their types, see the `Config` struct in the
 - [Case Directory Format](../reference/case-format.md) — full schema for all input files
 - [Running Studies](./running-studies.md) — end-to-end workflow guide
 - [Error Codes](../reference/error-codes.md) — validation errors including `SchemaError` for config fields
+- [Stochastic Modeling — Temporal Resolution](./stochastic-modeling.md#temporal-resolution-and-par) — how stage resolution affects PAR noise sharing and validation rules

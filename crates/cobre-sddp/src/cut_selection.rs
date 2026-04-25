@@ -6,9 +6,9 @@
 //!
 //! ## Design
 //!
-//! All three methods (`should_run`, `select`, `update_activity`) are pure and
-//! infallible. Configuration parameters are validated at load time, so runtime
-//! panics from zero `check_frequency` are impossible.
+//! Both methods (`should_run`, `select`) are pure and infallible. Configuration
+//! parameters are validated at load time, so runtime panics from zero
+//! `check_frequency` are impossible.
 //!
 //! The `Dominated` variant identifies cuts that are dominated at every visited
 //! forward-pass state: if a cut is always below the best active cut minus a
@@ -49,10 +49,11 @@
 
 /// Per-cut tracking metadata for cut selection strategies.
 ///
-/// Stored alongside cut coefficients and intercepts in the pre-allocated cut
-/// pool. All fields are initialized to zero / default values when the cut
-/// slot is first populated. Updated during the backward pass via
-/// [`CutSelectionStrategy::update_activity`].
+/// Stored alongside cut coefficients and intercepts in the pre-allocated
+/// cut pool. All fields are initialised to zero / default values when the
+/// cut slot is first populated. Updated inline during the backward pass
+/// in `crate::backward_pass_state::BackwardPassState` (the function
+/// that owns the per-stage cut-binding sync step).
 #[derive(Debug, Clone)]
 pub struct CutMetadata {
     /// Iteration at which this cut was generated (1-based).
@@ -71,23 +72,40 @@ pub struct CutMetadata {
     ///
     /// Used by [`CutSelectionStrategy::Level1`]: deactivate if
     /// `active_count <= threshold`.
-    /// Initialized to 0; incremented by `update_activity` for Level1.
+    /// Initialised to 0; incremented inline by the backward pass when the
+    /// associated cut row's dual exceeds `cut_activity_tolerance`.
     pub active_count: u64,
 
     /// Most recent iteration at which this cut was binding.
     ///
     /// Used by [`CutSelectionStrategy::Lml1`]: deactivate if
     /// `current_iteration - last_active_iter > memory_window`.
-    /// Initialized to `iteration_generated`; updated by `update_activity` for
-    /// LML1.
+    /// Initialised to `iteration_generated`; updated inline by the backward
+    /// pass during the per-stage cut-binding sync.
     pub last_active_iter: u64,
 
-    /// Number of visited states at which this cut is dominated by other cuts.
+    /// Sliding-window binding-activity bitmap.
     ///
-    /// Used by [`CutSelectionStrategy::Dominated`]: deactivate if dominated
-    /// at ALL visited states. Reset to 0 when the cut is binding at any
-    /// state.
-    pub domination_count: u64,
+    /// Bit 0 = current iteration; bit `i` = iteration `current_iter - i`.
+    /// Updated to bit-0-set when the cut was binding (dual >
+    /// `cut_activity_tolerance`) during any backward solve of the current
+    /// iteration; shifted left by 1 at end-of-iteration so the next
+    /// iteration's bit 0 records fresh activity.
+    ///
+    /// Populated by the MPI `allreduce(BitwiseOr)` in the backward pass
+    /// (so any rank observing the cut binding sets bit 0 globally). Consumed
+    /// by the activity-guided basis classifier in `reconstruct_basis`.
+    ///
+    /// **Transient seed**: `add_cut` sets
+    /// [`crate::basis_reconstruct::SEED_BIT`] (bit 31, outside
+    /// `RECENT_WINDOW_BITS`) so the classifier fires LOWER on a freshly
+    /// generated cut during the same iteration's remaining backward stages —
+    /// the cut is tight at the x̂ it was derived from by construction. The
+    /// end-of-iteration logic clears `SEED_BIT` *before* the `<<= 1` shift so
+    /// the seed does **not** persist into the next iteration's basis
+    /// reconstruction. From iteration i+1 onward, only genuine binding
+    /// observations drive classification decisions.
+    pub active_window: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +139,13 @@ pub struct DeactivationSet {
 /// variant per run). All stages use the same strategy. Selection runs
 /// periodically via [`should_run`] to amortize the cost of scanning the pool.
 ///
+/// This type derives [`serde::Serialize`] and [`serde::Deserialize`] so it can
+/// be postcard-serialized directly for MPI broadcast without a wrapper enum.
+/// Variant names and field names are stable wire-format identifiers — do not
+/// rename them without a migration.
+///
 /// [`should_run`]: CutSelectionStrategy::should_run
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CutSelectionStrategy {
     /// Level-1 selection: retain any cut that has ever been binding.
     ///
@@ -162,7 +185,9 @@ pub enum CutSelectionStrategy {
     /// A cut is dominated if at every visited forward pass state, some other
     /// active cut achieves a higher (or equal within threshold) value.
     /// Computationally expensive: O(|active cuts| x |visited states|) per
-    /// stage per check.
+    /// stage per check. This is the only dominance-based variant of cut
+    /// selection in cobre-sddp; cuts are kept iff they contribute strictly
+    /// at some visited state.
     Dominated {
         /// Activity threshold epsilon. Ignored by the stub implementation.
         threshold: f64,
@@ -313,56 +338,6 @@ impl CutSelectionStrategy {
             indices,
         }
     }
-
-    /// Update tracking metadata for a cut that was binding at an LP solution.
-    ///
-    /// Called during the backward pass for every cut whose dual multiplier
-    /// exceeds the solver tolerance (`is_binding == true`). When
-    /// `is_binding == false`, the metadata is not modified.
-    ///
-    /// The update performed depends on the active strategy:
-    ///
-    /// | Strategy  | Update                                          |
-    /// |-----------|--------------------------------------------------|
-    /// | Level1    | Increments `metadata.active_count` by 1         |
-    /// | Lml1      | Sets `metadata.last_active_iter = current_iteration` |
-    /// | Dominated | Resets `metadata.domination_count` to 0          |
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use cobre_sddp::cut_selection::{CutMetadata, CutSelectionStrategy};
-    ///
-    /// let strategy = CutSelectionStrategy::Level1 { threshold: 0, check_frequency: 5 };
-    /// let mut meta = CutMetadata {
-    ///     iteration_generated: 1, forward_pass_index: 0,
-    ///     active_count: 0, last_active_iter: 1, domination_count: 0,
-    /// };
-    /// strategy.update_activity(&mut meta, true, 5);
-    /// assert_eq!(meta.active_count, 1);
-    /// ```
-    pub fn update_activity(
-        &self,
-        metadata: &mut CutMetadata,
-        is_binding: bool,
-        current_iteration: u64,
-    ) {
-        if !is_binding {
-            return;
-        }
-
-        match self {
-            Self::Level1 { .. } => {
-                metadata.active_count += 1;
-            }
-            Self::Lml1 { .. } => {
-                metadata.last_active_iter = current_iteration;
-            }
-            Self::Dominated { .. } => {
-                metadata.domination_count = 0;
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +435,7 @@ fn select_dominated(
 // Config parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a [`cobre_io::config::CutSelectionConfig`] into an optional
+/// Parse a [`cobre_io::config::RowSelectionConfig`] into an optional
 /// [`CutSelectionStrategy`].
 ///
 /// Returns `None` when disabled (default). Returns `Err` when explicitly
@@ -474,7 +449,7 @@ fn select_dominated(
 /// when the `method` string is not a recognised variant, or when
 /// `check_frequency = 0`.
 pub fn parse_cut_selection_config(
-    config: &cobre_io::config::CutSelectionConfig,
+    config: &cobre_io::config::RowSelectionConfig,
 ) -> Result<Option<CutSelectionStrategy>, String> {
     let enabled = config.enabled.unwrap_or(false);
     if !enabled {
@@ -527,15 +502,15 @@ mod tests {
     use super::parse_cut_selection_config;
     use super::{CutMetadata, CutSelectionStrategy, DeactivationSet};
     use crate::cut::CutPool;
-    use cobre_io::config::CutSelectionConfig;
+    use cobre_io::config::RowSelectionConfig;
 
-    fn make_meta(active_count: u64, last_active_iter: u64, domination_count: u64) -> CutMetadata {
+    fn make_meta(active_count: u64, last_active_iter: u64) -> CutMetadata {
         CutMetadata {
             iteration_generated: 1,
             forward_pass_index: 0,
             active_count,
             last_active_iter,
-            domination_count,
+            active_window: 0,
         }
     }
 
@@ -612,7 +587,7 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(0, 1, 0), make_meta(1, 5, 0)], &[true, true]);
+        let pool = make_pool(&[make_meta(0, 1), make_meta(1, 5)], &[true, true]);
         let deact = strategy.select(&pool, &[], 10);
         assert_eq!(
             deact.indices,
@@ -627,7 +602,7 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(3, 1, 0), make_meta(7, 5, 0)], &[true, true]);
+        let pool = make_pool(&[make_meta(3, 1), make_meta(7, 5)], &[true, true]);
         let deact = strategy.select(&pool, &[], 10);
         assert!(
             deact.indices.is_empty(),
@@ -642,7 +617,7 @@ mod tests {
             check_frequency: 5,
         };
         let pool = make_pool(
-            &[make_meta(0, 1, 0), make_meta(1, 5, 0), make_meta(2, 8, 0)],
+            &[make_meta(0, 1), make_meta(1, 5), make_meta(2, 8)],
             &[true, true, true],
         );
         let deact = strategy.select(&pool, &[], 10);
@@ -666,7 +641,7 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(0, 5, 0)], &[true]);
+        let pool = make_pool(&[make_meta(0, 5)], &[true]);
         let deact = strategy.select(&pool, &[], 20);
         assert_eq!(deact.indices, vec![0]);
     }
@@ -679,7 +654,7 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(0, 12, 0)], &[true]);
+        let pool = make_pool(&[make_meta(0, 12)], &[true]);
         let deact = strategy.select(&pool, &[], 20);
         assert!(deact.indices.is_empty());
     }
@@ -690,7 +665,7 @@ mod tests {
             memory_window: 10,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(0, 10, 0)], &[true]);
+        let pool = make_pool(&[make_meta(0, 10)], &[true]);
         let deact = strategy.select(&pool, &[], 20);
         assert!(
             deact.indices.is_empty(),
@@ -705,7 +680,7 @@ mod tests {
             check_frequency: 5,
         };
         let pool = make_pool(
-            &[make_meta(0, 5, 0), make_meta(0, 12, 0), make_meta(0, 1, 0)],
+            &[make_meta(0, 5), make_meta(0, 12), make_meta(0, 1)],
             &[true, true, true],
         );
         let deact = strategy.select(&pool, &[], 20);
@@ -720,83 +695,9 @@ mod tests {
             threshold: 0.001,
             check_frequency: 10,
         };
-        let pool = make_pool(&[make_meta(0, 1, 5), make_meta(0, 1, 10)], &[true, true]);
+        let pool = make_pool(&[make_meta(0, 1), make_meta(0, 1)], &[true, true]);
         let deact = strategy.select(&pool, &[], 20);
         assert!(deact.indices.is_empty());
-    }
-
-    #[test]
-    fn level1_update_activity_increments_active_count_when_binding() {
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 5,
-        };
-        let mut meta = make_meta(0, 1, 0);
-        strategy.update_activity(&mut meta, true, 5);
-        assert_eq!(meta.active_count, 1);
-        strategy.update_activity(&mut meta, true, 6);
-        assert_eq!(meta.active_count, 2);
-    }
-
-    #[test]
-    fn level1_update_activity_does_nothing_when_not_binding() {
-        let strategy = CutSelectionStrategy::Level1 {
-            threshold: 0,
-            check_frequency: 5,
-        };
-        let mut meta = make_meta(3, 1, 0);
-        strategy.update_activity(&mut meta, false, 5);
-        assert_eq!(meta.active_count, 3, "must not modify when not binding");
-    }
-
-    #[test]
-    fn lml1_update_activity_sets_last_active_iter_when_binding() {
-        let strategy = CutSelectionStrategy::Lml1 {
-            memory_window: 10,
-            check_frequency: 5,
-        };
-        let mut meta = make_meta(0, 1, 0);
-        strategy.update_activity(&mut meta, true, 15);
-        assert_eq!(meta.last_active_iter, 15);
-    }
-
-    #[test]
-    fn lml1_update_activity_does_nothing_when_not_binding() {
-        let strategy = CutSelectionStrategy::Lml1 {
-            memory_window: 10,
-            check_frequency: 5,
-        };
-        let mut meta = make_meta(0, 7, 0);
-        strategy.update_activity(&mut meta, false, 15);
-        assert_eq!(meta.last_active_iter, 7, "must not modify when not binding");
-    }
-
-    #[test]
-    fn dominated_update_activity_resets_domination_count_when_binding() {
-        let strategy = CutSelectionStrategy::Dominated {
-            threshold: 0.001,
-            check_frequency: 10,
-        };
-        let mut meta = make_meta(0, 1, 42);
-        strategy.update_activity(&mut meta, true, 10);
-        assert_eq!(
-            meta.domination_count, 0,
-            "domination_count must be reset when cut is binding"
-        );
-    }
-
-    #[test]
-    fn dominated_update_activity_does_nothing_when_not_binding() {
-        let strategy = CutSelectionStrategy::Dominated {
-            threshold: 0.001,
-            check_frequency: 10,
-        };
-        let mut meta = make_meta(0, 1, 42);
-        strategy.update_activity(&mut meta, false, 10);
-        assert_eq!(
-            meta.domination_count, 42,
-            "must not modify when not binding"
-        );
     }
 
     #[test]
@@ -811,7 +712,7 @@ mod tests {
                 forward_pass_index: 0,
                 active_count: 0,
                 last_active_iter: 1,
-                domination_count: 0,
+                active_window: 0,
             }],
             &[true],
         );
@@ -831,7 +732,7 @@ mod tests {
                 forward_pass_index: 0,
                 active_count: 0,
                 last_active_iter: 5,
-                domination_count: 0,
+                active_window: 0,
             }],
             &[true],
         );
@@ -845,7 +746,7 @@ mod tests {
             threshold: 0,
             check_frequency: 5,
         };
-        let pool = make_pool(&[make_meta(0, 1, 0)], &[true]);
+        let pool = make_pool(&[make_meta(0, 1)], &[true]);
         let deact = strategy.select_for_stage(&pool, &[], 10, 7);
         assert_eq!(deact.stage_index, 7);
     }
@@ -875,7 +776,7 @@ mod tests {
 
     #[test]
     fn cut_metadata_derives_debug_and_clone() {
-        let meta = make_meta(5, 10, 2);
+        let meta = make_meta(5, 10);
         let cloned = meta.clone();
         assert_eq!(cloned.active_count, 5);
         assert!(!format!("{meta:?}").is_empty());
@@ -887,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_parse_disabled_default() {
-        let cfg = CutSelectionConfig::default();
+        let cfg = RowSelectionConfig::default();
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
         assert!(
@@ -898,17 +799,16 @@ mod tests {
 
     #[test]
     fn test_parse_level1() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: Some(0),
             check_frequency: Some(5),
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -929,17 +829,16 @@ mod tests {
 
     #[test]
     fn test_parse_lml1() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("lml1".to_string()),
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -959,17 +858,16 @@ mod tests {
 
     #[test]
     fn test_parse_domination() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("domination".to_string()),
             threshold: Some(0),
             check_frequency: Some(10),
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_ok());
@@ -990,17 +888,16 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_method() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("bogus".to_string()),
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -1013,17 +910,16 @@ mod tests {
 
     #[test]
     fn test_parse_enabled_without_method() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: None,
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -1031,17 +927,16 @@ mod tests {
 
     #[test]
     fn test_parse_enabled_false_with_method_returns_none() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(false),
             method: Some("level1".to_string()),
             threshold: None,
             check_frequency: None,
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg).unwrap();
         assert!(
@@ -1052,17 +947,16 @@ mod tests {
 
     #[test]
     fn test_parse_zero_check_frequency() {
-        let cfg = CutSelectionConfig {
+        let cfg = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: None,
             check_frequency: Some(0),
             cut_activity_tolerance: None,
-            angular_pruning: cobre_io::config::AngularPruningConfig::default(),
             max_active_per_stage: None,
-            basis_padding: None,
             memory_window: None,
             domination_epsilon: None,
+            basis_activity_window: None,
         };
         let result = parse_cut_selection_config(&cfg);
         assert!(result.is_err());
@@ -1125,11 +1019,11 @@ mod tests {
         };
         let pool = make_pool(
             &[
-                make_meta(0, 1, 0),  // last_active_iter = 1
-                make_meta(0, 5, 0),  // last_active_iter = 5
-                make_meta(0, 7, 0),  // last_active_iter = 7 (boundary)
-                make_meta(0, 8, 0),  // last_active_iter = 8
-                make_meta(0, 10, 0), // last_active_iter = 10
+                make_meta(0, 1),  // last_active_iter = 1
+                make_meta(0, 5),  // last_active_iter = 5
+                make_meta(0, 7),  // last_active_iter = 7 (boundary)
+                make_meta(0, 8),  // last_active_iter = 8
+                make_meta(0, 10), // last_active_iter = 10
             ],
             &[true; 5],
         );
@@ -1160,14 +1054,14 @@ mod tests {
                     forward_pass_index: 0,
                     active_count: 0,
                     last_active_iter: 10,
-                    domination_count: 0,
+                    active_window: 0,
                 },
                 CutMetadata {
                     iteration_generated: 5, // older, zero activity
                     forward_pass_index: 0,
                     active_count: 0,
                     last_active_iter: 5,
-                    domination_count: 0,
+                    active_window: 0,
                 },
             ],
             &[true, true],
@@ -1196,7 +1090,7 @@ mod tests {
                 forward_pass_index: 0,
                 active_count: 0,
                 last_active_iter: 10,
-                domination_count: 0,
+                active_window: 0,
             }],
             &[true],
         );
@@ -1239,7 +1133,7 @@ mod tests {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: iter,
-            domination_count: 0,
+            active_window: 0,
         }
     }
 
@@ -1412,35 +1306,35 @@ mod tests {
                 forward_pass_index: 0,
                 active_count: 0,
                 last_active_iter: 1,
-                domination_count: 0,
+                active_window: 0,
             },
             CutMetadata {
                 iteration_generated: 1,
                 forward_pass_index: 1,
                 active_count: 0,
                 last_active_iter: 2,
-                domination_count: 0,
+                active_window: 0,
             },
             CutMetadata {
                 iteration_generated: 1,
                 forward_pass_index: 2,
                 active_count: 3,
                 last_active_iter: 3,
-                domination_count: 0,
+                active_window: 0,
             },
             CutMetadata {
                 iteration_generated: 1,
                 forward_pass_index: 3,
                 active_count: 5,
                 last_active_iter: 10,
-                domination_count: 0,
+                active_window: 0,
             },
             CutMetadata {
                 iteration_generated: 1,
                 forward_pass_index: 4,
                 active_count: 5,
                 last_active_iter: 10,
-                domination_count: 0,
+                active_window: 0,
             },
         ];
         let pool = make_dominated_pool(

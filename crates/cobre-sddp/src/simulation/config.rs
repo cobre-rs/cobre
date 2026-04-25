@@ -13,11 +13,12 @@
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::SimulationConfig;
+/// use cobre_sddp::simulation::SimulationConfig;
 ///
 /// let config = SimulationConfig {
 ///     n_scenarios: 500,
 ///     io_channel_capacity: 32,
+///     basis_activity_window: 5,
 /// };
 /// assert_eq!(config.n_scenarios, 500);
 /// assert_eq!(config.io_channel_capacity, 32);
@@ -41,8 +42,14 @@ pub struct SimulationConfig {
     /// Larger values increase memory usage but allow the I/O thread more
     /// headroom to absorb bursts. Default in practice is 64.
     ///
-    /// [`SimulationScenarioResult`]: crate::SimulationScenarioResult
+    /// [`SimulationScenarioResult`]: crate::simulation::SimulationScenarioResult
     pub io_channel_capacity: usize,
+
+    /// Activity-window size for the basis-reconstruction classifier (1..=31).
+    ///
+    /// Must match the value used during training. Validated at study setup time
+    /// via [`crate::StudyParams::from_config`].
+    pub basis_activity_window: u32,
 }
 
 #[cfg(test)]
@@ -54,6 +61,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 2000,
             io_channel_capacity: 64,
+            basis_activity_window: 5,
         };
         assert_eq!(config.n_scenarios, 2000);
         assert_eq!(config.io_channel_capacity, 64);
@@ -64,6 +72,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 1,
             io_channel_capacity: 1,
+            basis_activity_window: 5,
         };
         assert_eq!(config.n_scenarios, 1);
         assert_eq!(config.io_channel_capacity, 1);
@@ -74,6 +83,7 @@ mod tests {
         let config = SimulationConfig {
             n_scenarios: 100,
             io_channel_capacity: 16,
+            basis_activity_window: 5,
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

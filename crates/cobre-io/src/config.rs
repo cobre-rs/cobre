@@ -132,7 +132,7 @@ pub struct TrainingConfig {
     #[serde(default = "TrainingConfig::default_stopping_mode")]
     pub stopping_mode: String,
 
-    /// Cut formulation: `"single"` or `"multi"`.
+    /// Row formulation: `"single"` or `"multi"`.
     #[serde(default)]
     pub cut_formulation: Option<String>,
 
@@ -140,9 +140,9 @@ pub struct TrainingConfig {
     #[serde(default)]
     pub forward_pass: Option<ForwardPassConfig>,
 
-    /// Cut selection settings.
+    /// Row-selection settings.
     #[serde(default)]
-    pub cut_selection: CutSelectionConfig,
+    pub cut_selection: RowSelectionConfig,
 
     /// LP solver retry settings.
     #[serde(default)]
@@ -176,11 +176,11 @@ pub struct ForwardPassConfig {
     pub pass_type: String,
 }
 
-/// Cut selection settings (`config.json → training.cut_selection`).
+/// Row-selection settings (`config.json → training.cut_selection`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct CutSelectionConfig {
-    /// Enable cut pruning.
+pub struct RowSelectionConfig {
+    /// Enable row pruning.
     #[serde(default)]
     pub enabled: Option<bool>,
 
@@ -198,7 +198,7 @@ pub struct CutSelectionConfig {
     /// Use `memory_window` for lml1 and `domination_epsilon` for domination
     /// to avoid the integer limitation. This field is retained for backwards
     /// compatibility.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_deprecated_threshold")]
     pub threshold: Option<u32>,
 
     /// Memory window size for the `"lml1"` method (iterations).
@@ -218,84 +218,30 @@ pub struct CutSelectionConfig {
     #[serde(default)]
     pub check_frequency: Option<u32>,
 
-    /// Minimum dual multiplier for a cut to count as binding.
+    /// Minimum dual multiplier for a row to count as binding.
     #[serde(default)]
     pub cut_activity_tolerance: Option<f64>,
 
-    /// Angular diversity pruning settings (stage 2 of the cut selection pipeline).
+    /// Activity-window size for the basis-reconstruction classifier and
+    /// Scheme 1 sort popcount. Bit `i` of `activity_window` counts toward the
+    /// classifier and popcount mask when `i < basis_activity_window`.
     ///
-    /// Uses cosine similarity clustering as a computational accelerator for
-    /// pointwise dominance verification. When absent from `config.json`, serde
-    /// applies `AngularPruningConfig::default()` (all fields `None`), which
-    /// disables angular pruning.
+    /// Validated range: 1..=31. Default when absent: 5.
     #[serde(default)]
-    pub angular_pruning: AngularPruningConfig,
+    pub basis_activity_window: Option<u32>,
 
-    /// Maximum number of active cuts per stage (stage 3 of the cut selection
+    /// Maximum number of active rows per stage (stage 2 of the row-selection
     /// pipeline — hard cap on LP size).
     ///
-    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
-    /// per stage after strategy selection and angular pruning have completed.
-    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
-    /// tie-broken by usage frequency (`active_count` ascending).
-    /// Cuts generated in the current iteration are never evicted.
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active rows
+    /// per stage after strategy selection has completed. Rows are evicted in
+    /// order of staleness (`last_active_iter` ascending), tie-broken by usage
+    /// frequency (`active_count` ascending). Rows generated in the current
+    /// iteration are never evicted.
     ///
     /// When `None` (the default), no hard cap is enforced.
     #[serde(default)]
     pub max_active_per_stage: Option<u32>,
-
-    /// Enable basis padding for warm-start (Epic 05).
-    ///
-    /// When `Some(true)`, the forward pass applies informed basis status
-    /// assignment for new cut rows before warm-starting the LP solver.
-    /// This can reduce the number of simplex pivots required after each
-    /// cut addition.
-    ///
-    /// Disabled by default (`None` or `Some(false)`).
-    #[serde(default)]
-    pub basis_padding: Option<bool>,
-}
-
-/// Angular diversity pruning settings
-/// (`config.json → training.cut_selection.angular_pruning`).
-///
-/// Angular pruning uses cosine similarity clustering as a computational
-/// accelerator for pointwise dominance verification — it is **not** a
-/// standalone pruning criterion. This preserves Assumption (H2) from
-/// Guigues 2017 and finite convergence of the stochastic programming algorithm.
-///
-/// All fields are `Option` so the struct can be absent from `config.json`
-/// without causing a deserialization error.
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-#[serde(default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct AngularPruningConfig {
-    /// Enable angular diversity pruning. When `None` or `false`, angular
-    /// pruning is disabled and the other fields are ignored.
-    ///
-    /// Default: `None` (disabled).
-    #[serde(default)]
-    pub enabled: Option<bool>,
-
-    /// Cosine similarity threshold in `(0.0, 1.0]`.
-    ///
-    /// Cuts whose cosine similarity exceeds this threshold are considered
-    /// candidates for pointwise dominance verification. Higher values make
-    /// the clustering more conservative (fewer candidates per cluster).
-    ///
-    /// Default when enabled: `0.999`.
-    #[serde(default)]
-    pub cosine_threshold: Option<f64>,
-
-    /// Iterations between angular pruning runs.
-    ///
-    /// When `None`, inherits from the parent
-    /// [`CutSelectionConfig::check_frequency`], or defaults to `5` if that
-    /// is also `None`.
-    ///
-    /// Must be `> 0` when specified.
-    #[serde(default)]
-    pub check_frequency: Option<u32>,
 }
 
 /// LP solver retry settings (`config.json → training.solver`).
@@ -321,10 +267,8 @@ impl Default for TrainingSolverConfig {
 
 /// Intermediate serde type for per-class scenario source configuration in `config.json`.
 ///
-/// Structurally identical to `RawScenarioSource` in `stages.rs` but scoped to
-/// `config.json` fields (`training.scenario_source` / `simulation.scenario_source`).
-/// The two types are kept separate during the transition to per-phase sampling config
-/// (Epic 01). `RawScenarioSource` in `stages.rs` will be removed in ticket-002.
+/// Scoped to `config.json` fields (`training.scenario_source` /
+/// `simulation.scenario_source`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RawScenarioSourceConfig {
@@ -476,14 +420,14 @@ pub struct LipschitzConfig {
 /// Policy initialization mode (`config.json → policy.mode`).
 ///
 /// Controls whether the training phase starts from scratch, warm-starts from
-/// a prior policy's cuts, or resumes a checkpointed training run.
+/// a prior policy's rows, or resumes a checkpointed training run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PolicyMode {
     /// Start training from an empty future-cost function.
     Fresh,
-    /// Load cuts from a prior policy checkpoint and continue training.
+    /// Load rows from a prior policy checkpoint and continue training.
     WarmStart,
     /// Resume a previously interrupted training run from its checkpoint.
     Resume,
@@ -499,12 +443,26 @@ impl std::fmt::Display for PolicyMode {
     }
 }
 
+/// Boundary-row configuration for terminal-stage FCF coupling.
+///
+/// When present, the solver loads rows from a source Cobre policy
+/// checkpoint and injects them as fixed boundary conditions at the
+/// terminal stage of the current study.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BoundaryPolicy {
+    /// Path to the source policy checkpoint directory.
+    pub path: String,
+    /// 0-based stage index in the source checkpoint to load rows from.
+    pub source_stage: u32,
+}
+
 /// Policy directory settings (`config.json → policy`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PolicyConfig {
-    /// Directory for policy data (cuts, states, vertices, basis).
+    /// Directory for policy data (rows, states, vertices, basis).
     pub path: String,
 
     /// Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`.
@@ -515,6 +473,10 @@ pub struct PolicyConfig {
 
     /// Checkpoint settings.
     pub checkpointing: CheckpointingConfig,
+
+    /// Optional boundary-row policy for terminal-stage coupling.
+    #[serde(default)]
+    pub boundary: Option<BoundaryPolicy>,
 }
 
 impl Default for PolicyConfig {
@@ -524,6 +486,7 @@ impl Default for PolicyConfig {
             mode: PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
+            boundary: None,
         }
     }
 }
@@ -564,7 +527,7 @@ pub struct SimulationConfig {
     /// Number of simulation scenarios.
     pub num_scenarios: u32,
 
-    /// Policy representation: `"outer"` (cuts) or `"inner"` (vertices).
+    /// Policy representation: `"outer"` (envelope rows) or `"inner"` (vertices).
     pub policy_type: String,
 
     /// Directory for simulation output files.
@@ -629,6 +592,29 @@ impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
     }
 }
 
+/// Deserialize `RowSelectionConfig::threshold`, emitting a deprecation warning
+/// when a non-`None` value is present.
+///
+/// Used as the target of `#[serde(deserialize_with = ...)]` on the `threshold`
+/// field. The warning fires once per parse — i.e. once per config load — and
+/// mirrors the phrasing used for the deprecated `"fixed"` value of
+/// [`OrderSelectionMethod`].
+fn deserialize_deprecated_threshold<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<u32> = Option::deserialize(deserializer)?;
+    if value.is_some() {
+        tracing::warn!(
+            "RowSelectionConfig::threshold is deprecated and will be removed in a \
+             future release. Use `memory_window` for the \"lml1\" method and \
+             `domination_epsilon` for the \"domination\" method. Please update \
+             your config.json."
+        );
+    }
+    Ok(value)
+}
+
 /// Time series estimation settings (`config.json → estimation`).
 ///
 /// Controls automatic parameter estimation when historical inflow data is
@@ -672,56 +658,19 @@ impl Default for EstimationConfig {
 /// Export flags controlling which outputs are written to disk
 /// (`config.json → exports`).
 ///
-/// The struct uses multiple `bool` fields because each flag maps directly to a
-/// JSON field name in the `exports` section of `config.json`. A state machine
-/// would not improve clarity for a flat set of independent output toggles.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Only the two flags with active consumers are retained. Keys for removed
+/// fields (`training`, `cuts`, `vertices`, `simulation`, `forward_detail`,
+/// `backward_detail`, `compression`) are silently ignored when present in
+/// legacy `config.json` files.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExportsConfig {
-    /// Export training summary metrics.
-    pub training: bool,
-
-    /// Export cut pool (outer approximation).
-    pub cuts: bool,
-
     /// Export visited forward-pass trial points to the policy checkpoint.
     pub states: bool,
 
-    /// Export inner approximation vertices.
-    pub vertices: bool,
-
-    /// Export simulation results.
-    pub simulation: bool,
-
-    /// Export per-scenario forward-pass detail.
-    pub forward_detail: bool,
-
-    /// Export per-scenario backward-pass detail.
-    pub backward_detail: bool,
-
     /// Export stochastic preprocessing artifacts to `output/stochastic/`.
     pub stochastic: bool,
-
-    /// Compression algorithm for output files: `"zstd"`, `"lz4"`, or `"none"`.
-    pub compression: Option<String>,
-}
-
-impl Default for ExportsConfig {
-    fn default() -> Self {
-        Self {
-            training: true,
-            cuts: true,
-            states: false,
-            vertices: true,
-            simulation: true,
-            forward_detail: false,
-            backward_detail: false,
-            stochastic: false,
-            compression: None,
-        }
-    }
 }
 
 /// Load and validate `config.json` from `path`.
@@ -1066,8 +1015,6 @@ mod tests {
         assert_eq!(cfg.policy.mode, PolicyMode::Fresh);
         assert_eq!(cfg.policy.path, "./policy");
         assert!(cfg.policy.validate_compatibility);
-        assert!(cfg.exports.training);
-        assert!(cfg.exports.cuts);
     }
 
     /// AC-2: missing `training.forward_passes` → SchemaError with field name.
@@ -1169,14 +1116,8 @@ mod tests {
             "output_mode": "streaming"
           },
           "exports": {
-            "training": true,
-            "cuts": true,
             "states": true,
-            "vertices": true,
-            "simulation": true,
-            "forward_detail": false,
-            "backward_detail": false,
-            "compression": "zstd"
+            "stochastic": true
           }
         }"#;
 
@@ -1212,9 +1153,8 @@ mod tests {
         assert_eq!(cfg.simulation.policy_type, "outer");
 
         // Exports
-        assert!(cfg.exports.training);
-        assert_eq!(cfg.exports.compression.as_deref(), Some("zstd"));
-        assert!(!cfg.exports.forward_detail);
+        assert!(cfg.exports.states);
+        assert!(cfg.exports.stochastic);
     }
 
     /// AC-5: invalid JSON syntax → ParseError.
@@ -1292,7 +1232,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): `Config` has no `version` field — the struct does not
+    /// `Config` has no `version` field — the struct does not
     /// expose `.version` and the field is not present after deserialization.
     #[test]
     fn test_config_has_no_version_field() {
@@ -1305,7 +1245,7 @@ mod tests {
         assert!(cfg.schema.is_none(), "schema should be None when absent");
     }
 
-    /// AC (ticket-007b): JSON with `"$schema"` property is accepted and the field
+    /// JSON with `"$schema"` property is accepted and the field
     /// value is stored correctly.
     #[test]
     fn test_schema_field_accepted() {
@@ -1341,7 +1281,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-007b): JSON that still contains a `"version"` property is
+    /// JSON that still contains a `"version"` property is
     /// silently accepted because `Config` has no `deny_unknown_fields` and the
     /// removed field is treated as an unknown key that serde ignores.
     #[test]
@@ -1360,7 +1300,7 @@ mod tests {
         assert_eq!(cfg.training.forward_passes, Some(1));
     }
 
-    /// AC (ticket-007): `"truncation"` is accepted as a method string and
+    /// `"truncation"` is accepted as a method string and
     /// round-trips correctly through `parse_config`. The `penalty_cost` field
     /// falls back to its default (1000.0) when absent from the JSON.
     #[test]
@@ -1499,7 +1439,7 @@ mod tests {
         );
     }
 
-    // ── ScenarioSource parsing tests (ticket-001) ─────────────────────────────
+    // ── ScenarioSource parsing tests ──────────────────────────────────────────
 
     const MINIMAL_TRAINING: &str =
         r#"{"forward_passes": 10, "stopping_rules": [{"type": "iteration_limit", "limit": 5}]}"#;
@@ -1519,8 +1459,7 @@ mod tests {
         ))
     }
 
-    /// AC-1 (ticket-001): absent `training.scenario_source` → all InSample,
-    /// no seed, no historical_years.
+    /// Absent `training.scenario_source` → all InSample, no seed, no historical_years.
     #[test]
     fn test_training_scenario_source_default() {
         let f = write_config(&format!(r#"{{"training": {MINIMAL_TRAINING}}}"#));
@@ -1534,7 +1473,7 @@ mod tests {
         assert_eq!(source.historical_years, None);
     }
 
-    /// AC-1b (ticket-001): explicit per-class schemes are parsed correctly.
+    /// Explicit per-class schemes are parsed correctly.
     #[test]
     fn test_training_scenario_source_explicit() {
         let f = write_with_training_scenario_source(
@@ -1552,8 +1491,7 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-001): absent `simulation.scenario_source` falls back to
-    /// `training_scenario_source()`.
+    /// Absent `simulation.scenario_source` falls back to `training_scenario_source()`.
     #[test]
     fn test_simulation_scenario_source_fallback() {
         let f = write_with_training_scenario_source(
@@ -1567,8 +1505,7 @@ mod tests {
         assert_eq!(simulation.seed, Some(7));
     }
 
-    /// AC-4 (ticket-001): both sections present with different schemes → different
-    /// `ScenarioSource` values returned.
+    /// Both sections present with different schemes → different `ScenarioSource` values returned.
     #[test]
     fn test_simulation_scenario_source_independent() {
         let f = write_with_both_scenario_sources(
@@ -1596,7 +1533,7 @@ mod tests {
         assert_eq!(source.inflow_scheme, SamplingScheme::Historical);
     }
 
-    /// AC-5 (ticket-001): Historical on load class → SchemaError.
+    /// Historical on load class → SchemaError.
     #[test]
     fn test_scenario_source_historical_load_rejected() {
         let f = write_config(&format!(
@@ -1709,28 +1646,10 @@ mod tests {
         assert!(cfg.simulation.scenario_source.is_none());
     }
 
-    #[test]
-    fn angular_pruning_absent_deserializes_to_default() {
-        let f = write_config(
-            r#"{
-            "training": {
-                "forward_passes": 10,
-                "stopping_rules": [{"type": "iteration_limit", "limit": 5}],
-                "cut_selection": {"enabled": true, "method": "level1"}
-            }
-        }"#,
-        );
-        let cfg = parse_config(f.path()).unwrap();
-        let ap = &cfg.training.cut_selection.angular_pruning;
-        assert!(ap.enabled.is_none());
-        assert!(ap.cosine_threshold.is_none());
-        assert!(ap.check_frequency.is_none());
-    }
-
     /// max_active_per_stage serde roundtrip: Some(100) serializes and deserializes correctly.
     #[test]
     fn max_active_per_stage_serde_roundtrip() {
-        let original = CutSelectionConfig {
+        let original = RowSelectionConfig {
             enabled: Some(true),
             method: Some("level1".to_string()),
             threshold: None,
@@ -1738,15 +1657,15 @@ mod tests {
             domination_epsilon: None,
             check_frequency: None,
             cut_activity_tolerance: None,
-            angular_pruning: AngularPruningConfig::default(),
             max_active_per_stage: Some(100),
-            basis_padding: None,
+            basis_activity_window: Some(7),
         };
         let json = serde_json::to_string(&original).unwrap();
-        let roundtripped: CutSelectionConfig = serde_json::from_str(&json).unwrap();
+        let roundtripped: RowSelectionConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtripped.max_active_per_stage, Some(100));
         assert_eq!(roundtripped.enabled, Some(true));
         assert_eq!(roundtripped.method.as_deref(), Some("level1"));
+        assert_eq!(roundtripped.basis_activity_window, Some(7));
     }
 
     /// max_active_per_stage absent from JSON deserializes to None.
@@ -1766,5 +1685,241 @@ mod tests {
             cfg.training.cut_selection.max_active_per_stage.is_none(),
             "max_active_per_stage must be None when absent from config.json"
         );
+    }
+
+    /// `policy.boundary` with `path` and `source_stage` deserializes
+    /// to `Some(BoundaryPolicy { .. })` with the correct field values.
+    #[test]
+    fn test_boundary_policy_present() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": {
+                "mode": "fresh",
+                "boundary": {
+                    "path": "../monthly/policy",
+                    "source_stage": 2
+                }
+            }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        let boundary = cfg.policy.boundary.unwrap();
+        assert_eq!(boundary.path, "../monthly/policy");
+        assert_eq!(boundary.source_stage, 2);
+    }
+
+    /// `policy` without a `boundary` key deserializes to `None`.
+    #[test]
+    fn test_boundary_policy_absent() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": {}
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.policy.boundary.is_none(),
+            "boundary must be None when the key is absent"
+        );
+    }
+
+    /// `"boundary": null` deserializes to `None`.
+    #[test]
+    fn test_boundary_policy_explicit_null() {
+        let f = write_config(
+            r#"{
+            "training": {
+                "forward_passes": 10,
+                "stopping_rules": [{"type": "iteration_limit", "limit": 5}]
+            },
+            "policy": { "boundary": null }
+        }"#,
+        );
+        let cfg = parse_config(f.path()).unwrap();
+        assert!(
+            cfg.policy.boundary.is_none(),
+            "boundary must be None when explicitly null"
+        );
+    }
+
+    /// `PolicyConfig::default()` has `boundary` set to `None`.
+    #[test]
+    fn test_policy_config_default_boundary_is_none() {
+        assert!(
+            PolicyConfig::default().boundary.is_none(),
+            "default PolicyConfig must have boundary = None"
+        );
+    }
+
+    /// Round-trip: serialize `PolicyConfig` with `Some(BoundaryPolicy)`
+    /// to JSON and deserialize back; values are preserved.
+    #[test]
+    fn test_boundary_policy_round_trip() {
+        let original = PolicyConfig {
+            path: "./policy".to_string(),
+            mode: PolicyMode::Fresh,
+            validate_compatibility: true,
+            checkpointing: CheckpointingConfig::default(),
+            boundary: Some(BoundaryPolicy {
+                path: "../monthly/policy".to_string(),
+                source_stage: 5,
+            }),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: PolicyConfig = serde_json::from_str(&json).unwrap();
+        let boundary = restored.boundary.unwrap();
+        assert_eq!(boundary.path, "../monthly/policy");
+        assert_eq!(boundary.source_stage, 5);
+    }
+
+    // ── RowSelectionConfig::threshold deprecation warning tests ──────────────
+
+    /// Minimal tracing subscriber that records WARN-level event messages for
+    /// use in unit tests. Thread-safe via `Arc<Mutex<Vec<String>>>`.
+    mod test_subscriber {
+        use std::sync::{Arc, Mutex};
+        use tracing::{
+            Event, Level, Metadata, Subscriber,
+            span::{Attributes, Id, Record},
+        };
+
+        pub(super) struct WarnRecorder {
+            pub(super) messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl WarnRecorder {
+            pub(super) fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+                let messages = Arc::new(Mutex::new(Vec::new()));
+                (
+                    Self {
+                        messages: Arc::clone(&messages),
+                    },
+                    messages,
+                )
+            }
+        }
+
+        impl Subscriber for WarnRecorder {
+            fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+                *metadata.level() <= Level::WARN
+            }
+
+            fn new_span(&self, _attrs: &Attributes<'_>) -> Id {
+                Id::from_u64(1)
+            }
+
+            fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+            fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+            fn event(&self, event: &Event<'_>) {
+                if *event.metadata().level() == Level::WARN {
+                    struct MessageVisitor(String);
+                    impl tracing::field::Visit for MessageVisitor {
+                        fn record_debug(
+                            &mut self,
+                            field: &tracing::field::Field,
+                            value: &dyn std::fmt::Debug,
+                        ) {
+                            if field.name() == "message" {
+                                self.0 = format!("{value:?}");
+                            }
+                        }
+                        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                            if field.name() == "message" {
+                                self.0 = value.to_string();
+                            }
+                        }
+                    }
+                    let mut visitor = MessageVisitor(String::new());
+                    event.record(&mut visitor);
+                    self.messages.lock().unwrap().push(visitor.0);
+                }
+            }
+
+            fn enter(&self, _span: &Id) {}
+
+            fn exit(&self, _span: &Id) {}
+        }
+    }
+
+    /// AC: parsing `RowSelectionConfig` with `threshold: Some(5)` emits exactly
+    /// one WARN event whose message contains "threshold" and "deprecated".
+    #[test]
+    fn test_row_selection_threshold_deprecated_warning() {
+        let (subscriber, messages) = test_subscriber::WarnRecorder::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let json = r#"{"threshold": 5}"#;
+            let cfg: RowSelectionConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(cfg.threshold, Some(5), "threshold must be stored");
+        });
+        let recorded = messages.lock().unwrap();
+        let warn_events: Vec<&str> = recorded
+            .iter()
+            .map(std::string::String::as_str)
+            .filter(|msg| msg.contains("threshold") && msg.contains("deprecated"))
+            .collect();
+        assert!(
+            !warn_events.is_empty(),
+            "expected at least one WARN event containing 'threshold' and 'deprecated', got: {recorded:?}"
+        );
+    }
+
+    /// AC: parsing `RowSelectionConfig` without `threshold` emits no WARN event
+    /// from this code path.
+    #[test]
+    fn test_row_selection_threshold_absent_no_warning() {
+        let (subscriber, messages) = test_subscriber::WarnRecorder::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let json = r#"{"enabled": true, "method": "lml1", "memory_window": 10}"#;
+            let cfg: RowSelectionConfig = serde_json::from_str(json).unwrap();
+            assert!(
+                cfg.threshold.is_none(),
+                "threshold must be None when absent"
+            );
+        });
+        let recorded = messages.lock().unwrap();
+        let threshold_warns: Vec<&str> = recorded
+            .iter()
+            .map(std::string::String::as_str)
+            .filter(|msg| msg.contains("threshold") && msg.contains("deprecated"))
+            .collect();
+        assert!(
+            threshold_warns.is_empty(),
+            "expected no WARN events about threshold deprecation when field is absent, got: {threshold_warns:?}"
+        );
+    }
+
+    /// Stale `exports` keys (`training`, `cuts`, `vertices`, `simulation`,
+    /// `forward_detail`, `backward_detail`, `compression`) are silently
+    /// ignored by serde rather than producing a parse error. This preserves
+    /// forward-compat for users with legacy config files.
+    #[test]
+    fn parse_config_ignores_removed_exports_fields() {
+        let json = r#"{
+            "training": { "forward_passes": 4, "stopping_rules": [] },
+            "exports": {
+                "training": true,
+                "cuts": false,
+                "vertices": true,
+                "simulation": true,
+                "forward_detail": true,
+                "backward_detail": true,
+                "compression": "zstd"
+            }
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        // The two surviving fields use their defaults because the JSON
+        // does not specify them.
+        assert!(!cfg.exports.states);
+        assert!(!cfg.exports.stochastic);
     }
 }

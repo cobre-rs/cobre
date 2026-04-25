@@ -1,23 +1,26 @@
 //! Configuration types for the SDDP training loop.
 //!
 //! [`TrainingConfig`] bundles all algorithm parameters that control the
-//! training loop behaviour: iteration budget, forward scenario count,
-//! checkpoint cadence, warm-start cut count, and the optional event channel
-//! for real-time progress reporting.
+//! training loop behaviour, grouped into three sub-structs:
+//!
+//! - [`LoopConfig`]: iteration loop control and convergence.
+//! - [`CutManagementConfig`]: two-stage cut management pipeline.
+//! - [`EventConfig`]: event infrastructure for monitoring and checkpointing.
 //!
 //! ## Construction
 //!
-//! `TrainingConfig` does not implement `Default` — every field must be
-//! explicitly supplied by the caller to prevent silent misconfigurations
-//! (e.g., a zero `forward_passes` count or an unintentionally large
-//! `max_iterations`).
+//! `TrainingConfig` does not implement `Default` — every sub-struct group must
+//! be explicitly supplied by the caller to prevent silent misconfigurations.
+//! Each sub-struct implements `Default` with sensible test values, allowing
+//! tests to specify only the fields they care about via `..Default::default()`.
 //!
 //! ## Event channel
 //!
-//! The `event_sender` field carries an `Option<Sender<TrainingEvent>>`.
-//! When `None`, the training loop emits no events and incurs no channel
-//! overhead. When `Some(sender)`, typed [`cobre_core::TrainingEvent`] values
-//! are moved into the channel at each lifecycle step boundary.
+//! The `event_sender` field in [`EventConfig`] carries an
+//! `Option<Sender<TrainingEvent>>`. When `None`, the training loop emits no
+//! events and incurs no channel overhead. When `Some(sender)`, typed
+//! [`cobre_core::TrainingEvent`] values are moved into the channel at each
+//! lifecycle step boundary.
 //!
 //! Because `Sender<T>` is not `Clone` in the general sense (it can be cloned,
 //! but ownership transfer is the primary pattern), `TrainingConfig` does not
@@ -28,27 +31,26 @@
 //!
 //! ```rust
 //! use cobre_sddp::TrainingConfig;
+//! use cobre_sddp::config::{CutManagementConfig, EventConfig, LoopConfig};
 //!
 //! let config = TrainingConfig {
-//!     forward_passes: 10,
-//!     max_iterations: 200,
-//!     checkpoint_interval: Some(50),
-//!     warm_start_cuts: 0,
-//!     event_sender: None,
-//!     cut_activity_tolerance: 1e-6,
-//!     n_fwd_threads: 1,
-//!     max_blocks: 1,
-//!     cut_selection: None,
-//!     shutdown_flag: None,
-//!     start_iteration: 0,
-//!     export_states: false,
-//!     angular_pruning: None,
-//!     budget: None,
-//!     basis_padding_enabled: false,
+//!     loop_config: LoopConfig {
+//!         forward_passes: 10,
+//!         max_iterations: 200,
+//!         ..LoopConfig::default()
+//!     },
+//!     cut_management: CutManagementConfig {
+//!         cut_activity_tolerance: 1e-6,
+//!         ..CutManagementConfig::default()
+//!     },
+//!     events: EventConfig {
+//!         checkpoint_interval: Some(50),
+//!         ..EventConfig::default()
+//!     },
 //! };
-//! assert_eq!(config.forward_passes, 10);
-//! assert_eq!(config.max_iterations, 200);
-//! assert_eq!(config.checkpoint_interval, Some(50));
+//! assert_eq!(config.loop_config.forward_passes, 10);
+//! assert_eq!(config.loop_config.max_iterations, 200);
+//! assert_eq!(config.events.checkpoint_interval, Some(50));
 //! ```
 
 use std::sync::Arc;
@@ -56,42 +58,58 @@ use std::sync::atomic::AtomicBool;
 
 use cobre_core::TrainingEvent;
 
-use crate::angular_pruning::AngularPruningParams;
 use crate::cut_selection::CutSelectionStrategy;
+use crate::risk_measure::RiskMeasure;
+use crate::stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};
 
-/// Parameters controlling the SDDP training loop.
+/// Pure-data iteration parameters stored on [`crate::setup::StudySetup`].
 ///
-/// Construct this struct directly — all fields are public and there is no
-/// builder or `Default` implementation. Every field must be set explicitly
-/// to prevent silent misconfiguration.
+/// Projected subset of [`LoopConfig`] containing only the fields that are
+/// stable across training invocations. `n_fwd_threads` is excluded because
+/// it is derived at runtime from the `--threads` CLI flag and varies between
+/// invocations; it is supplied as a per-call argument to
+/// [`crate::setup::StudySetup::train`].
+///
+/// `max_blocks` is included here (not in `StageData`) because it is consumed
+/// by [`LoopConfig`] for LP buffer pre-sizing during training, making it
+/// semantically part of iteration configuration.
+///
+/// # Construction
+///
+/// Explicit construction only — no `Default` impl, to prevent silent
+/// misconfiguration.
+#[derive(Debug)]
+pub struct LoopParams {
+    /// Random seed for forward-pass stochastic trajectory generation.
+    pub seed: u64,
+    /// Number of forward-pass trajectories per training iteration.
+    pub forward_passes: u32,
+    /// Maximum iteration budget (also used for FCF cut-pool pre-sizing).
+    pub max_iterations: u64,
+    /// Starting iteration offset for resumed training runs.
+    pub(crate) start_iteration: u64,
+    /// Maximum number of demand blocks across all stages, used for
+    /// LP column pre-sizing and workspace buffer allocation.
+    pub(crate) max_blocks: usize,
+    /// Stopping rules controlling convergence.
+    pub(crate) stopping_rules: StoppingRuleSet,
+}
+
+/// Controls the iteration loop and convergence.
+///
+/// Construct via [`Default::default()`] for tests, or explicitly set all fields
+/// for production configuration.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::TrainingConfig;
+/// use cobre_sddp::config::LoopConfig;
 ///
-/// let config = TrainingConfig {
-///     forward_passes: 10,
-///     max_iterations: 100,
-///     checkpoint_interval: None,
-///     warm_start_cuts: 0,
-///     event_sender: None,
-///     cut_activity_tolerance: 1e-6,
-///     n_fwd_threads: 1,
-///     max_blocks: 1,
-///     cut_selection: None,
-///     shutdown_flag: None,
-///     start_iteration: 0,
-///     export_states: false,
-///     angular_pruning: None,
-///     budget: None,
-///     basis_padding_enabled: false,
-/// };
-/// assert_eq!(config.forward_passes, 10);
-/// assert_eq!(config.max_iterations, 100);
+/// let cfg = LoopConfig { forward_passes: 10, max_iterations: 200, ..LoopConfig::default() };
+/// assert_eq!(cfg.forward_passes, 10);
 /// ```
 #[derive(Debug)]
-pub struct TrainingConfig {
+pub struct LoopConfig {
     /// Total number of forward scenarios evaluated per iteration across all ranks.
     ///
     /// The work is divided among MPI ranks: each rank evaluates
@@ -107,38 +125,13 @@ pub struct TrainingConfig {
     /// Must be at least 1.
     pub max_iterations: u64,
 
-    /// Number of iterations between checkpoint writes.
+    /// Starting iteration for resumed training runs.
     ///
-    /// When `Some(n)`, the training loop writes a checkpoint after every `n`
-    /// completed iterations (i.e., when `iteration % n == 0`). When `None`,
-    /// no checkpoints are written during training (a final checkpoint may
-    /// still be written at convergence depending on caller configuration).
-    pub checkpoint_interval: Option<u64>,
-
-    /// Number of pre-loaded cuts imported from a warm-start policy file.
-    ///
-    /// When non-zero, the cut pool is pre-populated from a serialised policy
-    /// before the first training iteration begins. The warm-start cut count
-    /// contributes to the cut pool capacity calculation alongside
-    /// `max_iterations`.
-    pub warm_start_cuts: u32,
-
-    /// Optional channel sender for real-time training progress events.
-    ///
-    /// When `Some(sender)`, the training loop emits [`TrainingEvent`] values
-    /// at each lifecycle step boundary (forward pass, backward pass,
-    /// convergence update, etc.). When `None`, no events are emitted and no
-    /// channel allocation occurs on the hot path.
-    ///
-    /// The receiver end must be consumed on a separate thread or task to
-    /// prevent the channel from filling and blocking the training loop.
-    pub event_sender: Option<std::sync::mpsc::Sender<TrainingEvent>>,
-
-    /// Activity tolerance for cut selection deactivation.
-    ///
-    /// Cuts with activity (dual value) below this threshold across all openings
-    /// in a backward pass are candidates for deactivation. Typical value: `1e-6`.
-    pub cut_activity_tolerance: f64,
+    /// When resuming from a checkpoint, this is set to the checkpoint's
+    /// `completed_iterations`. The training loop starts at
+    /// `start_iteration + 1` and runs up to `max_iterations`.
+    /// Default: `0` (fresh training).
+    pub start_iteration: u64,
 
     /// Number of rayon threads for forward pass parallelism.
     ///
@@ -151,12 +144,135 @@ pub struct TrainingConfig {
     /// Used for pre-sizing buffers and determining the LP column layout.
     pub max_blocks: usize,
 
+    /// Stopping rules controlling convergence.
+    ///
+    /// The training loop evaluates these rules after each iteration's lower
+    /// bound update. Training terminates when the rule set triggers.
+    pub stopping_rules: StoppingRuleSet,
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self {
+            forward_passes: 1,
+            max_iterations: 1,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: StoppingRuleSet {
+                rules: vec![StoppingRule::IterationLimit { limit: 1 }],
+                mode: StoppingMode::Any,
+            },
+        }
+    }
+}
+
+/// Two-stage cut management pipeline configuration.
+///
+/// Construct via [`Default::default()`] for tests, or explicitly set all fields
+/// for production configuration.
+///
+/// # Examples
+///
+/// ```rust
+/// use cobre_sddp::config::CutManagementConfig;
+///
+/// let cfg = CutManagementConfig { cut_activity_tolerance: 1e-8, ..CutManagementConfig::default() };
+/// assert_eq!(cfg.cut_activity_tolerance, 1e-8);
+/// ```
+#[derive(Debug)]
+pub struct CutManagementConfig {
     /// Optional cut selection strategy for deactivating dominated cuts.
     ///
     /// When `Some(strategy)`, the training loop applies cut selection after each
     /// backward pass, deactivating cuts that do not meet the strategy's activity
     /// criteria. When `None`, all generated cuts remain active.
     pub cut_selection: Option<CutSelectionStrategy>,
+
+    /// Maximum number of active cuts per stage (stage 2 of the cut selection
+    /// pipeline — hard cap on LP size).
+    ///
+    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
+    /// per stage after strategy selection has completed. Cuts are evicted in
+    /// order of staleness (`last_active_iter` ascending), tie-broken by usage
+    /// frequency (`active_count` ascending). Cuts generated in the current
+    /// iteration are never evicted.
+    ///
+    /// When `None`, no hard cap is enforced.
+    pub budget: Option<u32>,
+
+    /// Activity tolerance for cut selection deactivation.
+    ///
+    /// Cuts with activity (dual value) below this threshold across all openings
+    /// in a backward pass are candidates for deactivation. Typical value: `1e-6`.
+    pub cut_activity_tolerance: f64,
+
+    /// Activity-window size for the basis-reconstruction classifier.
+    /// Validated range 1..=31 at `StudyParams::from_config`. Default 5.
+    pub basis_activity_window: u32,
+
+    /// Number of pre-loaded cuts imported from a warm-start policy file.
+    ///
+    /// When non-zero, the cut pool is pre-populated from a serialised policy
+    /// before the first training iteration begins. The warm-start cut count
+    /// contributes to the cut pool capacity calculation alongside
+    /// `max_iterations`.
+    pub warm_start_cuts: u32,
+
+    /// Per-stage risk measures for the backward pass.
+    ///
+    /// Controls whether the Benders cut aggregation uses expected value,
+    /// `CVaR`, or a convex combination thereof. The length must equal
+    /// `num_stages`.
+    pub risk_measures: Vec<RiskMeasure>,
+}
+
+impl Default for CutManagementConfig {
+    fn default() -> Self {
+        Self {
+            cut_selection: None,
+            budget: None,
+            cut_activity_tolerance: 1e-6,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            warm_start_cuts: 0,
+            risk_measures: vec![RiskMeasure::Expectation],
+        }
+    }
+}
+
+/// Event infrastructure for monitoring and checkpointing.
+///
+/// Construct via [`Default::default()`] for tests, or explicitly set all fields
+/// for production configuration.
+///
+/// # Examples
+///
+/// ```rust
+/// use cobre_sddp::config::EventConfig;
+///
+/// let cfg = EventConfig { checkpoint_interval: Some(10), ..EventConfig::default() };
+/// assert_eq!(cfg.checkpoint_interval, Some(10));
+/// ```
+#[derive(Debug, Default)]
+pub struct EventConfig {
+    /// Optional channel sender for real-time training progress events.
+    ///
+    /// When `Some(sender)`, the training loop emits [`TrainingEvent`] values
+    /// at each lifecycle step boundary (forward pass, backward pass,
+    /// convergence update, etc.). When `None`, no events are emitted and no
+    /// channel allocation occurs on the hot path.
+    ///
+    /// The receiver end must be consumed on a separate thread or task to
+    /// prevent the channel from filling and blocking the training loop.
+    pub event_sender: Option<std::sync::mpsc::Sender<TrainingEvent>>,
+
+    /// Number of iterations between checkpoint writes.
+    ///
+    /// When `Some(n)`, the training loop writes a checkpoint after every `n`
+    /// completed iterations (i.e., when `iteration % n == 0`). When `None`,
+    /// no checkpoints are written during training (a final checkpoint may
+    /// still be written at convergence depending on caller configuration).
+    pub checkpoint_interval: Option<u64>,
 
     /// Optional shutdown signal for graceful early termination.
     ///
@@ -166,14 +282,6 @@ pub struct TrainingConfig {
     /// convergence or iteration limit.
     pub shutdown_flag: Option<Arc<AtomicBool>>,
 
-    /// Starting iteration for resumed training runs.
-    ///
-    /// When resuming from a checkpoint, this is set to the checkpoint's
-    /// `completed_iterations`. The training loop starts at
-    /// `start_iteration + 1` and runs up to `max_iterations`.
-    /// Default: `0` (fresh training).
-    pub start_iteration: u64,
-
     /// Whether to allocate the visited-states archive for state export.
     ///
     /// When `true`, the archive is allocated so forward-pass trial points are
@@ -181,41 +289,71 @@ pub struct TrainingConfig {
     /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
     /// Default: `false`.
     pub export_states: bool,
+}
 
-    /// Optional angular diversity pruning parameters (stage 2 of the cut
-    /// selection pipeline).
+/// Pure-data event parameters stored on [`crate::setup::StudySetup`].
+///
+/// Projected subset of [`EventConfig`] containing only the fields that are
+/// stable across training invocations and safe to persist on the setup struct.
+/// The following fields from [`EventConfig`] are deliberately excluded:
+///
+/// - `event_sender` — runtime handle; ownership transferred per training call.
+/// - `shutdown_flag` — runtime handle; varies per invocation.
+/// - `checkpoint_interval` — not yet wired into the setup layer; deferred.
+#[derive(Debug)]
+pub(crate) struct EventParams {
+    /// Whether to allocate the visited-states archive for state export.
     ///
-    /// When `Some(params)`, the training loop applies angular pruning after the
-    /// strategy-based selection pass, using cosine similarity clustering as a
-    /// computational accelerator for pointwise dominance verification.
-    /// When `None`, angular pruning is disabled.
-    pub angular_pruning: Option<AngularPruningParams>,
+    /// When `true`, the archive is allocated so forward-pass trial points are
+    /// recorded for checkpoint persistence. When `false`, the archive is only
+    /// allocated if `cut_selection` requires it (i.e., `Dominated` variant).
+    pub(crate) export_states: bool,
+}
 
-    /// Maximum number of active cuts per stage (stage 3 of the cut selection
-    /// pipeline — hard cap on LP size).
-    ///
-    /// When `Some(n)`, the training loop enforces a hard cap of `n` active cuts
-    /// per stage after strategy selection and angular pruning have completed.
-    /// Cuts are evicted in order of staleness (`last_active_iter` ascending),
-    /// tie-broken by usage frequency (`active_count` ascending). Cuts generated
-    /// in the current iteration are never evicted.
-    ///
-    /// When `None`, no hard cap is enforced.
-    pub budget: Option<u32>,
+/// Parameters controlling the SDDP training loop.
+///
+/// Composes three sub-structs, each covering a distinct concern:
+/// [`LoopConfig`] for iteration loop control, [`CutManagementConfig`] for the
+/// cut management pipeline, and [`EventConfig`] for monitoring infrastructure.
+///
+/// `TrainingConfig` does not implement `Default` — every sub-group must be
+/// explicitly supplied to prevent silent misconfiguration. Each sub-struct
+/// implements `Default` with sensible test values, allowing tests to override
+/// only the fields they care about via `..Default::default()`.
+///
+/// # Examples
+///
+/// ```rust
+/// use cobre_sddp::TrainingConfig;
+/// use cobre_sddp::config::{CutManagementConfig, EventConfig, LoopConfig};
+///
+/// let config = TrainingConfig {
+///     loop_config: LoopConfig {
+///         forward_passes: 10,
+///         max_iterations: 100,
+///         ..LoopConfig::default()
+///     },
+///     cut_management: CutManagementConfig::default(),
+///     events: EventConfig::default(),
+/// };
+/// assert_eq!(config.loop_config.forward_passes, 10);
+/// assert_eq!(config.loop_config.max_iterations, 100);
+/// ```
+#[derive(Debug)]
+pub struct TrainingConfig {
+    /// Controls the iteration loop, forward pass count, and convergence rules.
+    pub loop_config: LoopConfig,
 
-    /// Enable basis padding for warm-start (Epic 05).
-    ///
-    /// When `true`, the forward pass applies informed basis status assignment for
-    /// new cut rows before warm-starting the LP solver, reducing the number of
-    /// simplex pivots required after each cut addition.
-    ///
-    /// Disabled by default (`false`).
-    pub basis_padding_enabled: bool,
+    /// Two-stage cut management pipeline configuration.
+    pub cut_management: CutManagementConfig,
+
+    /// Event infrastructure for monitoring and checkpointing.
+    pub events: EventConfig,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TrainingConfig;
+    use super::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig};
     use cobre_core::TrainingEvent;
 
     // ── Field access ─────────────────────────────────────────────────────────
@@ -223,87 +361,61 @@ mod tests {
     #[test]
     fn field_access_forward_passes_and_max_iterations() {
         let config = TrainingConfig {
-            forward_passes: 10,
-            max_iterations: 100,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 10,
+                max_iterations: 100,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig::default(),
+            events: EventConfig::default(),
         };
-        assert_eq!(config.forward_passes, 10);
-        assert_eq!(config.max_iterations, 100);
+        assert_eq!(config.loop_config.forward_passes, 10);
+        assert_eq!(config.loop_config.max_iterations, 100);
     }
 
     #[test]
     fn checkpoint_interval_none_and_some() {
         let config_none = TrainingConfig {
-            forward_passes: 5,
-            max_iterations: 50,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 5,
+                max_iterations: 50,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig::default(),
+            events: EventConfig::default(),
         };
-        assert!(config_none.checkpoint_interval.is_none());
+        assert!(config_none.events.checkpoint_interval.is_none());
 
         let config_some = TrainingConfig {
-            forward_passes: 5,
-            max_iterations: 50,
-            checkpoint_interval: Some(10),
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 5,
+                max_iterations: 50,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig::default(),
+            events: EventConfig {
+                checkpoint_interval: Some(10),
+                ..EventConfig::default()
+            },
         };
-        assert_eq!(config_some.checkpoint_interval, Some(10));
+        assert_eq!(config_some.events.checkpoint_interval, Some(10));
     }
 
     #[test]
     fn warm_start_cuts_field_accessible() {
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 10,
-            checkpoint_interval: None,
-            warm_start_cuts: 500,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 1,
+                max_iterations: 10,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig {
+                warm_start_cuts: 500,
+                ..CutManagementConfig::default()
+            },
+            events: EventConfig::default(),
         };
-        assert_eq!(config.warm_start_cuts, 500);
+        assert_eq!(config.cut_management.warm_start_cuts, 500);
     }
 
     // ── Event sender ─────────────────────────────────────────────────────────
@@ -311,50 +423,38 @@ mod tests {
     #[test]
     fn event_sender_none() {
         let config = TrainingConfig {
-            forward_passes: 1,
-            max_iterations: 1,
-            checkpoint_interval: None,
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig::default(),
+            cut_management: CutManagementConfig::default(),
+            events: EventConfig::default(),
         };
-        assert!(config.event_sender.is_none());
+        assert!(config.events.event_sender.is_none());
     }
 
     #[test]
     fn event_sender_some_can_send_training_event() {
         let (tx, rx) = std::sync::mpsc::channel::<TrainingEvent>();
         let config = TrainingConfig {
-            forward_passes: 4,
-            max_iterations: 200,
-            checkpoint_interval: Some(50),
-            warm_start_cuts: 100,
-            event_sender: Some(tx),
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 4,
+                max_iterations: 200,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig {
+                warm_start_cuts: 100,
+                cut_activity_tolerance: 1e-6,
+                ..CutManagementConfig::default()
+            },
+            events: EventConfig {
+                event_sender: Some(tx),
+                checkpoint_interval: Some(50),
+                ..EventConfig::default()
+            },
         };
 
-        assert!(config.event_sender.is_some());
+        assert!(config.events.event_sender.is_some());
 
         // Verify the sender in the config can actually send events.
-        if let Some(sender) = &config.event_sender {
+        if let Some(sender) = &config.events.event_sender {
             sender
                 .send(TrainingEvent::TrainingFinished {
                     reason: "test".to_string(),
@@ -362,7 +462,7 @@ mod tests {
                     final_lb: 0.0,
                     final_ub: 1.0,
                     total_time_ms: 100,
-                    total_cuts: 4,
+                    total_rows: 4,
                 })
                 .unwrap();
         }
@@ -376,21 +476,16 @@ mod tests {
     #[test]
     fn debug_output_non_empty() {
         let config = TrainingConfig {
-            forward_passes: 8,
-            max_iterations: 500,
-            checkpoint_interval: Some(100),
-            warm_start_cuts: 0,
-            event_sender: None,
-            cut_activity_tolerance: 1e-6,
-            n_fwd_threads: 1,
-            max_blocks: 1,
-            cut_selection: None,
-            shutdown_flag: None,
-            start_iteration: 0,
-            export_states: false,
-            angular_pruning: None,
-            budget: None,
-            basis_padding_enabled: false,
+            loop_config: LoopConfig {
+                forward_passes: 8,
+                max_iterations: 500,
+                ..LoopConfig::default()
+            },
+            cut_management: CutManagementConfig::default(),
+            events: EventConfig {
+                checkpoint_interval: Some(100),
+                ..EventConfig::default()
+            },
         };
         let debug = format!("{config:?}");
         assert!(!debug.is_empty());

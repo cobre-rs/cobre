@@ -9,8 +9,8 @@
 //! - [`assemble_load_models`] — maps [`LoadSeasonalStatsRow`] 1:1 to
 //!   `Vec<LoadModel>`.
 //!
-//! Both inputs are assumed to be pre-sorted by the individual parsers (tickets 020
-//! and 021). The assembly step preserves that sort order in its output.
+//! Both inputs are assumed to be pre-sorted by the individual parsers
+//! The assembly step preserves that sort order in its output.
 
 use std::collections::HashMap;
 use std::path::Path;

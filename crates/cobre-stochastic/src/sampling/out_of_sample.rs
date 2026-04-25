@@ -12,7 +12,7 @@ use rand_distr::StandardNormal;
 
 use crate::{
     StochasticError,
-    noise::{rng::rng_from_seed, seed::derive_forward_seed},
+    noise::{rng::rng_from_seed, seed::derive_forward_seed_grouped},
     tree::{
         lhs::{LhsPointSpec, sample_lhs_point},
         qmc_halton::{HaltonPointSpec, scrambled_halton_point},
@@ -33,6 +33,11 @@ pub(crate) struct FreshNoiseSpec {
     pub iteration: u32,
     pub scenario: u32,
     pub stage_id: u32,
+    /// Noise group identifier used for seed derivation (noise-group sharing).
+    ///
+    /// Stages within the same `(season_id, year)` bucket share the same
+    /// `noise_group_id` so that their noise draws are identical.
+    pub noise_group_id: u32,
     pub dim: usize,
     pub total_scenarios: u32,
 }
@@ -96,7 +101,7 @@ pub(crate) fn fill_uncorrelated(
                 sampling_seed: spec.forward_seed,
                 iteration: spec.iteration,
                 scenario: spec.scenario,
-                stage_id: spec.stage_id,
+                stage_id: spec.noise_group_id,
                 total_scenarios: spec.total_scenarios,
                 dim: spec.dim,
             };
@@ -114,7 +119,7 @@ pub(crate) fn fill_uncorrelated(
                 sampling_seed: spec.forward_seed,
                 iteration: spec.iteration,
                 scenario: spec.scenario,
-                stage_id: spec.stage_id,
+                stage_id: spec.noise_group_id,
                 total_scenarios: spec.total_scenarios,
                 dim: spec.dim,
             };
@@ -129,7 +134,7 @@ pub(crate) fn fill_uncorrelated(
                 sampling_seed: spec.forward_seed,
                 iteration: spec.iteration,
                 scenario: spec.scenario,
-                stage_id: spec.stage_id,
+                stage_id: spec.noise_group_id,
                 total_scenarios: spec.total_scenarios,
                 dim: spec.dim,
             };
@@ -146,7 +151,7 @@ pub(crate) fn fill_uncorrelated(
         NoiseMethod::HistoricalResiduals => {
             tracing::warn!(
                 stage_id = spec.stage_id,
-                "historical_residuals noise method not yet wired in forward pass; falling back to SAA at stage {} (see ticket-009)",
+                "historical_residuals noise method not yet wired in forward pass; falling back to SAA at stage {}",
                 spec.stage_id,
             );
             fill_saa(spec, output);
@@ -157,11 +162,11 @@ pub(crate) fn fill_uncorrelated(
 
 /// Fill `output[0..spec.dim]` with independent N(0,1) draws using SAA.
 fn fill_saa(spec: FreshNoiseSpec, output: &mut [f64]) {
-    let seed = derive_forward_seed(
+    let seed = derive_forward_seed_grouped(
         spec.forward_seed,
         spec.iteration,
         spec.scenario,
-        spec.stage_id,
+        spec.noise_group_id,
     );
     let mut rng = rng_from_seed(seed);
     for slot in output.iter_mut().take(spec.dim) {
@@ -234,6 +239,7 @@ mod tests {
             iteration: 0,
             scenario: 0,
             stage_id: 0,
+            noise_group_id: 0,
             dim: 3,
             total_scenarios: 10,
         }

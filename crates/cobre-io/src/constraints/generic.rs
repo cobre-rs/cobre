@@ -41,7 +41,7 @@
 //! - `slack.enabled = true` requires `slack.penalty` to be present and > 0.0.
 //! - Each `expression` string must parse without error.
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - Entity ID existence in entity registries — Layer 3.
 //! - Block ID validity for the referenced stage — Layer 3/5.
@@ -1128,7 +1128,7 @@ mod tests {
 
     // ── parse_generic_constraints integration tests ───────────────────────────
 
-    /// AC-1 (ticket): Valid 2-constraint file. First has 2 hydro_generation terms.
+    /// Valid 2-constraint file. First has 2 hydro_generation terms.
     #[test]
     fn test_parse_valid_two_constraints() {
         let f = write_json(VALID_JSON);
@@ -1161,7 +1161,7 @@ mod tests {
         assert_eq!(min_hydro.sense, ConstraintSense::GreaterEqual);
     }
 
-    /// AC-2 (ticket): Expression `"2.5 * thermal_generation(5) - hydro_generation(3)"`.
+    /// Expression `"2.5 * thermal_generation(5) - hydro_generation(3)"`.
     #[test]
     fn test_parse_coefficient_and_subtraction_expression() {
         let f = write_json(VALID_JSON);
@@ -1189,7 +1189,7 @@ mod tests {
         assert_eq!(max_thermal.sense, ConstraintSense::LessEqual);
     }
 
-    /// AC-3 (ticket): Invalid expression → SchemaError with "expression" in field.
+    /// Invalid expression → SchemaError with "expression" in field.
     #[test]
     fn test_parse_invalid_expression_returns_schema_error() {
         let json = r#"{
@@ -1316,7 +1316,7 @@ mod tests {
         }
     }
 
-    /// AC-5 (ticket): `None` path → `Ok(Vec::new())` (tested via `load_generic_constraints`).
+    /// `None` path → `Ok(Vec::new())` (tested via `load_generic_constraints`).
     /// The `load_*` wrapper is in `mod.rs`; here we test the `parse_*` function returns Ok
     /// for a valid empty constraints array.
     #[test]

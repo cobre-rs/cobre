@@ -100,7 +100,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         if self.infeasible_on_call == Some(call) {
@@ -117,18 +120,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -234,7 +226,7 @@ fn simple_opening_tree(n_openings: usize) -> cobre_stochastic::OpeningTree {
             n_load_buses: 0,
             n_ncs: 0,
         },
-        None,
+        &cobre_stochastic::tree::generate::OpeningTreeGenerationInputs::default(),
     )
     .unwrap()
 }
@@ -275,150 +267,147 @@ mod risk_measure_conformance {
         }
     }
 
-    /// Verify `Expectation.aggregate_cut` computes a probability-weighted mean
-    /// with 4 outcomes and non-uniform probabilities.
+    // Original test names consolidated into this sweep:
+    //   risk_measure_expectation_aggregate_cut_sums_to_weighted_mean
+    //   risk_measure_cvar_alpha_one_equals_expectation
+    //   risk_measure_cvar_alpha_half_concentrates_on_worst
+    //   risk_measure_cvar_weights_sum_to_one
+    //
+    // Cases (alpha, lambda, description):
+    //   0: Expectation weighted mean with non-uniform probs
+    //   1: CVaR(alpha=1.0, lambda=1.0) equals Expectation
+    //   2: CVaR(alpha=0.5, lambda=1.0) concentrates weight on worst 50%
+    //   3: CVaR(alpha=0.3, lambda=0.8) weights sum to 1.0
+    const RISK_MEASURE_CASES: &[(&str, f64, f64)] = &[
+        ("expectation_weighted_mean", 0.0, 0.0), // alpha=0 signals Expectation variant
+        ("cvar_alpha_one_equals_expectation", 1.0, 1.0),
+        ("cvar_alpha_half_concentrates_on_worst", 0.5, 1.0),
+        ("cvar_weights_sum_to_one", 0.3, 0.8),
+    ];
+
+    #[allow(clippy::too_many_lines)]
     #[test]
-    fn risk_measure_expectation_aggregate_cut_sums_to_weighted_mean() {
-        let outcomes = vec![
-            outcome(10.0, 10.0, vec![1.0]),
-            outcome(20.0, 20.0, vec![2.0]),
-            outcome(30.0, 30.0, vec![3.0]),
-            outcome(40.0, 40.0, vec![4.0]),
-        ];
-        // Non-uniform probabilities that sum to 1.0
-        let probs = vec![0.1, 0.2, 0.3, 0.4];
-
-        let (intercept, coeffs) = RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
-
-        // Expected: 0.1*10 + 0.2*20 + 0.3*30 + 0.4*40 = 1 + 4 + 9 + 16 = 30.0
-        let expected_intercept = 0.1 * 10.0 + 0.2 * 20.0 + 0.3 * 30.0 + 0.4 * 40.0;
-        assert!(
-            (intercept - expected_intercept).abs() < 1e-10,
-            "intercept must equal weighted mean {expected_intercept}, got {intercept}"
-        );
-
-        // Expected coefficient: 0.1*1 + 0.2*2 + 0.3*3 + 0.4*4 = 0.1+0.4+0.9+1.6 = 3.0
-        let expected_coeff = 0.1 * 1.0 + 0.2 * 2.0 + 0.3 * 3.0 + 0.4 * 4.0;
-        assert_eq!(coeffs.len(), 1, "coefficient vector must have length 1");
-        assert!(
-            (coeffs[0] - expected_coeff).abs() < 1e-10,
-            "coefficient[0] must equal {expected_coeff}, got {}",
-            coeffs[0]
-        );
-    }
-
-    /// Verify `CVaR(alpha=1.0, lambda=1.0).aggregate_cut` produces identical
-    /// results to `Expectation.aggregate_cut`.
-    #[test]
-    fn risk_measure_cvar_alpha_one_equals_expectation() {
-        let outcomes = vec![
-            outcome(10.0, 10.0, vec![1.0]),
-            outcome(20.0, 20.0, vec![2.0]),
-            outcome(30.0, 30.0, vec![3.0]),
-            outcome(40.0, 40.0, vec![4.0]),
-        ];
-        let probs = vec![0.25; 4];
-
-        let (int_exp, coeffs_exp) = RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
-        let (int_cvar, coeffs_cvar) = RiskMeasure::CVaR {
-            alpha: 1.0,
-            lambda: 1.0,
+    fn risk_measure_parameter_sweep() {
+        for (idx, &(desc, alpha, lambda)) in RISK_MEASURE_CASES.iter().enumerate() {
+            match idx {
+                // case_index = 0: Expectation.aggregate_cut computes probability-weighted mean
+                // with 4 outcomes and non-uniform probabilities.
+                0 => {
+                    let outcomes = vec![
+                        outcome(10.0, 10.0, vec![1.0]),
+                        outcome(20.0, 20.0, vec![2.0]),
+                        outcome(30.0, 30.0, vec![3.0]),
+                        outcome(40.0, 40.0, vec![4.0]),
+                    ];
+                    let probs = vec![0.1, 0.2, 0.3, 0.4];
+                    let (intercept, coeffs) =
+                        RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
+                    // Expected: 0.1*10 + 0.2*20 + 0.3*30 + 0.4*40 = 30.0
+                    let expected_intercept = 0.1 * 10.0 + 0.2 * 20.0 + 0.3 * 30.0 + 0.4 * 40.0;
+                    assert!(
+                        (intercept - expected_intercept).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: intercept must equal weighted mean \
+                         {expected_intercept}, got {intercept}"
+                    );
+                    let expected_coeff = 0.1 * 1.0 + 0.2 * 2.0 + 0.3 * 3.0 + 0.4 * 4.0;
+                    assert_eq!(
+                        coeffs.len(),
+                        1,
+                        "case_index = {idx}, desc = {desc}: coefficient vector must have length 1"
+                    );
+                    assert!(
+                        (coeffs[0] - expected_coeff).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: coefficient[0] must equal \
+                         {expected_coeff}, got {}",
+                        coeffs[0]
+                    );
+                }
+                // case_index = 1: CVaR(alpha=1.0, lambda=1.0) must equal Expectation.
+                1 => {
+                    let outcomes = vec![
+                        outcome(10.0, 10.0, vec![1.0]),
+                        outcome(20.0, 20.0, vec![2.0]),
+                        outcome(30.0, 30.0, vec![3.0]),
+                        outcome(40.0, 40.0, vec![4.0]),
+                    ];
+                    let probs = vec![0.25; 4];
+                    let (int_exp, coeffs_exp) =
+                        RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
+                    let (int_cvar, coeffs_cvar) =
+                        RiskMeasure::CVaR { alpha, lambda }.aggregate_cut(&outcomes, &probs);
+                    assert!(
+                        (int_exp - int_cvar).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: CVaR(alpha={alpha}, lambda={lambda}) \
+                         intercept {int_cvar} must equal Expectation {int_exp}"
+                    );
+                    assert_eq!(coeffs_exp.len(), coeffs_cvar.len());
+                    for (ci, (e, c)) in coeffs_exp.iter().zip(&coeffs_cvar).enumerate() {
+                        assert!(
+                            (e - c).abs() < 1e-10,
+                            "case_index = {idx}, desc = {desc}: coefficient[{ci}]: CVaR={c} must \
+                             equal Expectation={e}"
+                        );
+                    }
+                    let costs = vec![10.0, 20.0, 30.0, 40.0];
+                    let risk_exp = RiskMeasure::Expectation.evaluate_risk(&costs, &probs);
+                    let risk_cvar =
+                        RiskMeasure::CVaR { alpha, lambda }.evaluate_risk(&costs, &probs);
+                    assert!(
+                        (risk_exp - risk_cvar).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: evaluate_risk CVaR={risk_cvar} must \
+                         equal Expectation={risk_exp}"
+                    );
+                }
+                // case_index = 2: CVaR(alpha=0.5, lambda=1.0) concentrates weight on worst 50%.
+                2 => {
+                    let outcomes = vec![
+                        outcome(10.0, 10.0, vec![]),
+                        outcome(20.0, 20.0, vec![]),
+                        outcome(30.0, 30.0, vec![]),
+                        outcome(40.0, 40.0, vec![]),
+                    ];
+                    let probs = vec![0.25; 4];
+                    let rm = RiskMeasure::CVaR { alpha, lambda };
+                    let (intercept, _) = rm.aggregate_cut(&outcomes, &probs);
+                    // Per-scenario upper bound = p / alpha = 0.25 / 0.5 = 0.5.
+                    // Greedy fills worst two (40, 30) → 0.5*40 + 0.5*30 = 35.0.
+                    let expected = 35.0_f64;
+                    assert!(
+                        (intercept - expected).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: CVaR(alpha={alpha}, lambda={lambda}) \
+                         must concentrate on worst 50%: expected {expected}, got {intercept}"
+                    );
+                }
+                // case_index = 3: CVaR(alpha=0.3, lambda=0.8) weights sum to 1.0.
+                3 => {
+                    let obj_values = [15.0_f64, 5.0, 25.0, 35.0];
+                    let probs = vec![0.3, 0.2, 0.3, 0.2];
+                    let rm = RiskMeasure::CVaR { alpha, lambda };
+                    // If weights sum to 1, aggregating unit intercepts yields intercept=1.
+                    let unit_outcomes: Vec<BackwardOutcome> = obj_values
+                        .iter()
+                        .map(|&obj| BackwardOutcome {
+                            intercept: 1.0,
+                            coefficients: vec![1.0],
+                            objective_value: obj,
+                        })
+                        .collect();
+                    let (intercept, coeffs) = rm.aggregate_cut(&unit_outcomes, &probs);
+                    assert!(
+                        (intercept - 1.0).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: CVaR(alpha={alpha}, lambda={lambda}) \
+                         weights must sum to 1.0 (intercept check): got {intercept}"
+                    );
+                    assert!(
+                        (coeffs[0] - 1.0).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: CVaR(alpha={alpha}, lambda={lambda}) \
+                         weights must sum to 1.0 (coeff check): got {}",
+                        coeffs[0]
+                    );
+                }
+                _ => unreachable!("unexpected case_index = {idx}"),
+            }
         }
-        .aggregate_cut(&outcomes, &probs);
-
-        assert!(
-            (int_exp - int_cvar).abs() < 1e-10,
-            "CVaR(alpha=1, lambda=1) intercept {int_cvar} must equal Expectation {int_exp}"
-        );
-        assert_eq!(coeffs_exp.len(), coeffs_cvar.len());
-        for (i, (e, c)) in coeffs_exp.iter().zip(&coeffs_cvar).enumerate() {
-            assert!(
-                (e - c).abs() < 1e-10,
-                "coefficient[{i}]: CVaR={c} must equal Expectation={e}"
-            );
-        }
-
-        // Also verify evaluate_risk matches
-        let costs = vec![10.0, 20.0, 30.0, 40.0];
-        let risk_exp = RiskMeasure::Expectation.evaluate_risk(&costs, &probs);
-        let risk_cvar = RiskMeasure::CVaR {
-            alpha: 1.0,
-            lambda: 1.0,
-        }
-        .evaluate_risk(&costs, &probs);
-        assert!(
-            (risk_exp - risk_cvar).abs() < 1e-10,
-            "CVaR(alpha=1, lambda=1) evaluate_risk {risk_cvar} must equal Expectation {risk_exp}"
-        );
-    }
-
-    /// Verify `CVaR(alpha=0.5, lambda=1.0)` with 4 uniform-probability outcomes
-    /// places all weight on the worst 50% (outcomes 30 and 40).
-    #[test]
-    fn risk_measure_cvar_alpha_half_concentrates_on_worst() {
-        let outcomes = vec![
-            outcome(10.0, 10.0, vec![]), // cheapest
-            outcome(20.0, 20.0, vec![]),
-            outcome(30.0, 30.0, vec![]),
-            outcome(40.0, 40.0, vec![]), // most expensive
-        ];
-        let probs = vec![0.25; 4];
-
-        let rm = RiskMeasure::CVaR {
-            alpha: 0.5,
-            lambda: 1.0,
-        };
-        let (intercept, _) = rm.aggregate_cut(&outcomes, &probs);
-
-        // CVaR(0.5, 1.0) with 4 uniform outcomes concentrates weight on the worst 50%.
-        // Per-scenario upper bound = p / alpha = 0.25 / 0.5 = 0.5 for each scenario.
-        // Greedy fills worst two (40, 30) with 0.5 each → sum = 0.5*40 + 0.5*30 = 35.0
-        let expected = 35.0_f64;
-        assert!(
-            (intercept - expected).abs() < 1e-10,
-            "CVaR(0.5, 1.0) must concentrate on worst 50%: expected {expected}, got {intercept}"
-        );
-    }
-
-    /// Verify that the `CVaR` weights sum to exactly 1.0 for non-uniform
-    /// probabilities and arbitrary alpha/lambda.
-    #[test]
-    fn risk_measure_cvar_weights_sum_to_one() {
-        // Non-uniform probabilities; alpha and lambda chosen to produce a
-        // non-trivial weight distribution.
-        let outcomes = [
-            outcome(10.0, 15.0, vec![1.0]),
-            outcome(20.0, 5.0, vec![1.0]),
-            outcome(30.0, 25.0, vec![1.0]),
-            outcome(40.0, 35.0, vec![1.0]),
-        ];
-        let probs = vec![0.3, 0.2, 0.3, 0.2];
-
-        let rm = RiskMeasure::CVaR {
-            alpha: 0.3,
-            lambda: 0.8,
-        };
-
-        // If weights sum to 1, aggregating unit intercepts yields intercept=1.
-        let unit_outcomes: Vec<BackwardOutcome> = outcomes
-            .iter()
-            .map(|o| BackwardOutcome {
-                intercept: 1.0,
-                coefficients: vec![1.0],
-                objective_value: o.objective_value,
-            })
-            .collect();
-
-        let (intercept, coeffs) = rm.aggregate_cut(&unit_outcomes, &probs);
-        assert!(
-            (intercept - 1.0).abs() < 1e-10,
-            "weights must sum to 1.0 (intercept check): got {intercept}"
-        );
-        assert!(
-            (coeffs[0] - 1.0).abs() < 1e-10,
-            "weights must sum to 1.0 (coeff check): got {}",
-            coeffs[0]
-        );
     }
 }
 
@@ -438,105 +427,128 @@ mod stopping_rule_conformance {
         }
     }
 
-    /// Verify `BoundStalling` uses `max(1.0, |lb|)` as denominator, preventing
-    /// division by near-zero values.
-    ///
-    /// When `lb = 0.001` over a window of 3 iterations where the history
-    /// starts at 0.0, the delta = (0.001 - 0.0) / max(1.0, 0.001) = 0.001 / 1.0
-    /// = 0.001, which is below tolerance=0.01 → triggers.
+    // Original test names consolidated into this sweep:
+    //   stopping_rule_bound_stalling_uses_max_guard
+    //   stopping_rule_set_all_mode_requires_simultaneous
+    //   stopping_rule_graceful_shutdown_bypasses_all_mode
+    //
+    // Cases (desc, tolerance, iterations, iter_limit, history_len, shutdown_requested):
+    //   0: BoundStalling uses max(1.0,|lb|) denominator
+    //   1: StoppingMode::All requires ALL non-shutdown rules simultaneously
+    //   2: GracefulShutdown bypasses StoppingMode::All
+    const STOPPING_RULE_CASES: &[(&str, f64, u64, u64, usize, bool)] = &[
+        ("bound_stalling_max_guard", 0.01, 3, 0, 4, false),
+        ("all_mode_requires_simultaneous", 0.001, 5, 10, 2, false),
+        ("graceful_shutdown_bypasses_all", 0.001, 5, 100, 0, true),
+    ];
+
     #[test]
-    fn stopping_rule_bound_stalling_uses_max_guard() {
-        let rule = StoppingRule::BoundStalling {
-            tolerance: 0.01,
-            iterations: 3,
-        };
-        // History: [0.0, 0.0, 0.0, 0.001]. Window of 3 → lb_window_start = history[1] = 0.0.
-        // lb_current = 0.001, denominator = max(1.0, |0.001|) = 1.0
-        // delta = (0.001 - 0.0) / 1.0 = 0.001 < 0.01 → triggered
-        let history = vec![0.0, 0.0, 0.0, 0.001];
-        let state = make_state(4, 0.001, history, false);
-        let result = rule.evaluate(&state);
-
-        assert!(
-            result.triggered,
-            "BoundStalling must trigger when |delta|={:.6} < tolerance=0.01 using max guard",
-            0.001_f64 / 1.0_f64
-        );
-        assert_eq!(result.rule_name, "bound_stalling");
-    }
-
-    /// Verify `StoppingRuleSet` with `StoppingMode::All` requires ALL non-shutdown
-    /// rules to trigger simultaneously — 2 of 3 triggering is insufficient.
-    #[test]
-    fn stopping_rule_set_all_mode_requires_simultaneous() {
-        let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::IterationLimit { limit: 10 },
-                StoppingRule::TimeLimit { seconds: 3600.0 },
-                StoppingRule::BoundStalling {
-                    tolerance: 0.001,
-                    iterations: 5,
-                },
-            ],
-            mode: StoppingMode::All,
-        };
-
-        // IterationLimit(10) triggers at iteration 10.
-        // TimeLimit(3600) does NOT trigger (wall_time = 1000s < 3600s).
-        // BoundStalling requires 5 history entries; provide only 2 → not triggered.
-        let state = MonitorState {
-            iteration: 10,
-            wall_time_seconds: 1000.0, // below the 3600s limit
-            lower_bound: 100.0,
-            lower_bound_history: vec![99.0, 100.0], // only 2 entries, need 5
-            shutdown_requested: false,
-            simulation_costs: None,
-        };
-
-        let (should_stop, results) = rule_set.evaluate(&state);
-
-        // All mode: 2 of 3 non-shutdown rules triggered → must NOT stop
-        assert!(
-            !should_stop,
-            "All mode must not stop when only 2 of 3 rules trigger"
-        );
-        assert_eq!(results.len(), 3, "must return 3 results");
-        assert!(
-            results[0].triggered,
-            "IterationLimit(10) must trigger at iteration 10"
-        );
-        assert!(
-            !results[1].triggered,
-            "TimeLimit(3600) must not trigger at 1000s"
-        );
-        assert!(
-            !results[2].triggered,
-            "BoundStalling must not trigger with only 2 history entries"
-        );
-    }
-
-    /// Verify `GracefulShutdown` bypasses `StoppingMode::All` logic.
-    ///
-    /// Even with `All` mode and only `GracefulShutdown` + a non-triggered
-    /// `IterationLimit`, a shutdown signal forces `should_stop = true`.
-    #[test]
-    fn stopping_rule_graceful_shutdown_bypasses_all_mode() {
-        let rule_set = StoppingRuleSet {
-            rules: vec![
-                StoppingRule::IterationLimit { limit: 100 },
-                StoppingRule::GracefulShutdown,
-            ],
-            mode: StoppingMode::All,
-        };
-
-        // Iteration 1 does NOT trigger IterationLimit(100), but shutdown IS requested.
-        let state = make_state(1, 0.0, vec![], true);
-        let (should_stop, _) = rule_set.evaluate(&state);
-
-        assert!(
-            should_stop,
-            "GracefulShutdown must bypass All mode and force should_stop=true"
-        );
+    fn stopping_rule_parameter_sweep() {
+        for (idx, &(desc, tolerance, stalling_iters, iter_limit, history_len, shutdown)) in
+            STOPPING_RULE_CASES.iter().enumerate()
+        {
+            match idx {
+                // case_index = 0: BoundStalling uses max(1.0, |lb|) as denominator.
+                // History: [0.0, 0.0, 0.0, 0.001]. Window of 3 → lb_window_start = 0.0.
+                // lb_current = 0.001, denominator = max(1.0, 0.001) = 1.0
+                // delta = 0.001 / 1.0 = 0.001 < tolerance=0.01 → triggers.
+                0 => {
+                    let rule = StoppingRule::BoundStalling {
+                        tolerance,
+                        iterations: stalling_iters,
+                    };
+                    let history = vec![0.0_f64; history_len - 1]
+                        .into_iter()
+                        .chain(std::iter::once(0.001_f64))
+                        .collect();
+                    let state = make_state(history_len as u64, 0.001, history, shutdown);
+                    let result = rule.evaluate(&state);
+                    assert!(
+                        result.triggered,
+                        "case_index = {idx}, desc = {desc}: BoundStalling must trigger when \
+                         |delta|={:.6} < tolerance={tolerance} using max guard",
+                        0.001_f64 / 1.0_f64
+                    );
+                    assert_eq!(
+                        result.rule_name, "bound_stalling",
+                        "case_index = {idx}, desc = {desc}: rule_name must be bound_stalling"
+                    );
+                }
+                // case_index = 1: StoppingMode::All requires ALL non-shutdown rules
+                // to trigger simultaneously. Only 2 of 3 trigger here → must NOT stop.
+                1 => {
+                    let rule_set = StoppingRuleSet {
+                        rules: vec![
+                            StoppingRule::IterationLimit { limit: iter_limit },
+                            StoppingRule::TimeLimit { seconds: 3600.0 },
+                            StoppingRule::BoundStalling {
+                                tolerance,
+                                iterations: stalling_iters,
+                            },
+                        ],
+                        mode: StoppingMode::All,
+                    };
+                    // IterationLimit triggers at iter_limit=10.
+                    // TimeLimit(3600) does NOT trigger (wall_time=1000s < 3600s).
+                    // BoundStalling needs stalling_iters=5 entries; only 2 provided.
+                    let history = vec![99.0_f64, 100.0]; // history_len=2
+                    let state = MonitorState {
+                        iteration: iter_limit,
+                        wall_time_seconds: 1000.0,
+                        lower_bound: 100.0,
+                        lower_bound_history: history,
+                        shutdown_requested: shutdown,
+                        simulation_costs: None,
+                    };
+                    let (should_stop, results) = rule_set.evaluate(&state);
+                    assert!(
+                        !should_stop,
+                        "case_index = {idx}, desc = {desc}: All mode must not stop when only 2 \
+                         of 3 rules trigger"
+                    );
+                    assert_eq!(
+                        results.len(),
+                        3,
+                        "case_index = {idx}, desc = {desc}: must return 3 results"
+                    );
+                    assert!(
+                        results[0].triggered,
+                        "case_index = {idx}, desc = {desc}: IterationLimit({iter_limit}) must \
+                         trigger at iteration {iter_limit}"
+                    );
+                    assert!(
+                        !results[1].triggered,
+                        "case_index = {idx}, desc = {desc}: TimeLimit(3600) must not trigger at \
+                         1000s"
+                    );
+                    assert!(
+                        !results[2].triggered,
+                        "case_index = {idx}, desc = {desc}: BoundStalling must not trigger with \
+                         only {history_len} history entries"
+                    );
+                }
+                // case_index = 2: GracefulShutdown bypasses StoppingMode::All.
+                // shutdown_requested=true forces should_stop=true even though
+                // IterationLimit(100) has not triggered at iteration 1.
+                2 => {
+                    let rule_set = StoppingRuleSet {
+                        rules: vec![
+                            StoppingRule::IterationLimit { limit: iter_limit },
+                            StoppingRule::GracefulShutdown,
+                        ],
+                        mode: StoppingMode::All,
+                    };
+                    let state = make_state(1, 0.0, vec![], shutdown);
+                    let (should_stop, _) = rule_set.evaluate(&state);
+                    assert!(
+                        should_stop,
+                        "case_index = {idx}, desc = {desc}: GracefulShutdown must bypass All \
+                         mode and force should_stop=true (shutdown_requested={shutdown})"
+                    );
+                }
+                _ => unreachable!("unexpected case_index = {idx}"),
+            }
+        }
     }
 }
 
@@ -573,7 +585,7 @@ mod cut_conformance {
             &coefficients,
         );
 
-        let (header, recovered_coeffs) = deserialize_cut(&buf, n_state);
+        let (header, recovered_coeffs) = deserialize_cut(&buf, n_state).unwrap();
 
         // All header fields must match exactly.
         assert_eq!(
@@ -675,115 +687,121 @@ mod convergence_conformance {
         ConvergenceMonitor::new(rule_set)
     }
 
-    /// Verify the gap formula `(UB - LB) / max(1, |UB|)`.
-    ///
-    /// Case 1: UB=110, LB=100 → denominator=110 → gap=10/110.
-    /// Case 2: UB=0.5, LB=0.3 → denominator=max(1,0.5)=1.0 → gap=0.2/1.0=0.2.
+    // Original test names consolidated into this sweep:
+    //   convergence_monitor_gap_formula_matches_spec
+    //   convergence_monitor_lb_history_grows_monotonically_when_lb_increases
+    //   convergence_monitor_iteration_limit_triggers_at_exact_count
+    //
+    // Cases (desc, lb, ub, expected_gap):
+    //   0: gap formula — UB=110, LB=100, denominator=110, gap=10/110
+    //   1: gap formula — UB=0.5, LB=0.3, denominator=max(1.0,0.5)=1.0, gap=0.2
+    //   2: LB history grows monotonically over 5 updates
+    //   3: IterationLimit(10) triggers at exactly iteration 10
+    const CONVERGENCE_CASES: &[(&str, f64, f64, f64)] = &[
+        ("gap_formula_large_ub", 100.0, 110.0, 10.0 / 110.0),
+        ("gap_formula_small_ub_max_guard", 0.3, 0.5, 0.2),
+        ("lb_history_monotonic", 0.0, 0.0, 0.0), // sentinel; logic below uses lb_values
+        ("iteration_limit_exact_trigger", 0.0, 0.0, 0.0), // sentinel; logic below uses loop
+    ];
+
     #[test]
-    fn convergence_monitor_gap_formula_matches_spec() {
-        // Case 1: UB=110, LB=100
-        let mut monitor1 = make_monitor(100);
-        monitor1.update(100.0, &make_sync_result(110.0));
-        let expected1 = 10.0_f64 / 110.0_f64;
-        assert!(
-            (monitor1.gap() - expected1).abs() < 1e-10,
-            "gap(UB=110, LB=100) must equal {expected1}, got {}",
-            monitor1.gap()
-        );
-
-        // Case 2: UB=0.5, LB=0.3 → denominator=max(1.0, 0.5)=1.0
-        let mut monitor2 = make_monitor(100);
-        monitor2.update(0.3, &make_sync_result(0.5));
-        let expected2 = (0.5_f64 - 0.3_f64) / 1.0_f64; // = 0.2 / 1.0
-        assert!(
-            (monitor2.gap() - expected2).abs() < 1e-10,
-            "gap(UB=0.5, LB=0.3) must equal {expected2} (max guard=1.0), got {}",
-            monitor2.gap()
-        );
-    }
-
-    /// Verify LB history grows monotonically when LB values increase over 5 calls.
-    ///
-    /// After 5 updates with strictly increasing LB values [10, 20, 30, 40, 50],
-    /// the internal history must have length 5 and the LB accessor must return
-    /// the latest value (50).
-    #[test]
-    fn convergence_monitor_lb_history_grows_monotonically_when_lb_increases() {
-        let mut monitor = make_monitor(100);
-        let lb_values = [10.0_f64, 20.0, 30.0, 40.0, 50.0];
-        let sync = make_sync_result(110.0);
-
-        for &lb in &lb_values {
-            monitor.update(lb, &sync);
+    fn convergence_monitor_parameter_sweep() {
+        for (idx, &(desc, lb, ub, expected_gap)) in CONVERGENCE_CASES.iter().enumerate() {
+            match idx {
+                // case_index = 0 and 1: gap formula (UB - LB) / max(1, |UB|).
+                0 | 1 => {
+                    let mut monitor = make_monitor(100);
+                    monitor.update(lb, &make_sync_result(ub));
+                    let got = monitor.gap();
+                    assert!(
+                        (got - expected_gap).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: gap(UB={ub}, LB={lb}) must equal \
+                         {expected_gap}, got {got}"
+                    );
+                }
+                // case_index = 2: LB history grows monotonically when LB increases over 5 calls.
+                2 => {
+                    let lb_values = [10.0_f64, 20.0, 30.0, 40.0, 50.0];
+                    let sync = make_sync_result(110.0);
+                    let mut monitor = make_monitor(100);
+                    for &v in &lb_values {
+                        monitor.update(v, &sync);
+                    }
+                    assert_eq!(
+                        monitor.iteration_count(),
+                        5,
+                        "case_index = {idx}, desc = {desc}: iteration count must equal 5"
+                    );
+                    assert!(
+                        (monitor.lower_bound() - 50.0).abs() < 1e-10,
+                        "case_index = {idx}, desc = {desc}: lower_bound() must return latest LB \
+                         50.0, got {}",
+                        monitor.lower_bound()
+                    );
+                    // Verify history depth indirectly via BoundStalling requiring 5 entries.
+                    let stalling_rule = StoppingRule::BoundStalling {
+                        tolerance: 1000.0, // huge tolerance → triggers if enough history
+                        iterations: 5,
+                    };
+                    let rule_set = StoppingRuleSet {
+                        rules: vec![stalling_rule],
+                        mode: StoppingMode::Any,
+                    };
+                    let mut monitor2 = ConvergenceMonitor::new(rule_set);
+                    for &v in &lb_values {
+                        monitor2.update(v, &make_sync_result(110.0));
+                    }
+                    let (should_stop, results) = monitor2.update(50.0, &make_sync_result(110.0));
+                    assert_eq!(
+                        results[0].rule_name, "bound_stalling",
+                        "case_index = {idx}, desc = {desc}: rule must be bound_stalling"
+                    );
+                    assert!(
+                        should_stop || !results[0].detail.contains("insufficient history"),
+                        "case_index = {idx}, desc = {desc}: after 6 updates, BoundStalling must \
+                         have sufficient history"
+                    );
+                }
+                // case_index = 3: IterationLimit(10) triggers at exactly iteration 10.
+                3 => {
+                    let rule_set = StoppingRuleSet {
+                        rules: vec![StoppingRule::IterationLimit { limit: 10 }],
+                        mode: StoppingMode::Any,
+                    };
+                    let mut monitor = ConvergenceMonitor::new(rule_set);
+                    let sync = make_sync_result(110.0);
+                    for i in 1..10 {
+                        let (stop, results) = monitor.update(100.0, &sync);
+                        assert!(
+                            !stop,
+                            "case_index = {idx}, desc = {desc}: IterationLimit(10) must not \
+                             trigger at iteration {i}"
+                        );
+                        assert!(
+                            !results[0].triggered,
+                            "case_index = {idx}, desc = {desc}: IterationLimit rule must not be \
+                             triggered at iteration {i}"
+                        );
+                    }
+                    let (stop, results) = monitor.update(100.0, &sync);
+                    assert!(
+                        stop,
+                        "case_index = {idx}, desc = {desc}: IterationLimit(10) must trigger at \
+                         iteration 10"
+                    );
+                    assert!(
+                        results[0].triggered,
+                        "case_index = {idx}, desc = {desc}: IterationLimit rule must be triggered \
+                         at iteration 10"
+                    );
+                    assert_eq!(
+                        results[0].rule_name, "iteration_limit",
+                        "case_index = {idx}, desc = {desc}: rule_name must be iteration_limit"
+                    );
+                }
+                _ => unreachable!("unexpected case_index = {idx}"),
+            }
         }
-
-        assert_eq!(
-            monitor.iteration_count(),
-            5,
-            "iteration count must equal number of update calls"
-        );
-        assert!(
-            (monitor.lower_bound() - 50.0).abs() < 1e-10,
-            "lower_bound() must return latest LB 50.0, got {}",
-            monitor.lower_bound()
-        );
-
-        // Verify that iteration_count grew from 0 to 5 monotonically (proxy for history length).
-        // The history is an internal field but we can verify it indirectly via a BoundStalling
-        // rule that requires 5 history entries — it should now have enough.
-        let stalling_rule = StoppingRule::BoundStalling {
-            tolerance: 1000.0, // huge tolerance → triggers if enough history
-            iterations: 5,
-        };
-        let rule_set = StoppingRuleSet {
-            rules: vec![stalling_rule],
-            mode: StoppingMode::Any,
-        };
-        let mut monitor2 = ConvergenceMonitor::new(rule_set);
-        for &lb in &lb_values {
-            monitor2.update(lb, &make_sync_result(110.0));
-        }
-        // After 5 calls, the BoundStalling rule has 5 entries and should evaluate (not skip).
-        // With tolerance=1000 and strictly increasing LBs, delta > 0, which is < 1000 → triggers.
-        let (should_stop, results) = monitor2.update(50.0, &make_sync_result(110.0));
-        assert_eq!(results[0].rule_name, "bound_stalling");
-        assert!(
-            should_stop || !results[0].detail.contains("insufficient history"),
-            "after 6 updates, BoundStalling must have sufficient history"
-        );
-    }
-
-    /// Verify `IterationLimit(10)` triggers at exactly iteration 10 and not at 9.
-    #[test]
-    fn convergence_monitor_iteration_limit_triggers_at_exact_count() {
-        let rule_set = StoppingRuleSet {
-            rules: vec![StoppingRule::IterationLimit { limit: 10 }],
-            mode: StoppingMode::Any,
-        };
-        let mut monitor = ConvergenceMonitor::new(rule_set);
-        let sync = make_sync_result(110.0);
-
-        // Iterations 1-9: must NOT trigger
-        for i in 1..10 {
-            let (stop, results) = monitor.update(100.0, &sync);
-            assert!(
-                !stop,
-                "IterationLimit(10) must not trigger at iteration {i}"
-            );
-            assert!(
-                !results[0].triggered,
-                "IterationLimit rule must not be triggered at iteration {i}"
-            );
-        }
-
-        // Iteration 10: MUST trigger
-        let (stop, results) = monitor.update(100.0, &sync);
-        assert!(stop, "IterationLimit(10) must trigger at iteration 10");
-        assert!(
-            results[0].triggered,
-            "IterationLimit rule must be triggered at iteration 10"
-        );
-        assert_eq!(results[0].rule_name, "iteration_limit");
     }
 }
 
@@ -791,8 +809,11 @@ mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
     use cobre_sddp::{
-        InflowNonNegativityMethod, PatchBuffer, RiskMeasure, StageIndexer,
-        lower_bound::{LbEvalSpec, evaluate_lower_bound},
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        lower_bound::{LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound},
+        lp_builder::PatchBuffer,
+        risk_measure::RiskMeasure,
     };
     use cobre_solver::RowBatch;
 
@@ -838,21 +859,28 @@ mod lb_conformance {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
         };
+        let mut lb_scratch = LbEvalScratch::new();
 
         // First call: solver returns [50, 100] → LB = E[50, 100] = 75 (scaled).
         // After unscaling by COST_SCALE_FACTOR (1000), LB = 75_000.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
-        let lb1 = evaluate_lower_bound(
-            &mut solver1,
-            &fcf,
-            &initial_state,
-            &indexer,
-            &mut patch_buf,
-            &mut lb_cut_batch,
-            &spec,
-            &comm,
-            None,
-        )
+        let lb1 = {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut lb_cut_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver1,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+        }
         .expect("first evaluate_lower_bound must succeed");
 
         assert!(
@@ -864,17 +892,23 @@ mod lb_conformance {
         // After unscaling by COST_SCALE_FACTOR (1000), LB = 100_000.
         // This simulates the effect of tighter cuts (higher stage-0 LP objectives).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
-        let lb2 = evaluate_lower_bound(
-            &mut solver2,
-            &fcf,
-            &initial_state,
-            &indexer,
-            &mut patch_buf,
-            &mut lb_cut_batch,
-            &spec,
-            &comm,
-            None,
-        )
+        let lb2 = {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut lb_cut_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver2,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+        }
         .expect("second evaluate_lower_bound must succeed");
 
         assert!(
@@ -901,7 +935,7 @@ mod lb_conformance {
 /// empty (0..0) ranges for a constraint family that should be present.
 #[test]
 fn indexer_constraint_inventory() {
-    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+    use cobre_sddp::indexer::{EquipmentCounts, FphaColumnLayout, StageIndexer};
 
     let indexer = StageIndexer::with_equipment(
         &EquipmentCounts {
@@ -1027,7 +1061,7 @@ fn indexer_constraint_inventory() {
 fn constraint_extraction_regression_guard() {
     use std::ops::Range;
 
-    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+    use cobre_sddp::indexer::{EquipmentCounts, FphaColumnLayout, StageIndexer};
 
     let indexer = StageIndexer::with_equipment(
         &EquipmentCounts {

@@ -3,7 +3,7 @@
 //! This module provides JSON writers for two metadata files:
 //!
 //! - [`write_training_metadata`] — writes `training/metadata.json` capturing
-//!   run context, configuration, convergence, and cut statistics.
+//!   run context, configuration, convergence, and row-pool statistics.
 //! - [`write_simulation_metadata`] — writes `simulation/metadata.json` capturing
 //!   run context and scenario completion counts.
 //!
@@ -148,14 +148,14 @@ pub struct MetadataConvergence {
     pub termination_reason: String,
 }
 
-/// Cut pool summary embedded in [`TrainingMetadata`].
+/// Row-pool summary embedded in [`TrainingMetadata`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetadataCuts {
-    /// Total cuts generated over the entire run.
+pub struct MetadataRowPool {
+    /// Total rows generated over the entire run.
     pub total_generated: u64,
-    /// Cuts still active in the pool at termination.
+    /// Rows still active in the pool at termination.
     pub total_active: u64,
-    /// Highest number of simultaneously active cuts observed.
+    /// Highest number of simultaneously active rows observed.
     pub peak_active: u64,
 }
 
@@ -204,8 +204,8 @@ pub struct TrainingMetadata {
     pub iterations: MetadataIterations,
     /// Convergence outcome.
     pub convergence: MetadataConvergence,
-    /// Cut pool summary.
-    pub cuts: MetadataCuts,
+    /// Row-pool summary.
+    pub row_pool: MetadataRowPool,
     /// Execution distribution and environment information.
     pub distribution: DistributionInfo,
 }
@@ -380,7 +380,7 @@ mod tests {
                 final_gap_percent: Some(0.45),
                 termination_reason: "bound_stalling".to_string(),
             },
-            cuts: MetadataCuts {
+            row_pool: MetadataRowPool {
                 total_generated: 1_250_000,
                 total_active: 980_000,
                 peak_active: 1_100_000,
@@ -433,9 +433,15 @@ mod tests {
             decoded.convergence.final_gap_percent,
             original.convergence.final_gap_percent
         );
-        assert_eq!(decoded.cuts.total_generated, original.cuts.total_generated);
-        assert_eq!(decoded.cuts.total_active, original.cuts.total_active);
-        assert_eq!(decoded.cuts.peak_active, original.cuts.peak_active);
+        assert_eq!(
+            decoded.row_pool.total_generated,
+            original.row_pool.total_generated
+        );
+        assert_eq!(
+            decoded.row_pool.total_active,
+            original.row_pool.total_active
+        );
+        assert_eq!(decoded.row_pool.peak_active, original.row_pool.peak_active);
         assert_eq!(
             decoded.distribution.world_size,
             original.distribution.world_size
@@ -500,7 +506,7 @@ mod tests {
 
         assert_eq!(decoded.iterations.completed, 100);
         assert!(decoded.convergence.achieved);
-        assert_eq!(decoded.cuts.total_generated, 1_250_000);
+        assert_eq!(decoded.row_pool.total_generated, 1_250_000);
     }
 
     #[test]

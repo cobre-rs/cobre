@@ -22,7 +22,7 @@ summary to stderr:
 
 ```
  ━━━━━━━━━━━●
- ━━━━━━━━━━━●⚡  COBRE v0.4.4
+ ━━━━━━━━━━━●⚡  COBRE v0.5.0
  ━━━━━━━━━━━●   Power systems in Rust
 
 Created my_first_study case directory from template '1dtoy':
@@ -98,7 +98,7 @@ The banner, a progress bar, and a post-run summary are printed to stderr:
 
 ```
  ━━━━━━━━━━━●
- ━━━━━━━━━━━●⚡  COBRE v0.4.4
+ ━━━━━━━━━━━●⚡  COBRE v0.5.0
  ━━━━━━━━━━━●   Power systems in Rust
 
 Training complete in 3.2s (128 iterations, converged at iter 94)

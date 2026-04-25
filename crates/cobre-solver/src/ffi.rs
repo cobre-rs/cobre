@@ -181,8 +181,15 @@ unsafe extern "C" {
     // Basis Management
     // ============================================================
 
-    /// Set the basis using column and row status arrays. Wraps `Highs_setBasis()`.
-    pub fn cobre_highs_set_basis(
+    /// Set the basis using `alien = false`, saving one LU factorisation
+    /// compared to the alien setter (`Highs_setBasis`). Caller guarantees
+    /// basis consistency (total basic count equals `num_rows`);
+    /// inconsistent bases are rejected with `HIGHS_STATUS_ERROR`. The
+    /// Cobre caller surfaces the rejection as
+    /// [`SolverError::BasisInconsistent`](crate::types::SolverError) with
+    /// the exact basic counts; there is no alien-setter fallback.
+    /// Wraps `Highs::setBasis(const HighsBasis&)` with `basis.alien = false`.
+    pub fn cobre_highs_set_basis_non_alien(
         highs: *mut c_void,
         col_status: *const int32_t,
         row_status: *const int32_t,

@@ -50,9 +50,43 @@ pub fn derive_opening_seed(base_seed: u64, opening_index: u32, stage: u32) -> u6
     hasher.finish()
 }
 
+/// Derive a deterministic seed for grouped forward-pass noise generation.
+///
+/// Uses `group_id` instead of a per-stage ID, so all stages that belong to
+/// the same noise group draw from the same seed. This enables noise-group sharing
+/// (weekly stages sharing monthly PAR noise): assign the same group ID to all
+/// stages within a `(season_id, year)` bucket, then call this function with
+/// that group ID to obtain a shared seed.
+///
+/// The wire format includes a domain separator byte `0x01` prepended before
+/// the remaining fields. This guarantees that
+/// `derive_forward_seed_grouped(s, i, sc, g)` cannot collide with
+/// `derive_forward_seed(s, i, sc, g)` even when all numeric arguments are
+/// identical, because `derive_forward_seed` writes no prefix byte.
+///
+/// Returns the same output for identical `(base_seed, iteration, scenario, group_id)`
+/// tuples regardless of MPI rank, thread ID, or process restart.
+#[must_use]
+pub fn derive_forward_seed_grouped(
+    base_seed: u64,
+    iteration: u32,
+    scenario: u32,
+    group_id: u32,
+) -> u64 {
+    let mut hasher = SipHasher13::new();
+    hasher.write(&[0x01]); // domain separator — absent in derive_forward_seed
+    hasher.write(&base_seed.to_le_bytes());
+    hasher.write(&iteration.to_le_bytes());
+    hasher.write(&scenario.to_le_bytes());
+    hasher.write(&group_id.to_le_bytes());
+    hasher.finish()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{derive_forward_seed, derive_opening_seed, derive_stage_seed};
+    use super::{
+        derive_forward_seed, derive_forward_seed_grouped, derive_opening_seed, derive_stage_seed,
+    };
 
     // -------------------------------------------------------------------------
     // derive_forward_seed: determinism
@@ -215,5 +249,29 @@ mod tests {
         let seed = derive_stage_seed(42, 0);
         // Golden value recorded from siphasher 1.0.2 with zero key.
         assert_eq!(seed, 983_776_962_555_776_753_u64);
+    }
+
+    // -------------------------------------------------------------------------
+    // derive_forward_seed_grouped: determinism and domain separation
+    // -------------------------------------------------------------------------
+
+    /// Same inputs must always produce the same output.
+    #[test]
+    fn test_derive_forward_seed_grouped_deterministic() {
+        assert_eq!(
+            derive_forward_seed_grouped(42, 3, 7, 5),
+            derive_forward_seed_grouped(42, 3, 7, 5),
+        );
+    }
+
+    /// The grouped variant must differ from `derive_forward_seed` even when all
+    /// numeric arguments are identical, because the 0x01 domain separator byte
+    /// is absent in `derive_forward_seed`.
+    #[test]
+    fn test_derive_forward_seed_grouped_differs_from_forward() {
+        assert_ne!(
+            derive_forward_seed_grouped(42, 0, 0, 5),
+            derive_forward_seed(42, 0, 0, 5),
+        );
     }
 }

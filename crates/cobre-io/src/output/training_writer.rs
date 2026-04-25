@@ -4,7 +4,7 @@
 //! training run:
 //!
 //! - `training/convergence.parquet` — one row per iteration, capturing
-//!   bounds, gap, cut pool statistics, timing, and resource usage.
+//!   bounds, gap, row-pool statistics, timing, and resource usage.
 //! - `training/timing/iterations.parquet` — per-iteration timing breakdown
 //!   (currently placeholder zeros — per-phase timing is not yet collected).
 //!
@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, Float64Builder, Int32Builder, Int64Builder, RecordB
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use super::{IterationRecord, TrainingOutput};
+use super::{IterationRecord, TrainingOutput, WorkerTimingRecord};
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{convergence_schema, iteration_timing_schema};
@@ -33,7 +33,7 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 /// # Examples
 ///
 /// ```no_run
-/// use cobre_io::{TrainingOutput, CutStatistics, ParquetWriterConfig};
+/// use cobre_io::{TrainingOutput, RowPoolStatistics, ParquetWriterConfig};
 /// use cobre_io::output::training_writer::TrainingParquetWriter;
 /// use std::path::Path;
 ///
@@ -49,12 +49,13 @@ use crate::output::schemas::{convergence_schema, iteration_timing_schema};
 ///     converged: false,
 ///     termination_reason: "iteration limit".to_string(),
 ///     total_time_ms: 0,
-///     cut_stats: CutStatistics {
+///     cut_stats: RowPoolStatistics {
 ///         total_generated: 0,
 ///         total_active: 0,
 ///         peak_active: 0,
 ///     },
 ///     cut_selection_records: Vec::new(),
+///     worker_timing_records: Vec::new(),
 /// };
 /// writer.write(&training)?;
 /// # Ok(())
@@ -124,7 +125,7 @@ impl TrainingParquetWriter {
         let convergence_path = self.output_dir.join("training/convergence.parquet");
         write_parquet(&convergence_path, &convergence_batch, &self.config)?;
 
-        let timing_batch = build_iteration_timing_batch(records)?;
+        let timing_batch = build_iteration_timing_batch(&training_output.worker_timing_records)?;
         let timing_path = self.output_dir.join("training/timing/iterations.parquet");
         write_parquet(&timing_path, &timing_batch, &self.config)?;
 
@@ -198,14 +199,23 @@ fn build_convergence_batch(records: &[IterationRecord]) -> Result<RecordBatch, O
 
 /// Build a `RecordBatch` for `training/timing/iterations.parquet`.
 ///
-/// Reads per-phase timing fields from each [`IterationRecord`] and writes them
-/// as `i64` millisecond columns.
+/// Each [`WorkerTimingRecord`] produces exactly one row. `rank` is always
+/// non-null. `worker_id` is `NULL` for rank-aggregated rows and carries the
+/// per-worker index for per-worker rows. The 16 timing columns come from the
+/// `timings` array at the corresponding slot index.
+///
+/// Schema: `iteration(i32), rank(i32 nullable), worker_id(i32 nullable),`
+/// then 16 `Int64` timing columns in slot order.
 #[allow(clippy::cast_possible_wrap)]
-fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBatch, OutputError> {
+fn build_iteration_timing_batch(
+    records: &[WorkerTimingRecord],
+) -> Result<RecordBatch, OutputError> {
     let schema = Arc::new(iteration_timing_schema());
     let n = records.len();
 
     let mut iteration = Int32Builder::with_capacity(n);
+    let mut rank = Int32Builder::with_capacity(n);
+    let mut worker_id = Int32Builder::with_capacity(n);
     let mut forward_wall_ms = Int64Builder::with_capacity(n);
     let mut backward_wall_ms = Int64Builder::with_capacity(n);
     let mut cut_selection_ms = Int64Builder::with_capacity(n);
@@ -214,29 +224,48 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
     let mut lower_bound_ms = Int64Builder::with_capacity(n);
     let mut state_exchange_ms = Int64Builder::with_capacity(n);
     let mut cut_batch_build_ms = Int64Builder::with_capacity(n);
-    let mut bwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
-    let mut fwd_rayon_overhead_ms = Int64Builder::with_capacity(n);
+    let mut bwd_setup_ms = Int64Builder::with_capacity(n);
+    let mut bwd_load_imbalance_ms = Int64Builder::with_capacity(n);
+    let mut bwd_scheduling_overhead_ms = Int64Builder::with_capacity(n);
+    let mut fwd_setup_ms = Int64Builder::with_capacity(n);
+    let mut fwd_load_imbalance_ms = Int64Builder::with_capacity(n);
+    let mut fwd_scheduling_overhead_ms = Int64Builder::with_capacity(n);
     let mut overhead_ms = Int64Builder::with_capacity(n);
 
     for rec in records {
         iteration.append_value(rec.iteration as i32);
-        forward_wall_ms.append_value(rec.time_forward_wall_ms as i64);
-        backward_wall_ms.append_value(rec.time_backward_wall_ms as i64);
-        cut_selection_ms.append_value(rec.time_cut_selection_ms as i64);
-        mpi_allreduce_ms.append_value(rec.time_mpi_allreduce_ms as i64);
-        cut_sync_ms.append_value(rec.time_cut_sync_ms as i64);
-        lower_bound_ms.append_value(rec.time_lower_bound_ms as i64);
-        state_exchange_ms.append_value(rec.time_state_exchange_ms as i64);
-        cut_batch_build_ms.append_value(rec.time_cut_batch_build_ms as i64);
-        bwd_rayon_overhead_ms.append_value(rec.time_bwd_rayon_overhead_ms as i64);
-        fwd_rayon_overhead_ms.append_value(rec.time_fwd_rayon_overhead_ms as i64);
-        overhead_ms.append_value(rec.time_overhead_ms as i64);
+        rank.append_value(rec.rank);
+        worker_id.append_option(rec.worker_id);
+        // Slot indices match the column order defined by iteration_timing_schema():
+        //   0: forward_wall_ms   1: backward_wall_ms  2: cut_selection_ms
+        //   3: mpi_allreduce_ms  4: cut_sync_ms        5: lower_bound_ms
+        //   6: state_exchange_ms 7: cut_batch_build_ms 8: bwd_setup_ms
+        //   9: bwd_load_imbalance_ms  10: bwd_scheduling_overhead_ms
+        //  11: fwd_setup_ms  12: fwd_load_imbalance_ms  13: fwd_scheduling_overhead_ms
+        //  14: overhead_ms   15: reserved
+        forward_wall_ms.append_value(rec.timings[0] as i64);
+        backward_wall_ms.append_value(rec.timings[1] as i64);
+        cut_selection_ms.append_value(rec.timings[2] as i64);
+        mpi_allreduce_ms.append_value(rec.timings[3] as i64);
+        cut_sync_ms.append_value(rec.timings[4] as i64);
+        lower_bound_ms.append_value(rec.timings[5] as i64);
+        state_exchange_ms.append_value(rec.timings[6] as i64);
+        cut_batch_build_ms.append_value(rec.timings[7] as i64);
+        bwd_setup_ms.append_value(rec.timings[8] as i64);
+        bwd_load_imbalance_ms.append_value(rec.timings[9] as i64);
+        bwd_scheduling_overhead_ms.append_value(rec.timings[10] as i64);
+        fwd_setup_ms.append_value(rec.timings[11] as i64);
+        fwd_load_imbalance_ms.append_value(rec.timings[12] as i64);
+        fwd_scheduling_overhead_ms.append_value(rec.timings[13] as i64);
+        overhead_ms.append_value(rec.timings[14] as i64);
     }
 
     RecordBatch::try_new(
         schema,
         vec![
             Arc::new(iteration.finish()),
+            Arc::new(rank.finish()),
+            Arc::new(worker_id.finish()),
             Arc::new(forward_wall_ms.finish()),
             Arc::new(backward_wall_ms.finish()),
             Arc::new(cut_selection_ms.finish()),
@@ -245,15 +274,19 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
             Arc::new(lower_bound_ms.finish()),
             Arc::new(state_exchange_ms.finish()),
             Arc::new(cut_batch_build_ms.finish()),
-            Arc::new(bwd_rayon_overhead_ms.finish()),
-            Arc::new(fwd_rayon_overhead_ms.finish()),
+            Arc::new(bwd_setup_ms.finish()),
+            Arc::new(bwd_load_imbalance_ms.finish()),
+            Arc::new(bwd_scheduling_overhead_ms.finish()),
+            Arc::new(fwd_setup_ms.finish()),
+            Arc::new(fwd_load_imbalance_ms.finish()),
+            Arc::new(fwd_scheduling_overhead_ms.finish()),
             Arc::new(overhead_ms.finish()),
         ],
     )
     .map_err(|e| OutputError::serialization("iteration_timing", e.to_string()))
 }
 
-/// Write `training/cut_selection/iterations.parquet` from cut selection records.
+/// Write `training/cut_selection/iterations.parquet` from row-selection records.
 ///
 /// Creates the `training/cut_selection/` directory if it does not exist.
 /// Does nothing if `records` is empty.
@@ -261,9 +294,9 @@ fn build_iteration_timing_batch(records: &[IterationRecord]) -> Result<RecordBat
 /// # Errors
 ///
 /// Returns [`OutputError`] on filesystem or serialization failures.
-pub fn write_cut_selection_records(
+pub fn write_row_selection_records(
     output_dir: &Path,
-    records: &[super::CutSelectionRecord],
+    records: &[super::RowSelectionRecord],
     config: &ParquetWriterConfig,
 ) -> Result<(), OutputError> {
     if records.is_empty() {
@@ -273,7 +306,7 @@ pub fn write_cut_selection_records(
     let dir = output_dir.join("training/cut_selection");
     std::fs::create_dir_all(&dir).map_err(|e| OutputError::io(&dir, e))?;
 
-    let schema = Arc::new(super::schemas::cut_selection_schema());
+    let schema = Arc::new(super::schemas::row_selection_schema());
 
     let n = records.len();
     let mut iteration_builder = Int32Builder::with_capacity(n);
@@ -284,7 +317,6 @@ pub fn write_cut_selection_records(
     let mut active_after_builder = Int32Builder::with_capacity(n);
     let mut selection_time_builder = Float64Builder::with_capacity(n);
     let mut budget_evicted_builder = Int32Builder::with_capacity(n);
-    let mut active_after_angular_builder = Int32Builder::with_capacity(n);
     let mut active_after_budget_builder = Int32Builder::with_capacity(n);
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -297,7 +329,6 @@ pub fn write_cut_selection_records(
         active_after_builder.append_value(r.cuts_active_after as i32);
         selection_time_builder.append_value(r.selection_time_ms);
         budget_evicted_builder.append_option(r.budget_evicted.map(|v| v as i32));
-        active_after_angular_builder.append_option(r.active_after_angular.map(|v| v as i32));
         active_after_budget_builder.append_option(r.active_after_budget.map(|v| v as i32));
     }
 
@@ -310,7 +341,6 @@ pub fn write_cut_selection_records(
         Arc::new(active_after_builder.finish()),
         Arc::new(selection_time_builder.finish()),
         Arc::new(budget_evicted_builder.finish()),
-        Arc::new(active_after_angular_builder.finish()),
         Arc::new(active_after_budget_builder.finish()),
     ];
 
@@ -368,7 +398,7 @@ fn write_parquet(
 )]
 mod tests {
     use super::*;
-    use crate::output::{CutStatistics, TrainingOutput};
+    use crate::output::{RowPoolStatistics, TrainingOutput};
 
     fn make_record(iteration: u32, gap: Option<f64>) -> IterationRecord {
         IterationRecord {
@@ -391,8 +421,12 @@ mod tests {
             time_lower_bound_ms: 0,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_bwd_rayon_overhead_ms: 0,
-            time_fwd_rayon_overhead_ms: 0,
+            time_bwd_setup_ms: 0,
+            time_bwd_load_imbalance_ms: 0,
+            time_bwd_scheduling_overhead_ms: 0,
+            time_fwd_setup_ms: 0,
+            time_fwd_load_imbalance_ms: 0,
+            time_fwd_scheduling_overhead_ms: 0,
             time_overhead_ms: 0,
             forward_passes: 4,
             lp_solves: 40,
@@ -410,12 +444,22 @@ mod tests {
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
             total_time_ms: 5_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 200,
                 total_active: 80,
                 peak_active: 95,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
+        }
+    }
+
+    fn make_worker_timing_record(iteration: u32) -> WorkerTimingRecord {
+        WorkerTimingRecord {
+            iteration,
+            rank: 0,
+            worker_id: None,
+            timings: [100, 200, 10, 5, 8, 3, 4, 7, 50, 60, 20, 40, 30, 15, 12, 0],
         }
     }
 
@@ -470,13 +514,13 @@ mod tests {
 
     #[test]
     fn iteration_timing_batch_field_count() {
-        let records: Vec<IterationRecord> = (1..=3).map(|i| make_record(i, Some(1.0))).collect();
+        let records: Vec<WorkerTimingRecord> = (1..=3).map(make_worker_timing_record).collect();
         let batch = build_iteration_timing_batch(&records).expect("timing batch must be built");
         assert_eq!(batch.num_rows(), 3, "3 records yield 3 rows");
         assert_eq!(
             batch.num_columns(),
-            12,
-            "iteration_timing schema has 12 columns"
+            18,
+            "iteration_timing schema has 18 columns (16 timings + iteration + rank + worker_id)"
         );
 
         let expected_schema = iteration_timing_schema();
@@ -485,6 +529,140 @@ mod tests {
             expected_schema.fields(),
             "schema must match iteration_timing_schema()"
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn iteration_timing_columns_six_decomposed_overhead() {
+        use arrow::array::Int64Array;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        std::fs::create_dir_all(tmp.path().join("training/timing")).unwrap();
+        let config = ParquetWriterConfig::default();
+
+        // Build 3 records with distinct non-zero overhead component values so we
+        // can verify each column carries the right field.
+        let records: Vec<IterationRecord> = (1u32..=3)
+            .map(|i| IterationRecord {
+                iteration: i,
+                lower_bound: f64::from(i) * 10.0,
+                upper_bound_mean: f64::from(i) * 11.0,
+                upper_bound_std: 0.5,
+                gap_percent: Some(5.0),
+                cuts_added: 5,
+                cuts_removed: 1,
+                cuts_active: 4,
+                time_forward_ms: 100,
+                time_backward_ms: 200,
+                time_total_ms: 300,
+                time_forward_wall_ms: 100,
+                time_backward_wall_ms: 200,
+                time_cut_selection_ms: 0,
+                time_mpi_allreduce_ms: 0,
+                time_cut_sync_ms: 0,
+                time_lower_bound_ms: 0,
+                time_state_exchange_ms: 0,
+                time_cut_batch_build_ms: 0,
+                time_bwd_setup_ms: u64::from(i) * 10,
+                time_bwd_load_imbalance_ms: u64::from(i) * 20,
+                time_bwd_scheduling_overhead_ms: u64::from(i) * 30,
+                time_fwd_setup_ms: u64::from(i) * 40,
+                time_fwd_load_imbalance_ms: u64::from(i) * 50,
+                time_fwd_scheduling_overhead_ms: u64::from(i) * 60,
+                time_overhead_ms: 0,
+                forward_passes: 4,
+                lp_solves: 40,
+                solve_time_ms: 0.0,
+            })
+            .collect();
+
+        // Build matching WorkerTimingRecord rank-aggregated rows directly so the
+        // writer has data to emit (the timing parquet reads from
+        // worker_timing_records, not convergence_records).
+        let worker_records: Vec<WorkerTimingRecord> = (1u32..=3)
+            .map(|i| WorkerTimingRecord {
+                iteration: i,
+                rank: 0,
+                worker_id: None,
+                timings: [
+                    100,
+                    200,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    u64::from(i) * 10,
+                    u64::from(i) * 20,
+                    u64::from(i) * 30,
+                    u64::from(i) * 40,
+                    u64::from(i) * 50,
+                    u64::from(i) * 60,
+                    0,
+                    0,
+                ],
+            })
+            .collect();
+        let mut training = make_training_output(records.clone());
+        training.worker_timing_records = worker_records;
+        let writer = TrainingParquetWriter::new(tmp.path(), &config).expect("new must succeed");
+        writer.write(&training).expect("write must succeed");
+
+        let timing_path = tmp.path().join("training/timing/iterations.parquet");
+        assert!(timing_path.exists(), "iterations.parquet must exist");
+
+        let file = std::fs::File::open(&timing_path).expect("file must open");
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("builder")
+            .build()
+            .expect("reader");
+        let batch = reader.next().expect("must have rows").expect("batch Ok");
+
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 18);
+
+        // Old column names should not be present.
+        assert!(batch.column_by_name("bwd_rayon_overhead_ms").is_none());
+        assert!(batch.column_by_name("fwd_rayon_overhead_ms").is_none());
+
+        let expected_schema = iteration_timing_schema();
+        assert_eq!(
+            batch.schema().fields(),
+            expected_schema.fields(),
+            "schema must match iteration_timing_schema()"
+        );
+
+        for (col_name, expected_row1_val) in &[
+            ("bwd_setup_ms", 10_i64),
+            ("bwd_load_imbalance_ms", 20_i64),
+            ("bwd_scheduling_overhead_ms", 30_i64),
+            ("fwd_setup_ms", 40_i64),
+            ("fwd_load_imbalance_ms", 50_i64),
+            ("fwd_scheduling_overhead_ms", 60_i64),
+        ] {
+            let col = batch
+                .column_by_name(col_name)
+                .unwrap_or_else(|| panic!("column {col_name} must exist"));
+            let arr = col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap_or_else(|| panic!("{col_name} must be Int64Array"));
+            // Row 0 corresponds to iteration=1, multiplier=1.
+            assert_eq!(
+                arr.value(0),
+                *expected_row1_val,
+                "{col_name} row 0 must be {expected_row1_val}"
+            );
+            // Row 1: iteration=2, multiplier=2.
+            assert_eq!(
+                arr.value(1),
+                expected_row1_val * 2,
+                "{col_name} row 1 must be {}",
+                expected_row1_val * 2
+            );
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -648,7 +826,11 @@ mod tests {
         let config = ParquetWriterConfig::default();
 
         let records: Vec<IterationRecord> = (1..=5).map(|i| make_record(i, Some(1.0))).collect();
-        let training = make_training_output(records);
+        let mut training = make_training_output(records);
+        // The timing parquet reads from worker_timing_records, not
+        // convergence_records. Add 5 rank-aggregated rows for parity with the
+        // convergence rows.
+        training.worker_timing_records = (1u32..=5).map(make_worker_timing_record).collect();
 
         let writer = TrainingParquetWriter::new(tmp.path(), &config).expect("new must succeed");
         writer.write(&training).expect("write must succeed");
@@ -671,7 +853,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 12);
+        assert_eq!(batch.num_columns(), 18, "timing schema has 18 columns");
     }
 
     #[test]
@@ -714,14 +896,14 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // write_cut_selection_records tests
+    // write_row_selection_records tests
     // -------------------------------------------------------------------------
 
     #[test]
     fn write_cut_selection_empty_is_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
-        write_cut_selection_records(tmp.path(), &[], &config).unwrap();
+        write_row_selection_records(tmp.path(), &[], &config).unwrap();
         assert!(
             !tmp.path()
                 .join("training/cut_selection/iterations.parquet")
@@ -731,12 +913,12 @@ mod tests {
 
     #[test]
     fn write_cut_selection_roundtrip() {
-        use super::super::CutSelectionRecord;
+        use super::super::RowSelectionRecord;
 
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
         let records = vec![
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 3,
                 stage: 0,
                 cuts_populated: 10,
@@ -745,10 +927,9 @@ mod tests {
                 cuts_active_after: 10,
                 selection_time_ms: 0.0,
                 budget_evicted: None,
-                active_after_angular: None,
                 active_after_budget: None,
             },
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 3,
                 stage: 1,
                 cuts_populated: 8,
@@ -757,11 +938,10 @@ mod tests {
                 cuts_active_after: 6,
                 selection_time_ms: 1.5,
                 budget_evicted: None,
-                active_after_angular: None,
                 active_after_budget: None,
             },
         ];
-        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        write_row_selection_records(tmp.path(), &records, &config).unwrap();
         let path = tmp.path().join("training/cut_selection/iterations.parquet");
         assert!(path.exists());
 
@@ -772,19 +952,19 @@ mod tests {
             .unwrap();
         let batch: RecordBatch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 10);
+        assert_eq!(batch.num_columns(), 9);
     }
 
     #[test]
     fn write_cut_selection_with_budget_columns_roundtrip() {
-        use super::super::CutSelectionRecord;
+        use super::super::RowSelectionRecord;
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let tmp = tempfile::tempdir().unwrap();
         let config = ParquetWriterConfig::default();
         let records = vec![
             // Record with all budget columns populated (budget enabled).
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 5,
                 stage: 0,
                 cuts_populated: 20,
@@ -793,11 +973,10 @@ mod tests {
                 cuts_active_after: 20,
                 selection_time_ms: 0.0,
                 budget_evicted: Some(3),
-                active_after_angular: Some(18),
                 active_after_budget: Some(15),
             },
             // Record with all budget columns None (budget disabled).
-            CutSelectionRecord {
+            RowSelectionRecord {
                 iteration: 5,
                 stage: 1,
                 cuts_populated: 15,
@@ -806,11 +985,10 @@ mod tests {
                 cuts_active_after: 13,
                 selection_time_ms: 2.0,
                 budget_evicted: None,
-                active_after_angular: None,
                 active_after_budget: None,
             },
         ];
-        write_cut_selection_records(tmp.path(), &records, &config).unwrap();
+        write_row_selection_records(tmp.path(), &records, &config).unwrap();
         let path = tmp.path().join("training/cut_selection/iterations.parquet");
         assert!(path.exists());
 
@@ -821,7 +999,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 10);
+        assert_eq!(batch.num_columns(), 9);
 
         // Verify nullable columns: row 0 has Some values, row 1 has None.
         let budget_evicted_col = batch.column_by_name("budget_evicted").unwrap();
@@ -832,16 +1010,6 @@ mod tests {
         assert!(
             budget_evicted_col.is_null(1),
             "row 1: budget_evicted None must be null"
-        );
-
-        let angular_col = batch.column_by_name("active_after_angular").unwrap();
-        assert!(
-            !angular_col.is_null(0),
-            "row 0: active_after_angular Some(18) must not be null"
-        );
-        assert!(
-            angular_col.is_null(1),
-            "row 1: active_after_angular None must be null"
         );
 
         let budget_col = batch.column_by_name("active_after_budget").unwrap();
@@ -860,12 +1028,6 @@ mod tests {
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
         assert_eq!(budget_evicted_arr.value(0), 3);
-
-        let angular_arr = angular_col
-            .as_any()
-            .downcast_ref::<arrow::array::Int32Array>()
-            .unwrap();
-        assert_eq!(angular_arr.value(0), 18);
 
         let budget_arr = budget_col
             .as_any()

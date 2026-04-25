@@ -111,24 +111,24 @@ fn simulation_only_fcf_round_trip() {
     let training_result = outcome.result;
 
     // Capture original FCF state.
-    let original_active_cuts = setup.fcf().total_active_cuts();
+    let original_active_cuts = setup.fcf.total_active_cuts();
     assert!(original_active_cuts > 0, "training should produce cuts");
 
-    let n_stages = setup.num_stages();
-    let state_dim = setup.fcf().state_dimension;
+    let n_stages = setup.stage_data.stage_templates.templates.len();
+    let state_dim = setup.fcf.state_dimension;
 
     // Evaluate at a representative state point for each stage.
     let test_state: Vec<f64> = vec![50.0; state_dim];
     let mut original_evals = Vec::with_capacity(n_stages);
     for stage in 0..n_stages {
-        original_evals.push(setup.fcf().evaluate_at_state(stage, &test_state));
+        original_evals.push(setup.fcf.evaluate_at_state(stage, &test_state));
     }
 
     // Write policy checkpoint to a temporary directory.
     let tmpdir = tempfile::tempdir().expect("tempdir");
     let policy_dir = tmpdir.path().join("policy");
 
-    let fcf = setup.fcf();
+    let fcf = &setup.fcf;
     let stage_records = build_stage_cut_records(fcf);
     let stage_active_indices = build_active_indices(&stage_records);
     let stage_cuts = build_stage_cuts_payloads(fcf, &stage_records, &stage_active_indices);
@@ -146,8 +146,8 @@ fn simulation_only_fcf_round_trip() {
         best_upper_bound: Some(training_result.final_ub),
         state_dimension: state_dim as u32,
         num_stages: n_stages as u32,
-        max_iterations: setup.max_iterations() as u32,
-        forward_passes: setup.forward_passes(),
+        max_iterations: setup.loop_params.max_iterations as u32,
+        forward_passes: setup.loop_params.forward_passes,
         warm_start_cuts: warm_start_counts.iter().copied().max().unwrap_or(0),
         warm_start_counts,
         rng_seed: 42,

@@ -24,9 +24,9 @@
 //! 4. Convert raw types to public types and sort the output.
 //!
 //! Cross-reference validation (checking that referenced entity IDs exist in
-//! their registries) is deferred to Layer 3 (Epic 06). Dimensional/semantic
+//! their registries) is deferred to Layer 3. Dimensional/semantic
 //! constraints (lag contiguity, AR coefficient count matching, block count
-//! matching) are deferred to Layer 3/5 (Epic 06).
+//! matching) are deferred to Layer 3/5.
 
 pub mod ar_coefficients;
 pub mod assembly;

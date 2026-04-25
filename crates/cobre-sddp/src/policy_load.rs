@@ -11,6 +11,9 @@ use cobre_io::PolicyCheckpointMetadata;
 use cobre_solver::Basis;
 
 use crate::SddpError;
+use crate::cut::pool::CutPool;
+use crate::setup::StudySetup;
+use crate::workspace::CapturedBasis;
 
 /// Resolve the per-stage warm-start cut counts from a loaded policy checkpoint.
 ///
@@ -74,35 +77,290 @@ pub fn validate_policy_compatibility(
 
 /// Build a basis cache from deserialized checkpoint basis records.
 ///
-/// Returns a `Vec<Option<Basis>>` with one entry per stage. Stages with a
-/// matching record get `Some(Basis)` (with `u8` status codes widened to `i32`);
-/// stages without a record get `None`.
+/// Returns a `Vec<Option<CapturedBasis>>` with one entry per stage. Stages with
+/// a matching record get `Some(CapturedBasis)` (with `u8` status codes widened
+/// to `i32`); stages without a record get `None`.
+///
+/// The returned `CapturedBasis` entries have empty metadata (`cut_row_slots`,
+/// `state_at_capture`, `base_row_count = 0`). Checkpoint files do not store
+/// slot-tracking metadata; on the simulation warm-start path, `reconstruct_basis`
+/// degrades gracefully when `cut_row_slots` is empty (all rows treated as new).
 #[must_use]
 pub fn build_basis_cache_from_checkpoint(
     num_stages: usize,
     stage_bases: &[cobre_io::OwnedPolicyBasisRecord],
-) -> Vec<Option<Basis>> {
-    let mut cache: Vec<Option<Basis>> = vec![None; num_stages];
+) -> Vec<Option<CapturedBasis>> {
+    let mut cache: Vec<Option<CapturedBasis>> = vec![None; num_stages];
     for record in stage_bases {
         let stage = record.stage_id as usize;
         if stage < num_stages {
             let col_status: Vec<i32> = record.column_status.iter().map(|&c| i32::from(c)).collect();
             let row_status: Vec<i32> = record.row_status.iter().map(|&r| i32::from(r)).collect();
-            cache[stage] = Some(Basis {
-                col_status,
-                row_status,
+            cache[stage] = Some(CapturedBasis {
+                basis: Basis {
+                    col_status,
+                    row_status,
+                },
+                base_row_count: 0,
+                cut_row_slots: Vec::new(),
+                state_at_capture: Vec::new(),
             });
         }
     }
     cache
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use cobre_io::PolicyCheckpointMetadata;
+/// Load boundary cuts from a source Cobre policy checkpoint.
+///
+/// Reads the checkpoint at `boundary_path`, extracts cuts from the stage
+/// identified by `source_stage`, and validates that the source state dimension
+/// matches `current_state_dimension`.
+///
+/// Only `state_dimension` must match between the source and current study —
+/// `num_stages` may differ (e.g., a monthly source checkpoint vs. a
+/// weekly+monthly current study).
+///
+/// # Errors
+///
+/// Returns [`SddpError::Validation`] if:
+/// - The checkpoint cannot be read
+/// - `source_stage` does not exist in the checkpoint
+/// - The source stage's state dimension does not match `current_state_dimension`
+pub fn load_boundary_cuts(
+    boundary_path: &std::path::Path,
+    source_stage: u32,
+    current_state_dimension: u32,
+) -> Result<Vec<cobre_io::OwnedPolicyCutRecord>, SddpError> {
+    let checkpoint =
+        cobre_io::output::policy::read_policy_checkpoint(boundary_path).map_err(|e| {
+            SddpError::Validation(format!(
+                "failed to read boundary policy checkpoint at {}: {e}",
+                boundary_path.display()
+            ))
+        })?;
 
-    use super::{resolve_warm_start_counts, validate_policy_compatibility};
+    let stage_result = checkpoint
+        .stage_cuts
+        .iter()
+        .find(|sr| sr.stage_id == source_stage)
+        .ok_or_else(|| {
+            SddpError::Validation(format!(
+                "boundary policy: source_stage {} not found in checkpoint \
+                 (available stages: {:?})",
+                source_stage,
+                checkpoint
+                    .stage_cuts
+                    .iter()
+                    .map(|sr| sr.stage_id)
+                    .collect::<Vec<_>>()
+            ))
+        })?;
+
+    if stage_result.state_dimension != current_state_dimension {
+        return Err(SddpError::Validation(format!(
+            "boundary policy state_dimension mismatch: source stage {} has {}, \
+             current study has {}",
+            source_stage, stage_result.state_dimension, current_state_dimension
+        )));
+    }
+
+    Ok(stage_result.cuts.clone())
+}
+
+/// Inject boundary cuts into the terminal stage of the study's FCF.
+///
+/// Replaces the terminal stage's [`CutPool`] with one pre-populated from
+/// `boundary_records`. The pool retains capacity for new training cuts;
+/// only the terminal pool is modified.
+///
+/// After this call, `setup.fcf().pools[num_stages - 1].warm_start_count`
+/// equals `boundary_records.len()`, which causes the forward pass to set
+/// `terminal_has_boundary_cuts = true` and prevents theta zeroing at the
+/// terminal stage.
+pub fn inject_boundary_cuts(
+    setup: &mut StudySetup,
+    boundary_records: &[cobre_io::OwnedPolicyCutRecord],
+) {
+    let fcf = &mut setup.fcf;
+    let terminal_idx = fcf.pools.len() - 1;
+    let state_dimension = fcf.state_dimension;
+    let forward_passes = fcf.forward_passes;
+    let existing_capacity = fcf.pools[terminal_idx].capacity;
+    let existing_warm_start = fcf.pools[terminal_idx].warm_start_count as usize;
+    let training_capacity = existing_capacity.saturating_sub(existing_warm_start);
+    let max_iterations = if forward_passes > 0 {
+        #[allow(clippy::cast_possible_truncation)]
+        let m = (training_capacity / forward_passes as usize) as u64;
+        m
+    } else {
+        0
+    };
+    fcf.pools[terminal_idx] = CutPool::new_with_warm_start(
+        state_dimension,
+        forward_passes,
+        max_iterations,
+        boundary_records,
+    );
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::cast_possible_truncation)]
+mod tests {
+    use cobre_io::{PolicyCheckpointMetadata, StageCutsPayload};
+
+    use super::{load_boundary_cuts, resolve_warm_start_counts, validate_policy_compatibility};
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// Write a minimal policy checkpoint to `dir` with `n_stages` stages each
+    /// having `state_dimension` state variables and the supplied cut intercepts.
+    ///
+    /// Each stage gets `cuts.len()` cuts with coefficients all set to 1.0.
+    fn write_minimal_checkpoint(
+        dir: &std::path::Path,
+        n_stages: u32,
+        state_dimension: u32,
+        cut_intercepts: &[f64],
+    ) {
+        let state_dim = state_dimension as usize;
+        let coefficients = vec![1.0_f64; state_dim];
+        let n_cuts = cut_intercepts.len();
+
+        // Build cut records for each stage.
+        let cut_records: Vec<Vec<cobre_io::PolicyCutRecord<'_>>> = (0..n_stages)
+            .map(|_| {
+                cut_intercepts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &intercept)| cobre_io::PolicyCutRecord {
+                        cut_id: i as u64,
+                        slot_index: i as u32,
+                        iteration: i as u32,
+                        forward_pass_index: 0,
+                        intercept,
+                        coefficients: &coefficients,
+                        is_active: true,
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let active_indices: Vec<Vec<u32>> = (0..n_stages)
+            .map(|_| (0..n_cuts as u32).collect())
+            .collect();
+
+        let payloads: Vec<StageCutsPayload<'_>> = (0..n_stages as usize)
+            .map(|s| StageCutsPayload {
+                stage_id: s as u32,
+                state_dimension,
+                capacity: n_cuts as u32,
+                warm_start_count: 0,
+                cuts: &cut_records[s],
+                active_cut_indices: &active_indices[s],
+                populated_count: n_cuts as u32,
+            })
+            .collect();
+
+        let metadata = PolicyCheckpointMetadata {
+            cobre_version: "0.4.0".to_string(),
+            created_at: "2026-04-14T00:00:00Z".to_string(),
+            completed_iterations: 10,
+            final_lower_bound: 0.0,
+            best_upper_bound: None,
+            state_dimension,
+            num_stages: n_stages,
+            max_iterations: 50,
+            forward_passes: 1,
+            warm_start_cuts: 0,
+            warm_start_counts: vec![],
+            rng_seed: 0,
+            total_visited_states: 0,
+        };
+
+        cobre_io::write_policy_checkpoint(dir, &payloads, &[], &metadata, &[]).unwrap();
+    }
+
+    // ── load_boundary_cuts tests ──────────────────────────────────────────────
+
+    /// Given a valid checkpoint with 12 stages and `state_dimension=10`, when
+    /// `load_boundary_cuts` is called for stage 2 with matching dimension,
+    /// then it returns `Ok` with the cuts from that stage.
+    #[test]
+    fn load_boundary_cuts_valid_stage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let intercepts = vec![10.0, 20.0, 30.0];
+        write_minimal_checkpoint(tmp.path(), 12, 10, &intercepts);
+
+        let cuts = load_boundary_cuts(tmp.path(), 2, 10).unwrap();
+
+        assert_eq!(cuts.len(), 3, "should return all 3 cuts from stage 2");
+        let returned_intercepts: Vec<f64> = cuts.iter().map(|c| c.intercept).collect();
+        assert_eq!(
+            returned_intercepts, intercepts,
+            "intercepts should match written values"
+        );
+        for cut in &cuts {
+            assert_eq!(
+                cut.coefficients.len(),
+                10,
+                "each cut should have state_dimension=10 coefficients"
+            );
+        }
+    }
+
+    /// Given a checkpoint without stage 99, when `load_boundary_cuts` is called
+    /// for stage 99, then it returns `Err(SddpError::Validation)` with a message
+    /// containing `"source_stage"` and `"99"`.
+    #[test]
+    fn load_boundary_cuts_missing_stage_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_checkpoint(tmp.path(), 5, 10, &[1.0]);
+
+        let result = load_boundary_cuts(tmp.path(), 99, 10);
+
+        assert!(result.is_err(), "should fail for missing stage");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("source_stage"),
+            "error should mention 'source_stage': {msg}"
+        );
+        assert!(
+            msg.contains("99"),
+            "error should include the missing stage index: {msg}"
+        );
+    }
+
+    /// Given a checkpoint with `state_dimension=10`, when `load_boundary_cuts` is
+    /// called with `current_state_dimension=5`, then it returns
+    /// `Err(SddpError::Validation)` with a message containing `"state_dimension"`.
+    #[test]
+    fn load_boundary_cuts_state_dimension_mismatch_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_minimal_checkpoint(tmp.path(), 5, 10, &[1.0]);
+
+        let result = load_boundary_cuts(tmp.path(), 0, 5);
+
+        assert!(result.is_err(), "should fail for dimension mismatch");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("state_dimension"),
+            "error should mention 'state_dimension': {msg}"
+        );
+    }
+
+    /// Given a non-existent path, when `load_boundary_cuts` is called, then it
+    /// returns `Err(SddpError::Validation)` with a message describing the failure.
+    #[test]
+    fn load_boundary_cuts_nonexistent_path_returns_error() {
+        let result = load_boundary_cuts(std::path::Path::new("/nonexistent/path/to/policy"), 0, 10);
+
+        assert!(result.is_err(), "should fail for non-existent path");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("failed to read boundary policy checkpoint"),
+            "error should describe the IO failure: {msg}"
+        );
+    }
 
     fn sample_metadata() -> PolicyCheckpointMetadata {
         PolicyCheckpointMetadata {

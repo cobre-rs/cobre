@@ -40,8 +40,8 @@
 //! 4. `max_generation_mw >= min_generation_mw`.
 //!
 //! GNL config is parsed but NOT rejected at this layer — GNL rejection is a
-//! semantic validation concern for Epic 06. Cross-reference validation (checking
-//! that `bus_id` exists) is also deferred to Layer 3 (Epic 06).
+//! semantic validation concern deferred to Layer 3. Cross-reference validation
+//! (checking that `bus_id` exists) is also deferred to Layer 3.
 
 use cobre_core::{
     EntityId,
@@ -115,7 +115,7 @@ pub(crate) struct RawGnlConfig {
 ///
 /// GNL config is parsed but NOT rejected at this layer. Cross-reference
 /// validation (e.g., `bus_id` existence in the bus registry) is deferred to
-/// Layer 3 (Epic 06).
+/// Layer 3.
 ///
 /// # Errors
 ///
@@ -591,8 +591,7 @@ mod tests {
 
     // ── AC: GNL thermals accepted without rejection ───────────────────────────
 
-    /// GNL thermals are parsed and accepted at this layer (rejection is semantic
-    /// validation in Epic 06).
+    /// GNL thermals are parsed and accepted at this layer (semantic rejection is deferred).
     #[test]
     fn test_gnl_thermal_not_rejected() {
         let f = write_json(VALID_JSON);

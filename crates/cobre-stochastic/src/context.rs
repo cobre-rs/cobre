@@ -36,22 +36,38 @@ pub struct ClassSchemes {
 
 /// Opening-tree inputs passed to [`build_stochastic_context`].
 ///
-/// Groups the two optional caller-provided overrides for the opening scenario
-/// tree: a pre-built `OpeningTree` that bypasses generation entirely, and a
+/// Groups the optional caller-provided overrides for the opening scenario
+/// tree: a pre-built `OpeningTree` that bypasses generation entirely, a
 /// `HistoricalScenarioLibrary` used when any stage is configured with
-/// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals).
+/// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals),
+/// a pre-padding external scenario count per stage used to clamp openings
+/// for stages whose external library was padded from fewer raw scenarios,
+/// and per-stage noise group IDs for the noise-group sharing feature.
 ///
-/// When both fields are `None` the opening tree is generated from SAA/LHS/QMC
+/// When all optional fields are `None` the opening tree is generated from SAA/LHS/QMC
 /// noise depending on each stage's `scenario_config.noise_method`.
 #[derive(Debug, Default)]
 pub struct OpeningTreeInputs<'a> {
     /// A pre-built opening tree that bypasses generation. When `Some`, the
-    /// `historical_library` field is ignored.
+    /// `historical_library` and `external_scenario_counts` fields are ignored.
     pub user_tree: Option<OpeningTree>,
     /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals)
     /// stages. Required when any study stage uses that noise method and
     /// `user_tree` is `None`.
     pub historical_library: Option<&'a HistoricalScenarioLibrary>,
+    /// Pre-padding external scenario count per stage. Used to clamp opening
+    /// tree openings for stages with fewer external scenarios than the
+    /// configured branching factor. `None` when no entity class uses External
+    /// sampling. When `Some`, length must equal the number of study stages.
+    pub external_scenario_counts: Option<Vec<usize>>,
+    /// Noise group IDs for noise-group sharing, indexed by stage array index.
+    ///
+    /// Stages with the same group ID share the same noise draw in the opening
+    /// tree, enabling weekly stages within the same monthly bucket to receive
+    /// identical noise. `None` generates independent noise for every stage
+    /// (the original behaviour). When `Some`, length must equal the number of
+    /// study stages.
+    pub noise_group_ids: Option<Vec<u32>>,
 }
 
 use crate::{
@@ -62,7 +78,7 @@ use crate::{
     provenance::{ComponentProvenance, StochasticProvenance},
     sampling::historical::HistoricalScenarioLibrary,
     tree::{
-        generate::{ClassDimensions, generate_opening_tree},
+        generate::{ClassDimensions, OpeningTreeGenerationInputs, generate_opening_tree},
         opening_tree::OpeningTreeView,
     },
 };
@@ -380,6 +396,8 @@ pub fn build_stochastic_context(
     let OpeningTreeInputs {
         user_tree: user_opening_tree,
         historical_library,
+        external_scenario_counts,
+        noise_group_ids,
     } = opening_tree_inputs;
     let _report = validate_par_parameters(system.inflow_models())?;
 
@@ -479,7 +497,11 @@ pub fn build_stochastic_context(
                 n_load_buses,
                 n_ncs: n_stochastic_ncs,
             },
-            historical_library,
+            &OpeningTreeGenerationInputs {
+                historical_library,
+                external_scenario_counts: external_scenario_counts.as_deref(),
+                noise_group_ids: noise_group_ids.as_deref(),
+            },
         )?
     };
 
@@ -1472,6 +1494,8 @@ mod tests {
             OpeningTreeInputs {
                 user_tree: Some(user_tree),
                 historical_library: None,
+                external_scenario_counts: None,
+                noise_group_ids: None,
             },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),
@@ -1614,6 +1638,8 @@ mod tests {
             OpeningTreeInputs {
                 user_tree: Some(user_tree),
                 historical_library: None,
+                external_scenario_counts: None,
+                noise_group_ids: None,
             },
             ClassSchemes {
                 inflow: Some(SamplingScheme::InSample),

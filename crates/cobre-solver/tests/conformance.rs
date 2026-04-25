@@ -64,7 +64,9 @@ fn test_solver_highs_load_model_and_solve() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver.solve().expect("solve() must succeed on feasible LP");
+    let solution = solver
+        .solve(None)
+        .expect("solve() must succeed on feasible LP");
 
     let obj = solution.objective;
     assert!(
@@ -98,7 +100,7 @@ fn test_solver_highs_load_model_replaces_previous() {
 
     solver.load_model(&template);
     let obj1 = solver
-        .solve()
+        .solve(None)
         .expect("first solve() must succeed")
         .objective;
     assert!(
@@ -111,7 +113,7 @@ fn test_solver_highs_load_model_replaces_previous() {
     solver.load_model(&modified);
 
     let obj2 = solver
-        .solve()
+        .solve(None)
         .expect("second solve() must succeed")
         .objective;
     assert!(
@@ -168,7 +170,7 @@ fn test_solver_highs_add_rows_tightens() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after adding both cuts");
 
     assert!(
@@ -207,7 +209,7 @@ fn test_solver_highs_add_rows_single_cut() {
     solver.load_model(&template);
     solver.add_rows(&single_cut);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after adding single cut");
 
     let obj = solution.objective;
@@ -236,7 +238,7 @@ fn test_solver_highs_set_row_bounds_state_change() {
     solver.add_rows(&cuts);
     solver.set_row_bounds(&[0], &[4.0], &[4.0]);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after patching row bounds");
 
     let obj = solution.objective;
@@ -275,7 +277,7 @@ fn test_solver_highs_set_col_bounds_basic() {
     solver.add_rows(&cuts);
     solver.set_col_bounds(&[2], &[0.0], &[3.0]);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after tightening col 2 bounds");
 
     let obj = solution.objective;
@@ -295,7 +297,7 @@ fn test_solver_highs_set_col_bounds_tightens() {
     // Force x1 >= 10.0
     solver.set_col_bounds(&[1], &[10.0], &[f64::INFINITY]);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after patching col 1 lower bound");
 
     let obj = solution.objective;
@@ -320,7 +322,7 @@ fn test_solver_highs_set_col_bounds_repatch() {
 
     solver.load_model(&template);
     let obj1 = solver
-        .solve()
+        .solve(None)
         .expect("first solve() must succeed with original bounds")
         .objective;
     assert!(
@@ -330,7 +332,7 @@ fn test_solver_highs_set_col_bounds_repatch() {
 
     solver.set_col_bounds(&[1], &[10.0], &[f64::INFINITY]);
     let obj2 = solver
-        .solve()
+        .solve(None)
         .expect("second solve() must succeed after tightening col 1")
         .objective;
     assert!(
@@ -340,7 +342,7 @@ fn test_solver_highs_set_col_bounds_repatch() {
 
     solver.set_col_bounds(&[1], &[0.0], &[f64::INFINITY]);
     let obj3 = solver
-        .solve()
+        .solve(None)
         .expect("third solve() must succeed after restoring col 1 bounds")
         .objective;
     assert!(
@@ -357,7 +359,9 @@ fn test_solver_highs_solve_dual_values() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver.solve().expect("solve() must succeed on feasible LP");
+    let solution = solver
+        .solve(None)
+        .expect("solve() must succeed on feasible LP");
 
     assert_eq!(
         solution.dual.len(),
@@ -389,7 +393,7 @@ fn test_solver_highs_solve_dual_values_with_cuts() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after adding both cuts");
 
     assert_eq!(
@@ -416,7 +420,9 @@ fn test_solver_highs_solve_reduced_costs() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver.solve().expect("solve() must succeed on feasible LP");
+    let solution = solver
+        .solve(None)
+        .expect("solve() must succeed on feasible LP");
 
     assert_eq!(
         solution.reduced_costs.len(),
@@ -439,7 +445,9 @@ fn test_solver_highs_solve_iterations_reported() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver.solve().expect("solve() must succeed on feasible LP");
+    let solution = solver
+        .solve(None)
+        .expect("solve() must succeed on feasible LP");
 
     assert!(
         solution.iterations >= 1,
@@ -463,7 +471,9 @@ fn test_solver_highs_dual_normalization_cut_relevant_row() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    let solution = solver.solve().expect("solve() must succeed on feasible LP");
+    let solution = solver
+        .solve(None)
+        .expect("solve() must succeed on feasible LP");
 
     // dual[0] is the cut-relevant state-fixing row dual (n_dual_relevant = 1)
     let pi_0 = solution.dual[0];
@@ -482,7 +492,7 @@ fn test_solver_highs_dual_normalization_sensitivity_check() {
     // Solve original problem (Row 0 RHS = 6.0, z* = 100.0)
     solver.load_model(&template);
     let z_original = solver
-        .solve()
+        .solve(None)
         .expect("first solve() must succeed on original fixture")
         .objective;
     assert!(
@@ -493,7 +503,7 @@ fn test_solver_highs_dual_normalization_sensitivity_check() {
     // Patch Row 0 RHS to 6.01 (perturb state-fixing constraint by +0.01)
     solver.set_row_bounds(&[0], &[6.01], &[6.01]);
     let z_perturbed = solver
-        .solve()
+        .solve(None)
         .expect("second solve() must succeed after patching Row 0 RHS")
         .objective;
 
@@ -515,7 +525,7 @@ fn test_solver_highs_dual_normalization_with_binding_cut() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
     let solution = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after adding both cuts");
 
     // dual[3] is Cut 2 (the binding cut, appended as Row 3)
@@ -526,52 +536,38 @@ fn test_solver_highs_dual_normalization_with_binding_cut() {
     );
 }
 
-// ─── SS1.9 reset conformance tests ────────────────────────────────────────────
+// ─── SS1.9 statistics-accumulation conformance tests ─────────────────────────
 
-/// SS1.9 row 3: solve twice, reset, verify statistics counters preserved.
+/// SS1.9: solve twice, verify statistics are cumulative across solves.
+///
+/// `reset()` was removed — statistics are now always cumulative
+/// and survive `load_model` calls.
 #[test]
-fn test_solver_highs_reset_preserves_statistics() {
+fn test_solver_highs_statistics_are_cumulative() {
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     let template = make_fixture_stage_template();
 
     // Solve twice to accumulate non-trivial statistics
     solver.load_model(&template);
-    solver.solve().expect("first solve() must succeed");
-    solver.solve().expect("second solve() must succeed");
+    solver.solve(None).expect("first solve() must succeed");
+    solver.solve(None).expect("second solve() must succeed");
 
-    let stats_before = solver.statistics();
-    assert_eq!(
-        stats_before.solve_count, 2,
-        "expected 2 solves before reset"
-    );
-    assert_eq!(
-        stats_before.success_count, 2,
-        "expected 2 successes before reset"
-    );
+    let stats = solver.statistics();
+    assert_eq!(stats.solve_count, 2, "expected 2 solves");
+    assert_eq!(stats.success_count, 2, "expected 2 successes");
 
-    // Reset clears the model but must preserve statistics
-    solver.reset();
+    // Reload model and solve again — statistics must continue to accumulate
+    solver.load_model(&template);
+    solver.solve(None).expect("third solve() must succeed");
 
     let stats_after = solver.statistics();
     assert_eq!(
-        stats_after.solve_count, stats_before.solve_count,
-        "solve_count must be preserved across reset"
+        stats_after.solve_count, 3,
+        "solve_count must accumulate across load_model calls"
     );
     assert_eq!(
-        stats_after.success_count, stats_before.success_count,
-        "success_count must be preserved across reset"
-    );
-    assert_eq!(
-        stats_after.failure_count, stats_before.failure_count,
-        "failure_count must be preserved across reset"
-    );
-    assert_eq!(
-        stats_after.total_iterations, stats_before.total_iterations,
-        "total_iterations must be preserved across reset"
-    );
-    assert_eq!(
-        stats_after.total_solve_time_seconds, stats_before.total_solve_time_seconds,
-        "total_solve_time_seconds must be preserved across reset"
+        stats_after.success_count, 3,
+        "success_count must accumulate across load_model calls"
     );
 }
 
@@ -608,8 +604,8 @@ fn test_solver_highs_statistics_initial() {
         "expected total_solve_time_seconds = 0.0 on fresh solver"
     );
     assert_eq!(
-        stats.basis_rejections, 0,
-        "expected basis_rejections = 0 on fresh solver"
+        stats.basis_consistency_failures, 0,
+        "expected basis_consistency_failures = 0 on fresh solver"
     );
 }
 
@@ -620,9 +616,9 @@ fn test_solver_highs_statistics_increment() {
     let template = make_fixture_stage_template();
 
     solver.load_model(&template);
-    solver.solve().expect("first solve() must succeed");
-    solver.solve().expect("second solve() must succeed");
-    solver.solve().expect("third solve() must succeed");
+    solver.solve(None).expect("first solve() must succeed");
+    solver.solve(None).expect("second solve() must succeed");
+    solver.solve(None).expect("third solve() must succeed");
 
     let stats = solver.statistics();
     assert_eq!(
@@ -651,9 +647,9 @@ fn test_solver_highs_statistics_increment() {
         stats.total_solve_time_seconds
     );
     assert_eq!(
-        stats.basis_rejections, 0,
-        "expected basis_rejections = 0 after cold solves, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures, 0,
+        "expected basis_consistency_failures = 0 after cold solves, got {}",
+        stats.basis_consistency_failures
     );
 }
 
@@ -691,7 +687,7 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
     solver.add_rows(&cuts);
 
     let obj1 = solver
-        .solve()
+        .solve(None)
         .expect("step 2 solve() must succeed with base fixture + cuts")
         .objective;
     assert!(
@@ -701,7 +697,7 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
 
     solver.set_row_bounds(&[0], &[4.0], &[4.0]);
     let obj2 = solver
-        .solve()
+        .solve(None)
         .expect("step 3 solve() must succeed with x0=4.0")
         .objective;
     assert!(
@@ -710,7 +706,7 @@ fn test_solver_highs_lifecycle_repeated_patch_solve() {
     );
 
     solver.set_row_bounds(&[0], &[8.0], &[8.0]);
-    let result = solver.solve();
+    let result = solver.solve(None);
     assert!(
         matches!(result, Err(cobre_solver::SolverError::Infeasible)),
         "step 4: expected Err(SolverError::Infeasible), got {:?}",
@@ -755,7 +751,7 @@ fn test_solver_highs_solve_infeasible() {
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&infeasible_template);
-    let result = solver.solve().map(|s| s.objective);
+    let result = solver.solve(None).map(|s| s.objective);
 
     assert!(
         matches!(result, Err(cobre_solver::SolverError::Infeasible)),
@@ -818,7 +814,7 @@ fn test_solver_highs_solve_unbounded() {
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&unbounded_template);
-    let result = solver.solve().map(|s| s.objective);
+    let result = solver.solve(None).map(|s| s.objective);
 
     assert!(
         matches!(result, Err(cobre_solver::SolverError::Unbounded)),
@@ -852,7 +848,7 @@ fn test_solver_highs_solve_unbounded() {
 // The SS1.1 fixture (3 vars, 2 constraints) is too small to trigger these limits:
 // HiGHS's crash heuristic produces an optimal starting point without entering the
 // simplex loop, so per-iteration and per-second checks never fire. A larger LP
-// is required (see research doc: plans/phase-3-solver/epic-08-coverage/research-edge-case-lps.md).
+// is required
 //
 // ─── Larger LP fixture (5 vars, 4 constraints) ───────────────────────────────
 //
@@ -928,7 +924,7 @@ fn test_solver_highs_solve_time_limit() {
         );
     }
 
-    let result = solver.solve();
+    let result = solver.solve(None);
     assert!(result.is_err(), "time_limit=0 must exhaust all retries");
 
     let stats = solver.statistics();
@@ -967,7 +963,7 @@ fn test_solver_highs_solve_iteration_limit() {
     }
 
     // Solve succeeds because internal safeguards override the external limit.
-    let result = solver.solve();
+    let result = solver.solve(None);
     assert!(
         result.is_ok(),
         "internal safeguard limits must override external simplex_iteration_limit=0"
@@ -999,16 +995,15 @@ fn test_solver_highs_restore_defaults_after_limit() {
         );
     }
     assert!(
-        solver.solve().is_ok(),
+        solver.solve(None).is_ok(),
         "internal safeguards must override external simplex_iteration_limit=0"
     );
 
-    // Reset and reload a different LP — solve must still work because
+    // Reload a different LP — solve must still work because
     // safeguard limits are restored after each solve.
-    solver.reset();
     solver.load_model(&make_fixture_stage_template());
     let objective = solver
-        .solve()
+        .solve(None)
         .expect("solve() must succeed after reset")
         .objective;
     assert!((objective - 100.0).abs() < 1e-8);
@@ -1042,8 +1037,7 @@ fn test_solver_highs_restore_defaults_after_limit() {
 // and `restore_default_settings` are therefore covered indirectly:
 // `restore_default_settings` is exercised by `test_solver_highs_restore_defaults_after_limit`
 // (which verifies that cleanup after a limit error allows a subsequent optimal solve),
-// and the retry loop's coverage is deferred to a future ticket that adds a
-// controllable error injection mechanism.
+// and the retry loop's coverage is deferred
 //
 // Reference: research-edge-case-lps.md §3.3 "Retry Escalation" and §8 item 3.
 
@@ -1090,7 +1084,7 @@ fn test_solver_highs_infeasible_with_rows() {
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&infeasible_with_rows);
-    let result = solver.solve();
+    let result = solver.solve(None);
 
     assert!(
         matches!(result, Err(SolverError::Infeasible)),
@@ -1140,7 +1134,7 @@ fn test_solver_highs_infeasible_with_presolve() {
     }
 
     solver.load_model(&infeasible_with_rows);
-    let result = solver.solve().map(|s| s.objective);
+    let result = solver.solve(None).map(|s| s.objective);
 
     assert!(
         matches!(result, Err(SolverError::Infeasible)),
@@ -1184,7 +1178,7 @@ fn test_solver_highs_unbounded_with_primal_ray() {
 
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&unbounded_with_rows);
-    let result = solver.solve();
+    let result = solver.solve(None);
 
     assert!(
         matches!(result, Err(SolverError::Unbounded)),
@@ -1247,7 +1241,7 @@ fn test_solver_highs_unbounded_or_infeasible() {
     }
 
     solver.load_model(&ambiguous_template);
-    let result = solver.solve().map(|s| s.objective);
+    let result = solver.solve(None).map(|s| s.objective);
 
     // Accept either UNBOUNDED_OR_INFEASIBLE or INFEASIBLE — both are valid
     // responses for this LP depending on the HiGHS solver path taken.
@@ -1270,12 +1264,15 @@ fn solve_equals_solve_owned() {
     // Solver A: view path converted to owned
     let mut solver_a = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver_a.load_model(&make_fixture_stage_template());
-    let owned = solver_a.solve().expect("solve() must succeed").to_owned();
+    let owned = solver_a
+        .solve(None)
+        .expect("solve() must succeed")
+        .to_owned();
 
     // Solver B: zero-copy view path
     let mut solver_b = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver_b.load_model(&make_fixture_stage_template());
-    let view = solver_b.solve().expect("solve() must succeed");
+    let view = solver_b.solve(None).expect("solve() must succeed");
     let from_view = view.to_owned();
 
     assert_eq!(
@@ -1309,13 +1306,13 @@ fn solve_borrows_internal_buffers() {
 
     // First solve — read a couple of values then let it go out of scope.
     let (obj1, primal0_first) = {
-        let view = solver.solve().expect("first solve() must succeed");
+        let view = solver.solve(None).expect("first solve() must succeed");
         (view.objective, view.primal[0])
     };
     // view is dropped here; the &mut self borrow is released.
 
     // Second solve — model is unchanged, so results must be identical.
-    let view2 = solver.solve().expect("second solve() must succeed");
+    let view2 = solver.solve(None).expect("second solve() must succeed");
     assert_eq!(
         obj1, view2.objective,
         "objective must be identical on both calls"
@@ -1340,7 +1337,9 @@ fn solve_after_add_rows() {
     solver.load_model(&template);
     solver.add_rows(&cuts);
 
-    let view = solver.solve().expect("solve() after add_rows must succeed");
+    let view = solver
+        .solve(None)
+        .expect("solve() after add_rows must succeed");
 
     assert!(
         (view.objective - 162.0).abs() < 1e-8,
@@ -1363,7 +1362,7 @@ fn solve_statistics_updated() {
     let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");
     solver.load_model(&make_fixture_stage_template());
 
-    let _view: SolutionView<'_> = solver.solve().expect("solve() must succeed");
+    let _view: SolutionView<'_> = solver.solve(None).expect("solve() must succeed");
 
     let stats = solver.statistics();
     assert_eq!(
@@ -1385,7 +1384,7 @@ fn basis_dimensions_after_solve() {
     let mut solver = HighsSolver::new().expect("solver");
     let template = make_fixture_stage_template();
     solver.load_model(&template);
-    solver.solve().expect("solve");
+    solver.solve(None).expect("solve");
 
     let mut basis = Basis::new(template.num_cols, template.num_rows);
     solver.get_basis(&mut basis);
@@ -1407,14 +1406,20 @@ fn basis_dimensions_after_solve() {
     }
 }
 
-/// A basis extracted from a 2-row LP must remain valid after 2 Benders cuts are
-/// added, and the warm-started objective must equal 162.0.
+/// A basis extracted from a 2-row LP must remain valid after 2 inequality rows
+/// are added, and the warm-started objective must equal 162.0.
+///
+/// This test exercises the defensive BASIC-padding fallback path in `solve`.
+/// The production caller reconciles the basis size to the current LP row count
+/// before invoking `solve`, so the `debug_assert!` would fire on this fallback
+/// path. The test runs only when `debug_assertions` is disabled.
+#[cfg(not(debug_assertions))]
 #[test]
 fn basis_cut_extension() {
     let mut solver = HighsSolver::new().expect("solver");
     let template = make_fixture_stage_template();
     solver.load_model(&template);
-    solver.solve().expect("cold solve");
+    solver.solve(None).expect("cold solve");
 
     let mut basis = Basis::new(template.num_cols, template.num_rows);
     solver.get_basis(&mut basis);
@@ -1424,9 +1429,7 @@ fn basis_cut_extension() {
     let cuts = make_fixture_row_batch();
     solver.add_rows(&cuts);
 
-    let view = solver
-        .solve_with_basis(&basis)
-        .expect("warm-start with cuts");
+    let view = solver.solve(Some(&basis)).expect("warm-start with cuts");
 
     assert!(
         (view.objective - 162.0).abs() < 1e-8,
@@ -1435,14 +1438,14 @@ fn basis_cut_extension() {
     );
 }
 
-/// A warm-start via `solve_with_basis` must not require more simplex
-/// iterations than a cold-start, and `basis_rejections` must remain zero.
+/// A warm-start via `solve(Some(&basis))` must not require more simplex
+/// iterations than a cold-start, and `basis_consistency_failures` must remain zero.
 #[test]
 fn basis_warm_start_iterations() {
     let mut solver = HighsSolver::new().expect("solver");
     let template = make_fixture_stage_template();
     solver.load_model(&template);
-    let cold_view = solver.solve().expect("cold solve");
+    let cold_view = solver.solve(None).expect("cold solve");
     let cold_iterations = cold_view.iterations;
     // cold_view is dropped here; the &mut self borrow on solver is released.
 
@@ -1450,7 +1453,7 @@ fn basis_warm_start_iterations() {
     solver.get_basis(&mut basis);
 
     solver.load_model(&template);
-    let warm_view = solver.solve_with_basis(&basis).expect("warm-start");
+    let warm_view = solver.solve(Some(&basis)).expect("warm-start");
 
     assert!(
         warm_view.iterations <= cold_iterations,
@@ -1462,14 +1465,14 @@ fn basis_warm_start_iterations() {
 
     let stats = solver.statistics();
     assert_eq!(
-        stats.basis_rejections, 0,
-        "basis_rejections must be 0 after accepted basis, got {}",
-        stats.basis_rejections
+        stats.basis_consistency_failures, 0,
+        "basis_consistency_failures must be 0 after accepted basis, got {}",
+        stats.basis_consistency_failures
     );
 }
 
 /// Full basis round-trip: solve SS1.1, extract basis via `get_basis`,
-/// reload the same model, warm-start via `solve_with_basis`, and verify
+/// reload the same model, warm-start via `solve(Some(&basis))`, and verify
 /// that the objective matches and the solver needs at most 1 simplex iteration.
 #[test]
 fn test_basis_roundtrip() {
@@ -1478,7 +1481,7 @@ fn test_basis_roundtrip() {
 
     // Cold-start solve to obtain the optimal basis.
     solver.load_model(&template);
-    solver.solve().expect("cold solve must succeed");
+    solver.solve(None).expect("cold solve must succeed");
 
     // Extract the basis into a pre-allocated buffer.
     let mut basis = Basis::new(template.num_cols, template.num_rows);
@@ -1487,7 +1490,7 @@ fn test_basis_roundtrip() {
     // Reload the model to reset HiGHS internal state, then warm-start.
     solver.load_model(&template);
     let warm_view = solver
-        .solve_with_basis(&basis)
+        .solve(Some(&basis))
         .expect("warm-start solve must succeed");
 
     assert!(

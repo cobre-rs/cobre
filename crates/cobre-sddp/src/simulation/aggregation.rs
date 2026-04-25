@@ -22,9 +22,9 @@
 //!    stride-5 `f64` buffer packed from the five `ScenarioCategoryCosts` fields.
 //!    Per-category mean, max, and frequency are computed from the gathered data.
 //!
-//! 4. **`SimulationSummary` assembled** with `stage_stats = None` and
-//!    operational statistics set to `0.0` (deferred — requires per-stage
-//!    deficit/spillage tracking not yet in the cost buffer).
+//! 4. **`SimulationSummary` assembled** with operational statistics set to
+//!    `0.0` (deferred — requires per-stage deficit/spillage tracking not yet
+//!    in the cost buffer).
 //!
 //! ## `CVaR` computation
 //!
@@ -93,7 +93,6 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// - `deficit_frequency`, `total_deficit_mwh`, `total_spillage_mwh` — `0.0`
 ///   (deferred: requires per-stage deficit/spillage accumulation in the
 ///   simulation forward pass).
-/// - `stage_stats` — `None` (deferred: requires per-stage aggregation).
 ///
 /// # Errors
 ///
@@ -106,7 +105,7 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// ```rust
 /// use cobre_comm::LocalBackend;
 /// use cobre_sddp::simulation::aggregation::aggregate_simulation;
-/// use cobre_sddp::{SimulationConfig, ScenarioCategoryCosts};
+/// use cobre_sddp::simulation::{ScenarioCategoryCosts, SimulationConfig};
 ///
 /// let zero_cats = ScenarioCategoryCosts {
 ///     resource_cost: 0.0,
@@ -118,7 +117,7 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// let local_costs: Vec<(u32, f64, ScenarioCategoryCosts)> = vec![
 ///     (0, 100.0, zero_cats),
 /// ];
-/// let config = SimulationConfig { n_scenarios: 1, io_channel_capacity: 1 };
+/// let config = SimulationConfig { n_scenarios: 1, io_channel_capacity: 1, basis_activity_window: 5 };
 /// let comm = LocalBackend;
 ///
 /// let summary = aggregate_simulation(&local_costs, &config, &comm).unwrap();
@@ -227,7 +226,6 @@ pub fn aggregate_simulation<C: Communicator>(
         total_spillage_mwh: 0.0,
         #[allow(clippy::cast_possible_truncation)]
         n_scenarios: total_gathered as u32,
-        stage_stats: None,
     })
 }
 
@@ -311,7 +309,7 @@ fn compute_cvar(costs: &[f64], alpha: f64) -> f64 {
 
     // Sort descending (worst first) into a scratch buffer.
     let mut sorted = costs.to_vec();
-    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| b.total_cmp(a));
 
     // Use n - floor(alpha * n) to avoid floating-point imprecision in
     // ceil((1 - alpha) * n). Both formulas are mathematically equivalent
@@ -411,8 +409,8 @@ mod tests {
         CVAR_ALPHA, N_CATEGORIES, compute_cvar, compute_local_min_max, compute_mean_std,
         pack_category_costs,
     };
-    use crate::{
-        ScenarioCategoryCosts, SimulationConfig, simulation::aggregation::aggregate_simulation,
+    use crate::simulation::{
+        aggregation::aggregate_simulation, config::SimulationConfig, types::ScenarioCategoryCosts,
     };
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -431,6 +429,7 @@ mod tests {
         SimulationConfig {
             n_scenarios: n,
             io_channel_capacity: 1,
+            basis_activity_window: 5,
         }
     }
 
@@ -717,16 +716,6 @@ mod tests {
         assert_eq!(summary.deficit_frequency, 0.0);
         assert_eq!(summary.total_deficit_mwh, 0.0);
         assert_eq!(summary.total_spillage_mwh, 0.0);
-    }
-
-    #[test]
-    fn aggregate_stage_stats_is_none() {
-        let local_costs = vec![(0u32, 50.0, zero_cats())];
-        let config = make_config(1);
-        let comm = LocalBackend;
-
-        let summary = aggregate_simulation(&local_costs, &config, &comm).unwrap();
-        assert!(summary.stage_stats.is_none());
     }
 
     #[test]

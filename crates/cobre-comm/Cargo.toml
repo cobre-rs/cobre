@@ -14,13 +14,11 @@ categories = ["science", "network-programming"]
 
 [dependencies]
 thiserror = "2"
-ferrompi = { version = "0.3.0", optional = true }
+ferrompi = { version = "0.4.0", optional = true }
 
 [features]
 mpi = ["dep:ferrompi"]
 numa = ["mpi", "ferrompi/numa"]
-tcp = []
-shm = []
 
 # Override unsafe_code to "allow" for this crate because FerrompiBackend requires
 # `unsafe impl Send` and `unsafe impl Sync` to satisfy the Communicator trait bounds.
@@ -38,3 +36,4 @@ pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "warn"
 panic = "warn"
+too_many_arguments = "deny"

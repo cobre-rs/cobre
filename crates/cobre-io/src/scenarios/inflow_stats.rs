@@ -27,8 +27,8 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
-//! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
+//! - `stage_id` existence in the stages registry — Layer 3.
 //! - Coverage: every (hydro, stage) with AR coefficients has a stats row — Layer 4/5.
 
 use cobre_core::EntityId;

@@ -27,8 +27,8 @@
 //!
 //! Deferred validations (not performed here):
 //!
-//! - Monotonicity (`volume_hm3` increasing within each hydro) — Layer 5, Epic 06.
-//! - `hydro_id` existence in the hydro registry — Layer 3, Epic 06.
+//! - Monotonicity (`volume_hm3` increasing within each hydro) — Layer 5.
+//! - `hydro_id` existence in the hydro registry — Layer 3.
 
 use arrow::array::{Array, Float64Array, Int32Array};
 use cobre_core::EntityId;
@@ -142,11 +142,10 @@ pub fn parse_hydro_geometry(path: &Path) -> Result<Vec<HydroGeometryRow>, LoadEr
 
     // ── Sort by (hydro_id, volume_hm3) ascending ─────────────────────────────
     rows.sort_by(|a, b| {
-        a.hydro_id.0.cmp(&b.hydro_id.0).then_with(|| {
-            a.volume_hm3
-                .partial_cmp(&b.volume_hm3)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        a.hydro_id
+            .0
+            .cmp(&b.hydro_id.0)
+            .then_with(|| a.volume_hm3.total_cmp(&b.volume_hm3))
     });
 
     Ok(rows)

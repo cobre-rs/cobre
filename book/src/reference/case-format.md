@@ -209,16 +209,17 @@ Each entry has a `"type"` discriminator. Valid types:
 
 **`policy` section:**
 
-| Field                               | Type    | Default      | Description                                                            |
-| ----------------------------------- | ------- | ------------ | ---------------------------------------------------------------------- |
-| `path`                              | string  | `"./policy"` | Directory for policy data (cuts, states, vertices, basis)              |
-| `mode`                              | string  | `"fresh"`    | Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`          |
-| `validate_compatibility`            | boolean | `true`       | Verify entity and dimension compatibility when loading a stored policy |
-| `checkpointing.enabled`             | boolean | `null`       | Enable periodic checkpointing                                          |
-| `checkpointing.initial_iteration`   | integer | `null`       | First iteration to write a checkpoint                                  |
-| `checkpointing.interval_iterations` | integer | `null`       | Iterations between checkpoints                                         |
-| `checkpointing.store_basis`         | boolean | `null`       | Include LP basis in checkpoints                                        |
-| `checkpointing.compress`            | boolean | `null`       | Compress checkpoint files                                              |
+| Field                               | Type           | Default      | Description                                                            |
+| ----------------------------------- | -------------- | ------------ | ---------------------------------------------------------------------- |
+| `path`                              | string         | `"./policy"` | Directory for policy data (cuts, states, vertices, basis)              |
+| `mode`                              | string         | `"fresh"`    | Initialization mode: `"fresh"`, `"warm_start"`, or `"resume"`          |
+| `validate_compatibility`            | boolean        | `true`       | Verify entity and dimension compatibility when loading a stored policy |
+| `boundary`                          | object or null | `null`       | Terminal boundary cut config: `path` (string) + `source_stage` (int)   |
+| `checkpointing.enabled`             | boolean        | `null`       | Enable periodic checkpointing                                          |
+| `checkpointing.initial_iteration`   | integer        | `null`       | First iteration to write a checkpoint                                  |
+| `checkpointing.interval_iterations` | integer        | `null`       | Iterations between checkpoints                                         |
+| `checkpointing.store_basis`         | boolean        | `null`       | Include LP basis in checkpoints                                        |
+| `checkpointing.compress`            | boolean        | `null`       | Compress checkpoint files                                              |
 
 **`simulation` section:**
 
@@ -241,7 +242,7 @@ Each entry has a `"type"` discriminator. Valid types:
 | Field             | Type           | Default | Description                                                        |
 | ----------------- | -------------- | ------- | ------------------------------------------------------------------ |
 | `training`        | boolean        | `true`  | Export training summary metrics                                    |
-| `cuts`            | boolean        | `true`  | Export cut pool (outer approximation)                              |
+| `cuts`            | boolean        | `true`  | Export row pool (piecewise-linear envelope)                        |
 | `states`          | boolean        | `false` | Export visited states                                              |
 | `vertices`        | boolean        | `true`  | Export inner approximation vertices                                |
 | `simulation`      | boolean        | `true`  | Export simulation results                                          |
@@ -358,19 +359,187 @@ and policy graph horizon type.
 | `risk_measure`    | No       | Per-stage risk measure: `"expectation"` or CVaR config            |
 | `sampling_method` | No       | Noise method: `"saa"` or other variants                           |
 
+**`season_definitions` sub-object:**
+
+The optional `season_definitions` object maps season IDs to calendar periods for the PAR model.
+When absent, Cobre infers 12 monthly seasons from stage dates. When present, it controls
+how `season_id` values on stages translate to stochastic parameters.
+
+| Field        | Required | Description                            |
+| ------------ | -------- | -------------------------------------- |
+| `cycle_type` | Yes      | `"monthly"`, `"weekly"`, or `"custom"` |
+| `seasons`    | Yes      | Array of season entries (see below)    |
+
+**`season_definitions.seasons[]` entry fields:**
+
+| Field         | Required    | Description                                                                    |
+| ------------- | ----------- | ------------------------------------------------------------------------------ |
+| `id`          | Yes         | Season identifier (0-based integer, unique within the season map)              |
+| `label`       | Yes         | Human-readable label (e.g., `"January"`, `"Q1"`, `"Wet Season"`)               |
+| `month_start` | Yes         | Calendar month where the season starts (1–12)                                  |
+| `day_start`   | Custom only | Calendar day where the season starts (1–31). Required for `custom` cycle type. |
+| `month_end`   | Custom only | Calendar month where the season ends (1–12). Required for `custom` cycle type. |
+| `day_end`     | Custom only | Calendar day where the season ends (1–31). Required for `custom` cycle type.   |
+
+**Cycle types:**
+
+- `"monthly"` — seasons map to calendar months (12 seasons, 0 = January, ..., 11 = December).
+  Only `id`, `label`, and `month_start` are needed per entry.
+- `"weekly"` — seasons map to ISO calendar weeks (52 seasons). Only `id`, `label`,
+  and `month_start` are needed per entry.
+- `"custom"` — user-defined date ranges with explicit `month_start`/`day_start`/`month_end`/`day_end`.
+  All four boundary fields are required. Use this cycle type for mixed-resolution studies
+  where some stages are monthly (IDs 0–11) and others are quarterly (IDs 12–15).
+
+**Example — Custom cycle type with monthly and quarterly seasons:**
+
+```json
+{
+  "season_definitions": {
+    "cycle_type": "custom",
+    "seasons": [
+      {
+        "id": 0,
+        "label": "January",
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 2,
+        "day_end": 1
+      },
+      {
+        "id": 1,
+        "label": "February",
+        "month_start": 2,
+        "day_start": 1,
+        "month_end": 3,
+        "day_end": 1
+      },
+      {
+        "id": 11,
+        "label": "December",
+        "month_start": 12,
+        "day_start": 1,
+        "month_end": 1,
+        "day_end": 1
+      },
+      {
+        "id": 12,
+        "label": "Q1",
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 4,
+        "day_end": 1
+      },
+      {
+        "id": 13,
+        "label": "Q2",
+        "month_start": 4,
+        "day_start": 1,
+        "month_end": 7,
+        "day_end": 1
+      },
+      {
+        "id": 14,
+        "label": "Q3",
+        "month_start": 7,
+        "day_start": 1,
+        "month_end": 10,
+        "day_end": 1
+      },
+      {
+        "id": 15,
+        "label": "Q4",
+        "month_start": 10,
+        "day_start": 1,
+        "month_end": 1,
+        "day_end": 1
+      }
+    ]
+  }
+}
+```
+
+In this example, seasons 0–11 cover monthly PAR models for the near-term phase and seasons 12–15
+cover quarterly PAR models for the long-term phase. Each monthly stage assigns a `season_id` of 0–11;
+each quarterly stage assigns a `season_id` of 12–15. Rule 29 enforces that stages sharing the same
+`season_id` must have similar durations (within 7 days), so monthly and quarterly stages must use
+distinct season IDs.
+
 ---
 
 ### `initial_conditions.json`
 
-Initial reservoir storage values at the start of the study.
+Initial reservoir storage, past inflow lags, and recent observations at the
+start of the study.
 
-| Field             | Required | Description                                                                          |
-| ----------------- | -------- | ------------------------------------------------------------------------------------ |
-| `storage`         | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros |
-| `filling_storage` | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros   |
+| Field                 | Required | Description                                                                                                       |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `storage`             | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for operating hydros                              |
+| `filling_storage`     | Yes      | Array of `{ "hydro_id": integer, "value_hm3": number }` entries for filling hydros                                |
+| `past_inflows`        | No       | Array of `{ "hydro_id": integer, "values_m3s": [number], "season_ids": [integer] }` for PAR(p) lag initialization |
+| `recent_observations` | No       | Array of observed inflow entries for mid-season study starts (see below)                                          |
 
-Each `hydro_id` must be unique within its array and must not appear in both arrays.
-All `value_hm3` values must be non-negative.
+Each `hydro_id` must be unique within its array and must not appear in both
+`storage` and `filling_storage`. All `value_hm3` values must be non-negative.
+
+**`past_inflows`** provides the most-recent inflow history for PAR(p) lag
+initialization. For each hydro, `values_m3s[0]` is the most recent past inflow
+(lag 1) and `values_m3s[p-1]` is the oldest (lag p). The array length must be
+
+> = the hydro's PAR order. Optional; defaults to an empty array when absent.
+
+Each `past_inflows` entry supports an optional `season_ids` field:
+
+| Field        | Type             | Description                                                                                                                                                                                                                            |
+| ------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hydro_id`   | integer          | Hydro plant identifier                                                                                                                                                                                                                 |
+| `values_m3s` | array of number  | Past inflow values [m³/s], most recent first                                                                                                                                                                                           |
+| `season_ids` | array of integer | Optional. Season IDs corresponding to each lag entry. When present, length must equal `values_m3s.length`. Each value must reference a valid season ID from `season_definitions`. Absent from legacy JSON files (backward compatible). |
+
+When `season_ids` is present and a season ID is not defined in `season_definitions`, a
+`BusinessRuleViolation` is emitted during semantic validation (Rule 32) when the
+hydro has PAR order > 0 and a `SeasonMap` is available.
+
+**`recent_observations`** provides observed inflow data for partial periods
+before the study start. Used to seed the lag accumulator when a study begins
+mid-season (e.g., a DECOMP study starting on January 5 needs observed inflow
+for January 1--4). Each entry has:
+
+| Field        | Type    | Description                                                      |
+| ------------ | ------- | ---------------------------------------------------------------- |
+| `hydro_id`   | integer | Hydro plant identifier                                           |
+| `start_date` | string  | Start of the observation period (inclusive), ISO 8601 YYYY-MM-DD |
+| `end_date`   | string  | End of the observation period (exclusive), ISO 8601 YYYY-MM-DD   |
+| `value_m3s`  | number  | Average inflow observed during the period, in m³/s               |
+
+Date ranges for the same hydro must not overlap; adjacent ranges
+(`start_date == previous end_date`) are accepted. Values must be finite and
+non-negative. Optional; defaults to an empty array when absent. Existing cases
+without this field are unaffected.
+
+Example:
+
+```json
+{
+  "storage": [{ "hydro_id": 0, "value_hm3": 15000.0 }],
+  "filling_storage": [],
+  "past_inflows": [{ "hydro_id": 0, "values_m3s": [600.0, 500.0] }],
+  "recent_observations": [
+    {
+      "hydro_id": 0,
+      "start_date": "2026-04-01",
+      "end_date": "2026-04-04",
+      "value_m3s": 500.0
+    },
+    {
+      "hydro_id": 0,
+      "start_date": "2026-04-04",
+      "end_date": "2026-04-11",
+      "value_m3s": 480.0
+    }
+  ]
+}
+```
 
 ---
 

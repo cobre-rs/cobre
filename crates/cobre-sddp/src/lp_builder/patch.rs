@@ -101,7 +101,7 @@ impl PatchBuffer {
     /// # Examples
     ///
     /// ```
-    /// use cobre_sddp::PatchBuffer;
+    /// use cobre_sddp::lp_builder::PatchBuffer;
     ///
     /// // 3-hydro AR(2) system, no stochastic load
     /// // Capacity = N*(2+L) + M*B + N = 3*(2+2) + 0 + 3 = 15

@@ -55,7 +55,7 @@ The ecosystem delivers a full SDDP training and simulation pipeline:
 - **Pluggable communication** with MPI and local backends, execution topology reporting, and SLURM integration (`cobre-comm`)
 - **PAR(p) inflow models** with deterministic correlated scenario generation, per-class sampling (InSample, OutOfSample, Historical, External), and inflow non-negativity enforcement (`cobre-stochastic`)
 - **SDDP training loop** with forward/backward passes, Benders cut generation, cut synchronization, and composite stopping rules (`cobre-sddp`)
-- **Three-stage cut management pipeline** with strategy-based selection (Level1/LML1/Dominated), angular diversity pruning, and budget enforcement (`cobre-sddp`)
+- **Two-stage cut management pipeline** with strategy-based selection (Level1/LML1/Dominated) and budget enforcement (`cobre-sddp`)
 - **Performance accelerators**: LP scaling, model persistence, incremental cut injection, backward-pass work-stealing, parallel lower bound evaluation, basis-aware padding, and zero-allocation hot paths (`cobre-sddp`, `cobre-solver`)
 - **Simulation pipeline** with Hive-partitioned Parquet output and FlatBuffers policy checkpointing (`cobre-sddp`)
 - **Policy warm-start and resume** from checkpoint with per-stage cut counts (`cobre-sddp`)

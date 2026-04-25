@@ -3,7 +3,7 @@
 //! [`resolve_bounds`] pre-computes per-(entity, stage) bound values by:
 //!
 //! 1. Deriving base `*StageBounds` values from each entity's fields (loaded from
-//!    entity JSON files in epic-03).
+//!    entity JSON files).
 //! 2. Filling the [`ResolvedBounds`] table with these base values for all stages.
 //! 3. Applying sparse stage-varying overrides from the parsed Parquet rows.
 //!
@@ -60,7 +60,7 @@ pub struct BoundsOverrides<'a> {
 /// slice becomes its `entity_index` in the [`ResolvedBounds`] flat array.
 ///
 /// Override rows referencing unknown entity IDs or out-of-range stage IDs are silently
-/// skipped — referential integrity is a Layer 3 concern validated in Epic 06.
+/// skipped — referential integrity is a Layer 3 concern (deferred).
 ///
 /// # Arguments
 ///
@@ -358,7 +358,7 @@ pub fn resolve_bounds(
     //
     // Override rows are sparse: only (entity_id, stage_id) pairs that differ from
     // the base value need rows. Unknown entity IDs and out-of-range stage IDs are
-    // silently skipped (Layer 3 validation concern, Epic 06).
+    // silently skipped (Layer 3 validation concern, deferred).
 
     for row in hydro_overrides {
         let Some(&entity_idx) = hydro_index.get(&row.hydro_id) else {
@@ -405,7 +405,7 @@ pub fn resolve_bounds(
 
     for row in thermal_overrides {
         // Rows with non-null block_id are reserved for future per-block cost support
-        // (DECOMP). They are parsed but silently ignored during bounds resolution.
+        // They are parsed but silently ignored during bounds resolution.
         if row.block_id.is_some() {
             continue;
         }
@@ -1291,9 +1291,9 @@ mod tests {
         assert!((result.hydro_bounds(0, 1).water_withdrawal_m3s - 0.0).abs() < f64::EPSILON);
     }
 
-    // ── Tests: ticket-002 acceptance criteria ────────────────────────────────
+    // ── Tests: thermal cost override acceptance criteria ─────────────────────
 
-    /// AC1 (ticket-002): cost_per_mwh override with null block_id — applied.
+    /// cost_per_mwh override with null block_id — applied.
     /// thermal T1, stages 0 and 1, cost overrides 50.0 and 100.0.
     #[test]
     fn test_thermal_cost_override_null_block_id() {
@@ -1343,7 +1343,7 @@ mod tests {
         );
     }
 
-    /// AC2 (ticket-002): no parquet cost override — falls back to base Thermal.cost_per_mwh.
+    /// No parquet cost override — falls back to base Thermal.cost_per_mwh.
     #[test]
     fn test_thermal_cost_fallback_to_base() {
         // make_thermal uses cost_per_mwh: 50.0 in the helper.
@@ -1359,7 +1359,7 @@ mod tests {
         }
     }
 
-    /// AC3 (ticket-002): row with non-null block_id is silently ignored — no effect on bounds.
+    /// Row with non-null block_id is silently ignored — no effect on bounds.
     #[test]
     fn test_thermal_cost_block_id_row_ignored() {
         // make_thermal uses cost_per_mwh: 50.0; override with block_id=1 must be ignored.
@@ -1395,7 +1395,7 @@ mod tests {
         );
     }
 
-    /// AC4 (ticket-002): thermal with cost_per_mwh == 0.0, no override — resolves to 0.0.
+    /// Thermal with cost_per_mwh == 0.0, no override — resolves to 0.0.
     #[test]
     fn test_thermal_zero_base_cost_no_override() {
         let thermals = vec![Thermal {

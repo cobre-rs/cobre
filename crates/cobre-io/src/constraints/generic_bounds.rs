@@ -26,7 +26,7 @@
 //! - All required columns must be present with the correct types.
 //! - `bound` must be finite (NaN and ±Inf are rejected).
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - `constraint_id` existence in the generic constraint registry.
 //! - `block_id` validity for the referenced stage.

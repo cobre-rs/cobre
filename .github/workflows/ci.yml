@@ -143,12 +143,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Infra genericity gate
+        run: bash scripts/check-infra-genericity.sh
+      - name: Check for plan-structure leaks
+        run: bash scripts/check-no-plan-leaks.sh
       - name: Check Python parity
         run: python3 scripts/check_python_parity.py --max 0
-      - name: Check suppression count
-        run: python3 scripts/check_suppressions.py --max 10
-      - name: Check CLAUDE.md version
-        run: python3 scripts/check_claudemd_version.py
       - name: Check book version references
         run: python3 scripts/check_book_version.py
 

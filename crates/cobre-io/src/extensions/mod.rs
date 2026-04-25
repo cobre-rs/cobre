@@ -22,8 +22,8 @@
 //! 4. Convert raw types to public types and sort the output.
 //!
 //! Cross-reference validation (checking that referenced entity IDs exist in
-//! their registries) is deferred to Layer 3 (Epic 06). Monotonicity and other
-//! multi-row semantic constraints are deferred to Layer 5 (Epic 06).
+//! their registries) is deferred to Layer 3. Monotonicity and other
+//! multi-row semantic constraints are deferred to Layer 5.
 
 pub mod fpha_hyperplanes;
 pub mod hydro_geometry;

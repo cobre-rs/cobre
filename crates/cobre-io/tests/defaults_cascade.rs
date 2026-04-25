@@ -71,12 +71,12 @@ fn test_minimal_config_all_defaults() {
 
     // exports defaults
     assert!(
-        cfg.exports.training,
-        "exports.training should default to true"
+        !cfg.exports.states,
+        "exports.states should default to false"
     );
     assert!(
-        !cfg.exports.forward_detail,
-        "exports.forward_detail should default to false"
+        !cfg.exports.stochastic,
+        "exports.stochastic should default to false"
     );
 }
 
@@ -146,13 +146,8 @@ fn test_config_all_sections_explicit_no_defaults_applied() {
             "validate_compatibility": false
           },
           "exports": {
-            "training": false,
-            "cuts": false,
-            "states": false,
-            "vertices": false,
-            "simulation": false,
-            "forward_detail": true,
-            "backward_detail": true
+            "states": true,
+            "stochastic": true
           }
         }"#,
     );
@@ -184,9 +179,8 @@ fn test_config_all_sections_explicit_no_defaults_applied() {
     assert!(!cfg.policy.validate_compatibility);
 
     // exports: non-default values preserved
-    assert!(!cfg.exports.training);
-    assert!(cfg.exports.forward_detail);
-    assert!(cfg.exports.backward_detail);
+    assert!(cfg.exports.states);
+    assert!(cfg.exports.stochastic);
 }
 
 /// Given a `config.json` where the `modeling` section is absent, the
@@ -249,12 +243,12 @@ fn test_config_absent_exports_uses_defaults() {
     let cfg = parse_config(f.path()).unwrap();
 
     assert!(
-        cfg.exports.training,
-        "absent exports section must default exports.training to true"
+        !cfg.exports.states,
+        "absent exports section must default exports.states to false"
     );
     assert!(
-        !cfg.exports.forward_detail,
-        "absent exports section must default exports.forward_detail to false"
+        !cfg.exports.stochastic,
+        "absent exports section must default exports.stochastic to false"
     );
 }
 

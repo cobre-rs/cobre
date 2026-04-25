@@ -41,10 +41,19 @@ use cobre_io::{
     write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    EntityCounts, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer,
-    RiskMeasure, SimulationConfig, SimulationOutputSpec, SolverWorkspace, StageContext,
-    StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrainingContext,
-    build_training_output, simulate, train,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_training_output,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    lp_builder::PatchBuffer,
+    risk_measure::RiskMeasure,
+    simulate,
+    simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    train,
+    workspace::{SolverWorkspace, WorkspaceSizing},
 };
 
 /// Single-rank communicator for testing.
@@ -117,7 +126,10 @@ impl SolverInterface for MockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         let call = self.call_count;
         self.call_count += 1;
         let obj = self.objectives[call % self.objectives.len()];
@@ -131,18 +143,7 @@ impl SolverInterface for MockSolver {
         })
     }
 
-    fn reset(&mut self) {
-        self.call_count = 0;
-    }
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -371,9 +372,10 @@ impl Fixture {
 
 fn make_config() -> Config {
     use cobre_io::config::{
-        CheckpointingConfig, CutSelectionConfig, ExportsConfig, InflowNonNegativityConfig,
-        ModelingConfig, PolicyConfig, SimulationConfig as IoSimulationConfig, StoppingRuleConfig,
-        TrainingConfig as IoTrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
+        CheckpointingConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
+        PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
+        StoppingRuleConfig, TrainingConfig as IoTrainingConfig, TrainingSolverConfig,
+        UpperBoundEvaluationConfig,
     };
     Config {
         schema: None,
@@ -388,7 +390,7 @@ fn make_config() -> Config {
             stopping_mode: "any".to_string(),
             cut_formulation: None,
             forward_pass: None,
-            cut_selection: CutSelectionConfig::default(),
+            cut_selection: RowSelectionConfig::default(),
             solver: TrainingSolverConfig::default(),
             scenario_source: None,
         },
@@ -398,6 +400,7 @@ fn make_config() -> Config {
             mode: cobre_io::PolicyMode::Fresh,
             validate_compatibility: true,
             checkpointing: CheckpointingConfig::default(),
+            boundary: None,
         },
         simulation: IoSimulationConfig {
             enabled: false,
@@ -553,21 +556,28 @@ fn train_simulate_write_cycle() {
 
     let (tx, rx) = mpsc::channel::<TrainingEvent>();
     let training_config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 10,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: Some(tx),
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 10,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(3),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            budget: None,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            risk_measures: fx.risk_measures.clone(),
+        },
+        events: EventConfig {
+            event_sender: Some(tx),
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
 
     let block_counts_per_stage = vec![1usize; fx.n_stages];
@@ -583,6 +593,9 @@ fn train_simulate_write_cycle() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
     };
     let result = train(
         &mut solver,
@@ -602,11 +615,10 @@ fn train_simulate_write_cycle() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
-        &fx.risk_measures,
-        iteration_limit(3),
         &comm,
         || Ok(MockSolver::with_fixed(100.0)),
     )
@@ -639,7 +651,6 @@ fn train_simulate_write_cycle() {
                         coefficients: &pool.coefficients
                             [slot * pool.state_dimension..(slot + 1) * pool.state_dimension],
                         is_active: pool.active[slot],
-                        domination_count: meta.domination_count as u32,
                     }
                 })
                 .collect()
@@ -704,6 +715,7 @@ fn train_simulate_write_cycle() {
     let sim_config = SimulationConfig {
         n_scenarios: 2,
         io_channel_capacity: 4,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
     };
 
     let entity_counts = EntityCounts {
@@ -722,13 +734,19 @@ fn train_simulate_write_cycle() {
     let io_thread = std::thread::spawn(move || result_rx.into_iter().collect::<Vec<_>>());
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         sim_solver,
         PatchBuffer::new(fx.indexer.hydro_count, fx.indexer.max_par_order, 0, 0),
         fx.indexer.n_state,
-        fx.indexer.hydro_count,
-        fx.indexer.max_par_order,
-        0,
-        0,
+        WorkspaceSizing {
+            hydro_count: fx.indexer.hydro_count,
+            max_par_order: fx.indexer.max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order: 0,
+            ..WorkspaceSizing::default()
+        },
     )];
 
     simulate(
@@ -745,6 +763,9 @@ fn train_simulate_write_cycle() {
             ncs_max_gen: &[],
             discount_factors: &[],
             cumulative_discount_factors: &[],
+            stage_lag_transitions: &[],
+            noise_group_ids: &[],
+            downstream_par_order: 0,
         },
         &fcf,
         &TrainingContext {
@@ -760,7 +781,8 @@ fn train_simulate_write_cycle() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &sim_config,
@@ -777,6 +799,7 @@ fn train_simulate_write_cycle() {
             hydro_productivities_per_stage: &vec![vec![1.0]; fx.n_stages],
             event_sender: None,
         },
+        None,
         &[],
         &sim_comm,
     )
@@ -929,7 +952,10 @@ impl SolverInterface for SizedMockSolver {
     fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
     fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-    fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+    fn solve(
+        &mut self,
+        _basis: Option<&Basis>,
+    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
         Ok(cobre_solver::SolutionView {
             objective: 1000.0,
             primal: &self.primal,
@@ -940,16 +966,7 @@ impl SolverInterface for SizedMockSolver {
         })
     }
 
-    fn reset(&mut self) {}
-
     fn get_basis(&mut self, _out: &mut Basis) {}
-
-    fn solve_with_basis(
-        &mut self,
-        _basis: &Basis,
-    ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-        self.solve()
-    }
 
     fn statistics(&self) -> SolverStatistics {
         SolverStatistics::default()
@@ -1298,27 +1315,35 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
         ncs_max_gen: &[],
         discount_factors: &[],
         cumulative_discount_factors: &[],
+        stage_lag_transitions: &[],
+        noise_group_ids: &[],
+        downstream_par_order: 0,
     };
 
     let training_config = TrainingConfig {
-        forward_passes: 1,
-        max_iterations: 1,
-        checkpoint_interval: None,
-        warm_start_cuts: 0,
-        event_sender: None,
-        cut_activity_tolerance: 0.0,
-        n_fwd_threads: 1,
-        max_blocks: 1,
-        cut_selection: None,
-        shutdown_flag: None,
-        start_iteration: 0,
-        export_states: false,
-        angular_pruning: None,
-        budget: None,
-        basis_padding_enabled: false,
+        loop_config: LoopConfig {
+            forward_passes: 1,
+            max_iterations: 1,
+            start_iteration: 0,
+            n_fwd_threads: 1,
+            max_blocks: 1,
+            stopping_rules: iteration_limit(1),
+        },
+        cut_management: CutManagementConfig {
+            cut_selection: None,
+            budget: None,
+            cut_activity_tolerance: 0.0,
+            warm_start_cuts: 0,
+            basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            risk_measures: vec![RiskMeasure::Expectation; n_stages],
+        },
+        events: EventConfig {
+            event_sender: None,
+            checkpoint_interval: None,
+            shutdown_flag: None,
+            export_states: false,
+        },
     };
-
-    let risk_measures = vec![RiskMeasure::Expectation; n_stages];
 
     train(
         &mut solver,
@@ -1338,11 +1363,10 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
-        &risk_measures,
-        iteration_limit(1),
         &StubComm,
         || Ok(SizedMockSolver::new(t0.num_cols, t0.num_rows)),
     )
@@ -1351,6 +1375,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     let sim_config = SimulationConfig {
         n_scenarios: 1,
         io_channel_capacity: 4,
+        basis_activity_window: cobre_sddp::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
     };
 
     let entity_counts = EntityCounts {
@@ -1376,13 +1401,19 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
     sim_solver.set_primal(slack_col, sentinel_m3s);
 
     let mut sim_workspaces = vec![SolverWorkspace::new(
+        0,
+        0,
         sim_solver,
         PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0),
         indexer.n_state,
-        indexer.hydro_count,
-        indexer.max_par_order,
-        0,
-        0,
+        WorkspaceSizing {
+            hydro_count: indexer.hydro_count,
+            max_par_order: indexer.max_par_order,
+            n_load_buses: 0,
+            max_blocks: 0,
+            downstream_par_order: 0,
+            ..WorkspaceSizing::default()
+        },
     )];
 
     simulate(
@@ -1402,7 +1433,8 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             external_inflow_library: None,
             external_load_library: None,
             external_ncs_library: None,
-            basis_padding_enabled: false,
+            recent_accum_seed: &[],
+            recent_weight_seed: 0.0,
             stages: &[],
         },
         &sim_config,
@@ -1419,6 +1451,7 @@ fn simulation_min_outflow_slack_extracted_from_primal() {
             hydro_productivities_per_stage: &hydro_productivities_per_stage,
             event_sender: None,
         },
+        None,
         &[],
         &StubComm,
     )

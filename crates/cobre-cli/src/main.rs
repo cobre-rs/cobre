@@ -2,7 +2,7 @@
 //!
 //! Command-line interface for the [Cobre](https://github.com/cobre-rs/cobre) power systems ecosystem.
 //!
-//! Provides commands for running SDDP studies, validating input data,
+//! Provides commands for running optimization studies, validating input data,
 //! and inspecting results from the terminal.
 //!
 //! ## Subcommands
@@ -103,7 +103,7 @@ struct Cli {
 enum Command {
     /// Scaffold a new case directory from an embedded template.
     Init(InitArgs),
-    /// Load a case directory, train an SDDP policy, and run simulation.
+    /// Load a case directory, train a policy, and run simulation.
     Run(RunArgs),
     /// Validate a case directory and print a structured diagnostic report.
     Validate(ValidateArgs),

@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod extraction;
 pub mod pipeline;
+pub(crate) mod state;
 pub mod types;
 
 pub use aggregation::aggregate_simulation;
@@ -24,5 +25,5 @@ pub use types::{
     SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,
     SimulationHydroResult, SimulationInflowLagResult, SimulationNonControllableResult,
     SimulationPumpingResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
-    SimulationThermalResult, StageSummaryStats,
+    SimulationThermalResult,
 };

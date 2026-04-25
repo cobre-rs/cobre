@@ -7,6 +7,202 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [Unreleased]
+
+## [0.5.0] - 2026-04-25
+
+Major refactor. Consumers must update `config.json`, any code calling
+solver traits, and any tooling reading `solver/iterations.parquet`
+before upgrading.
+
+### Breaking Changes
+
+**Public Rust API**:
+
+- `TrainingResult` is `#[non_exhaustive]`; use `TrainingResult::new(...)`.
+- `SolverInterface::record_padding_stats` → `record_reconstruction_stats(&mut self)`.
+- `SolverInterface::clear_solver_state` removed.
+- `WarmStartBasisMode` and `CanonicalStateStrategy` enums removed along
+  with the `canonical_state_strategy` config fields.
+- Four classification counters (`basis_preserved`, `basis_new_tight`,
+  `basis_new_slack`, `basis_demotions`) collapsed into `basis_reconstructions`.
+- `basis_rejections` + `basis_non_alien_rejections` → `basis_consistency_failures`.
+- `add_rows_count`, `add_rows_time_ms`, `clear_solver_count`, and
+  `clear_solver_failures` counters removed.
+- `StoppingRuleResult.rule_name` is now `&'static str`;
+  `StoppingRuleResult.detail` is now `Cow<'static, str>`. Call
+  `.to_string()` on `rule_name` or use `detail.as_ref()` at consumers
+  that previously expected `String`.
+- `TrainingEvent::WorkerTiming.timings` field type changed from
+  `[f64; 16]` (where 12 of 16 slots were always zero on per-worker
+  events) to a new `WorkerPhaseTimings` struct with four named fields:
+  `forward_wall_ms`, `backward_wall_ms`, `fwd_setup_ms`, `bwd_setup_ms`.
+  The output Parquet schema for `training/timing/iterations.parquet`
+  is unchanged. Consumers that read the variant payload directly must
+  access the named fields rather than slot indices. The rank-aggregated
+  `WorkerTimingRecord` writer record retains its 16-column layout and
+  the `WORKER_TIMING_SLOT_*` constants remain public as the bridge
+  between named fields and writer slots.
+
+**Output schema** — `solver/iterations.parquet` drops from 23 to 19
+columns. Added: `opening`, `rank`, `worker_id` (nullable i32),
+`basis_reconstructions` (u64). Removed: the eight counters listed
+above. Backward rows gain an `opening` dimension; forward rows are now
+one per `(iteration, stage)` rather than one per iteration.
+
+`cut_selection/iterations.parquet` drops `active_after_angular`
+(10 → 9 columns).
+
+**Policy FlatBuffer** — `CUT_FIELD_DOMINATION_COUNT` slot removed. Old
+policies deserialise via graceful-absence; `"domination_count"`
+disappears from `cobre.results.load_policy` per-cut dicts.
+
+### Added
+
+- **Backward-pass basis cache** — rank 0 captures a fresh basis per
+  stage during the backward pass and broadcasts it end-of-iteration;
+  next-iteration backward solves warm-start from the cache.
+- **Basis reconstruction** — `CapturedBasis` wrapper with slot and
+  state metadata; `reconstruct_basis` applies a stored basis across
+  cut-set churn on forward, backward, and simulation paths. Controlled
+  by `training.cut_selection.basis_activity_window` (1-31, default 5).
+- **Weekly+monthly studies** — sub-monthly lag accumulation,
+  `recent_observations` input for mid-season starts, terminal boundary
+  cuts (`policy.boundary.{path, source_stage}`) for Cobre-to-Cobre FCF
+  coupling, and non-uniform per-stage scenario counts.
+- **Multi-resolution studies** — same-season noise group sharing,
+  observation aggregation from finer to coarser resolution, and
+  monthly→quarterly PAR transition.
+- **Per-opening solver statistics** — backward rows carry `rank` and
+  `worker_id` metadata for per-worker parity testing.
+- `TrainingEvent::SimulationStarted` variant mirrors `TrainingStarted`
+  for the simulation phase. Carries `n_scenarios`, `n_stages`, `ranks`,
+  and `threads_per_rank`. Emitted once per rank before the parallel
+  scenario loop so consumers can render a banner before any scenario
+  completes.
+- Non-TTY progress lines (pipes, `mpirun` aggregators, log files) now
+  include an `[elapsed HH:MM:SS < eta HH:MM:SS]` trailing cell matching
+  the interactive bar.
+- Wire-format version bytes added to both the basis broadcast payload
+  and cut records. The basis version field is at position 1 of the
+  `i32` metadata buffer; the cut version byte is at byte 0 of each
+  serialized cut record. Mismatches between sender and receiver produce
+  typed validation errors rather than silent data corruption or panics.
+- Typed errors for MPI correctness conditions:
+  - Non-uniform worker counts across ranks are detected during the
+    backward-pass handshake and reported as a validation error naming
+    both the minimum and maximum observed counts.
+  - Basis broadcast `i32` length overflow (more than `i32::MAX`
+    elements) is detected before the MPI call and reported as
+    `CommError::InvalidBufferSize`.
+  - Wire-format version mismatches in the basis broadcast and in cut
+    deserialization are reported as validation errors naming both
+    expected and received versions.
+  - Violated cut-count invariants in `sync_cuts` (negotiated count
+    differs from actual serialized count) are reported as a validation
+    error.
+  - Stats counter values exceeding `2^53` (the f64 integer precision
+    limit), which would corrupt MPI allreduce sums, are detected before
+    the allreduce call and reported as an internal error.
+
+### Changed
+
+- **Lower-bound LP is strictly append-only.** Cuts are never removed
+  from the LB LP, guaranteeing monotonic non-decreasing lower bound.
+  Cut selection and budget enforcement continue to deactivate cuts in
+  the shared pool for the forward and backward passes.
+- **Cut management pipeline reduced to two stages**: strategy-based
+  selection followed by budget enforcement.
+- Internal refactor of `cobre-io` semantic-validation: the
+  6 319-line `validation/semantic.rs` file is now split into
+  7 cohesive domain submodules (`hydro`, `thermal`, `stages`,
+  `scenarios`, `season`, `correlation`, `sobol`) plus a
+  placeholder `shared` module for future cross-domain helpers.
+  The two public entry functions
+  (`validate_semantic_hydro_thermal`,
+  `validate_semantic_stages_penalties_scenarios`) keep their
+  paths under `cobre_io::validation::semantic::*`. No semantic-
+  validation rule was added, removed, or modified.
+- `TrainingEvent::SimulationProgress.scenarios_complete` now carries a
+  global estimate under multi-rank execution (`local × ranks`, clamped
+  to `scenarios_total`), matching the `scenarios_total` field's global
+  scope. Single-rank runs are unchanged. Previously, rank 0 reported
+  its local count against the global total, producing a misleading
+  `50/100` final line on a 2-rank run.
+- `cobre-comm` now requires `ferrompi >= 0.4.0`. The MPI bitwise-OR
+  allreduce used to synchronize the active-window bitmap is dispatched
+  directly to `MPI_Allreduce` with `MPI_BOR` instead of being emulated
+  via an `allgatherv` + bytewise fold workaround.
+- FPHA hyperplane file is now written to
+  `<output_dir>/hydro_models/fpha_hyperplanes.parquet` in both the CLI
+  (`--output` flag) and Python bindings (`output_dir` parameter).
+  Previously the file was always written to
+  `<case_dir>/output/hydro_models/`, ignoring the caller-specified
+  output directory. Under multi-rank execution the file is written by
+  rank 0 only; previously all ranks raced to write the same path.
+- All sort comparators on `f64` in the hot path now use `f64::total_cmp`
+  for deterministic NaN handling. `partial_cmp(...).unwrap_or(Equal)`
+  patterns on the production training and simulation paths have been
+  replaced.
+- Rayon global thread pool initialization failure now emits a structured
+  warning (configured threads, actual threads, error reason) and
+  continues using the already-initialized pool. Previously a silent
+  fallback was applied without any diagnostic output.
+
+### Deprecated
+
+- `RowSelectionConfig::threshold` is deprecated. The field remains
+  parseable; supplying it now emits a `WARN`-level `tracing` event
+  directing the user to `memory_window` (for `"lml1"`) or
+  `domination_epsilon` (for `"domination"`).
+
+### Removed
+
+- **Angular diversity pruning** — config section, module, output
+  column, and training event variant.
+- **`SparseCut` module** — handled by the indexer.
+- **`CutMetadata::domination_count`** — unused.
+- **LB LP periodic rebuild** and its `CutRowMap` helpers.
+- `FerrompiScratch` and the `FerrompiBackend::scratch` interior-
+  mutability field. The native bitwise-OR allreduce no longer needs
+  per-call scratch for counts/displs vectors.
+  `unsafe impl Send + Sync for FerrompiBackend` comments were updated
+  accordingly.
+- `SimulationSummary::stage_stats: Option<Vec<StageSummaryStats>>`
+  field and the `StageSummaryStats` struct were removed; the field was
+  always `None` in production output and had no consumers.
+- `ExportsConfig` reduced to two flags: `states` and `stochastic`. The
+  seven previously declared fields (`training`, `cuts`, `vertices`,
+  `simulation`, `forward_detail`, `backward_detail`, `compression`)
+  had no runtime consumers and have been removed from the public
+  config surface. Existing `config.json` files that set these keys
+  will continue to load — the keys are silently ignored.
+- Cargo features `tcp = []` and `shm = []` removed from `cobre-comm`
+  (no runtime backends were declared under either feature).
+  `highs = []` removed from `cobre-solver`; the HiGHS FFI is compiled
+  unconditionally. Downstream `Cargo.toml` files that specified
+  `cobre-comm = { features = ["tcp"] }` or
+  `cobre-solver = { features = ["highs"] }` must drop those entries.
+- `cobre-sddp` crate root re-export surface reduced from ~85 to ~50
+  symbols. Implementation-detail types (`BackwardOutcome`,
+  `CutSyncBuffers`, `StageIndexer`, `FphaColumnLayout`, `EvapConfig`,
+  `LbEvalScratch*`, `PatchBuffer`, `WorkspacePool`, `BasisStore*`,
+  `CapturedBasis`, `RiskMeasure*`, `EvaporationModel*`, `FphaPlane`,
+  `LinearizedEvaporation`, `MonitorState`, `TrainingOutcome`,
+  `TrainingContext`, `StageContext`, and similar) are no longer
+  accessible at `cobre_sddp::Type`. They remain reachable via their
+  full module path (e.g., `cobre_sddp::cut::pool::CutPool`,
+  `cobre_sddp::workspace::SolverWorkspace`).
+
+### Verified
+
+- D01-D30 + convertido SHA256 map matches v0.4.5 reference except for
+  the documented schema renames. All 90 stable parquet entries are
+  byte-identical versus the previous baseline.
+- D01-D15 parity hash holds across all internal refactors landed in
+  this release (cut coefficients, primal/dual trajectories,
+  convergence trajectory bit-for-bit identical).
+
 ## [0.4.4] - 2026-04-14
 
 ### Added
@@ -937,7 +1133,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-url -->
 
-[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/cobre-rs/cobre/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cobre-rs/cobre/compare/v0.4.4...v0.5.0
+[0.4.4]: https://github.com/cobre-rs/cobre/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/cobre-rs/cobre/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/cobre-rs/cobre/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/cobre-rs/cobre/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/cobre-rs/cobre/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/cobre-rs/cobre/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/cobre-rs/cobre/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/cobre-rs/cobre/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/cobre-rs/cobre/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/cobre-rs/cobre/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/cobre-rs/cobre/compare/v0.1.11...v0.2.0

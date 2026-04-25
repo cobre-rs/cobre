@@ -707,4 +707,55 @@ mod tests {
             "None season_map must reproduce the month0()-based result (1991–2010)"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Test 11: month0() fallback is identical to monthly SeasonMap path
+    // -----------------------------------------------------------------------
+
+    /// Given 12 monthly stages and monthly history for 2 hydros from 1990–2010,
+    /// `discover_historical_windows` with `season_map = None` (which falls back
+    /// to `month0()`) must return exactly the same window years as calling it
+    /// with `season_map = Some(&monthly_sm)`.
+    ///
+    /// This directly verifies that the `month0()` fallback is correct for
+    /// monthly studies: the fallback path (`month0()`) and the calendar-based
+    /// `SeasonMap` path both produce `season_id = date.month0()` for dates on
+    /// the 1st of each month, so the discovered window sets must be identical.
+    #[test]
+    fn test_month0_fallback_matches_monthly_season_map() {
+        let hydro1 = EntityId(1);
+        let hydro2 = EntityId(2);
+        let mut history = monthly_history(hydro1, 1990, 2010);
+        history.extend(monthly_history(hydro2, 1990, 2010));
+        let stages = twelve_monthly_stages();
+        let sm = monthly_season_map();
+
+        let windows_none =
+            discover_historical_windows(&history, &[hydro1, hydro2], &stages, 2, None, None, 10)
+                .unwrap();
+        let windows_with_sm = discover_historical_windows(
+            &history,
+            &[hydro1, hydro2],
+            &stages,
+            2,
+            None,
+            Some(&sm),
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(
+            windows_none, windows_with_sm,
+            "month0() fallback (season_map = None) must produce identical window years \
+             to the monthly SeasonMap path"
+        );
+
+        // Additionally verify the expected window set (1991–2010) so this test
+        // is self-contained and not merely a reflexive comparison.
+        let expected: Vec<i32> = (1991..=2010).collect();
+        assert_eq!(
+            windows_none, expected,
+            "monthly study must discover windows 1991–2010"
+        );
+    }
 }

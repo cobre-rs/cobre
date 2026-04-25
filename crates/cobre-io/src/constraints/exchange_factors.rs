@@ -31,7 +31,7 @@
 //! - All `direct_factor` and `reverse_factor` values must be finite.
 //! - All `direct_factor` and `reverse_factor` values must be > 0.0.
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
 //! - `line_id` existence in the line registry.
 //! - `block_id` validity for the referenced stage.
@@ -294,7 +294,7 @@ mod tests {
 
     // ── Tests ─────────────────────────────────────────────────────────────────
 
-    /// AC-4 (ticket): Valid 1 entry with 3 block factors.
+    /// Valid 1 entry with 3 block factors.
     #[test]
     fn test_parse_valid_single_entry_three_block_factors() {
         let f = write_json(VALID_JSON);

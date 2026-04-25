@@ -10,8 +10,7 @@
 //! While the GIL is released, Python's signal machinery cannot deliver
 //! `SIGINT`. If the user presses Ctrl-C during a long training run, the
 //! interrupt will be queued and delivered only after the current iteration
-//! completes and control returns to the Python interpreter. This is the
-//! expected MVP behaviour — progress callbacks are deferred to a future ticket.
+//! completes and control returns to the Python interpreter.
 //!
 //! ## Single-process only
 //!
@@ -57,11 +56,22 @@ struct SimSummary {
     completed: u32,
 }
 
-fn init_rayon(threads: Option<u32>) {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads.map_or(1, |t| t as usize))
+fn init_rayon(threads: Option<u32>) -> usize {
+    let configured = threads.map_or(1, |t| t as usize);
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(configured)
         .build_global()
-        .unwrap_or(());
+    {
+        Ok(()) => configured,
+        Err(err) => {
+            let actual = rayon::current_num_threads();
+            eprintln!(
+                "cobre-python: rayon init warning: configured={configured}, \
+                 actual={actual}, error={err}"
+            );
+            actual
+        }
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -224,31 +234,40 @@ fn export_stochastic_artifacts_py(
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
-/// scenario ID for the simulation phase.
+/// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
+/// and `None` for forward, `lower_bound`, and simulation rows. `rank` and `worker_id`
+/// are `Some` for backward rows (from allgatherv unpack) and `None` for forward,
+/// `lower_bound`, and simulation rows (no per-worker dimension yet).
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
+    opening: Option<i32>,
+    rank: Option<i32>,
+    worker_id: Option<i32>,
     delta: &SolverStatsDelta,
 ) -> SolverStatsRow {
     SolverStatsRow {
         iteration: id,
         phase: phase.to_string(),
         stage,
+        opening,
+        rank,
+        worker_id,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
         lp_failures: delta.lp_failures as u32,
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
-        basis_rejections: delta.basis_rejections as u32,
+        basis_consistency_failures: delta.basis_consistency_failures as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,
-        add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        basis_reconstructions: delta.basis_reconstructions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }
@@ -304,11 +323,11 @@ fn write_training_artifacts(
     n_threads: usize,
 ) -> Result<(), String> {
     write_policy_checkpoint(
-        &output_dir.join(setup.policy_path()),
-        setup.fcf(),
+        &output_dir.join(&setup.policy_path),
+        &setup.fcf,
         &training.result,
-        setup.max_iterations(),
-        setup.forward_passes(),
+        setup.loop_params.max_iterations,
+        setup.loop_params.forward_passes,
         seed,
         config.exports.states,
     )
@@ -319,9 +338,25 @@ fn write_training_artifacts(
             .result
             .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, delta)| {
-                #[allow(clippy::cast_possible_truncation)]
-                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+            .map(|(iter, phase, stage, opening, rank, worker_id, delta)| {
+                let opening_opt = if *opening == -1 { None } else { Some(*opening) };
+                // worker_id == -1 means "no per-worker dimension" → NULL in parquet.
+                let worker_id_opt = if *worker_id == -1 {
+                    None
+                } else {
+                    Some(*worker_id)
+                };
+                #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
+                let id = *iter as u32;
+                delta_to_stats_row(
+                    id,
+                    phase,
+                    *stage,
+                    opening_opt,
+                    Some(*rank),
+                    worker_id_opt,
+                    delta,
+                )
             })
             .collect();
         cobre_io::write_solver_stats(output_dir, &rows)
@@ -329,7 +364,7 @@ fn write_training_artifacts(
     }
 
     if !training.output.cut_selection_records.is_empty() {
-        cobre_io::write_cut_selection_records(
+        cobre_io::write_row_selection_records(
             output_dir,
             &training.output.cut_selection_records,
             &ParquetWriterConfig::default(),
@@ -372,7 +407,7 @@ fn run_simulation_phase_py(
     let sim_started_at = cobre_io::now_iso8601();
     let io_capacity = setup.simulation_config().io_channel_capacity;
     let mut sim_pool = setup
-        .create_workspace_pool(n_threads, HighsSolver::new)
+        .create_workspace_pool(&LocalBackend, n_threads, HighsSolver::new)
         .map_err(|e| format!("HiGHS initialisation failed for simulation pool: {e}"))?;
     let (result_tx, result_rx) = mpsc::sync_channel(io_capacity.max(1));
 
@@ -398,6 +433,7 @@ fn run_simulation_phase_py(
             &LocalBackend,
             &result_tx,
             None,
+            training_result.baked_templates.as_deref(),
             &training_result.basis_cache,
         )
         .map_err(|e| format!("simulation error: {e}"));
@@ -411,11 +447,15 @@ fn run_simulation_phase_py(
     let mut sim_out = sim_writer.finalize(0);
     sim_out.failed = write_failures;
 
+    // Simulation has no opening dimension and no per-worker dimension yet;
+    // opening, rank, and worker_id are all None.
     if !sim_run_result.solver_stats.is_empty() {
         let rows: Vec<SolverStatsRow> = sim_run_result
             .solver_stats
             .iter()
-            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .map(|(scenario_id, _opening, delta)| {
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, None, None, delta)
+            })
             .collect();
         cobre_io::write_simulation_solver_stats(output_dir, &rows)
             .map_err(|e| format!("simulation solver stats output: {e}"))?;
@@ -450,14 +490,14 @@ fn run_simulation_phase_py(
 }
 
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
+#[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
     output_dir: PathBuf,
     threads: Option<u32>,
     skip_simulation: bool,
 ) -> Result<RunSummary, String> {
-    init_rayon(threads);
-    let n_threads = threads.map_or(1, |t| t as usize);
+    let n_threads = init_rayon(threads);
 
     let system = cobre_io::load_case(case_dir).map_err(|e| e.to_string())?;
     let config = cobre_io::parse_config(&case_dir.join("config.json"))
@@ -490,21 +530,21 @@ fn run_inner(
     let provenance_report = build_provenance_report(
         estimation_path,
         estimation_report.as_ref(),
-        setup.stochastic().provenance(),
+        setup.stochastic.provenance(),
         system.hydros().len(),
     );
 
     if config.exports.stochastic {
         export_stochastic_artifacts_py(
             &output_dir,
-            setup.stochastic(),
+            &setup.stochastic,
             &system,
             estimation_report.as_ref(),
         );
     }
 
     let scaling_path = output_dir.join("training/scaling_report.json");
-    cobre_io::write_scaling_report(&scaling_path, setup.scaling_report())
+    cobre_io::write_scaling_report(&scaling_path, &setup.stage_data.scaling_report)
         .map_err(|e| format!("failed to write scaling report: {e}"))?;
 
     let provenance_path = output_dir.join("training/model_provenance.json");
@@ -512,20 +552,16 @@ fn run_inner(
         eprintln!("cobre-python: provenance output warning: {e}");
     }
 
-    let stochastic_summary = build_stochastic_summary(
-        &system,
-        setup.stochastic(),
-        estimation_report.as_ref(),
-        seed,
-    );
-    let hydro_models_summary = Some(build_hydro_model_summary(setup.hydro_models(), &system));
+    let stochastic_summary =
+        build_stochastic_summary(&system, &setup.stochastic, estimation_report.as_ref(), seed);
+    let hydro_models_summary = Some(build_hydro_model_summary(&setup.hydro_models, &system));
 
     let training_enabled = config.training.enabled;
 
     if training_enabled {
         // Warm-start: load prior policy and inject cuts before training.
         if config.policy.mode == cobre_io::PolicyMode::WarmStart {
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot warm-start \
@@ -540,7 +576,8 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
-                let state_dim = setup.fcf().state_dimension as u32;
+                #[allow(clippy::cast_possible_truncation)]
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -552,13 +589,13 @@ fn run_inner(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(|e| format!("warm-start FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
         } else if config.policy.mode == cobre_io::PolicyMode::Resume {
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot resume \
@@ -573,7 +610,8 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
-                let state_dim = setup.fcf().state_dimension as u32;
+                #[allow(clippy::cast_possible_truncation)]
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -587,12 +625,25 @@ fn run_inner(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(|e| format!("resume FCF construction error: {e}"))?;
             setup.replace_fcf(warm_fcf);
             setup.set_start_iteration(completed);
+        }
+
+        // Boundary cuts — orthogonal to policy mode. Runs after warm-start/resume
+        // so that both compose correctly: warm-start replaces the entire FCF first,
+        // then boundary cuts overwrite only the terminal pool.
+        if let Some(ref bp) = config.policy.boundary {
+            let boundary_path = output_dir.join(&bp.path);
+            #[allow(clippy::cast_possible_truncation)]
+            let state_dim = setup.fcf.state_dimension as u32;
+            let boundary_records =
+                cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
+                    .map_err(|e| format!("boundary cut error: {e}"))?;
+            cobre_sddp::inject_boundary_cuts(&mut setup, &boundary_records);
         }
 
         let training = run_training_phase_py(&mut setup, n_threads)?;
@@ -606,6 +657,20 @@ fn run_inner(
             seed,
             n_threads,
         )?;
+
+        // Write FPHA hyperplanes after training. This file represents the
+        // trained model and is only meaningful once training has completed;
+        // simulation-only runs do not write it.
+        if !setup.hydro_models.fpha_export_rows.is_empty() {
+            let fpha_path = output_dir
+                .join("hydro_models")
+                .join("fpha_hyperplanes.parquet");
+            cobre_io::output::write_fpha_hyperplanes(
+                &fpha_path,
+                &setup.hydro_models.fpha_export_rows,
+            )
+            .map_err(|e| format!("failed to write fpha_hyperplanes: {e}"))?;
+        }
 
         if let Some(ref e) = training.error {
             return Err(format!(
@@ -643,7 +708,7 @@ fn run_inner(
         // Training disabled: check if simulation is requested.
         if should_simulate {
             // Simulation-only mode: load policy and run simulation.
-            let policy_dir = output_dir.join(setup.policy_path());
+            let policy_dir = output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(format!(
                     "Policy directory not found: {}. Cannot run simulation-only \
@@ -659,7 +724,8 @@ fn run_inner(
             if config.policy.validate_compatibility {
                 #[allow(clippy::cast_possible_truncation)]
                 let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
-                let state_dim = setup.fcf().state_dimension as u32;
+                #[allow(clippy::cast_possible_truncation)]
+                let state_dim = setup.fcf.state_dimension as u32;
                 cobre_sddp::validate_policy_compatibility(
                     &checkpoint.metadata,
                     state_dim,
@@ -676,26 +742,29 @@ fn run_inner(
 
             // Build basis cache from loaded checkpoint.
             let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
-                setup.num_stages(),
+                setup.stage_data.stage_templates.templates.len(),
                 &checkpoint.stage_bases,
             );
 
             // Create a minimal TrainingResult for simulation warm-start.
-            let training_result = cobre_sddp::TrainingResult {
-                iterations: checkpoint.metadata.completed_iterations.into(),
-                final_lb: checkpoint.metadata.final_lower_bound,
-                final_ub: checkpoint
+            let training_result = cobre_sddp::TrainingResult::new(
+                checkpoint.metadata.final_lower_bound,
+                checkpoint
                     .metadata
                     .best_upper_bound
                     .unwrap_or(f64::INFINITY),
-                final_ub_std: 0.0,
-                final_gap: 0.0,
-                total_time_ms: 0,
-                reason: "loaded from checkpoint".to_string(),
-                solver_stats_log: Vec::new(),
+                0.0,
+                0.0,
+                checkpoint.metadata.completed_iterations.into(),
+                "loaded from checkpoint".to_string(),
+                0,
                 basis_cache,
-                visited_archive: None,
-            };
+                Vec::new(),
+                None,
+                // Baked templates are not stored in policy checkpoints. simulate() re-bakes all
+                // stage templates at startup from the FCF cut pool when baked_templates is None.
+                None,
+            );
 
             let simulation = Some(run_simulation_phase_py(
                 &mut setup,
@@ -926,10 +995,18 @@ pub fn run(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp
+)]
 mod tests {
     use std::path::Path;
 
     use cobre_sddp::setup::prepare_stochastic;
+
+    use super::init_rayon;
 
     #[test]
     fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
@@ -955,6 +1032,40 @@ mod tests {
             result.is_ok(),
             "prepare_stochastic failed for D01 via Python path: {:?}",
             result.err()
+        );
+    }
+
+    /// Verify that `init_rayon` returns the actual thread count when the global
+    /// pool is already initialized (i.e. it falls back to `rayon::current_num_threads()`
+    /// rather than returning the configured count).
+    ///
+    /// Nextest runs each test in an isolated process, so rayon global state does
+    /// not bleed across tests.  Under `cargo test` (single-process) the pre-init
+    /// step may silently fail if another test already initialized the pool; the
+    /// assertion `result == rayon::current_num_threads()` is still valid in that
+    /// case because `init_rayon` must always return the true active count.
+    #[test]
+    fn init_rayon_falls_back_to_actual_count() {
+        // Attempt to pre-initialize the global pool with 2 threads.
+        // Silently ignored if the pool is already initialized (ok() discards the error).
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build_global()
+            .ok();
+
+        // Now try to reinitialize with 99 threads — must fail and fall back.
+        let result = init_rayon(Some(99));
+
+        // The result must match the true active count, not the requested 99.
+        let actual = rayon::current_num_threads();
+        assert_eq!(
+            result, actual,
+            "init_rayon must return the active thread count on fallback, \
+             got {result} but rayon reports {actual} active threads"
+        );
+        assert_ne!(
+            result, 99,
+            "init_rayon must not return the configured count (99) on fallback"
         );
     }
 }

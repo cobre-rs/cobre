@@ -131,7 +131,7 @@ pub struct StageTemplates {
 /// Construct a [`StageTemplate`] for a single study stage.
 ///
 /// Returns the template, the row index of the water-balance block
-/// (used as `base_row` by the [`PatchBuffer`] noise injection), the
+/// (used as `base_row` by the `PatchBuffer` noise injection), the
 /// row index of the load-balance block (used for load-noise patches),
 /// the generic constraint row entries for this stage, NCS metadata
 /// (column start, count, and active system indices), and z-inflow
@@ -276,13 +276,13 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// Key dimensions for a stage with N hydros, T thermals, Lines lines,
 /// B buses, K blocks per stage, and F FPHA hydros each with M planes:
 ///
-/// - `num_cols = N*(2+L) + 1 + N*K*2 + T*K + Lines*K*2 + B*K*2 + [N penalty] + F*K`
-///   (FPHA generation columns added after inflow-slack columns)
-/// - `num_rows = N*(1+L) + N + B*K + F*K*M`
-///   (FPHA constraint rows added after load-balance rows)
+/// - `num_cols` and `num_rows` are computed by `layout::StageLayout` —
+///   see `layout.rs` for the authoritative column and row counts
 /// - `n_state  = N*(1+L)`
 /// - `n_transfer = N*L`  (storage + all lags except the oldest)
-/// - `n_dual_relevant = N*(1+L)`  (unchanged: FPHA rows are structural, not dual-relevant)
+/// - `n_dual_relevant = N*(1+L)`  (`z_inflow` definition, water balance, load balance, FPHA,
+///   evaporation, operational violation, and generic constraint rows are all structural and
+///   non-dual-relevant; only the state-fixing rows contribute to cut gradients)
 ///
 /// ## PAR order and `max_par_order`
 ///
@@ -344,9 +344,6 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 /// One equality constraint row is added per evaporation hydro with
 /// `row_lower == row_upper == k_evap0`.
 ///
-/// CSC matrix entries for the evaporation constraint are added by ticket-011
-/// and ticket-012.  Violation cost objective coefficients are added by ticket-013.
-///
 /// # Examples
 ///
 /// ```
@@ -373,7 +370,6 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///     .expect("empty system ok");
 /// assert!(result.templates.is_empty());
 /// ```
-#[allow(clippy::too_many_lines)]
 pub fn build_stage_templates(
     system: &System,
     inflow_method: &InflowNonNegativityMethod,
@@ -384,8 +380,7 @@ pub fn build_stage_templates(
 ) -> Result<StageTemplates, SddpError> {
     // Only build templates for study stages (id >= 0), in canonical order.
     let study_stages: Vec<_> = system.stages().iter().filter(|s| s.id >= 0).collect();
-    let hydros = system.hydros();
-    let n_hydros = hydros.len();
+    let n_hydros = system.hydros().len();
 
     if study_stages.is_empty() {
         return Ok(StageTemplates {
@@ -409,7 +404,94 @@ pub fn build_stage_templates(
         });
     }
 
+    // Consistency gate: a non-empty PrecomputedNormal must have the same
+    // entity count as the stochastic load buses derived from the system.
+    let (ctx, load_bus_indices, diversion_upstream_output) = build_template_build_ctx(
+        system,
+        inflow_method,
+        par_lp,
+        production_models,
+        evaporation_models,
+    );
+    let n_load_buses = load_bus_indices.len();
+    debug_assert!(
+        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
+        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
+        normal_lp.n_entities(),
+        n_load_buses
+    );
+
+    let n_study = study_stages.len();
+    let mut templates = Vec::with_capacity(n_study);
+    let mut base_rows = Vec::with_capacity(n_study);
+    let mut load_balance_row_starts = Vec::with_capacity(n_study);
+    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
+    let mut ncs_col_starts = Vec::with_capacity(n_study);
+    let mut n_ncs_per_stage = Vec::with_capacity(n_study);
+    let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
+    for (stage_idx, stage) in study_stages.iter().enumerate() {
+        let (
+            template,
+            stage_base_row,
+            load_balance_row_start,
+            gc_entries,
+            ncs_col_start,
+            ncs_count,
+            ncs_active,
+        ) = build_single_stage_template(&ctx, stage, stage_idx);
+        templates.push(template);
+        base_rows.push(stage_base_row);
+        load_balance_row_starts.push(load_balance_row_start);
+        generic_constraint_row_entries.push(gc_entries);
+        ncs_col_starts.push(ncs_col_start);
+        n_ncs_per_stage.push(ncs_count);
+        active_ncs_indices_per_stage.push(ncs_active);
+    }
+
+    Ok(assemble_stage_templates_output(
+        templates,
+        base_rows,
+        load_balance_row_starts,
+        generic_constraint_row_entries,
+        ncs_col_starts,
+        n_ncs_per_stage,
+        active_ncs_indices_per_stage,
+        load_bus_indices,
+        diversion_upstream_output,
+        &study_stages,
+        &ctx,
+        par_lp,
+        n_hydros,
+        n_load_buses,
+        n_study,
+    ))
+}
+
+/// Build the [`TemplateBuildCtx`] and ancillary data needed by the stage loop.
+///
+/// Constructs position maps (hydro/thermal/line/bus), the diversion-upstream
+/// map, and the `TemplateBuildCtx` that is shared across all per-stage builds.
+/// Also returns `load_bus_indices` (the bus-slice positions of stochastic load
+/// buses) and `diversion_upstream_output` (the clone of the diversion map
+/// preserved for the final `StageTemplates` output field).
+///
+/// Called once per `build_stage_templates` invocation, after the early-return
+/// guard for empty systems.
+fn build_template_build_ctx<'a>(
+    system: &'a System,
+    inflow_method: &InflowNonNegativityMethod,
+    par_lp: &'a PrecomputedPar,
+    production_models: &'a ProductionModelSet,
+    evaporation_models: &'a EvaporationModelSet,
+) -> (
+    TemplateBuildCtx<'a>,
+    Vec<usize>,
+    HashMap<EntityId, Vec<usize>>,
+) {
+    let hydros = system.hydros();
     let buses = system.buses();
+    let n_hydros = hydros.len();
+
     let hydro_pos: HashMap<EntityId, usize> =
         hydros.iter().enumerate().map(|(i, h)| (h.id, i)).collect();
     let thermal_pos: HashMap<EntityId, usize> = system
@@ -428,15 +510,6 @@ pub fn build_stage_templates(
         buses.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
 
     let load_bus_indices = collect_load_bus_indices(system, &bus_pos);
-    let n_load_buses = load_bus_indices.len();
-    // Consistency gate: a non-empty PrecomputedNormal must have the same
-    // entity count as the stochastic load buses derived from the system.
-    debug_assert!(
-        normal_lp.n_entities() == 0 || normal_lp.n_entities() == n_load_buses,
-        "PrecomputedNormal has {} entities but system has {} stochastic load buses",
-        normal_lp.n_entities(),
-        n_load_buses
-    );
 
     let max_par_order: usize = system
         .inflow_models()
@@ -493,35 +566,40 @@ pub fn build_stage_templates(
         has_penalty: n_hydros > 0 && inflow_method.has_slack_columns(),
     };
 
-    let n_study = study_stages.len();
-    let mut templates = Vec::with_capacity(n_study);
-    let mut base_rows = Vec::with_capacity(n_study);
-    let mut load_balance_row_starts = Vec::with_capacity(n_study);
-    let mut generic_constraint_row_entries = Vec::with_capacity(n_study);
-    let mut ncs_col_starts = Vec::with_capacity(n_study);
-    let mut n_ncs_per_stage = Vec::with_capacity(n_study);
-    let mut active_ncs_indices_per_stage = Vec::with_capacity(n_study);
-    for (stage_idx, stage) in study_stages.iter().enumerate() {
-        let (
-            template,
-            stage_base_row,
-            load_balance_row_start,
-            gc_entries,
-            ncs_col_start,
-            ncs_count,
-            ncs_active,
-        ) = build_single_stage_template(&ctx, stage, stage_idx);
-        templates.push(template);
-        base_rows.push(stage_base_row);
-        load_balance_row_starts.push(load_balance_row_start);
-        generic_constraint_row_entries.push(gc_entries);
-        ncs_col_starts.push(ncs_col_start);
-        n_ncs_per_stage.push(ncs_count);
-        active_ncs_indices_per_stage.push(ncs_active);
-    }
+    (ctx, load_bus_indices, diversion_upstream_output)
+}
 
+/// Assemble the final [`StageTemplates`] from per-stage loop outputs.
+///
+/// Computes noise-scale, zeta, block-hour, hydro-productivity, and discount
+/// arrays and packages them alongside the per-stage template vectors into the
+/// `StageTemplates` struct returned by `build_stage_templates`.
+///
+/// Called once, immediately after the per-stage loop completes.
+// RATIONALE: 15 args are the heterogeneous per-stage accumulator Vecs produced by the
+// per-stage build loop, each of a distinct type (templates, base_rows, ncs_col_starts, etc.).
+// They cannot be grouped into a context struct without either re-allocating them after the
+// loop or wrapping in Option, both of which add cost on this post-loop cold path.
+#[allow(clippy::too_many_arguments)]
+fn assemble_stage_templates_output(
+    templates: Vec<cobre_solver::StageTemplate>,
+    base_rows: Vec<usize>,
+    load_balance_row_starts: Vec<usize>,
+    generic_constraint_row_entries: Vec<Vec<GenericConstraintRowEntry>>,
+    ncs_col_starts: Vec<usize>,
+    n_ncs_per_stage: Vec<usize>,
+    active_ncs_indices_per_stage: Vec<Vec<usize>>,
+    load_bus_indices: Vec<usize>,
+    diversion_upstream_output: HashMap<EntityId, Vec<usize>>,
+    study_stages: &[&cobre_core::Stage],
+    ctx: &TemplateBuildCtx<'_>,
+    par_lp: &PrecomputedPar,
+    n_hydros: usize,
+    n_load_buses: usize,
+    n_study: usize,
+) -> StageTemplates {
     let (noise_scale, zeta_per_stage, block_hours_per_stage) =
-        scaling::compute_noise_scale(&study_stages, n_hydros, par_lp);
+        scaling::compute_noise_scale(study_stages, n_hydros, par_lp);
 
     // Build per-stage productivity arrays for simulation extraction.
     let hydro_productivities_per_stage: Vec<Vec<f64>> = (0..n_study)
@@ -540,7 +618,7 @@ pub fn build_stage_templates(
     // StudySetup::from_broadcast_params and overwrite this field.
     let discount_factors = vec![1.0; templates.len()];
 
-    Ok(StageTemplates {
+    StageTemplates {
         templates,
         base_rows,
         noise_scale,
@@ -559,7 +637,7 @@ pub fn build_stage_templates(
         discount_factors,
         // Cumulative factors default to 1.0; overwritten by setup.rs.
         cumulative_discount_factors: vec![1.0; n_study],
-    })
+    }
 }
 
 #[cfg(test)]
@@ -2360,7 +2438,7 @@ mod tests {
 
         // The solve must succeed — the slack absorbs the negative inflow.
         let view = solver
-            .solve()
+            .solve(None)
             .expect("LP must be feasible with inflow slack active");
 
         let primal = view.primal;
@@ -2382,7 +2460,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-024: load balance row starts, n_load_buses, load_bus_indices
+    // load balance row starts, n_load_buses, load_bus_indices
     // -------------------------------------------------------------------------
 
     /// Build a two-bus system with N hydros and K blocks per stage.
@@ -3414,7 +3492,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-009: FPHA LP integration tests (HiGHS end-to-end solve)
+    // FPHA LP integration tests (HiGHS end-to-end solve)
     // -------------------------------------------------------------------------
     //
     // These tests build an FPHA template, load it into HiGHS, patch the
@@ -3473,7 +3551,7 @@ mod tests {
         (system, production)
     }
 
-    /// AC (ticket-009): 1-FPHA-hydro LP solves to Optimal with generation > 0.
+    /// 1-FPHA-hydro LP solves to Optimal with generation > 0.
     ///
     /// Patches `v_in = 100 hm³` (row 0), then solves. Asserts:
     /// - status is `Ok` (no solver error)
@@ -3514,7 +3592,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("FPHA LP must be feasible and optimal");
 
         // col 9 is g (generation variable, shifted by +1 for diversion).
@@ -3526,7 +3604,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-009): all hyperplane constraints hold within 1e-6 tolerance
+    /// all hyperplane constraints hold within 1e-6 tolerance
     /// after solving the 1-FPHA-hydro LP.
     ///
     /// For each plane p: `g <= intercept + gamma_v * v_avg + gamma_q * q + gamma_s * s`
@@ -3575,7 +3653,7 @@ mod tests {
         let v_in = 100.0_f64;
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
-        let view = solver.solve().expect("FPHA LP must solve to optimal");
+        let view = solver.solve(None).expect("FPHA LP must solve to optimal");
         let primal = view.primal;
 
         let col_v = 0_usize;
@@ -3607,7 +3685,7 @@ mod tests {
         }
     }
 
-    /// AC (ticket-009): storage-fixing dual differs between FPHA and
+    /// storage-fixing dual differs between FPHA and
     /// constant-productivity for the same system entity.
     ///
     /// The FPHA model introduces `-gamma_v/2` entries on the `v_in` column
@@ -3709,7 +3787,7 @@ mod tests {
             // Fix v_in = 100 hm³ via the storage-fixing equality row (row 0).
             let v_in = 100.0_f64;
             solver.set_row_bounds(&[0], &[v_in], &[v_in]);
-            let view = solver.solve().expect("LP must solve to optimal");
+            let view = solver.solve(None).expect("LP must solve to optimal");
             // Row 0 is the storage-fixing equality; its dual is the marginal cost
             // of one additional hm³ of initial storage.
             view.dual[0]
@@ -3741,7 +3819,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-009, mixed): 2-constant + 1-FPHA system solves to Optimal.
+    /// 2-constant + 1-FPHA system solves to Optimal.
     ///
     /// Verifies that generation variables for both types of hydros have
     /// correct values in the solution:
@@ -3792,7 +3870,7 @@ mod tests {
         );
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("mixed FPHA LP must be feasible and optimal");
 
         // The solve must return a finite objective.
@@ -3818,7 +3896,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Evaporation variable tests (ticket-010)
+    // Evaporation variable tests
     // =========================================================================
 
     use cobre_solver::StageTemplate;
@@ -3862,7 +3940,7 @@ mod tests {
         EvaporationModelSet::new(models)
     }
 
-    /// AC (ticket-010): 0 evaporation hydros — `num_cols` and `num_rows` are unchanged.
+    /// 0 evaporation hydros — `num_cols` and `num_rows` are unchanged.
     ///
     /// A system with 1 hydro (L=0, T=0, B=1, K=1) and no evaporation:
     /// - Without evaporation: `num_cols` = N\*(2+L)+1 + N\*K\*2 + B\*K\*2 = 3+2+2 = 7
@@ -3902,7 +3980,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): 2 evaporation hydros + 1 block → `num_cols` += 6, `num_rows` += 2.
+    /// 2 evaporation hydros + 1 block → `num_cols` += 6, `num_rows` += 2.
     ///
     /// Uses a system with 2 hydros (L=0, T=0, B=1, K=1).
     /// Baseline (no evaporation):
@@ -3959,7 +4037,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): evaporation row bounds are equality: `row_lower == row_upper == k_evap0`.
+    /// evaporation row bounds are equality: `row_lower == row_upper == k_evap0`.
     ///
     /// Uses a 1-hydro system with `k_evap0 = 1.5` at stage 0.
     #[test]
@@ -3994,7 +4072,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-010): evaporation column bounds are [0, bound) and objective is 0.0.
+    /// evaporation column bounds are [0, bound) and objective is 0.0.
     /// Q_ev has a physical upper bound; f_plus and f_minus are unbounded.
     #[test]
     fn evap_col_bounds_and_objective() {
@@ -4028,7 +4106,7 @@ mod tests {
             );
             assert_eq!(
                 t.objective[col], 0.0,
-                "evap column {col} objective must be 0.0 (ticket-013 sets violation cost), got {}",
+                "evap column {col} objective must be 0.0, got {}",
                 t.objective[col]
             );
         }
@@ -4053,7 +4131,7 @@ mod tests {
     }
 
     // =========================================================================
-    // ticket-011: fill_evaporation_entries — CSC matrix entries
+    // fill_evaporation_entries — CSC matrix entries
     // =========================================================================
 
     /// Build an `EvaporationModelSet` where evaporation hydros have a specific
@@ -4098,14 +4176,14 @@ mod tests {
             .collect()
     }
 
-    /// AC (ticket-011): 1 evaporation hydro (`h_idx=0`) with `k_evap_v = 0.02` produces
+    /// 1 evaporation hydro (`h_idx=0`) with `k_evap_v = 0.02` produces
     /// the correct CSC entries at the evaporation row and water balance row.
     ///
     /// Expected entries on the evaporation constraint row:
     ///   `(Q_ev_col, +1.0)`, `(v_col, -0.01)`, `(v_in_col, -0.01)`,
     ///   `(f_plus_col, +1.0)`, `(f_minus_col, -1.0)`.
     ///
-    /// After ticket-012, the `Q_ev` column also has an entry in the water balance
+    /// After, the `Q_ev` column also has an entry in the water balance
     /// row with coefficient `+zeta`.
     #[test]
     fn evap_csc_entries_one_hydro_correct_coefficients() {
@@ -4144,7 +4222,7 @@ mod tests {
         let evap_row = t.num_rows - 1 - 4 * t.n_hydro;
         let water_balance_row = 2_usize; // row_water_balance_start = n_state + n_hydros = 2
 
-        // After ticket-012, Q_ev has 2 entries: water balance row (+zeta) and
+        // Q_ev has 2 entries: water balance row (+zeta) and
         // evaporation constraint row (+1.0). Entries are sorted by row ascending.
         let zeta = 744.0 * (3_600.0 / 1_000_000.0);
         let entries_q_ev = entries_for_col(t, col_q_ev);
@@ -4230,7 +4308,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): coefficient value check with `k_evap_v = 0.04` → v and `v_in` entries are -0.02.
+    /// coefficient value check with `k_evap_v = 0.04` → v and `v_in` entries are -0.02.
     #[test]
     fn evap_csc_entries_coefficient_scaling() {
         let system = one_hydro_system(1, 0);
@@ -4274,7 +4352,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): 0 evaporation hydros — `fill_evaporation_entries` is a no-op;
+    /// 0 evaporation hydros — `fill_evaporation_entries` is a no-op;
     /// the evaporation columns do not exist and no extra non-zeros are added.
     #[test]
     fn evap_csc_entries_zero_hydros_no_op() {
@@ -4307,7 +4385,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-011): 2 evap hydros with distinct `k_evap_v` produce independent rows.
+    /// 2 evap hydros with distinct `k_evap_v` produce independent rows.
     #[test]
     fn evap_csc_entries_two_hydros_independent_rows() {
         let (system, production) = four_hydro_mixed_system();
@@ -4381,7 +4459,7 @@ mod tests {
         assert!((t.row_lower[evap_row_1] - 2.0).abs() < 1e-12);
     }
 
-    /// AC (ticket-011): `k_evap_v = 0.0` → v and `v_in` entries are 0.0;
+    /// `k_evap_v = 0.0` → v and `v_in` entries are 0.0;
     /// the constraint reduces to `Q_ev + f_plus - f_minus = k_evap0`.
     #[test]
     fn evap_csc_entries_zero_k_evap_v_produces_zero_volume_coefficients() {
@@ -4424,9 +4502,9 @@ mod tests {
         );
     }
 
-    // ── ticket-012: water balance entries for evaporation ────────────────────
+    // ── water balance entries for evaporation ────────────────────
 
-    /// AC-1 (ticket-012): 1 evaporation hydro (`h_idx=0`), 1 block of 744 hours.
+    /// 1 evaporation hydro (`h_idx=0`), 1 block of 744 hours.
     ///
     /// The `Q_ev_h` column must have an entry in the water balance row
     /// (`row = row_water_balance_start + 0`) with coefficient `+zeta`
@@ -4471,7 +4549,7 @@ mod tests {
         );
     }
 
-    /// AC-2 (ticket-012): 2 hydros where only hydro 1 has evaporation.
+    /// 2 hydros where only hydro 1 has evaporation.
     ///
     /// The `Q_ev` column for hydro 1 must have an entry in water balance row 1
     /// with coefficient `+zeta`. Hydro 0's water balance row must have no
@@ -4692,10 +4770,10 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-012): 0 evaporation hydros — no evaporation entries added.
+    /// 0 evaporation hydros — no evaporation entries added.
     ///
     /// The total non-zero count must be identical to a baseline with no
-    /// evaporation model (behaviour unchanged from before ticket-012).
+    /// evaporation model.
     #[test]
     fn evap_water_balance_zero_hydros_no_op() {
         let system = one_hydro_system(1, 0);
@@ -4728,7 +4806,7 @@ mod tests {
     }
 
     // =========================================================================
-    // Evaporation violation cost tests (ticket-013)
+    // Evaporation violation cost tests
     // =========================================================================
 
     /// Build a 1-bus, 1-hydro system with evaporation and a custom
@@ -4938,7 +5016,7 @@ mod tests {
             .expect("evap_hydro_system_with_violation_cost: valid")
     }
 
-    /// AC-1 (ticket-013): `f_evap_plus` carries base violation cost;
+    /// `f_evap_plus` carries base violation cost;
     /// `f_evap_minus` carries 100x asymmetric over-evaporation penalty.
     ///
     /// System: 1 hydro with evaporation, `evaporation_violation_cost = 500.0`,
@@ -4988,7 +5066,7 @@ mod tests {
         );
     }
 
-    /// AC-2 (ticket-013): `Q_ev` column objective is 0.0 even when a
+    /// `Q_ev` column objective is 0.0 even when a
     /// non-zero `evaporation_violation_cost` is set.
     #[test]
     fn evap_q_ev_objective_is_zero() {
@@ -5016,7 +5094,7 @@ mod tests {
         );
     }
 
-    /// AC-3 (ticket-013): LP with 1 evaporation hydro is solvable (`HiGHS` returns
+    /// LP with 1 evaporation hydro is solvable (`HiGHS` returns
     /// `Optimal`) and the `Q_ev` value is non-negative after fixing `v_in = 1000.0 hm3`.
     ///
     /// System: 1 bus, 1 hydro, `k_evap0 = 1.0`, `k_evap_v = 0.02`.
@@ -5059,7 +5137,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evaporation LP must be feasible and optimal");
 
         // Q_ev is the first evaporation column (before withdrawal + 4*N operational slacks).
@@ -5072,7 +5150,7 @@ mod tests {
         );
     }
 
-    /// AC-4 (ticket-013): violation slacks are near zero when `v_in` is large
+    /// violation slacks are near zero when `v_in` is large
     /// enough for the linearised evaporation constraint to be satisfiable without
     /// artificial violation.
     ///
@@ -5114,7 +5192,7 @@ mod tests {
         solver.set_row_bounds(&[0], &[v_in], &[v_in]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evaporation LP must be feasible and optimal");
 
         // Evaporation violation slack columns are before withdrawal + 4*N operational slacks.
@@ -5133,7 +5211,7 @@ mod tests {
         );
     }
 
-    /// AC-5 (ticket-013): the storage-fixing dual for an evaporation hydro differs
+    /// the storage-fixing dual for an evaporation hydro differs
     /// from the no-evaporation case.
     ///
     /// When evaporation is active, higher `v_in` reduces evaporation volume
@@ -5184,7 +5262,7 @@ mod tests {
             solver.add_rows(&empty_cuts);
             let v_in = 1_000.0_f64;
             solver.set_row_bounds(&[0], &[v_in], &[v_in]);
-            let view = solver.solve().expect("LP must solve to optimal");
+            let view = solver.solve(None).expect("LP must solve to optimal");
             // Row 0 is the storage-fixing equality; its dual is the marginal value
             // of one additional hm3 of initial storage.
             view.dual[0]
@@ -5262,7 +5340,7 @@ mod tests {
         solver.set_row_bounds(&[water_balance_row], &[high_inflow_rhs], &[high_inflow_rhs]);
 
         let view = solver
-            .solve()
+            .solve(None)
             .expect("evap dump valve LP must be feasible and optimal");
 
         // Column layout: N=1, L=0, K=1.
@@ -5698,7 +5776,7 @@ mod tests {
         );
     }
 
-    /// AC (ticket-003 C4): Bus with 2 deficit segments [{10MW, $500}, {None, $5000}] and 1 block.
+    /// Bus with 2 deficit segments [{10MW, $500}, {None, $5000}] and 1 block.
     /// Every deficit segment column for the bus/block must have exactly one entry in the
     /// load-balance row with coefficient +1.0.
     ///
@@ -5789,7 +5867,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // ticket-002: Water withdrawal LP wiring unit tests
+    // Water withdrawal LP wiring unit tests
     // -------------------------------------------------------------------------
 
     /// Build a `one_hydro_system` variant with a custom `water_withdrawal_m3s` and
@@ -6769,7 +6847,7 @@ mod tests {
         );
     }
 
-    // ── Generic constraint layout tests (ticket-002) ──────────────────────────
+    // ── Generic constraint layout tests ──────────────────────────
 
     /// Build a minimal one-bus, one-stage system for generic constraint tests.
     ///
@@ -8799,7 +8877,7 @@ mod tests {
 
     #[test]
     fn turbine_column_lower_bound_is_zero() {
-        // AD-5: turbine column lower bound must be 0.0, not min_turbined_m3s.
+        // turbine column lower bound must be 0.0, not min_turbined_m3s.
         let result = build_active_violations_template();
         let t = &result.templates[0];
         let indexer = StageIndexer::with_equipment(
@@ -8822,12 +8900,12 @@ mod tests {
         // Both turbine columns (block 0 and block 1) must have lower bound 0.0.
         assert_eq!(
             t.col_lower[indexer.turbine.start], 0.0,
-            "turbine blk0 lower bound must be 0.0 (AD-5)"
+            "turbine blk0 lower bound must be 0.0"
         );
         assert_eq!(
             t.col_lower[indexer.turbine.start + 1],
             0.0,
-            "turbine blk1 lower bound must be 0.0 (AD-5)"
+            "turbine blk1 lower bound must be 0.0"
         );
     }
 

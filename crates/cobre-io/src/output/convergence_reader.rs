@@ -115,6 +115,35 @@ impl BatchTotals {
     }
 }
 
+/// Read the first row's `gap_percent` value from `training/convergence.parquet`.
+///
+/// Used by the post-run summary to display "Gap: X% (started at Y%)".
+/// Returns `None` when the file is empty, the gap column is null on the
+/// first row (e.g. upper-bound evaluation disabled), or the file cannot
+/// be read or parsed. Errors are not surfaced because the initial gap is
+/// a cosmetic enhancement, not a load-bearing data point.
+#[must_use]
+pub fn read_initial_gap_percent(path: &Path) -> Option<f64> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .ok()?
+        .build()
+        .ok()?;
+    for batch_result in reader {
+        let batch = batch_result.ok()?;
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let gap_arr = get_f64_column(&batch, "gap_percent").ok()?;
+        return if gap_arr.is_valid(0) {
+            Some(gap_arr.value(0))
+        } else {
+            None
+        };
+    }
+    None
+}
+
 /// Extract an `Int64` column from `batch` by name, returning a schema error on failure.
 fn get_i64_column<'a>(
     batch: &'a RecordBatch,
@@ -198,7 +227,7 @@ fn accumulate_batch(batch: &RecordBatch, totals: &mut BatchTotals) -> Result<(),
 mod tests {
     use super::*;
     use crate::output::{
-        CutStatistics, IterationRecord, OutputContext, SimulationOutput, TrainingOutput,
+        IterationRecord, OutputContext, RowPoolStatistics, SimulationOutput, TrainingOutput,
         write_results,
     };
 
@@ -225,8 +254,12 @@ mod tests {
             time_lower_bound_ms: 0,
             time_state_exchange_ms: 0,
             time_cut_batch_build_ms: 0,
-            time_bwd_rayon_overhead_ms: 0,
-            time_fwd_rayon_overhead_ms: 0,
+            time_bwd_setup_ms: 0,
+            time_bwd_load_imbalance_ms: 0,
+            time_bwd_scheduling_overhead_ms: 0,
+            time_fwd_setup_ms: 0,
+            time_fwd_load_imbalance_ms: 0,
+            time_fwd_scheduling_overhead_ms: 0,
             time_overhead_ms: 0,
             solve_time_ms: 0.0,
         }
@@ -243,12 +276,13 @@ mod tests {
             converged: true,
             termination_reason: "gap tolerance reached".to_string(),
             total_time_ms: 5_000,
-            cut_stats: CutStatistics {
+            cut_stats: RowPoolStatistics {
                 total_generated: 200,
                 total_active: 80,
                 peak_active: 95,
             },
             cut_selection_records: vec![],
+            worker_timing_records: vec![],
         }
     }
 
@@ -260,8 +294,8 @@ mod tests {
 
     fn make_config() -> crate::Config {
         use crate::config::{
-            CheckpointingConfig, CutSelectionConfig, EstimationConfig, ExportsConfig,
-            InflowNonNegativityConfig, ModelingConfig, PolicyConfig, PolicyMode, SimulationConfig,
+            CheckpointingConfig, EstimationConfig, ExportsConfig, InflowNonNegativityConfig,
+            ModelingConfig, PolicyConfig, PolicyMode, RowSelectionConfig, SimulationConfig,
             StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
         };
         crate::Config {
@@ -277,7 +311,7 @@ mod tests {
                 stopping_mode: "any".to_string(),
                 cut_formulation: None,
                 forward_pass: None,
-                cut_selection: CutSelectionConfig::default(),
+                cut_selection: RowSelectionConfig::default(),
                 solver: TrainingSolverConfig::default(),
                 scenario_source: None,
             },
@@ -287,6 +321,7 @@ mod tests {
                 mode: PolicyMode::Fresh,
                 validate_compatibility: true,
                 checkpointing: CheckpointingConfig::default(),
+                boundary: None,
             },
             simulation: SimulationConfig {
                 enabled: false,

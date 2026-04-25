@@ -24,10 +24,10 @@ use crate::Config;
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
 use crate::output::schemas::{
-    buses_schema, contracts_schema, convergence_schema, costs_schema, cut_selection_schema,
-    exchanges_schema, generic_violations_schema, hydros_schema, inflow_lags_schema,
-    iteration_timing_schema, non_controllables_schema, pumping_stations_schema, rank_timing_schema,
-    retry_histogram_schema, solver_iterations_schema, thermals_schema,
+    buses_schema, contracts_schema, convergence_schema, costs_schema, exchanges_schema,
+    generic_violations_schema, hydros_schema, inflow_lags_schema, iteration_timing_schema,
+    non_controllables_schema, pumping_stations_schema, rank_timing_schema, retry_histogram_schema,
+    row_selection_schema, solver_iterations_schema, thermals_schema,
 };
 
 // ─── Entity type codes (SS3) ─────────────────────────────────────────────────
@@ -167,7 +167,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
     ])
     .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
 
-    // Hydros (code 0)
     for h in system.hydros() {
         wtr.write_record(&[
             ENTITY_TYPE_HYDRO.to_string(),
@@ -179,7 +178,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Thermals (code 1)
     for t in system.thermals() {
         wtr.write_record(&[
             ENTITY_TYPE_THERMAL.to_string(),
@@ -215,7 +213,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Pumping stations (code 4)
     for p in system.pumping_stations() {
         wtr.write_record(&[
             ENTITY_TYPE_PUMPING_STATION.to_string(),
@@ -227,7 +224,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Contracts (code 5)
     for c in system.contracts() {
         wtr.write_record(&[
             ENTITY_TYPE_CONTRACT.to_string(),
@@ -239,7 +235,6 @@ fn write_entities_csv(path: &Path, system: &System) -> Result<(), OutputError> {
         .map_err(|e| OutputError::io(&file_path, std::io::Error::other(e)))?;
     }
 
-    // Non-controllable sources (code 7)
     for n in system.non_controllable_sources() {
         wtr.write_record(&[
             ENTITY_TYPE_NON_CONTROLLABLE.to_string(),
@@ -284,7 +279,7 @@ fn write_variables_csv(path: &Path) -> Result<(), OutputError> {
         ("convergence", convergence_schema()),
         ("iteration_timing", iteration_timing_schema()),
         ("rank_timing", rank_timing_schema()),
-        ("cut_selection", cut_selection_schema()),
+        ("cut_selection", row_selection_schema()),
         ("solver_iterations", solver_iterations_schema()),
         ("retry_histogram", retry_histogram_schema()),
     ];
@@ -425,7 +420,12 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "io_write_ms"
         | "state_exchange_ms"
         | "cut_batch_build_ms"
-        | "rayon_overhead_ms"
+        | "bwd_setup_ms"
+        | "bwd_load_imbalance_ms"
+        | "bwd_scheduling_overhead_ms"
+        | "fwd_setup_ms"
+        | "fwd_load_imbalance_ms"
+        | "fwd_scheduling_overhead_ms"
         | "overhead_ms"
         | "forward_time_ms"
         | "backward_time_ms"
@@ -433,7 +433,6 @@ fn unit_for(file: &str, column: &str) -> &'static str {
         | "idle_time_ms"
         | "solve_time_ms"
         | "load_model_time_ms"
-        | "add_rows_time_ms"
         | "set_bounds_time_ms"
         | "basis_set_time_ms"
         | "selection_time_ms" => return "ms",
@@ -460,7 +459,7 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("costs", "block_id") => "Block index within stage (nullable)",
         ("costs", "total_cost") => "Total stage cost",
         ("costs", "immediate_cost") => "Immediate (operation) cost",
-        ("costs", "future_cost") => "Expected future cost (cut value)",
+        ("costs", "future_cost") => "Expected future cost (envelope value)",
         ("costs", "discount_factor") => "Discount factor applied to this stage",
         ("costs", "thermal_cost") => "Total thermal generation cost",
         ("costs", "contract_cost") => "Total contract cost",
@@ -605,18 +604,43 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("convergence", "lp_solves") => "Total LP solves in iteration",
         // ── iteration_timing ──────────────────────────────────────────────
         ("iteration_timing", "iteration") => "Iteration number (1-based)",
-        ("iteration_timing", "forward_solve_ms") => "Forward solve time",
-        ("iteration_timing", "forward_sample_ms") => "Forward sampling time",
-        ("iteration_timing", "backward_solve_ms") => "Backward solve time",
-        ("iteration_timing", "backward_cut_ms") => "Cut construction time",
-        ("iteration_timing", "cut_selection_ms") => "Cut selection time",
+        ("iteration_timing", "rank") => {
+            "MPI rank that produced this row. Always set; \
+             single-rank runs use 0."
+        }
+        ("iteration_timing", "worker_id") => {
+            "Worker thread index within the rank's pool. NULL on \
+             rank-aggregated rows that carry rank-only timings (cut_selection, \
+             mpi_allreduce, cut_sync, lower_bound, state_exchange, cut_batch_build, \
+             load_imbalance / scheduling_overhead, overhead). Set on per-worker \
+             rows that carry parallel-region timings (forward_wall, backward_wall, \
+             fwd_setup, bwd_setup)."
+        }
+        ("iteration_timing", "forward_wall_ms") => "Forward pass wall-clock time",
+        ("iteration_timing", "backward_wall_ms") => "Backward pass wall-clock time",
+        ("iteration_timing", "cut_selection_ms") => "Row-selection time",
         ("iteration_timing", "mpi_allreduce_ms") => "MPI allreduce time",
-        ("iteration_timing", "mpi_broadcast_ms") => "MPI broadcast time",
-        ("iteration_timing", "io_write_ms") => "I/O write time",
+        ("iteration_timing", "cut_sync_ms") => "Per-stage row-sync allgatherv time",
+        ("iteration_timing", "lower_bound_ms") => "Lower bound evaluation time",
         ("iteration_timing", "state_exchange_ms") => "State exchange allgatherv time",
-        ("iteration_timing", "cut_batch_build_ms") => "Cut batch assembly time",
-        ("iteration_timing", "rayon_overhead_ms") => "Rayon barrier/scheduling overhead",
-        ("iteration_timing", "overhead_ms") => "Overhead time",
+        ("iteration_timing", "cut_batch_build_ms") => "Row-batch assembly time",
+        ("iteration_timing", "bwd_setup_ms") => "Thread-pool setup time before backward pass",
+        ("iteration_timing", "bwd_load_imbalance_ms") => {
+            "Estimated load imbalance across backward pass worker threads"
+        }
+        ("iteration_timing", "bwd_scheduling_overhead_ms") => {
+            "Scheduling and synchronisation overhead in the backward pass"
+        }
+        ("iteration_timing", "fwd_setup_ms") => "Thread-pool setup time before forward pass",
+        ("iteration_timing", "fwd_load_imbalance_ms") => {
+            "Estimated load imbalance across forward pass worker threads"
+        }
+        ("iteration_timing", "fwd_scheduling_overhead_ms") => {
+            "Scheduling and synchronisation overhead in the forward pass"
+        }
+        ("iteration_timing", "overhead_ms") => {
+            "Residual iteration time not attributed to any phase"
+        }
         // ── rank_timing ────────────────────────────────────────────────────
         ("rank_timing", "iteration") => "Iteration number (1-based)",
         ("rank_timing", "rank") => "MPI rank",
@@ -645,14 +669,34 @@ fn description_for(file: &str, column: &str) -> &'static str {
         ("solver_iterations", "lp_retries") => "Solves requiring retry escalation",
         ("solver_iterations", "lp_failures") => "Solves that exhausted all retry levels",
         ("solver_iterations", "retry_attempts") => "Total retry attempts across all solves",
-        ("solver_iterations", "basis_offered") => "Number of solve_with_basis calls",
-        ("solver_iterations", "basis_rejections") => "Times the warm-start basis was rejected",
+        ("solver_iterations", "basis_offered") => {
+            "Number of warm-start solve calls (basis-offered)"
+        }
+        ("solver_iterations", "basis_consistency_failures") => {
+            "Number of warm-start solve calls rejected because isBasisConsistent returned false"
+        }
         ("solver_iterations", "simplex_iterations") => "Total simplex iterations",
         ("solver_iterations", "solve_time_ms") => "Cumulative solve wall-clock time",
         ("solver_iterations", "load_model_time_ms") => "Cumulative load_model call time",
-        ("solver_iterations", "add_rows_time_ms") => "Cumulative add_rows call time",
         ("solver_iterations", "set_bounds_time_ms") => "Cumulative set_bounds call time",
         ("solver_iterations", "basis_set_time_ms") => "Cumulative set_basis call time",
+        ("solver_iterations", "basis_reconstructions") => {
+            "Number of reconstruct_basis invocations: incremented once per \
+             warm-start solve that applied a stored basis via slot reconciliation. \
+             A non-zero value indicates basis reconstruction is active."
+        }
+        ("solver_iterations", "opening") => {
+            "Opening (noise realization) index within the stage, for backward-pass \
+             rows. NULL for forward, lower_bound, and simulation rows — these phases \
+             do not have an opening dimension. Backward rows range 0..n_openings."
+        }
+        ("solver_iterations", "rank") => {
+            "MPI rank that produced this row. NULL for rank-aggregated rows."
+        }
+        ("solver_iterations", "worker_id") => {
+            "Worker thread index within the rank's pool that produced this row. \
+             NULL for rank-aggregated rows."
+        }
         // ── retry_histogram ───────────────────────────────────────────────
         ("retry_histogram", "iteration") => "Iteration number (1-based) or scenario ID (0-based)",
         ("retry_histogram", "phase") => "Solver phase (forward, backward, lower_bound, simulation)",
@@ -1409,8 +1453,8 @@ mod tests {
 
         let row_count = rdr.records().count();
         assert_eq!(
-            row_count, 188,
-            "variables.csv must have exactly 188 data rows (one per column across all 16 schemas)"
+            row_count, 196,
+            "variables.csv must have exactly 196 data rows (one per column across all schemas)"
         );
     }
 

@@ -698,9 +698,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Bounds-checking panics
+    // Bounds-checking panics (debug-only — release lets native Vec indexing
+    // panic with a different message that would fail #[should_panic])
     // -----------------------------------------------------------------------
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stage index 1 is out of bounds")]
     fn mean_out_of_bounds_panics() {
@@ -710,6 +712,7 @@ mod tests {
         let _ = lp.mean(1, 0);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "entity index 1 is out of bounds")]
     fn mean_entity_out_of_bounds_panics() {
@@ -719,6 +722,7 @@ mod tests {
         let _ = lp.mean(0, 1);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "stage index 1 is out of bounds")]
     fn std_out_of_bounds_panics() {
@@ -728,6 +732,7 @@ mod tests {
         let _ = lp.std(1, 0);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "block index 1 is out of bounds")]
     fn block_factor_out_of_bounds_panics() {

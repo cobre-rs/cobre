@@ -33,11 +33,15 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::{OpeningTree, StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
 use crate::{
-    FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
-    StageIndexer,
+    cut::FutureCostFunction,
+    error::SddpError,
     forward::build_cut_row_batch_into,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
     lp_builder::COST_SCALE_FACTOR,
-    noise::{compute_effective_eta, transform_ncs_noise},
+    lp_builder::PatchBuffer,
+    noise::{NcsNoiseOffsets, compute_effective_eta, transform_ncs_noise},
+    risk_measure::RiskMeasure,
 };
 use cobre_solver::StageTemplate;
 
@@ -82,6 +86,396 @@ pub struct LbEvalSpec<'a> {
     pub inflow_method: &'a InflowNonNegativityMethod,
 }
 
+/// Per-evaluation scratch buffers for [`evaluate_lower_bound`] on rank 0.
+///
+/// Allocated once and stored on `IterationScratch`;
+/// reused across training iterations to eliminate per-iteration heap allocation.
+/// The first call to `evaluate_lower_bound` still allocates (grows Vec capacity);
+/// subsequent iterations reuse the existing capacity.
+///
+/// All fields are plain `f64` / `usize` working buffers — no LP-specific state.
+// All fields are scratch buffers; the shared `_buf` postfix is intentional.
+#[allow(clippy::struct_field_names)]
+pub struct LbEvalScratch {
+    /// Per-opening noise realization (one entry per hydro).
+    pub noise_buf: Vec<f64>,
+    /// Z-inflow RHS values per hydro for PAR(p) rows.
+    pub z_inflow_rhs_buf: Vec<f64>,
+    /// NCS column upper bounds, written by `transform_ncs_noise` per opening.
+    pub ncs_col_upper_buf: Vec<f64>,
+    /// NCS column indices (constant across openings for a given stage).
+    pub ncs_col_indices_buf: Vec<usize>,
+    /// NCS column lower bounds (constant zeros, parallel to `ncs_col_indices_buf`).
+    pub ncs_col_lower_buf: Vec<f64>,
+    /// PAR lag matrix (constant across openings for a given call).
+    pub lag_matrix_buf: Vec<f64>,
+    /// Per-hydro eta floor computed from lags (constant across openings).
+    pub eta_floor_buf: Vec<f64>,
+    /// Per-hydro PAR inflow evaluated per opening.
+    pub par_inflow_buf: Vec<f64>,
+    /// Per-hydro effective eta after clamping (recomputed per opening).
+    pub effective_eta_buf: Vec<f64>,
+    /// Per-hydro zero-target vector for truncation precompute.
+    pub zero_targets_buf: Vec<f64>,
+}
+
+impl LbEvalScratch {
+    /// Construct a new scratch with all buffers empty.
+    ///
+    /// No heap allocation occurs until `evaluate_lower_bound` populates the
+    /// buffers on the first call.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            noise_buf: Vec::new(),
+            z_inflow_rhs_buf: Vec::new(),
+            ncs_col_upper_buf: Vec::new(),
+            ncs_col_indices_buf: Vec::new(),
+            ncs_col_lower_buf: Vec::new(),
+            lag_matrix_buf: Vec::new(),
+            eta_floor_buf: Vec::new(),
+            par_inflow_buf: Vec::new(),
+            effective_eta_buf: Vec::new(),
+            zero_targets_buf: Vec::new(),
+        }
+    }
+}
+
+impl Default for LbEvalScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Bundle of mutable scratch references passed to [`evaluate_lower_bound`].
+///
+/// Groups `patch_buf`, `lb_cut_batch`, `lb_cut_row_map`, and `lb_scratch` so
+/// that the public signature of `evaluate_lower_bound` stays within the
+/// clippy `too-many-arguments-threshold = 9`.  Construct via
+/// [`LbEvalScratchBundle::from_scratch_fields`] when calling from a
+/// `TrainingSession` (disjoint-borrow factory pattern).
+pub struct LbEvalScratchBundle<'a> {
+    /// Reusable patch buffer for LP row-bound patching.
+    pub patch_buf: &'a mut PatchBuffer,
+    /// Cut row batch for the lower-bound LP (stage 0).
+    pub lb_cut_batch: &'a mut cobre_solver::RowBatch,
+    /// Optional cut row map for append-only lower-bound LP management.
+    pub lb_cut_row_map: Option<&'a mut crate::cut::CutRowMap>,
+    /// Per-evaluation scratch buffers (reused across training iterations).
+    pub lb_scratch: &'a mut LbEvalScratch,
+}
+
+impl<'a> LbEvalScratchBundle<'a> {
+    /// Construct from disjoint fields of `IterationScratch`.
+    ///
+    /// Analogous to `BackwardPassInputs::from_session_fields`: the caller takes
+    /// the fields it needs separately so that the borrow checker can verify
+    /// non-aliasing, then passes them here.
+    ///
+    /// ```text
+    /// let bundle = LbEvalScratchBundle::from_scratch_fields(
+    ///     &mut self.scratch.patch_buf,
+    ///     &mut self.scratch.lb_cut_batch,
+    ///     Some(&mut self.scratch.lb_cut_row_map),
+    ///     &mut self.scratch.lb_scratch,
+    /// );
+    /// ```
+    pub fn from_scratch_fields(
+        patch_buf: &'a mut PatchBuffer,
+        lb_cut_batch: &'a mut cobre_solver::RowBatch,
+        lb_cut_row_map: Option<&'a mut crate::cut::CutRowMap>,
+        lb_scratch: &'a mut LbEvalScratch,
+    ) -> Self {
+        Self {
+            patch_buf,
+            lb_cut_batch,
+            lb_cut_row_map,
+            lb_scratch,
+        }
+    }
+}
+
+/// Phase 1 — rank-0 buffer pre-population and append-only LP management.
+///
+/// Pre-populates the constant NCS column-bound index/lower buffers (same across
+/// all openings at a given stage) in `scratch` and performs the append-only LP
+/// load. The caller-supplied `scratch` is populated in-place so that its
+/// capacity is reused across training iterations.
+///
+/// Only called on rank 0.
+fn lb_init_rank0<S: SolverInterface>(
+    solver: &mut S,
+    fcf: &FutureCostFunction,
+    spec: &LbEvalSpec<'_>,
+    indexer: &StageIndexer,
+    lb_cut_batch: &mut RowBatch,
+    lb_cut_row_map: Option<&mut crate::cut::CutRowMap>,
+    scratch: &mut LbEvalScratch,
+) {
+    // Clear the append-only buffers before repopulating (capacity is kept).
+    scratch.ncs_col_upper_buf.clear();
+    scratch.ncs_col_indices_buf.clear();
+    scratch.ncs_col_lower_buf.clear();
+
+    // Pre-populate index/lower buffers for NCS column bound patching.
+    // These are constant across openings (same stage, same block count),
+    // so we build them once before the opening loop.
+    if let Some(stoch) = spec.stochastic {
+        let n_stochastic_ncs = stoch.n_stochastic_ncs();
+        if n_stochastic_ncs > 0 && !spec.ncs_generation.is_empty() {
+            for ncs_idx in 0..n_stochastic_ncs {
+                for blk in 0..spec.block_count {
+                    scratch
+                        .ncs_col_indices_buf
+                        .push(spec.ncs_generation.start + ncs_idx * spec.block_count + blk);
+                    scratch.ncs_col_lower_buf.push(0.0);
+                }
+            }
+        }
+    }
+
+    // Resize par_inflow_buf to the current n_hydros (no-op when capacity
+    // is already sufficient, which is the common case from iteration 2 on).
+    scratch.par_inflow_buf.resize(spec.n_hydros, 0.0);
+
+    // Append-only LP management for the lower bound solver.
+    //
+    // When a CutRowMap is provided, the solver persists across iterations:
+    //   - First call (row_map empty): load_model + append all active cuts.
+    //   - Subsequent calls: append only new cuts (row_map tracks existing).
+    // Cuts are never removed from the LB LP — this keeps the lower bound
+    // monotonically non-decreasing across iterations.
+    //
+    // When no CutRowMap is provided (test contexts with no persistent
+    // state), fall back to full rebuild each call.
+    if let Some(row_map) = lb_cut_row_map {
+        if row_map.total_cut_rows() == 0 {
+            // First call: full load.
+            solver.load_model(spec.template);
+        }
+        // Append only cuts not yet present in the LP.
+        crate::forward::append_new_cuts_to_lp(
+            solver,
+            fcf,
+            0,
+            indexer,
+            &spec.template.col_scale,
+            row_map,
+            lb_cut_batch,
+        );
+    } else {
+        // Test-only path: full rebuild every call.
+        build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &spec.template.col_scale);
+        solver.load_model(spec.template);
+        if lb_cut_batch.num_rows > 0 {
+            solver.add_rows(lb_cut_batch);
+        }
+    }
+}
+
+/// Phase 2 — truncation precompute and per-opening LP evaluation.
+///
+/// Precomputes the PAR lag matrix and eta floor (constant across openings), then
+/// iterates over all stage-0 openings. For each opening: evaluates PAR inflows,
+/// computes effective eta, patches row bounds, patches NCS column bounds
+/// (correctness-critical per-opening step), solves, and records the objective.
+///
+/// Returns the vector of per-opening objectives.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Infeasible`] if any opening LP is infeasible, or
+/// [`SddpError::Solver`] for other LP solve failures.
+// The per-opening loop body (noise build + NCS patch + solve) accounts for the
+// length; it cannot be meaningfully split without fragmenting correctness-critical
+// sequential steps (especially the NCS column-bound patch inside the opening loop).
+fn lb_evaluate_stage_0<S: SolverInterface>(
+    solver: &mut S,
+    spec: &LbEvalSpec<'_>,
+    patch_buf: &mut PatchBuffer,
+    initial_state: &[f64],
+    indexer: &StageIndexer,
+    scratch: &mut LbEvalScratch,
+) -> Result<Vec<f64>, SddpError> {
+    let n_openings = spec.opening_tree.n_openings(0);
+    let n_hydros = spec.n_hydros;
+    let base_row = spec.base_row;
+
+    // Truncation precomputation: lag matrix and eta floor are constant
+    // across openings (same initial_state, same stage 0).
+    let needs_truncation = matches!(
+        spec.inflow_method,
+        InflowNonNegativityMethod::Truncation
+            | InflowNonNegativityMethod::TruncationWithPenalty { .. }
+    );
+
+    // Resolve the PAR LP once; used for both truncation and z-inflow RHS.
+    let par_lp_opt = spec.stochastic.map(StochasticContext::par);
+    let truncation_par = if needs_truncation {
+        par_lp_opt.filter(|p| p.n_stages() > 0 && p.n_hydros() == n_hydros)
+    } else {
+        None
+    };
+
+    if let Some(par_lp) = truncation_par {
+        let max_order = indexer.max_par_order;
+        let lag_len = max_order * n_hydros;
+        scratch.lag_matrix_buf.resize(lag_len, 0.0);
+        for h in 0..n_hydros {
+            for l in 0..max_order {
+                scratch.lag_matrix_buf[l * n_hydros + h] =
+                    initial_state[indexer.inflow_lags.start + l * n_hydros + h];
+            }
+        }
+
+        // eta_floor is constant across openings: depends only on lags
+        // (initial_state) and stage (0), not on the opening noise.
+        scratch.eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
+        // zero_targets is constant (all zeros); reuse the scratch buffer to
+        // avoid a per-call allocation.
+        scratch.zero_targets_buf.clear();
+        scratch.zero_targets_buf.resize(n_hydros, 0.0);
+        solve_par_noise_batch(
+            par_lp,
+            0,
+            &scratch.lag_matrix_buf,
+            &scratch.zero_targets_buf,
+            &mut scratch.eta_floor_buf,
+        );
+    }
+
+    let mut objectives = Vec::with_capacity(n_openings);
+
+    for opening_idx in 0..n_openings {
+        let raw_noise = spec.opening_tree.opening(0, opening_idx);
+        scratch.noise_buf.clear();
+        scratch.z_inflow_rhs_buf.clear();
+
+        // Per-opening: evaluate PAR inflows (only when truncation active).
+        if let Some(par_lp) = truncation_par {
+            evaluate_par_batch(
+                par_lp,
+                0,
+                &scratch.lag_matrix_buf,
+                raw_noise,
+                &mut scratch.par_inflow_buf,
+            );
+        }
+
+        // Compute effective eta (clamped or raw).
+        compute_effective_eta(
+            raw_noise,
+            n_hydros,
+            spec.inflow_method,
+            &scratch.par_inflow_buf,
+            &scratch.eta_floor_buf,
+            &mut scratch.effective_eta_buf,
+        );
+
+        // Build noise_buf and z_inflow_rhs_buf from effective eta.
+        for (h, &eta_eff) in scratch.effective_eta_buf.iter().enumerate() {
+            scratch
+                .noise_buf
+                .push(spec.template.row_lower[base_row + h] + spec.noise_scale[h] * eta_eff);
+            if let Some(stoch) = spec.stochastic {
+                let par_lp = stoch.par();
+                if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
+                    let base = par_lp.deterministic_base(0, h);
+                    let sigma = par_lp.sigma(0, h);
+                    scratch.z_inflow_rhs_buf.push(base + sigma * eta_eff);
+                } else {
+                    scratch.z_inflow_rhs_buf.push(0.0);
+                }
+            } else {
+                scratch.z_inflow_rhs_buf.push(0.0);
+            }
+        }
+
+        patch_buf.fill_forward_patches(
+            indexer,
+            initial_state,
+            &scratch.noise_buf,
+            base_row,
+            &spec.template.row_scale,
+        );
+        patch_buf.fill_z_inflow_patches(
+            indexer.z_inflow_row_start,
+            &scratch.z_inflow_rhs_buf,
+            &spec.template.row_scale,
+        );
+        let n_patches = patch_buf.forward_patch_count();
+        solver.set_row_bounds(
+            &patch_buf.indices[..n_patches],
+            &patch_buf.lower[..n_patches],
+            &patch_buf.upper[..n_patches],
+        );
+
+        // Patch NCS column upper bounds with per-opening stochastic availability.
+        // CORRECTNESS: this patch MUST be inside the per-opening loop; each opening
+        // has a different noise realization that changes the available NCS generation.
+        // Moving this outside the loop would be a bug (see MEMORY.md D15 note).
+        if let Some(stoch) = spec.stochastic {
+            let n_stochastic_ncs = stoch.n_stochastic_ncs();
+            if n_stochastic_ncs > 0 && !spec.ncs_generation.is_empty() {
+                transform_ncs_noise(
+                    raw_noise,
+                    &NcsNoiseOffsets {
+                        n_hydros,
+                        n_load_buses: spec.n_load_buses,
+                    },
+                    stoch,
+                    0,
+                    spec.block_count,
+                    spec.ncs_max_gen,
+                    &mut scratch.ncs_col_upper_buf,
+                );
+                // ncs_col_indices_buf and ncs_col_lower_buf were pre-populated
+                // in lb_init_rank0 — no rebuild needed here.
+                solver.set_col_bounds(
+                    &scratch.ncs_col_indices_buf,
+                    &scratch.ncs_col_lower_buf,
+                    &scratch.ncs_col_upper_buf,
+                );
+            }
+        }
+
+        let view = solver.solve(None).map_err(|e| match e {
+            SolverError::Infeasible => SddpError::Infeasible {
+                stage: 0,
+                iteration: 0,
+                scenario: opening_idx,
+            },
+            other => SddpError::Solver(other),
+        })?;
+        objectives.push(view.objective);
+    }
+
+    Ok(objectives)
+}
+
+/// Phase 3 — risk-measure aggregation and MPI broadcast.
+///
+/// Applies `risk_measure` to the per-opening objectives with uniform
+/// probabilities, scales by [`COST_SCALE_FACTOR`], then broadcasts the scalar
+/// lower bound from rank 0 to all other ranks.
+///
+/// # Errors
+///
+/// Returns [`SddpError::Communication`] if the broadcast fails.
+fn lb_aggregate_and_broadcast<C: Communicator>(
+    objectives: &[f64],
+    risk_measure: &RiskMeasure,
+    comm: &C,
+) -> Result<f64, SddpError> {
+    #[allow(clippy::cast_precision_loss)]
+    let uniform_prob = 1.0_f64 / objectives.len() as f64;
+    let mut lb = risk_measure.evaluate_risk(objectives, &vec![uniform_prob; objectives.len()])
+        * COST_SCALE_FACTOR;
+    comm.broadcast(std::slice::from_mut(&mut lb), 0)
+        .map_err(SddpError::from)?;
+    Ok(lb)
+}
+
 /// Evaluate the global lower bound for the current FCF approximation.
 ///
 /// On rank 0 the function iterates over all stage-0 openings, solves the LP
@@ -95,7 +489,8 @@ pub struct LbEvalSpec<'a> {
 /// - `fcf` — Future Cost Function with all accumulated cuts.
 /// - `initial_state` — Known initial state vector `x_0` (length `indexer.n_state`).
 /// - `indexer` — LP layout map for stage 0.
-/// - `patch_buf` — Reusable patch buffer (must be sized for this stage).
+/// - `scratch` — Bundled mutable scratch references (patch buffer, cut batch,
+///   cut row map, and per-evaluation buffers). See [`LbEvalScratchBundle`].
 /// - `spec` — Stage-0 data bundle: template, base row, noise scale, hydro count,
 ///   opening tree, and risk measure. See [`LbEvalSpec`].
 /// - `comm` — Communicator for rank/size queries and broadcast.
@@ -113,236 +508,47 @@ pub struct LbEvalSpec<'a> {
 ///
 /// Panics if `spec.opening_tree.n_openings(0) == 0` on rank 0. Stage 0 must
 /// have at least one opening; this is a caller contract violation.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     solver: &mut S,
     fcf: &FutureCostFunction,
     initial_state: &[f64],
     indexer: &StageIndexer,
-    patch_buf: &mut PatchBuffer,
-    lb_cut_batch: &mut RowBatch,
+    scratch: &mut LbEvalScratchBundle<'_>,
     spec: &LbEvalSpec<'_>,
     comm: &C,
-    lb_cut_row_map: Option<&mut crate::cut::CutRowMap>,
 ) -> Result<f64, SddpError> {
-    let LbEvalSpec {
-        template,
-        base_row,
-        noise_scale,
-        n_hydros,
-        opening_tree,
-        risk_measure,
-        stochastic,
-        n_load_buses,
-        ncs_max_gen,
-        block_count,
-        ncs_generation,
-        inflow_method,
-    } = spec;
-    let (base_row, n_hydros, n_load_buses, block_count) =
-        (*base_row, *n_hydros, *n_load_buses, *block_count);
     let mut lb = 0.0_f64;
 
     if comm.rank() == 0 {
-        let n_openings = opening_tree.n_openings(0);
         assert!(
-            n_openings > 0,
+            spec.opening_tree.n_openings(0) > 0,
             "evaluate_lower_bound: stage 0 must have at least one opening"
         );
 
-        let mut objectives = Vec::with_capacity(n_openings);
-        let mut noise_buf = Vec::with_capacity(n_hydros);
-        let mut z_inflow_rhs_buf = Vec::with_capacity(n_hydros);
-        let mut ncs_col_upper_buf: Vec<f64> = Vec::new();
-        let mut ncs_col_indices_buf: Vec<usize> = Vec::new();
-        let mut ncs_col_lower_buf: Vec<f64> = Vec::new();
-
-        // Pre-populate index/lower buffers for NCS column bound patching.
-        // These are constant across openings (same stage, same block count),
-        // so we build them once before the opening loop.
-        if let Some(stoch) = stochastic {
-            let n_stochastic_ncs = stoch.n_stochastic_ncs();
-            if n_stochastic_ncs > 0 && !ncs_generation.is_empty() {
-                for ncs_idx in 0..n_stochastic_ncs {
-                    for blk in 0..block_count {
-                        ncs_col_indices_buf
-                            .push(ncs_generation.start + ncs_idx * block_count + blk);
-                        ncs_col_lower_buf.push(0.0);
-                    }
-                }
-            }
-        }
-
-        // Incremental LP management for the lower bound solver.
-        //
-        // When a CutRowMap is provided, the solver persists across iterations:
-        //   - First call (row_map empty): load_model + append all active cuts.
-        //   - Subsequent calls: append only new cuts (row_map tracks existing).
-        // When no CutRowMap is provided, fall back to full rebuild each call.
-        if let Some(row_map) = lb_cut_row_map {
-            if row_map.total_cut_rows() == 0 {
-                // First call or post-rebuild: full load.
-                solver.load_model(template);
-            }
-            // Append only cuts not yet present in the LP.
-            crate::forward::append_new_cuts_to_lp(
-                solver,
-                fcf,
-                0,
-                indexer,
-                &template.col_scale,
-                row_map,
-                lb_cut_batch,
-            );
-        } else {
-            // Legacy path: full rebuild every call.
-            build_cut_row_batch_into(lb_cut_batch, fcf, 0, indexer, &template.col_scale);
-            solver.load_model(template);
-            if lb_cut_batch.num_rows > 0 {
-                solver.add_rows(lb_cut_batch);
-            }
-        }
-
-        // Truncation precomputation: lag matrix and eta floor are constant
-        // across openings (same initial_state, same stage 0).
-        let needs_truncation = matches!(
-            inflow_method,
-            InflowNonNegativityMethod::Truncation
-                | InflowNonNegativityMethod::TruncationWithPenalty { .. }
+        // Phase 1: populate scratch buffers and perform append-only LP load.
+        lb_init_rank0(
+            solver,
+            fcf,
+            spec,
+            indexer,
+            scratch.lb_cut_batch,
+            scratch.lb_cut_row_map.as_deref_mut(),
+            scratch.lb_scratch,
         );
 
-        // Resolve the PAR LP once; used for both truncation and z-inflow RHS.
-        let par_lp_opt = stochastic.map(StochasticContext::par);
-        let truncation_par = if needs_truncation {
-            par_lp_opt.filter(|p| p.n_stages() > 0 && p.n_hydros() == n_hydros)
-        } else {
-            None
-        };
+        // Phase 2: truncation precompute + per-opening loop.
+        let objectives = lb_evaluate_stage_0(
+            solver,
+            spec,
+            scratch.patch_buf,
+            initial_state,
+            indexer,
+            scratch.lb_scratch,
+        )?;
 
-        let mut lag_matrix_buf = Vec::new();
-        let mut eta_floor_buf = Vec::new();
-        let mut par_inflow_buf = vec![0.0_f64; n_hydros];
-        let mut effective_eta_buf = Vec::with_capacity(n_hydros);
-
-        if let Some(par_lp) = truncation_par {
-            let max_order = indexer.max_par_order;
-            let lag_len = max_order * n_hydros;
-            lag_matrix_buf.resize(lag_len, 0.0);
-            for h in 0..n_hydros {
-                for l in 0..max_order {
-                    lag_matrix_buf[l * n_hydros + h] =
-                        initial_state[indexer.inflow_lags.start + l * n_hydros + h];
-                }
-            }
-
-            // eta_floor is constant across openings: depends only on lags
-            // (initial_state) and stage (0), not on the opening noise.
-            eta_floor_buf.resize(n_hydros, f64::NEG_INFINITY);
-            let zero_targets = vec![0.0_f64; n_hydros];
-            solve_par_noise_batch(
-                par_lp,
-                0,
-                &lag_matrix_buf,
-                &zero_targets,
-                &mut eta_floor_buf,
-            );
-        }
-
-        for opening_idx in 0..n_openings {
-            let raw_noise = opening_tree.opening(0, opening_idx);
-            noise_buf.clear();
-            z_inflow_rhs_buf.clear();
-
-            // Per-opening: evaluate PAR inflows (only when truncation active).
-            if let Some(par_lp) = truncation_par {
-                evaluate_par_batch(par_lp, 0, &lag_matrix_buf, raw_noise, &mut par_inflow_buf);
-            }
-
-            // Compute effective eta (clamped or raw).
-            compute_effective_eta(
-                raw_noise,
-                n_hydros,
-                inflow_method,
-                &par_inflow_buf,
-                &eta_floor_buf,
-                &mut effective_eta_buf,
-            );
-
-            // Build noise_buf and z_inflow_rhs_buf from effective eta.
-            for (h, &eta_eff) in effective_eta_buf.iter().enumerate() {
-                noise_buf.push(template.row_lower[base_row + h] + noise_scale[h] * eta_eff);
-                if let Some(stoch) = stochastic {
-                    let par_lp = stoch.par();
-                    if par_lp.n_stages() > 0 && par_lp.n_hydros() == n_hydros {
-                        let base = par_lp.deterministic_base(0, h);
-                        let sigma = par_lp.sigma(0, h);
-                        z_inflow_rhs_buf.push(base + sigma * eta_eff);
-                    } else {
-                        z_inflow_rhs_buf.push(0.0);
-                    }
-                } else {
-                    z_inflow_rhs_buf.push(0.0);
-                }
-            }
-
-            patch_buf.fill_forward_patches(
-                indexer,
-                initial_state,
-                &noise_buf,
-                base_row,
-                &template.row_scale,
-            );
-            patch_buf.fill_z_inflow_patches(
-                indexer.z_inflow_row_start,
-                &z_inflow_rhs_buf,
-                &template.row_scale,
-            );
-            let n_patches = patch_buf.forward_patch_count();
-            solver.set_row_bounds(
-                &patch_buf.indices[..n_patches],
-                &patch_buf.lower[..n_patches],
-                &patch_buf.upper[..n_patches],
-            );
-
-            // Patch NCS column upper bounds with per-opening stochastic availability.
-            if let Some(stoch) = stochastic {
-                let n_stochastic_ncs = stoch.n_stochastic_ncs();
-                if n_stochastic_ncs > 0 && !ncs_generation.is_empty() {
-                    transform_ncs_noise(
-                        raw_noise,
-                        n_hydros,
-                        n_load_buses,
-                        stoch,
-                        0,
-                        block_count,
-                        ncs_max_gen,
-                        &mut ncs_col_upper_buf,
-                    );
-                    // ncs_col_indices_buf and ncs_col_lower_buf were pre-populated
-                    // before the opening loop — no rebuild needed here.
-                    solver.set_col_bounds(
-                        &ncs_col_indices_buf,
-                        &ncs_col_lower_buf,
-                        &ncs_col_upper_buf,
-                    );
-                }
-            }
-
-            let view = solver.solve().map_err(|e| match e {
-                SolverError::Infeasible => SddpError::Infeasible {
-                    stage: 0,
-                    iteration: 0,
-                    scenario: opening_idx,
-                },
-                other => SddpError::Solver(other),
-            })?;
-            objectives.push(view.objective);
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        let uniform_prob = 1.0_f64 / n_openings as f64;
-        lb = risk_measure.evaluate_risk(&objectives, &vec![uniform_prob; n_openings])
-            * COST_SCALE_FACTOR;
+        // Phase 3: risk-measure aggregation + broadcast.
+        lb = lb_aggregate_and_broadcast(&objectives, spec.risk_measure, comm)?;
+        return Ok(lb);
     }
 
     comm.broadcast(std::slice::from_mut(&mut lb), 0)
@@ -359,10 +565,13 @@ pub fn evaluate_lower_bound<S: SolverInterface, C: Communicator>(
     clippy::cast_precision_loss
 )]
 mod tests {
-    use super::{LbEvalSpec, evaluate_lower_bound};
+    use super::{
+        LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound, lb_evaluate_stage_0,
+    };
     use crate::{
-        FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
-        StageIndexer,
+        cut::FutureCostFunction, error::SddpError, indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod, lp_builder::PatchBuffer,
+        risk_measure::RiskMeasure,
     };
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{
@@ -379,6 +588,20 @@ mod tests {
             row_lower: Vec::new(),
             row_upper: Vec::new(),
         }
+    }
+
+    /// Return the owned locals needed to build an [`LbEvalScratchBundle`] for tests.
+    ///
+    /// Call pattern:
+    /// ```text
+    /// let (mut row_batch, mut lb_scratch) = make_lb_locals();
+    /// let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+    ///     &mut patch_buf, &mut row_batch, None, &mut lb_scratch,
+    /// );
+    /// evaluate_lower_bound(..., &mut bundle, ...);
+    /// ```
+    fn make_lb_locals() -> (RowBatch, LbEvalScratch) {
+        (empty_row_batch(), LbEvalScratch::new())
     }
 
     /// Minimal stage template for N=1 hydro, L=0 PAR order.
@@ -487,7 +710,7 @@ mod tests {
                 n_load_buses: 0,
                 n_ncs: 0,
             },
-            None,
+            &cobre_stochastic::tree::generate::OpeningTreeGenerationInputs::default(),
         )
         .unwrap()
     }
@@ -589,7 +812,8 @@ mod tests {
 
     // ── Mock solver ──────────────────────────────────────────────────────────
 
-    /// Mock solver that returns configurable objective values in sequence.
+    /// Mock solver that records `set_col_bounds` calls and returns configurable
+    /// objective values in sequence.
     ///
     /// Each call to `solve()` returns the next value from `objectives`. If
     /// `infeasible_on_call` is set and the call index matches, returns
@@ -598,6 +822,8 @@ mod tests {
         objectives: Vec<f64>,
         call_count: usize,
         infeasible_on_call: Option<usize>,
+        /// Number of times `set_col_bounds` was called.
+        set_col_bounds_calls: usize,
     }
 
     impl MockSolver {
@@ -606,6 +832,7 @@ mod tests {
                 objectives,
                 call_count: 0,
                 infeasible_on_call: None,
+                set_col_bounds_calls: 0,
             }
         }
 
@@ -614,6 +841,7 @@ mod tests {
                 objectives: vec![0.0],
                 call_count: 0,
                 infeasible_on_call: Some(0),
+                set_col_bounds_calls: 0,
             }
         }
     }
@@ -625,9 +853,14 @@ mod tests {
         fn load_model(&mut self, _template: &StageTemplate) {}
         fn add_rows(&mut self, _cuts: &RowBatch) {}
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
-        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
+        fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {
+            self.set_col_bounds_calls += 1;
+        }
 
-        fn solve(&mut self) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
+        fn solve(
+            &mut self,
+            _basis: Option<&Basis>,
+        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
             let call = self.call_count;
             self.call_count += 1;
             if self.infeasible_on_call == Some(call) {
@@ -646,18 +879,7 @@ mod tests {
             })
         }
 
-        fn reset(&mut self) {
-            self.call_count = 0;
-        }
-
         fn get_basis(&mut self, _out: &mut Basis) {}
-
-        fn solve_with_basis(
-            &mut self,
-            _basis: &Basis,
-        ) -> Result<cobre_solver::SolutionView<'_>, SolverError> {
-            self.solve()
-        }
 
         fn statistics(&self) -> SolverStatistics {
             SolverStatistics::default()
@@ -705,16 +927,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch, mut lb_scratch) = make_lb_locals();
+        let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch,
+            None,
+            &mut lb_scratch,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -753,16 +980,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -808,16 +1040,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -860,16 +1097,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -908,16 +1150,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -954,16 +1201,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1007,16 +1259,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1060,31 +1317,41 @@ mod tests {
 
         // First call: solver returns [50, 100] → LB = 75.
         let mut solver1 = MockSolver::with_objectives(vec![50.0, 100.0]);
+        let (mut row_batch_lb1, mut lb_scratch_lb1) = make_lb_locals();
+        let mut bundle_lb1 = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb1,
+            None,
+            &mut lb_scratch_lb1,
+        );
         let lb1 = evaluate_lower_bound(
             &mut solver1,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb1,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
         // Second call: solver returns [80, 120] → LB = 100 (tighter cuts raise obj).
         let mut solver2 = MockSolver::with_objectives(vec![80.0, 120.0]);
+        let (mut row_batch_lb2, mut lb_scratch_lb2) = make_lb_locals();
+        let mut bundle_lb2 = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb2,
+            None,
+            &mut lb_scratch_lb2,
+        );
         let lb2 = evaluate_lower_bound(
             &mut solver2,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb2,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1128,16 +1395,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::None,
         };
+        let (mut row_batch_lb, mut lb_scratch_lb) = make_lb_locals();
+        let mut bundle_lb = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_lb,
+            None,
+            &mut lb_scratch_lb,
+        );
         let lb = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_lb,
             &spec,
             &comm,
-            None,
         )
         .unwrap();
 
@@ -1180,16 +1452,21 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::Truncation,
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
@@ -1226,21 +1503,350 @@ mod tests {
             ncs_generation: 0..0,
             inflow_method: &InflowNonNegativityMethod::TruncationWithPenalty { cost: 100.0 },
         };
+        let (mut row_batch_result, mut lb_scratch_result) = make_lb_locals();
+        let mut bundle_result = LbEvalScratchBundle::from_scratch_fields(
+            &mut patch_buf,
+            &mut row_batch_result,
+            None,
+            &mut lb_scratch_result,
+        );
         let result = evaluate_lower_bound(
             &mut solver,
             &fcf,
             &initial_state,
             &indexer,
-            &mut patch_buf,
-            &mut empty_row_batch(),
+            &mut bundle_result,
             &spec,
             &comm,
-            None,
         );
 
         assert!(
             result.is_ok(),
             "TruncationWithPenalty method must not panic or fail, got {result:?}"
+        );
+    }
+
+    // ── NCS column-bound patching regression test ────────────────────────────
+
+    /// Regression: `lb_evaluate_stage_0` calls `set_col_bounds` once per
+    /// opening when stochastic NCS entities are present.
+    ///
+    /// This is the correctness guard for the MEMORY.md D15 bug: NCS column
+    /// bounds must be patched *per opening*, not once before the loop or not
+    /// at all. With `n_openings` openings and stochastic NCS present, the
+    /// solver must receive exactly `n_openings` `set_col_bounds` calls.
+    ///
+    /// A real `StochasticContext` is built via `build_stochastic_context` with
+    /// a minimal `System` containing one `NonControllableSource` and one
+    /// `NcsModel`. The `LbRank0State` is pre-populated to mirror the output of
+    /// `lb_init_rank0`. `lb_evaluate_stage_0` is called directly so that we can
+    /// inspect the `MockSolver`'s `set_col_bounds_calls` counter afterwards.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn lb_evaluate_stage_0_patches_ncs_bounds_per_opening() {
+        use cobre_core::{
+            Bus, DeficitSegment, EntityId, SystemBuilder,
+            entities::non_controllable::NonControllableSource,
+            scenario::{
+                CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+                NcsModel, SamplingScheme,
+            },
+            temporal::{
+                Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+                StageStateConfig,
+            },
+        };
+        use cobre_stochastic::context::{
+            ClassSchemes, OpeningTreeInputs, build_stochastic_context,
+        };
+        use std::collections::BTreeMap;
+
+        let n_openings = 3_usize;
+        let n_ncs = 1_usize;
+        let block_count = 1_usize;
+        let ncs_entity_id = EntityId(10);
+
+        // Build a minimal System with one bus and one NCS entity.
+        let bus = Bus {
+            id: EntityId(0),
+            name: "B0".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 1000.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let ncs_source = NonControllableSource {
+            id: ncs_entity_id,
+            name: "W1".to_string(),
+            bus_id: EntityId(0),
+            entry_stage_id: None,
+            exit_stage_id: None,
+            max_generation_mw: 100.0,
+            curtailment_cost: 0.0,
+        };
+
+        let stage = Stage {
+            index: 0,
+            id: 0,
+            start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: chrono::NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: false,
+                inflow_lags: false,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: n_openings,
+                noise_method: NoiseMethod::Saa,
+            },
+        };
+
+        // NCS model: mean=0.5, std=0.1 availability factor.
+        let ncs_model = NcsModel {
+            ncs_id: ncs_entity_id,
+            stage_id: 0,
+            mean: 0.5,
+            std: 0.1,
+        };
+
+        // Correlation: single NCS entity, identity correlation.
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "default".to_string(),
+            CorrelationProfile {
+                groups: vec![CorrelationGroup {
+                    name: "ncs_group".to_string(),
+                    entities: vec![CorrelationEntity {
+                        entity_type: "ncs".to_string(),
+                        id: ncs_entity_id,
+                    }],
+                    matrix: vec![vec![1.0]],
+                }],
+            },
+        );
+        let correlation = CorrelationModel {
+            method: "spectral".to_string(),
+            profiles,
+            schedule: vec![],
+        };
+
+        let system = SystemBuilder::new()
+            .buses(vec![bus])
+            .non_controllable_sources(vec![ncs_source])
+            .stages(vec![stage])
+            .ncs_models(vec![ncs_model])
+            .correlation(correlation)
+            .build()
+            .unwrap();
+
+        let stoch = build_stochastic_context(
+            &system,
+            42,
+            None,
+            &[],
+            &[],
+            OpeningTreeInputs::default(),
+            ClassSchemes {
+                inflow: None,
+                load: None,
+                ncs: Some(SamplingScheme::InSample),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            stoch.n_stochastic_ncs(),
+            n_ncs,
+            "StochasticContext must report {n_ncs} stochastic NCS entity"
+        );
+
+        let opening_tree = stoch.opening_tree();
+
+        // Build a template with 1 NCS generation column (col index 0).
+        // The NCS generation column range is 0..block_count (= 0..1).
+        let template = StageTemplate {
+            num_cols: 1,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: vec![0_i32, 0],
+            row_indices: vec![],
+            values: vec![],
+            col_lower: vec![0.0],
+            col_upper: vec![100.0],
+            objective: vec![0.0],
+            row_lower: vec![],
+            row_upper: vec![],
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        };
+
+        let indexer = StageIndexer::new(0, 0);
+        let ncs_max_gen = vec![100.0_f64; n_ncs];
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 0,
+            noise_scale: &[],
+            n_hydros: 0,
+            opening_tree,
+            risk_measure: &RiskMeasure::Expectation,
+            stochastic: Some(&stoch),
+            n_load_buses: 0,
+            ncs_max_gen: &ncs_max_gen,
+            block_count,
+            ncs_generation: 0..block_count,
+            inflow_method: &InflowNonNegativityMethod::None,
+        };
+
+        // Pre-populate LbEvalScratch as lb_init_rank0 would.
+        let mut lb_scratch = LbEvalScratch::new();
+        for ncs_idx in 0..n_ncs {
+            for blk in 0..block_count {
+                lb_scratch
+                    .ncs_col_indices_buf
+                    .push(spec.ncs_generation.start + ncs_idx * block_count + blk);
+                lb_scratch.ncs_col_lower_buf.push(0.0);
+            }
+        }
+
+        let mut patch_buf = PatchBuffer::new(0, 0, 0, 0);
+        let initial_state: Vec<f64> = Vec::new();
+        let actual_n_openings = opening_tree.n_openings(0);
+        let mut solver =
+            MockSolver::with_objectives(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]);
+
+        lb_evaluate_stage_0(
+            &mut solver,
+            &spec,
+            &mut patch_buf,
+            &initial_state,
+            &indexer,
+            &mut lb_scratch,
+        )
+        .unwrap();
+
+        // set_col_bounds must have been called exactly once per opening.
+        assert_eq!(
+            solver.set_col_bounds_calls, actual_n_openings,
+            "set_col_bounds must be called once per opening ({actual_n_openings} openings), \
+             got {} calls — NCS bounds are not being patched per opening",
+            solver.set_col_bounds_calls
+        );
+        // Sanity: the opening count must be positive.
+        assert!(
+            actual_n_openings > 0,
+            "opening tree must have at least one opening at stage 0"
+        );
+    }
+
+    // ── Scratch reuse regression test ────────────────────────────────────────
+
+    /// Verify that `LbEvalScratch` buffers are reused across consecutive calls.
+    ///
+    /// Calls `evaluate_lower_bound` twice on the same scratch and verifies that
+    /// `noise_buf.capacity()` does not decrease on the second call (i.e., no
+    /// reallocation occurred). This guards against regressions that would re-
+    /// introduce per-iteration heap allocation on the lower-bound hot path.
+    #[test]
+    fn lb_eval_scratch_reuses_buffers_across_calls() {
+        // Use n_hydros = 1 so that noise_buf gets populated (capacity grows to 1
+        // after the first call). The template must have at least 1 row to avoid
+        // index-out-of-bounds in fill_forward_patches when n_hydros = 1.
+        let indexer = StageIndexer::new(1, 0);
+        let template = minimal_template();
+        let fcf = make_fcf(2, indexer.n_state);
+        let initial_state = vec![0.0_f64; indexer.n_state];
+        let mut patch_buf = PatchBuffer::new(indexer.hydro_count, indexer.max_par_order, 0, 0);
+        let opening_tree = simple_opening_tree(1);
+        let rm = RiskMeasure::Expectation;
+        let comm = LocalComm;
+
+        let spec = LbEvalSpec {
+            template: &template,
+            base_row: 0,
+            noise_scale: &[1.0],
+            n_hydros: 1,
+            opening_tree: &opening_tree,
+            risk_measure: &rm,
+            stochastic: None,
+            n_load_buses: 0,
+            ncs_max_gen: &[],
+            block_count: 1,
+            ncs_generation: 0..0,
+            inflow_method: &InflowNonNegativityMethod::None,
+        };
+
+        let mut row_batch = empty_row_batch();
+        let mut lb_scratch = LbEvalScratch::new();
+
+        // First call — allocates scratch buffers for the first time.
+        let mut solver1 = MockSolver::with_objectives(vec![10.0]);
+        {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut row_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver1,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+            .unwrap();
+        }
+
+        // Capture capacity after the first call.
+        let cap_after_first = lb_scratch.noise_buf.capacity();
+        assert!(
+            cap_after_first > 0,
+            "noise_buf must have nonzero capacity after first call (n_hydros = 1)"
+        );
+
+        // Second call — must reuse the existing capacity (no reallocation).
+        let mut solver2 = MockSolver::with_objectives(vec![20.0]);
+        {
+            let mut bundle = LbEvalScratchBundle::from_scratch_fields(
+                &mut patch_buf,
+                &mut row_batch,
+                None,
+                &mut lb_scratch,
+            );
+            evaluate_lower_bound(
+                &mut solver2,
+                &fcf,
+                &initial_state,
+                &indexer,
+                &mut bundle,
+                &spec,
+                &comm,
+            )
+            .unwrap();
+        }
+
+        let cap_after_second = lb_scratch.noise_buf.capacity();
+        assert_eq!(
+            cap_after_second, cap_after_first,
+            "noise_buf capacity must be stable across calls (first={cap_after_first}, second={cap_after_second}); \
+             a decrease indicates reallocation on the lower-bound hot path"
         );
     }
 }

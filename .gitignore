@@ -54,3 +54,4 @@ __pycache__/
 .claude/
 doc/
 tests/slurm/staging/
+dhat-heap.json

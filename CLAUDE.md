@@ -12,43 +12,6 @@ vertical is SDDP-based hydrothermal dispatch.
 - **Test**: `cargo test --workspace --all-features`
 - **Format**: `cargo fmt --all` (CI enforces `--check`)
 
-See `CONTRIBUTING.md` for build prerequisites and commit message format.
-
----
-
-## Current State (v0.4.4)
-
-The SDDP solver is fully functional: case loading, stochastic scenario
-generation, training, simulation, policy checkpointing, and output writing.
-3,450+ tests, including 27 deterministic regression cases (D01–D16, D19–D27)
-and 2 cut selection integration tests (D17–D18).
-
-**Implemented:** constant-productivity and FPHA hydro models, evaporation,
-cascade coupling, water withdrawal, inflow non-negativity (truncation, penalty, 
-truncation-with-penalty), multi-segment deficit, generic constraints (20
-variable types), NCS stochastic availability, block factors, per-stage 
-productivity override, per-stage thermal cost override, CVaR risk measure,
-PAR(p) estimation (periodic YW, PACF), LP scaling, solver statistics
-instrumentation, LP setup optimisation (model persistence, incremental cuts,
-sparse cuts), simulation basis warm-start, three-stage cut management pipeline
-(strategy-based selection, angular-accelerated dominance pruning, active cut
-budget enforcement), basis-aware warm-start padding, backward pass work-stealing
-parallelism, parallel lower bound evaluation, solver safeguards (12-level retry
-escalation with wall-clock budgets), MPI distribution with execution topology
-reporting, Python bindings with Arrow zero-copy, CLI with 7 subcommands, policy
-warm-start and resume-from-checkpoint with per-stage cut counts, cost
-decomposition, per-block operational violations, bidirectional
-withdrawal/evaporation slacks, per-plant inflow penalty via cascade, discount
-rate, visited state persistence, per-class scenario sampling (Historical,
-External, InSample, OutOfSample per entity class), composite ForwardSampler with
-ClassSampler dispatch, HistoricalScenarioLibrary and ExternalScenarioLibrary,
-HistoricalResiduals noise method, historical window discovery, per-class
-external scenario files, same-type correlation enforcement.
-
-**Known gaps:** GNL thermals, batteries (entity stubs exist, no LP contribution).
-
----
-
 ## Hard Rules
 
 These are non-negotiable. Violations must be fixed before committing.
@@ -58,8 +21,6 @@ These are non-negotiable. Violations must be fixed before committing.
 - `clippy::all` and `clippy::pedantic` at `warn` level, zero warnings in CI
 - **Never use `Box<dyn Trait>`** — enum dispatch for closed variant sets
 - **Never allocate on hot paths** — pre-allocate workspaces, reuse buffers
-- **Never add `#[allow(clippy::too_many_arguments)]`** without first absorbing
-  the parameter into an existing context struct. See `.claude/architecture-rules.md`
 - **Declaration-order invariance** — results must be bit-for-bit identical
   regardless of input entity ordering
 - **Infrastructure crate genericity** — `cobre-core`, `cobre-io`, `cobre-solver`,
@@ -70,25 +31,16 @@ These are non-negotiable. Violations must be fixed before committing.
 - Do not use `bincode` — use `postcard` for MPI, `FlatBuffers` for policy
 - Do not commit secrets, `.env` files, or credentials
 - Do not force-push to `main`
-
----
-
-## Pre-Commit Check
-
-Before committing changes to `crates/`, run:
-
-```
-python3 scripts/check_suppressions.py --max 0
-```
-
-This checks that no `#[allow(clippy::too_many_arguments)]` exists in production
-code (code before `#[cfg(test)]`). If the check fails, absorb the parameter
-into an existing context struct instead of adding a suppression. Read
-`.claude/architecture-rules.md` for the specific struct patterns.
-
-The current codebase has legacy suppressions that are being worked down.
-Until they reach zero, use `--max 10` as the threshold. The count must
-never increase.
+- **`slow-tests` feature** — long-running tests (D-case sweep, FPHA plane-selection, forward-sampler convergence) are gated behind `#[cfg_attr(not(feature = "slow-tests"), ignore = ...)]`. Default `cargo test --workspace` skips them; pass `--features slow-tests` to include them.
+- **No plan-structure references in user-facing artifacts** — identifiers such
+  as `Epic 09`, `ticket-007`, or `architecture-unification plan` must not
+  appear in `CHANGELOG.md`, release notes, `book/`, public rustdoc, or
+  comments in shipped code. Plans live in `plans/` (gitignored); public
+  artifacts describe behavior, not how the work was organized. Git commit
+  messages may reference plan structure — they target git-log readers, not
+  release consumers. Existing rustdoc/comment references predating this
+  rule are tech debt; clean up opportunistically when touching the
+  surrounding code.
 
 ---
 
@@ -98,8 +50,35 @@ When modifying hot-path code (`forward.rs`, `backward.rs`, `training.rs`,
 `simulation/pipeline.rs`, `lower_bound.rs`), read:
 → `.claude/architecture-rules.md`
 
+When applying a stored basis at any call site, read:
+→ `crates/cobre-sddp/src/basis_reconstruct.rs` module docs.
+`reconstruct_basis` is the single hot-path entry point; never
+bypass it.
+
+When changing the MPI basis-cache wire format, read:
+→ `crates/cobre-sddp/src/workspace.rs` —
+`CapturedBasis::to_broadcast_payload` and
+`CapturedBasis::try_from_broadcast_payload` are the sole
+owners of the byte layout. Any layout change must update
+both methods together; the `broadcast_basis_cache` helper
+in `training.rs` only owns the four MPI broadcast calls.
+
 When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`
+
+When modifying study setup construction or scenario library building, note that
+`setup.rs` is now a directory module (`setup/mod.rs`) with nine sub-modules:
+→ `setup/params.rs` — `StudyParams`, `ConstructionConfig`, constants
+→ `setup/stochastic_pipeline.rs` — `PrepareStochasticResult`, `prepare_stochastic`, helpers
+→ `setup/template_postprocess.rs` — `postprocess_templates`
+→ `setup/scenario_libraries.rs` — 4 scenario library builder functions
+→ `setup/scenario_library_set.rs` — `ScenarioLibraries` nested per-phase container
+→ `setup/stage_data.rs` — `StageData` stage-indexed sub-struct
+→ `setup/methodology_config.rs` — `MethodologyConfig` numerical-methodology params
+→ `setup/accessors.rs` — accessor methods and context builders
+→ `setup/orchestration.rs` — `train`, `simulate`, `build_training_output`, `create_workspace_pool`
+The `StudySetup` struct, its two constructors (`new`, `from_broadcast_params`), and three
+private helpers remain in `setup/mod.rs`.
 
 When adding new output files, check both CLI and Python write paths:
 → `crates/cobre-cli/src/commands/run.rs` (`write_outputs` function)
@@ -109,9 +88,9 @@ When adding new output files, check both CLI and Python write paths:
 
 ## Key References
 
-| Resource | Location | Purpose |
-|----------|----------|---------|
-| Software book | `book/` | User-facing documentation (mdBook) |
-| Methodology reference | `~/git/cobre-docs/` | Specs, theory, math |
-| CHANGELOG | `CHANGELOG.md` | Per-release feature list |
-| Design docs | `docs/design/` | Future feature designs (not yet implemented) |
+| Resource              | Location            | Purpose                                      |
+| --------------------- | ------------------- | -------------------------------------------- |
+| Software book         | `book/`             | User-facing documentation (mdBook)           |
+| Methodology reference | `~/git/cobre-docs/` | Specs, theory, math                          |
+| CHANGELOG             | `CHANGELOG.md`      | Per-release feature list                     |
+| Design docs           | `docs/design/`      | Future feature designs (not yet implemented) |

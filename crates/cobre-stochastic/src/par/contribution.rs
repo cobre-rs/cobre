@@ -408,7 +408,6 @@ mod tests {
 
     #[test]
     fn phi1_near_zero_negative_returns_true() {
-        // NEWAVE rejects even near-zero negative values.
         assert!(has_negative_phi1(&[-0.001]));
     }
 }

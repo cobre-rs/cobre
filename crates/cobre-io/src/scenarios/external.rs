@@ -47,11 +47,11 @@
 //! - Value columns must be finite (NaN and infinity are rejected).
 //! - `scenario_id` must be >= 0 (0-based indexing).
 //!
-//! Deferred validations (not performed here, Epic 06):
+//! Deferred validations (not performed here):
 //!
-//! - Entity ID existence in registries — Layer 3, Epic 06.
-//! - `stage_id` existence in the stages registry — Layer 3, Epic 06.
-//! - Scenario count matching `stage.num_scenarios` — Layer 3/5, Epic 06.
+//! - Entity ID existence in registries — Layer 3.
+//! - `stage_id` existence in the stages registry — Layer 3.
+//! - Scenario count matching `stage.num_scenarios` — Layer 3/5.
 
 use cobre_core::EntityId;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;

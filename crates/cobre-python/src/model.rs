@@ -3,8 +3,8 @@
 //! This module exposes the core entity types from `cobre-core` as Python
 //! classes in the `cobre.model` sub-module. All wrappers are immutable:
 //! Python code reads entity data but cannot mutate it. Construction of
-//! `System` objects happens through `cobre.io.load_case()` (ticket-014),
-//! not through Python constructors.
+//! `System` objects happens through `cobre.io.load_case()`, not through Python
+//! constructors.
 //!
 //! Entity collections are cloned into the wrapper structs because entity data
 //! is small (strings + floats) and cloning avoids lifetime complexity at the
@@ -194,7 +194,7 @@ impl PyThermal {
         self.inner.max_generation_mw
     }
 
-    /// Marginal cost of generation [$/MWh].
+    /// Marginal cost of generation [$/`MWh`].
     #[getter]
     fn cost_per_mwh(&self) -> f64 {
         self.inner.cost_per_mwh

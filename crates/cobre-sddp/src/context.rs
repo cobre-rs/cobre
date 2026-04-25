@@ -1,10 +1,12 @@
 //! Context structs for reducing parameter count in hot-path functions.
 
-use cobre_core::{Stage, scenario::SamplingScheme};
+use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
-use crate::{HorizonMode, InflowNonNegativityMethod, StageIndexer};
+use crate::{
+    horizon_mode::HorizonMode, indexer::StageIndexer, inflow_method::InflowNonNegativityMethod,
+};
 
 /// Immutable per-stage LP layout and noise scaling parameters.
 ///
@@ -43,6 +45,48 @@ pub struct StageContext<'a> {
     /// factors for transitions preceding stage `t`. `[0] == 1.0` always.
     /// Length equals the number of study stages.
     pub cumulative_discount_factors: &'a [f64],
+    /// Precomputed lag accumulation weights and period-finalization flags, one
+    /// entry per study stage. Indexed by stage: `stage_lag_transitions[t]`.
+    ///
+    /// Populated by `crate::lag_transition::precompute_stage_lag_transitions`
+    /// at setup time. Used by the forward pass and simulation pipeline.
+    pub stage_lag_transitions: &'a [StageLagTransition],
+    /// Noise group IDs for noise-group sharing, indexed by stage array index.
+    ///
+    /// Stages with the same group ID share the same noise draw in the opening
+    /// tree and forward pass. For uniform monthly studies every stage has a
+    /// unique group ID, so no sharing is triggered. Populated from
+    /// `StudySetup::stage_data.noise_group_ids`
+    /// at setup time. Length equals the number of study stages.
+    pub noise_group_ids: &'a [u32],
+    /// PAR order for the downstream (coarser-resolution) model.
+    ///
+    /// `0` for uniform-resolution studies — all downstream accumulation code paths
+    /// in `accumulate_and_shift_lag_state` are skipped. Non-zero for studies with a
+    /// monthly-to-quarterly transition (e.g., hybrid resolution studies).
+    ///
+    /// Used to size the downstream scratch buffers in the forward-pass workspace pool
+    /// (`train`) and to pass as `par_order` to `crate::noise::DownstreamAccumState`.
+    /// Set from `crate::setup::StudySetup::downstream_par_order` at setup time.
+    pub downstream_par_order: usize,
+}
+
+impl StageContext<'_> {
+    /// Returns the noise group ID for stage index `t`.
+    #[inline]
+    #[must_use]
+    pub fn noise_group_id_at(&self, t: usize) -> u32 {
+        if self.noise_group_ids.is_empty() {
+            #[allow(clippy::cast_possible_truncation)]
+            return t as u32;
+        }
+        debug_assert!(
+            t < self.noise_group_ids.len(),
+            "stage index {t} out of bounds for noise_group_ids (len={})",
+            self.noise_group_ids.len()
+        );
+        self.noise_group_ids[t]
+    }
 }
 
 /// Immutable algorithm-level configuration for the training loop.
@@ -85,6 +129,16 @@ pub struct TrainingContext<'a> {
     ///
     /// `Some` when `ncs_scheme == SamplingScheme::External`, `None` otherwise.
     pub external_ncs_library: Option<&'a ExternalScenarioLibrary>,
-    /// Whether basis-aware warm-start padding is enabled (config-gated).
-    pub basis_padding_enabled: bool,
+    /// Per-hydro accumulated `value_m3s * hours` seed values from pre-study
+    /// `RecentObservation` data.
+    ///
+    /// Copied into `ws.scratch.lag_accumulator` at every trajectory start
+    /// instead of zero-filling. Empty slice when there are no observations
+    /// (backward-compatible: the zero-fill path is taken instead).
+    pub recent_accum_seed: &'a [f64],
+    /// Fraction of the lag period covered by pre-study observations.
+    ///
+    /// Set into `ws.scratch.lag_weight_accum` at every trajectory start.
+    /// `0.0` when there are no observations.
+    pub recent_weight_seed: f64,
 }

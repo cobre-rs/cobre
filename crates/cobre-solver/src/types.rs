@@ -131,13 +131,13 @@ impl SolutionView<'_> {
 /// Statistics are aggregated across threads via reduction after training
 /// completes.
 ///
-/// `reset()` does **not** zero statistics counters. They persist across
-/// model reloads for the lifetime of the solver instance.
+/// Statistics counters persist across model reloads for the lifetime of the
+/// solver instance.
 ///
 /// See [Solver Interface Trait SS4.3](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md).
 #[derive(Debug, Clone, Default)]
 pub struct SolverStatistics {
-    /// Total number of `solve` and `solve_with_basis` calls.
+    /// Total number of `solve` calls (cold-start and warm-start).
     pub solve_count: u64,
 
     /// Number of solves that returned `Ok` (optimal solution found).
@@ -155,8 +155,12 @@ pub struct SolverStatistics {
     /// Cumulative wall-clock time spent in solver calls, in seconds.
     pub total_solve_time_seconds: f64,
 
-    /// Number of times `solve_with_basis` fell back to cold-start due to basis rejection.
-    pub basis_rejections: u64,
+    /// Number of warm-start `solve(Some(&basis))` calls in which
+    /// `cobre_highs_set_basis_non_alien` rejected the offered basis because
+    /// `isBasisConsistent` returned false.
+    /// Incremented once per rejected offer. Replaces two counters removed in v0.5.0
+    /// (see CHANGELOG).
+    pub basis_consistency_failures: u64,
 
     /// Number of solves that returned optimal on the first attempt (before any retry).
     ///
@@ -164,45 +168,31 @@ pub struct SolverStatistics {
     /// The complement `success_count - first_try_successes` gives the number of retried solves.
     pub first_try_successes: u64,
 
-    /// Total number of `solve_with_basis` calls (basis offers).
+    /// Total number of warm-start `solve(Some(&basis))` calls (basis offers).
     ///
-    /// Combined with `basis_rejections`, enables basis hit rate computation:
-    /// `basis_hit_rate = 1 - basis_rejections / basis_offered`.
+    /// Combined with `basis_consistency_failures`, enables acceptance-rate computation:
+    /// `basis_acceptance_rate = 1 - basis_consistency_failures / basis_offered`.
     pub basis_offered: u64,
 
     /// Total number of `load_model` calls.
     pub load_model_count: u64,
 
-    /// Total number of `add_rows` calls.
-    pub add_rows_count: u64,
-
     /// Cumulative wall-clock time spent in `load_model` calls, in seconds.
     pub total_load_model_time_seconds: f64,
-
-    /// Cumulative wall-clock time spent in `add_rows` calls, in seconds.
-    pub total_add_rows_time_seconds: f64,
 
     /// Cumulative wall-clock time spent in `set_row_bounds` and `set_col_bounds` calls, in seconds.
     pub total_set_bounds_time_seconds: f64,
 
     /// Cumulative wall-clock time spent in `set_basis` FFI calls, in seconds.
     ///
-    /// Accumulated by `solve_with_basis` around the basis installation step.
-    /// `solve()` (without basis) does not increment this counter.
+    /// Accumulated by `solve(Some(&basis))` around the basis installation step.
+    /// Cold-start `solve(None)` does not increment this counter.
     pub total_basis_set_time_seconds: f64,
 
-    /// Number of new cut rows assigned `NONBASIC_LOWER` by basis-aware padding
-    /// (Strategy S3).
-    ///
-    /// Incremented by the calling algorithm, not by the solver itself. A
-    /// non-zero value indicates that basis padding is active and functioning.
-    pub basis_padding_tight: u64,
-
-    /// Number of new cut rows assigned `BASIC` by basis-aware padding
-    /// (Strategy S3).
-    ///
-    /// Incremented by the calling algorithm, not by the solver itself.
-    pub basis_padding_slack: u64,
+    /// Number of `reconstruct_basis` invocations with a non-empty stored basis.
+    /// Incremented via `record_reconstruction_stats`. A non-zero value indicates
+    /// basis reconstruction is active on this solver instance.
+    pub basis_reconstructions: u64,
 
     /// Per-level retry success histogram. Length depends on the solver backend
     /// (e.g. 12 for `HiGHS`). `retry_level_histogram[k]` counts how many solves
@@ -276,7 +266,7 @@ pub struct StageTemplate {
     /// hydros and `L` is the maximum PAR lag order). FPHA and generic variable
     /// constraint rows are structural and not included in the dual-relevant set.
     ///
-    /// Cut coefficients are extracted from `dual[0..n_dual_relevant]`.
+    /// Gradient coefficients are extracted from `dual[0..n_dual_relevant]`.
     pub n_dual_relevant: usize,
 
     /// Number of operating hydros at this stage.
@@ -314,18 +304,18 @@ pub struct StageTemplate {
 
 /// Batch of constraint rows for addition to a loaded LP, in CSR (row-major) form.
 ///
-/// Assembled from the cut pool activity bitmap before each LP rebuild
+/// Assembled from the row-pool activity bitmap before each LP rebuild
 /// and passed to [`crate::SolverInterface::add_rows`] for a single batch call.
-/// Cuts are appended at the bottom of the constraint matrix in the dynamic
+/// Rows are appended at the bottom of the constraint matrix in the dynamic
 /// constraint region per
 /// [Solver Abstraction SS2.2](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
 ///
 /// See [Solver Interface Trait SS4.5](../../../cobre-docs/src/specs/architecture/solver-interface-trait.md)
-/// and the cut pool assembly protocol in
+/// and the row-pool assembly protocol in
 /// [Solver Abstraction SS5.4](../../../cobre-docs/src/specs/architecture/solver-abstraction.md).
 #[derive(Debug, Clone)]
 pub struct RowBatch {
-    /// Number of active constraint rows (cuts) in this batch.
+    /// Number of active constraint rows in this batch.
     pub num_rows: usize,
 
     /// CSR row start offsets (`i32` for `HiGHS` FFI compatibility).
@@ -347,16 +337,55 @@ pub struct RowBatch {
     /// coefficient at column `col_indices[k]` in its row.
     pub values: Vec<f64>,
 
-    /// Row lower bounds (cut intercepts for cutting-plane cuts).
+    /// Row lower bounds (RHS lower bounds for `>=` constraints).
     ///
-    /// Length: `num_rows`. For `>=` cuts, this is the RHS lower bound.
+    /// Length: `num_rows`. For `>=` constraints, this is the RHS lower bound.
     pub row_lower: Vec<f64>,
 
     /// Row upper bounds.
     ///
-    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` cuts (cutting-plane cuts
-    /// have no finite upper bound).
+    /// Length: `num_rows`. Use `f64::INFINITY` for `>=` constraints (no finite upper bound).
     pub row_upper: Vec<f64>,
+}
+
+impl StageTemplate {
+    /// Creates an empty [`StageTemplate`] with zero-sized fields and empty `Vec`s.
+    ///
+    /// Intended for use as a reusable output buffer passed to
+    /// [`crate::baking::bake_rows_into_template`]. The caller constructs one
+    /// `StageTemplate::empty()` and passes it on every baking call; the function
+    /// clears and refills the buffer without calling `shrink_to_fit`, so the
+    /// allocated capacity grows to its steady-state peak and then stabilises.
+    ///
+    /// An empty template is **not** a valid model for `load_model` (it has
+    /// `num_cols == 0` and `num_rows == 0`). Only pass it to `load_model` after
+    /// a successful `bake_rows_into_template` call has populated it.
+    ///
+    /// A `Default` impl is intentionally omitted: an empty template is a
+    /// surprising default and invites misuse. Use this constructor explicitly.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            num_cols: 0,
+            num_rows: 0,
+            num_nz: 0,
+            col_starts: Vec::new(),
+            row_indices: Vec::new(),
+            values: Vec::new(),
+            col_lower: Vec::new(),
+            col_upper: Vec::new(),
+            objective: Vec::new(),
+            row_lower: Vec::new(),
+            row_upper: Vec::new(),
+            n_state: 0,
+            n_transfer: 0,
+            n_dual_relevant: 0,
+            n_hydro: 0,
+            max_par_order: 0,
+            col_scale: Vec::new(),
+            row_scale: Vec::new(),
+        }
+    }
 }
 
 impl RowBatch {
@@ -430,6 +459,30 @@ pub enum SolverError {
         /// Solver-specific error code, if available.
         error_code: Option<i32>,
     },
+
+    /// The backend does not implement the requested operation.
+    ///
+    /// The caller should fall back to an alternate code path (e.g.,
+    /// `reset` + `load_model`).
+    Unsupported(&'static str),
+
+    /// The offered basis was rejected by the solver because the total
+    /// number of basic variables did not match the row count.
+    ///
+    /// Indicates that the reconstructed basis violates the fundamental LP
+    /// basis consistency invariant (`col_basic + row_basic == num_row`).
+    /// The calling algorithm should perform a hard stop; this is not a
+    /// recoverable solver-internal condition.
+    BasisInconsistent {
+        /// The LP row count at the point of rejection.
+        num_row: i64,
+        /// The total basic-variable count in the offered basis (`col_basic + row_basic`).
+        total_basic: i64,
+        /// Number of basic columns in the offered basis.
+        col_basic: i64,
+        /// Number of basic rows in the offered basis.
+        row_basic: i64,
+    },
 }
 
 impl fmt::Display for SolverError {
@@ -453,6 +506,16 @@ impl fmt::Display for SolverError {
                 Some(code) => write!(f, "internal solver error (code {code}): {message}"),
                 None => write!(f, "internal solver error: {message}"),
             },
+            Self::Unsupported(msg) => write!(f, "unsupported operation: {msg}"),
+            Self::BasisInconsistent {
+                num_row,
+                total_basic,
+                col_basic,
+                row_basic,
+            } => write!(
+                f,
+                "basis inconsistent: num_row={num_row}, total_basic={total_basic} (col_basic={col_basic}, row_basic={row_basic})"
+            ),
         }
     }
 }
@@ -513,6 +576,12 @@ mod tests {
                 message: "segfault in HiGHS".to_string(),
                 error_code: Some(-1),
             },
+            SolverError::BasisInconsistent {
+                num_row: 2,
+                total_basic: 5,
+                col_basic: 3,
+                row_basic: 2,
+            },
         ];
 
         let messages: Vec<String> = variants.iter().map(|err| format!("{err}")).collect();
@@ -541,14 +610,12 @@ mod tests {
         assert_eq!(stats.total_iterations, 0);
         assert_eq!(stats.retry_count, 0);
         assert_eq!(stats.total_solve_time_seconds, 0.0);
-        assert_eq!(stats.basis_rejections, 0);
+        assert_eq!(stats.basis_consistency_failures, 0);
         assert_eq!(stats.first_try_successes, 0);
         assert_eq!(stats.basis_offered, 0);
         assert_eq!(stats.total_load_model_time_seconds, 0.0);
-        assert_eq!(stats.total_add_rows_time_seconds, 0.0);
         assert_eq!(stats.total_set_bounds_time_seconds, 0.0);
-        assert_eq!(stats.basis_padding_tight, 0);
-        assert_eq!(stats.basis_padding_slack, 0);
+        assert_eq!(stats.basis_reconstructions, 0);
         assert!(stats.retry_level_histogram.is_empty());
     }
 
@@ -642,6 +709,16 @@ mod tests {
                 },
                 "code -1",
             ),
+            (
+                "BasisInconsistent",
+                SolverError::BasisInconsistent {
+                    num_row: 2,
+                    total_basic: 5,
+                    col_basic: 3,
+                    row_basic: 2,
+                },
+                "num_row=2",
+            ),
         ];
 
         for (name, err, expected_text) in cases {
@@ -673,6 +750,12 @@ mod tests {
             SolverError::InternalError {
                 message: "test".to_string(),
                 error_code: Some(-1),
+            },
+            SolverError::BasisInconsistent {
+                num_row: 2,
+                total_basic: 5,
+                col_basic: 3,
+                row_basic: 2,
             },
         ];
 

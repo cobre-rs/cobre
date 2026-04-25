@@ -255,6 +255,65 @@ parameters.
 
 ---
 
+## Multi-Resolution Studies
+
+Cobre supports studies that mix stages at different temporal resolutions — for
+example, weekly stages within a month followed by monthly stages, or monthly
+stages transitioning to quarterly stages. Three mechanisms handle the
+stochastic implications of these layouts automatically.
+
+### Noise Sharing
+
+When multiple SDDP stages share the same `season_id` (for example, four weekly
+stages all assigned to the April season), Cobre automatically shares PAR noise
+draws across those stages. Each group of same-`season_id` stages within a
+calendar period receives identical noise realizations, so that sub-monthly
+stages present a consistent inflow trajectory that is consistent with the
+monthly PAR model they were fitted from.
+
+This sharing is controlled by a `noise_group_id` precomputed for each stage at
+case load time. Uniform monthly studies assign a unique group to each stage, so
+noise sharing has no effect and zero runtime overhead for standard studies. The
+mechanism is seed-deterministic: identical `tree_seed` values produce identical
+grouped noise assignments across runs and across MPI ranks.
+
+### Observation Aggregation
+
+When the study uses a `Custom` cycle type with seasons of different durations
+(for example, 12 monthly seasons followed by 4 quarterly seasons), Cobre
+aggregates fine-grained historical observations into coarser season buckets
+before PAR fitting. A user who provides monthly `inflow_history.parquet` for a
+study that includes quarterly stages does not need to pre-aggregate the data:
+Cobre calls `aggregate_observations_to_season` internally using
+duration-weighted averaging to derive one observation per (hydro, season, year)
+at the appropriate resolution for each PAR model.
+
+The coarsening direction is mandatory — aggregating monthly to quarterly is
+supported; disaggregating quarterly to monthly is not and returns an error.
+Monthly-uniform studies bypass this step entirely.
+
+### Lag Resolution Transition
+
+For studies that transition from monthly to quarterly stages, the PAR lag
+state must change resolution at the boundary. During the monthly phase, each
+monthly inflow is accumulated into a ring buffer indexed by the downstream
+(quarterly) lag. When the first quarterly stage is reached, the ring buffer
+contains a complete set of duration-weighted monthly contributions and the lag
+state is rebuilt from those values.
+
+This transition is implemented in `StageLagTransition` via downstream
+accumulation fields and is transparent to the LP and the cut representation.
+The transition introduces no state variables in the LP; the lag state is an
+internal solver variable updated in the hot-path functions. For
+uniform-resolution studies, the downstream accumulation fields are unused and
+the transition is a no-op.
+
+For the full technical background — including the ring buffer design, frozen-lag
+semantics, and the noise group precomputation algorithm — see
+[`docs/design/temporal-resolution-debts.md`](../../docs/design/temporal-resolution-debts.md).
+
+---
+
 ## Correlation
 
 Hydro plants that share a watershed tend to have correlated inflows: when

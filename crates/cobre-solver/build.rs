@@ -16,10 +16,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=csrc/highs_wrapper.c");
     println!("cargo:rerun-if-changed=csrc/highs_wrapper.h");
-
-    if env::var("CARGO_FEATURE_HIGHS").is_err() {
-        return;
-    }
+    println!("cargo:rerun-if-changed=csrc/highs_wrapper_cpp.cpp");
 
     let manifest_dir = PathBuf::from(
         env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by Cargo"),
@@ -115,10 +112,15 @@ fn main() {
     build
         .file("csrc/highs_wrapper.c")
         .include("csrc")
-        .include(&highs_include)
-        .include(&highs_include_highs)
         .warnings(true)
         .extra_warnings(true);
+
+    // Treat HiGHS headers as system includes so that their warnings
+    // (unused-parameter on setHotStart/freezeBasis/unfreezeBasis inlines) do
+    // not surface while we keep full warning coverage on our own wrappers.
+    // MSVC lacks -isystem; fall back to -I and accept the vendor noise there.
+    add_system_or_include(&mut build, target_env == "msvc", &highs_include);
+    add_system_or_include(&mut build, target_env == "msvc", &highs_include_highs);
 
     // GCC/Clang-specific warning suppression.
     if target_env != "msvc" {
@@ -126,4 +128,45 @@ fn main() {
     }
 
     build.compile("highs_wrapper");
+
+    // C++ shim: implements cobre_highs_set_basis_non_alien which constructs a
+    // HighsBasis (C++ type) with alien = false and calls
+    // Highs::setBasis(const HighsBasis&) directly, bypassing the alien-path LU
+    // factorisation that the HiGHS C API always triggers.  Compiled as a
+    // separate object with C++17 so that the plain-C wrapper above is
+    // unaffected.
+    let mut build_cpp = cc::Build::new();
+    build_cpp
+        .file("csrc/highs_wrapper_cpp.cpp")
+        .cpp(true)
+        .include("csrc")
+        .warnings(true)
+        .extra_warnings(true);
+
+    add_system_or_include(&mut build_cpp, target_env == "msvc", &highs_include);
+    add_system_or_include(&mut build_cpp, target_env == "msvc", &highs_include_highs);
+
+    build_cpp.flag_if_supported("-std=c++17");
+
+    // Mirror the MSVC CRT setting used for the HiGHS cmake build above.
+    if target_env == "msvc" {
+        build_cpp.flag("/std:c++17");
+    } else {
+        build_cpp.flag("-Wno-unused-function");
+    }
+
+    build_cpp.compile("highs_wrapper_cpp");
+}
+
+/// Add an include path, preferring `-isystem` on GCC/Clang so warnings from
+/// third-party headers are suppressed while warnings on our own wrappers stay
+/// active.  MSVC does not accept `-isystem`, so fall back to a regular
+/// `.include()` there.
+fn add_system_or_include(build: &mut cc::Build, is_msvc: bool, path: &std::path::Path) {
+    if is_msvc {
+        build.include(path);
+    } else {
+        build.flag("-isystem");
+        build.flag(path.to_str().expect("HiGHS include path must be UTF-8"));
+    }
 }

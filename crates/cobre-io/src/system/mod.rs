@@ -14,7 +14,7 @@
 //! 4. `Ok(convert(raw))` — convert to core types and sort by ID.
 //!
 //! Cross-reference validation (e.g., checking that `bus_id` exists in the bus
-//! registry) is deferred to Layer 3 (Epic 06). Only schema-level invariants
+//! registry) is deferred to Layer 3. Only schema-level invariants
 //! are checked here.
 //!
 //! ## Optional files

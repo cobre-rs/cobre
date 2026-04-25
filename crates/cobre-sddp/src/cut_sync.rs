@@ -31,10 +31,9 @@
 //! [`CutSyncBuffers::new`] pre-allocates all byte buffers for the maximum
 //! possible exchange size. [`sync_cuts`](CutSyncBuffers::sync_cuts) serializes
 //! cuts directly into the pre-allocated `send_buf` using [`serialize_cut`] to
-//! avoid per-call allocation. The receive-side deserialization does allocate
-//! (one `Vec<f64>` per remote cut), but this occurs O(ranks * `cuts_per_rank`)
-//! times per stage — not per-scenario — and is acceptable on the backward pass
-//! hot path.
+//! avoid per-call allocation. The receive-side deserialization writes into the
+//! pre-allocated `deserialize_headers_buf` and `deserialize_coefficients_buf`
+//! scratch buffers, eliminating all per-call heap allocations on the hot path.
 //!
 //! [`cut::wire`]: crate::cut::wire
 //! [`serialize_cut`]: crate::cut::wire::serialize_cut
@@ -43,7 +42,7 @@ use cobre_comm::Communicator;
 
 use crate::{
     FutureCostFunction, SddpError,
-    cut::wire::{cut_wire_size, deserialize_cuts_from_buffer, serialize_cut},
+    cut::wire::{CutWireHeader, cut_wire_size, deserialize_cuts_from_buffer_into, serialize_cut},
 };
 
 /// Pre-allocated byte buffers for gathering cut wire records across all MPI
@@ -71,10 +70,12 @@ use crate::{
 /// use cobre_sddp::cut_sync::CutSyncBuffers;
 /// use cobre_sddp::cut::fcf::FutureCostFunction;
 ///
-/// // Single rank, 2 state dimensions, max 3 cuts per rank.
-/// let mut bufs = CutSyncBuffers::new(2, 3, 1);
+/// // Single rank, 2 state dimensions, 2 cuts per rank.
+/// // max_cuts_per_rank must equal the number of cuts actually passed to
+/// // sync_cuts so that per_rank_cuts[0] matches local_cuts.len().
+/// let mut bufs = CutSyncBuffers::new(2, 2, 1);
 ///
-/// let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
+/// let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
 /// let comm = LocalBackend;
 ///
 /// let local_cuts: &[(u32, u32, u32, f64, &[f64])] = &[
@@ -135,6 +136,20 @@ pub struct CutSyncBuffers {
     /// iteration. Used by [`sync_cuts`](Self::sync_cuts) to determine the
     /// expected byte count from each remote rank during `allgatherv`.
     per_rank_cuts: Vec<usize>,
+
+    /// Scratch buffer for deserialized cut headers, reused across calls.
+    ///
+    /// Grown lazily on demand; never shrunk. Eliminates the per-call
+    /// `Vec<CutWireHeader>` allocation in the deserialization hot path.
+    deserialize_headers_buf: Vec<CutWireHeader>,
+
+    /// Scratch buffer for deserialized cut coefficients (flat layout), reused
+    /// across calls.
+    ///
+    /// Stores all coefficients concatenated: cut 0's `n_state` values, then
+    /// cut 1's, etc. Grown lazily; never shrunk. Eliminates the per-cut
+    /// `Vec<f64>` allocation in the deserialization hot path.
+    deserialize_coefficients_buf: Vec<f64>,
 }
 
 impl CutSyncBuffers {
@@ -209,6 +224,8 @@ impl CutSyncBuffers {
             num_ranks,
             record_size,
             per_rank_cuts,
+            deserialize_headers_buf: Vec::new(),
+            deserialize_coefficients_buf: Vec::new(),
         }
     }
 
@@ -236,6 +253,12 @@ impl CutSyncBuffers {
     ///
     /// # Errors
     ///
+    /// Returns `Err(SddpError::Validation(_))` if `local_cuts.len()` does not
+    /// equal `per_rank_cuts[my_rank]`, the expected cut count for this rank as
+    /// established by the cut-distribution plan. Allowing a mismatch to proceed
+    /// would corrupt remote ranks' deserialized cut buffers, so this invariant
+    /// is enforced in both debug and release builds.
+    ///
     /// Returns `Err(SddpError::Communication(_))` if the underlying
     /// `allgatherv` call fails. The FCF and buffer contents are unspecified
     /// on error.
@@ -252,6 +275,18 @@ impl CutSyncBuffers {
         comm: &C,
     ) -> Result<usize, SddpError> {
         let n_local = local_cuts.len();
+        let my_rank = comm.rank();
+        let expected_for_me = self.per_rank_cuts[my_rank];
+        if n_local != expected_for_me {
+            return Err(SddpError::Validation(format!(
+                "sync_cuts invariant violated at stage {stage}: rank \
+                 {my_rank} produced {n_local} cuts, expected \
+                 {expected_for_me} per the cut-distribution plan. \
+                 Releasing this divergence to allgatherv would corrupt \
+                 remote ranks' deserialized cut buffers."
+            )));
+        }
+
         let send_len = n_local * self.record_size;
 
         debug_assert!(
@@ -282,9 +317,8 @@ impl CutSyncBuffers {
 
         // Each rank sends exactly n_local cuts. For multi-rank, other ranks
         // send per_rank_cuts[r] cuts. Recompute counts based on the actual
-        // local count (which should match per_rank_cuts[my_rank]) and the
-        // pre-computed per-rank expectations for other ranks.
-        let my_rank = comm.rank();
+        // local count (which matches per_rank_cuts[my_rank] — validated above)
+        // and the pre-computed per-rank expectations for other ranks.
         for r in 0..self.num_ranks {
             let cuts_for_r = if r == my_rank {
                 n_local
@@ -312,25 +346,30 @@ impl CutSyncBuffers {
             &self.displs,
         )?;
 
-        let local_rank = comm.rank();
         let mut remote_count = 0usize;
 
         for r in 0..self.num_ranks {
-            if r == local_rank {
+            if r == my_rank {
                 continue;
             }
 
             let start = self.displs[r];
             let end = start + self.counts[r];
             let slice = &self.recv_buf[start..end];
-            let cuts = deserialize_cuts_from_buffer(slice, self.n_state);
-            for (header, coefficients) in cuts {
+            deserialize_cuts_from_buffer_into(
+                slice,
+                self.n_state,
+                &mut self.deserialize_headers_buf,
+                &mut self.deserialize_coefficients_buf,
+            )?;
+            for (i, header) in self.deserialize_headers_buf.iter().enumerate() {
+                let coeff_start = i * self.n_state;
                 fcf.add_cut(
                     stage,
                     u64::from(header.iteration),
                     header.forward_pass_index,
                     header.intercept,
-                    &coefficients,
+                    &self.deserialize_coefficients_buf[coeff_start..coeff_start + self.n_state],
                 );
                 remote_count += 1;
             }
@@ -410,6 +449,12 @@ impl CutSyncBuffers {
     ///
     /// # Errors
     ///
+    /// Returns `Err(SddpError::Validation(_))` if `n_local` does not equal
+    /// `per_rank_cuts[my_rank]`, the expected cut count for this rank as
+    /// established by the cut-distribution plan. Allowing a mismatch to proceed
+    /// would corrupt remote ranks' deserialized cut buffers, so this invariant
+    /// is enforced in both debug and release builds.
+    ///
     /// Returns `Err(SddpError::Communication(_))` if the underlying
     /// `allgatherv` call fails.
     pub fn sync_packed_cuts<C: Communicator>(
@@ -428,6 +473,17 @@ impl CutSyncBuffers {
         );
 
         let my_rank = comm.rank();
+        let expected_for_me = self.per_rank_cuts[my_rank];
+        if n_local != expected_for_me {
+            return Err(SddpError::Validation(format!(
+                "sync_cuts invariant violated at stage {stage}: rank \
+                 {my_rank} produced {n_local} cuts, expected \
+                 {expected_for_me} per the cut-distribution plan. \
+                 Releasing this divergence to allgatherv would corrupt \
+                 remote ranks' deserialized cut buffers."
+            )));
+        }
+
         for r in 0..self.num_ranks {
             let cuts_for_r = if r == my_rank {
                 n_local
@@ -455,25 +511,30 @@ impl CutSyncBuffers {
             &self.displs,
         )?;
 
-        let local_rank = comm.rank();
         let mut remote_count = 0usize;
 
         for r in 0..self.num_ranks {
-            if r == local_rank {
+            if r == my_rank {
                 continue;
             }
 
             let start = self.displs[r];
             let end = start + self.counts[r];
             let slice = &self.recv_buf[start..end];
-            let cuts = deserialize_cuts_from_buffer(slice, self.n_state);
-            for (header, coefficients) in cuts {
+            deserialize_cuts_from_buffer_into(
+                slice,
+                self.n_state,
+                &mut self.deserialize_headers_buf,
+                &mut self.deserialize_coefficients_buf,
+            )?;
+            for (i, header) in self.deserialize_headers_buf.iter().enumerate() {
+                let coeff_start = i * self.n_state;
                 fcf.add_cut(
                     stage,
                     u64::from(header.iteration),
                     header.forward_pass_index,
                     header.intercept,
-                    &coefficients,
+                    &self.deserialize_coefficients_buf[coeff_start..coeff_start + self.n_state],
                 );
                 remote_count += 1;
             }
@@ -518,9 +579,26 @@ mod tests {
     // ── Unit tests ────────────────────────────────────────────────────────────
 
     #[test]
+    fn new_deserialize_scratch_bufs_start_empty() {
+        // AC3: deserialize_headers_buf and deserialize_coefficients_buf both
+        // have capacity == 0 immediately after construction (grown lazily).
+        let bufs = CutSyncBuffers::new(2, 3, 4);
+        assert_eq!(
+            bufs.deserialize_headers_buf.capacity(),
+            0,
+            "deserialize_headers_buf must start with capacity 0"
+        );
+        assert_eq!(
+            bufs.deserialize_coefficients_buf.capacity(),
+            0,
+            "deserialize_coefficients_buf must start with capacity 0"
+        );
+    }
+
+    #[test]
     fn new_send_buf_capacity_is_max_cuts_times_record_size() {
         // AC: CutSyncBuffers::new(n_state=2, max_cuts_per_rank=3, num_ranks=1)
-        // send_buf capacity = 3 * cut_wire_size(2) = 3 * 40 = 120
+        // send_buf capacity = 3 * cut_wire_size(2) = 3 * 41 = 123
         let bufs = CutSyncBuffers::new(2, 3, 1);
         let expected = 3 * cut_wire_size(2);
         assert_eq!(bufs.send_capacity(), expected);
@@ -529,11 +607,11 @@ mod tests {
     #[test]
     fn new_recv_buf_capacity_is_max_cuts_times_num_ranks_times_record_size() {
         // AC: CutSyncBuffers::new(n_state=3, max_cuts_per_rank=10, num_ranks=4)
-        // recv_buf capacity = 10 * 4 * cut_wire_size(3) = 40 * 48 = 1920
+        // recv_buf capacity = 10 * 4 * cut_wire_size(3) = 40 * 49 = 1960
         let bufs = CutSyncBuffers::new(3, 10, 4);
         let expected = 10 * 4 * cut_wire_size(3);
         assert_eq!(bufs.recv_capacity(), expected);
-        assert_eq!(expected, 1920);
+        assert_eq!(expected, 1960);
     }
 
     #[test]
@@ -555,7 +633,7 @@ mod tests {
         // Verify that counts and displs are set to maximum uniform capacity at
         // construction time (they will be recomputed per call to sync_cuts).
         let bufs = CutSyncBuffers::new(2, 3, 2);
-        let per_rank = 3 * cut_wire_size(2); // 120
+        let per_rank = 3 * cut_wire_size(2); // 123
         assert_eq!(bufs.counts[0], per_rank);
         assert_eq!(bufs.counts[1], per_rank);
         assert_eq!(bufs.displs[0], 0);
@@ -563,17 +641,17 @@ mod tests {
     }
 
     #[test]
-    fn new_n_state_zero_record_size_is_24() {
-        // Edge case: n_state = 0, record_size = 24.
+    fn new_n_state_zero_record_size_is_25() {
+        // Edge case: n_state = 0, record_size = 25.
         let bufs = CutSyncBuffers::new(0, 5, 1);
-        assert_eq!(bufs.send_capacity(), 5 * 24);
-        assert_eq!(bufs.recv_capacity(), 5 * 24);
+        assert_eq!(bufs.send_capacity(), 5 * 25);
+        assert_eq!(bufs.recv_capacity(), 5 * 25);
     }
 
     #[test]
     fn send_buf_serialization_round_trip_two_cuts() {
         // AC: given n_state=2, max_cuts_per_rank=2, when 2 cuts are serialized
-        // into send_buf, the byte length matches 2 * cut_wire_size(2) = 80 and
+        // into send_buf, the byte length matches 2 * cut_wire_size(2) = 82 and
         // round-trip deserialization recovers original fields.
         let mut bufs = CutSyncBuffers::new(2, 2, 1);
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
@@ -581,7 +659,7 @@ mod tests {
 
         let record_size = cut_wire_size(2);
         let send_len = local_cuts.len() * record_size;
-        assert_eq!(send_len, 80);
+        assert_eq!(send_len, 82);
 
         // Serialize manually into send_buf using the same logic as sync_cuts.
         for (i, &(slot_index, iteration, forward_pass_index, intercept, coefficients)) in
@@ -599,7 +677,7 @@ mod tests {
         }
 
         // Round-trip: deserialize from the same buffer.
-        let recovered = deserialize_cuts_from_buffer(&bufs.send_buf[..send_len], 2);
+        let recovered = deserialize_cuts_from_buffer(&bufs.send_buf[..send_len], 2).unwrap();
         assert_eq!(recovered.len(), 2);
 
         let (h0, c0) = &recovered[0];
@@ -622,13 +700,13 @@ mod tests {
         // Verify counts and displs are correctly computed for different numbers
         // of local cuts and ranks.
         //
-        // With 2 local cuts and n_state=2: per_rank_bytes = 2 * 40 = 80.
-        // For 3 ranks: counts = [80, 80, 80], displs = [0, 80, 160].
+        // With 2 local cuts and n_state=2: per_rank_bytes = 2 * 41 = 82.
+        // For 3 ranks: counts = [82, 82, 82], displs = [0, 82, 164].
         let mut bufs = CutSyncBuffers::new(2, 5, 3);
 
         let n_local = 2usize;
-        let record_size = cut_wire_size(2); // 40
-        let per_rank = n_local * record_size; // 80
+        let record_size = cut_wire_size(2); // 41
+        let per_rank = n_local * record_size; // 82
 
         // Simulate what sync_cuts does to counts and displs.
         for r in 0..3 {
@@ -636,20 +714,21 @@ mod tests {
             bufs.displs[r] = r * per_rank;
         }
 
-        assert_eq!(bufs.counts, vec![80, 80, 80]);
-        assert_eq!(bufs.displs, vec![0, 80, 160]);
+        assert_eq!(bufs.counts, vec![82, 82, 82]);
+        assert_eq!(bufs.displs, vec![0, 82, 164]);
     }
 
     // ── Integration tests (round-trip with LocalBackend) ──────────────────────
 
     #[test]
     fn sync_cuts_single_rank_returns_zero_remote_cuts() {
-        // AC: Given CutSyncBuffers::new(n_state=2, max_cuts_per_rank=3,
+        // AC: Given CutSyncBuffers::new(n_state=2, max_cuts_per_rank=2,
         // num_ranks=1), when sync_cuts is called with 2 local cuts in
         // single-rank mode, then it returns Ok(0) — the single rank's own
-        // cuts are skipped.
-        let mut bufs = CutSyncBuffers::new(2, 3, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
+        // cuts are skipped. (max_cuts_per_rank must equal the actual cut count
+        // so per_rank_cuts[0] == n_local.)
+        let mut bufs = CutSyncBuffers::new(2, 2, 1);
+        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
         let comm = LocalBackend;
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
@@ -664,8 +743,8 @@ mod tests {
         // After sync_cuts with single rank, FCF should have zero cuts —
         // the local rank's cuts are skipped (they were already inserted by the
         // backward pass before this function is called).
-        let mut bufs = CutSyncBuffers::new(2, 3, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 3, 10, &[0; 2]);
+        let mut bufs = CutSyncBuffers::new(2, 2, 1);
+        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
         let comm = LocalBackend;
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
@@ -687,8 +766,9 @@ mod tests {
         // must deserialize to the original cut fields. We verify this by
         // checking FCF state after manually inserting the local cut, then
         // confirming no additional cuts appear from sync (single rank skips).
-        let mut bufs = CutSyncBuffers::new(2, 2, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
+        // max_cuts_per_rank=1 matches the 1 cut actually sent (per_rank_cuts[0]=1).
+        let mut bufs = CutSyncBuffers::new(2, 1, 1);
+        let mut fcf = FutureCostFunction::new(2, 2, 1, 10, &[0; 2]);
         let comm = LocalBackend;
 
         // Simulate backward pass: insert cut into FCF (this rank's own cut).
@@ -707,8 +787,9 @@ mod tests {
     #[test]
     fn sync_cuts_zero_local_cuts_returns_zero() {
         // When no cuts are generated (empty local_cuts), sync_cuts must still
-        // succeed and return Ok(0) for single rank.
-        let mut bufs = CutSyncBuffers::new(2, 5, 1);
+        // succeed and return Ok(0) for single rank. Use with_distribution with
+        // total_forward_passes=0 so per_rank_cuts[0]=0 matches n_local=0.
+        let mut bufs = CutSyncBuffers::with_distribution(2, 5, 1, 0);
         let mut fcf = FutureCostFunction::new(2, 2, 5, 10, &[0; 2]);
         let comm = LocalBackend;
 
@@ -774,8 +855,8 @@ mod tests {
             }
         }
 
-        let mut bufs = CutSyncBuffers::new(2, 2, 1);
-        let mut fcf = FutureCostFunction::new(2, 2, 2, 10, &[0; 2]);
+        let mut bufs = CutSyncBuffers::new(2, 1, 1);
+        let mut fcf = FutureCostFunction::new(2, 2, 1, 10, &[0; 2]);
 
         let local_cuts: &[(u32, u32, u32, f64, &[f64])] = &[(0, 1, 0, 5.0, &[1.0, 2.0])];
 
@@ -852,9 +933,9 @@ mod tests {
         }
 
         let n_state = 2;
-        let record_size = cut_wire_size(n_state); // 40
+        let record_size = cut_wire_size(n_state); // 41
         let n_local = 2;
-        let per_rank_bytes = n_local * record_size; // 80
+        let per_rank_bytes = n_local * record_size; // 82
 
         // FCF: 1 stage, n_state=2, forward_passes=6, max_iterations=10,
         // warm_start=0 → capacity = 0 + 10*6 = 60 slots.
@@ -862,8 +943,8 @@ mod tests {
         let mut bufs = CutSyncBuffers::new(n_state, n_local, 3);
 
         // Pre-populate recv_buf with remote rank data at the exact offsets
-        // that sync_cuts will compute (displs[1] = 80, displs[2] = 160).
-        let r1_start = per_rank_bytes; // 80
+        // that sync_cuts will compute (displs[1] = 82, displs[2] = 164).
+        let r1_start = per_rank_bytes; // 82
         serialize_cut(
             &mut bufs.recv_buf[r1_start..r1_start + record_size],
             10,
@@ -881,7 +962,7 @@ mod tests {
             &[3.0, 4.0],
         );
 
-        let r2_start = 2 * per_rank_bytes; // 160
+        let r2_start = 2 * per_rank_bytes; // 164
         serialize_cut(
             &mut bufs.recv_buf[r2_start..r2_start + record_size],
             20,
@@ -927,10 +1008,11 @@ mod tests {
 
         bufs.sync_cuts(0, local_cuts, &mut fcf, &comm).unwrap();
 
-        // After LocalBackend allgatherv (identity copy), recv_buf[0..40]
+        // After LocalBackend allgatherv (identity copy), recv_buf[0..record_size]
         // contains rank 0's serialized cut. Deserialize and verify.
         let record_size = cut_wire_size(n_state);
-        let recovered = deserialize_cuts_from_buffer(&bufs.recv_buf[..record_size], n_state);
+        let recovered =
+            deserialize_cuts_from_buffer(&bufs.recv_buf[..record_size], n_state).unwrap();
         assert_eq!(recovered.len(), 1);
 
         let (header, rec_coeffs) = &recovered[0];
@@ -940,5 +1022,176 @@ mod tests {
         assert_eq!(header.intercept, 99.0);
         assert_eq!(rec_coeffs[0].to_bits(), coeffs[0].to_bits());
         assert_eq!(rec_coeffs[1].to_bits(), coeffs[1].to_bits());
+    }
+
+    // ── Invariant check tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn sync_cuts_invariant_passes_when_local_matches_expected() {
+        // AC1: per_rank_cuts == [3] (single rank), n_local == 3 → Ok(0).
+        let mut bufs = CutSyncBuffers::new(2, 3, 1);
+        let mut fcf = FutureCostFunction::new(1, 2, 3, 10, &[0; 1]);
+        let comm = LocalBackend;
+
+        let local_cuts: &[(u32, u32, u32, f64, &[f64])] = &[
+            (0, 1, 0, 10.0, &[1.0, 2.0]),
+            (1, 1, 1, 20.0, &[3.0, 4.0]),
+            (2, 1, 2, 30.0, &[5.0, 6.0]),
+        ];
+
+        let result = bufs.sync_cuts(0, local_cuts, &mut fcf, &comm).unwrap();
+        assert_eq!(result, 0, "single rank: no remote cuts expected");
+    }
+
+    #[test]
+    fn sync_cuts_invariant_rejects_local_mismatch() {
+        // AC2: with_distribution(n_state=2, max_cuts_per_rank=3, num_ranks=2,
+        // total_forward_passes=6) → per_rank_cuts == [3, 3]. Rank 0 supplies
+        // only 2 cuts → sync_cuts must return Err(SddpError::Validation) with
+        // both required substrings.
+
+        // Two-rank stub: rank() == 0, size() == 2.
+        // allgatherv is unreachable — the invariant check returns before it.
+        struct TwoRankStubComm;
+
+        impl Communicator for TwoRankStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _counts: &[usize],
+                _displs: &[usize],
+            ) -> Result<(), CommError> {
+                unreachable!("allgatherv must not be reached when invariant fails")
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _op: ReduceOp,
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let mut bufs = CutSyncBuffers::with_distribution(2, 3, 2, 6);
+        let mut fcf = FutureCostFunction::new(1, 2, 6, 10, &[0; 1]);
+
+        // Only 2 cuts; expected 3 per per_rank_cuts[0].
+        let local_cuts: &[(u32, u32, u32, f64, &[f64])] =
+            &[(0, 1, 0, 10.0, &[1.0, 2.0]), (1, 1, 1, 20.0, &[3.0, 4.0])];
+
+        let result = bufs.sync_cuts(0, local_cuts, &mut fcf, &TwoRankStubComm);
+        match result {
+            Err(SddpError::Validation(ref msg)) => {
+                assert!(
+                    msg.contains("sync_cuts invariant violated"),
+                    "message missing 'sync_cuts invariant violated': {msg}"
+                );
+                assert!(
+                    msg.contains("rank 0 produced 2 cuts, expected 3"),
+                    "message missing 'rank 0 produced 2 cuts, expected 3': {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_packed_cuts_invariant_rejects_local_mismatch() {
+        // Same harness as sync_cuts_invariant_rejects_local_mismatch but
+        // exercises sync_packed_cuts. n_local=2 with per_rank_cuts[0]=3 must
+        // return Err(SddpError::Validation) before any allgatherv call.
+
+        struct TwoRankStubComm;
+
+        impl Communicator for TwoRankStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _counts: &[usize],
+                _displs: &[usize],
+            ) -> Result<(), CommError> {
+                unreachable!("allgatherv must not be reached when invariant fails")
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                _send: &[T],
+                _recv: &mut [T],
+                _op: ReduceOp,
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                unreachable!()
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let mut bufs = CutSyncBuffers::with_distribution(2, 3, 2, 6);
+        let mut fcf = FutureCostFunction::new(1, 2, 6, 10, &[0; 1]);
+
+        // n_local=2 but per_rank_cuts[0]=3.
+        let result = bufs.sync_packed_cuts(0, 2, &mut fcf, &TwoRankStubComm);
+        match result {
+            Err(SddpError::Validation(ref msg)) => {
+                assert!(
+                    msg.contains("sync_cuts invariant violated"),
+                    "message missing 'sync_cuts invariant violated': {msg}"
+                );
+                assert!(
+                    msg.contains("rank 0 produced 2 cuts, expected 3"),
+                    "message missing 'rank 0 produced 2 cuts, expected 3': {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
     }
 }

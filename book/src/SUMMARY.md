@@ -37,6 +37,7 @@
 
 - [1dtoy](./examples/1dtoy.md)
 - [4ree](./examples/4ree.md)
+- [Deterministic Regression Suite](./examples/deterministic-suite.md)
 - [Creating Your Own Case](./examples/creating-your-own.md)
 
 ---

@@ -42,7 +42,6 @@ pub fn build_stage_cut_records(fcf: &FutureCostFunction) -> Vec<Vec<PolicyCutRec
                         coefficients: &pool.coefficients
                             [i * pool.state_dimension..(i + 1) * pool.state_dimension],
                         is_active: pool.active[i],
-                        domination_count: meta.active_count as u32,
                     }
                 })
                 .collect()
@@ -103,7 +102,7 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
         .iter()
         .map(|opt| {
             opt.as_ref()
-                .map(|b| b.col_status.iter().map(|&v| v as u8).collect())
+                .map(|cb| cb.basis.col_status.iter().map(|&v| v as u8).collect())
                 .unwrap_or_default()
         })
         .collect();
@@ -112,7 +111,7 @@ pub fn convert_basis_cache(training_result: &TrainingResult) -> (Vec<Vec<u8>>, V
         .iter()
         .map(|opt| {
             opt.as_ref()
-                .map(|b| b.row_status.iter().map(|&v| v as u8).collect())
+                .map(|cb| cb.basis.row_status.iter().map(|&v| v as u8).collect())
                 .unwrap_or_default()
         })
         .collect();

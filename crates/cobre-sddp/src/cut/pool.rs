@@ -115,6 +115,15 @@ pub struct CutPool {
     /// [`deactivate`]: CutPool::deactivate
     /// [`active_count`]: CutPool::active_count
     pub cached_active_count: usize,
+
+    /// Scratch buffer for [`enforce_budget`] candidate collection.
+    ///
+    /// Reused across calls to avoid per-call `Vec<u32>` allocation. Cleared
+    /// at the start of each `enforce_budget` invocation and populated with
+    /// active slot indices that are eligible for eviction.
+    ///
+    /// [`enforce_budget`]: CutPool::enforce_budget
+    pub(crate) candidates_buf: Vec<u32>,
 }
 
 impl CutPool {
@@ -155,7 +164,7 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
-            domination_count: 0,
+            active_window: 0,
         };
 
         Self {
@@ -169,6 +178,7 @@ impl CutPool {
             forward_passes,
             warm_start_count,
             cached_active_count: 0,
+            candidates_buf: Vec::new(),
         }
     }
 
@@ -253,7 +263,10 @@ impl CutPool {
             forward_pass_index,
             active_count: 0,
             last_active_iter: iteration,
-            domination_count: 0,
+            // Transient seed: set SEED_BIT (outside RECENT_WINDOW_BITS) so the
+            // classifier fires LOWER within the same iteration, but the seed is
+            // cleared at end-of-iter before the shift — no cross-iter carryover.
+            active_window: crate::basis_reconstruct::SEED_BIT,
         };
 
         if slot >= self.populated_count {
@@ -280,11 +293,69 @@ impl CutPool {
     /// assert_eq!(active.len(), 2);
     /// ```
     pub fn active_cuts(&self) -> impl Iterator<Item = (usize, f64, &[f64])> {
+        let mut remaining = self.cached_active_count;
         self.active[..self.populated_count]
             .iter()
             .enumerate()
-            .filter(|&(_, &is_active)| is_active)
-            .map(|(i, _)| {
+            .scan((), move |(), (i, &is_active)| {
+                if remaining == 0 {
+                    return None;
+                }
+                if is_active {
+                    remaining -= 1;
+                    let start = i * self.state_dimension;
+                    Some(Some((
+                        i,
+                        self.intercepts[i],
+                        &self.coefficients[start..start + self.state_dimension],
+                    )))
+                } else {
+                    Some(None)
+                }
+            })
+            .flatten()
+    }
+
+    /// Iterate over active cuts generated in a specific training iteration.
+    ///
+    /// Yields `(slot_index, intercept, coefficient_slice)` for every slot
+    /// where `active[slot]` is `true` AND
+    /// `metadata[slot].iteration_generated == current_iteration`.
+    ///
+    /// Warm-start cuts (whose `iteration_generated` is
+    /// [`WARM_START_ITERATION`]) are always excluded, even if
+    /// `current_iteration` were to equal the sentinel numerically — the
+    /// sentinel is chosen as `u64::MAX` to make such a collision impossible
+    /// in practice, but the explicit guard is retained for clarity.
+    ///
+    /// Only scans up to `populated_count` to avoid touching uninitialized
+    /// slots. Iterates in insertion order, preserving declaration-order
+    /// invariance.
+    pub(crate) fn active_delta_cuts(
+        &self,
+        current_iteration: u64,
+    ) -> impl Iterator<Item = (usize, f64, &[f64])> {
+        let mut remaining = self.cached_active_count;
+        self.active[..self.populated_count]
+            .iter()
+            .enumerate()
+            .scan((), move |(), (slot, &is_active)| {
+                if remaining == 0 {
+                    return None;
+                }
+                if is_active {
+                    remaining -= 1;
+                    Some(Some(slot))
+                } else {
+                    Some(None)
+                }
+            })
+            .flatten()
+            .filter(move |&slot| {
+                self.metadata[slot].iteration_generated == current_iteration
+                    && self.metadata[slot].iteration_generated != WARM_START_ITERATION
+            })
+            .map(|i| {
                 let start = i * self.state_dimension;
                 (
                     i,
@@ -333,6 +404,16 @@ impl CutPool {
     /// zero-based slot positions. Out-of-bounds indices are silently ignored
     /// in release builds; a debug assertion fires for out-of-bounds access.
     ///
+    /// # Idempotency
+    ///
+    /// Passing an index that is already inactive is a silent no-op: the
+    /// `active` flag stays `false` and `cached_active_count` is not
+    /// decremented a second time, preventing underflow. This means passing
+    /// the same index more than once in `indices` is safe — only the first
+    /// occurrence takes effect. In debug builds a `debug_assert!` fires on
+    /// the second occurrence to surface accidental duplicate-index calls
+    /// during testing.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -350,6 +431,10 @@ impl CutPool {
         for &idx in indices {
             let i = idx as usize;
             debug_assert!(i < self.capacity, "deactivate index {i} out of bounds");
+            debug_assert!(
+                self.active[i],
+                "deactivate called with index {i} that is already inactive"
+            );
             if i < self.capacity && self.active[i] {
                 self.active[i] = false;
                 self.cached_active_count -= 1;
@@ -400,12 +485,15 @@ impl CutPool {
             .fold(f64::NEG_INFINITY, f64::max)
     }
 
-    /// Compute a report of exact-zero sparsity across all active cuts.
+    /// Diagnostic: count exact-zero coefficients across all active cuts.
     ///
-    /// Scans every coefficient of every active cut and counts exact zeros
-    /// (`value == 0.0`). Returns a [`SparsityReport`] with aggregate and
-    /// per-dimension statistics. Only exact zeros are counted to preserve
-    /// bit-for-bit reproducibility when sparse representations are used.
+    /// Walks every coefficient of every active cut and tallies exact
+    /// zeros (`value == 0.0`). Returns a [`SparsityReport`] with the
+    /// aggregate count, fraction, and per-dimension breakdown.
+    ///
+    /// Not on the hot path: allocates one `Vec<usize>` of length
+    /// `state_dimension` per call. Intended for offline analysis or
+    /// pre-release diagnostics, not per-iteration use.
     ///
     /// # Example
     ///
@@ -478,7 +566,6 @@ impl CutPool {
     ///         intercept: 5.0,
     ///         coefficients: vec![1.0, 2.0],
     ///         is_active: true,
-    ///         domination_count: 0,
     ///     },
     /// ];
     ///
@@ -517,7 +604,7 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
-                domination_count: u64::from(record.domination_count),
+                active_window: 0,
             });
         }
 
@@ -533,6 +620,7 @@ impl CutPool {
             forward_passes: 0,
             warm_start_count: capacity as u32,
             cached_active_count,
+            candidates_buf: Vec::new(),
         }
     }
 
@@ -554,7 +642,7 @@ impl CutPool {
     ///     OwnedPolicyCutRecord {
     ///         cut_id: 0, slot_index: 0, iteration: 0, forward_pass_index: 0,
     ///         intercept: 5.0, coefficients: vec![1.0, 2.0],
-    ///         is_active: true, domination_count: 0,
+    ///         is_active: true,
     ///     },
     /// ];
     /// let pool = CutPool::new_with_warm_start(2, 4, 10, &records);
@@ -579,7 +667,7 @@ impl CutPool {
             forward_pass_index: 0,
             active_count: 0,
             last_active_iter: 0,
-            domination_count: 0,
+            active_window: 0,
         };
 
         let mut coefficients = vec![0.0_f64; capacity * state_dimension];
@@ -611,7 +699,7 @@ impl CutPool {
                 forward_pass_index: record.forward_pass_index,
                 active_count: 0,
                 last_active_iter: u64::from(record.iteration),
-                domination_count: u64::from(record.domination_count),
+                active_window: 0,
             };
         }
 
@@ -627,15 +715,16 @@ impl CutPool {
             forward_passes,
             warm_start_count: warm_start_count as u32,
             cached_active_count,
+            candidates_buf: Vec::new(),
         }
     }
 }
 
-/// Report of exact-zero sparsity across active cuts in a [`CutPool`].
+/// Diagnostic report of exact-zero coefficients across active cuts in a [`CutPool`].
 ///
-/// Produced by [`CutPool::sparsity_report`]. Only exact zeros (`value == 0.0`)
-/// are counted -- near-zero values are not included to preserve bit-for-bit
-/// reproducibility.
+/// Produced by [`CutPool::sparsity_report`]. Counts only exact
+/// zeros (`value == 0.0`); near-zero values are not collapsed to
+/// zero by this report.
 #[derive(Debug, Clone)]
 pub struct SparsityReport {
     /// Total number of coefficients scanned (`active_count * state_dimension`).
@@ -709,18 +798,21 @@ impl CutPool {
 
         let excess = self.cached_active_count - budget_usize;
 
-        // Collect eviction candidates: active slots not from current_iteration.
+        // Collect eviction candidates into the reused scratch buffer:
+        // active slots not from current_iteration.
+        self.candidates_buf.clear();
         #[allow(clippy::cast_possible_truncation)]
-        let mut candidates: Vec<u32> = self.active[..self.populated_count]
-            .iter()
-            .enumerate()
-            .filter(|&(slot, &is_active)| {
-                is_active && self.metadata[slot].iteration_generated != current_iteration
-            })
-            .map(|(slot, _)| slot as u32)
-            .collect();
+        self.candidates_buf.extend(
+            self.active[..self.populated_count]
+                .iter()
+                .enumerate()
+                .filter(|&(slot, &is_active)| {
+                    is_active && self.metadata[slot].iteration_generated != current_iteration
+                })
+                .map(|(slot, _)| slot as u32),
+        );
 
-        if candidates.is_empty() {
+        if self.candidates_buf.is_empty() {
             // All active cuts are from the current iteration; preserve them all.
             return BudgetEnforcementResult {
                 evicted_count: 0,
@@ -731,7 +823,7 @@ impl CutPool {
 
         // Eviction key: (last_active_iter ASC, active_count ASC).
         // Stalest, least-frequently-used cuts are evicted first.
-        let evict_count = excess.min(candidates.len());
+        let evict_count = excess.min(self.candidates_buf.len());
 
         let key = |&slot: &u32| {
             let meta = &self.metadata[slot as usize];
@@ -740,16 +832,19 @@ impl CutPool {
 
         // Use partial sort when only a small fraction of candidates need
         // evicting; fall back to full sort otherwise.
-        if evict_count < candidates.len() / 2 {
-            // select_nth_unstable_by partitions so that candidates[..evict_count]
+        if evict_count < self.candidates_buf.len() / 2 {
+            // select_nth_unstable_by partitions so that candidates_buf[..evict_count]
             // contains the evict_count smallest elements (in any order).
-            candidates.select_nth_unstable_by(evict_count, |a, b| key(a).cmp(&key(b)));
+            self.candidates_buf
+                .select_nth_unstable_by(evict_count, |a, b| key(a).cmp(&key(b)));
         } else {
-            candidates.sort_unstable_by_key(|a| key(a));
+            self.candidates_buf.sort_unstable_by_key(|a| key(a));
         }
 
-        let to_evict = &candidates[..evict_count];
-        self.deactivate(to_evict);
+        // Copy the eviction slice into a local Vec to release the borrow on
+        // self.candidates_buf before calling deactivate, which takes &mut self.
+        let to_evict: Vec<u32> = self.candidates_buf[..evict_count].to_vec();
+        self.deactivate(&to_evict);
 
         #[allow(clippy::cast_possible_truncation)]
         let evicted_count = evict_count as u32;
@@ -850,7 +945,6 @@ mod tests {
         assert_eq!(meta.forward_pass_index, 2);
         assert_eq!(meta.active_count, 0);
         assert_eq!(meta.last_active_iter, 3);
-        assert_eq!(meta.domination_count, 0);
     }
 
     #[test]
@@ -940,6 +1034,29 @@ mod tests {
         pool.add_cut(0, 0, 1.0, &[1.0]);
         pool.deactivate(&[]);
         assert_eq!(pool.active_count(), 1);
+    }
+
+    /// `deactivate` silently skips already-inactive indices.
+    ///
+    /// In debug builds the `debug_assert!` would fire on a duplicate
+    /// input, so the test is gated to release-only. When a release
+    /// build receives `&[0, 0, 0]`, the active count drops by exactly
+    /// 1 (not 3) and `active[0]` becomes `false`.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn deactivate_duplicate_index_is_silently_skipped() {
+        let mut pool = CutPool::new(10, 1, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0]);
+        pool.add_cut(1, 0, 2.0, &[2.0]);
+        assert_eq!(pool.active_count(), 2);
+        pool.deactivate(&[0, 0, 0]);
+        assert_eq!(
+            pool.active_count(),
+            1,
+            "duplicate indices must not double-decrement"
+        );
+        assert!(!pool.active[0]);
+        assert!(pool.active[1]);
     }
 
     #[test]
@@ -1161,7 +1278,6 @@ mod tests {
                 is_active: true,
                 iteration: 5,
                 forward_pass_index: 0,
-                domination_count: 0,
             },
             OwnedPolicyCutRecord {
                 cut_id: 1,
@@ -1171,7 +1287,6 @@ mod tests {
                 is_active: true,
                 iteration: 7,
                 forward_pass_index: 1,
-                domination_count: 0,
             },
         ];
 
@@ -1201,7 +1316,6 @@ mod tests {
             is_active: true,
             iteration: 0,
             forward_pass_index: 0,
-            domination_count: 0,
         }];
         let pool = CutPool::new_with_warm_start(1, 4, 100, &records);
         assert!(pool.warm_start_count > 0, "terminal pool has boundary cuts");
@@ -1310,5 +1424,96 @@ mod tests {
         assert_eq!(result.active_before, 3);
         assert_eq!(result.evicted_count, 2);
         assert_eq!(result.active_after, 1);
+    }
+
+    // ── active_cuts early-exit tests ─────────────────────────────────────────
+
+    /// Verify that `active_cuts()` stops iterating once all active cuts have
+    /// been yielded — it must not scan up to `populated_count` when
+    /// `cached_active_count` is small.
+    ///
+    /// Pool has `populated_count = 100` and only slot 0 is active
+    /// (`cached_active_count = 1`).  The early-exit iterator must stop after
+    /// visiting slot 0, yielding exactly 1 item.  If the old O(populated)
+    /// walk were still in place the count would still be 1, but the
+    /// scan-based implementation verifies correctness by construction:
+    /// `remaining` hits 0 after the first active slot and `scan` returns
+    /// `None` for all subsequent elements, preventing any further polling.
+    #[test]
+    fn active_cuts_early_exit_stops_at_cached_count() {
+        // forward_passes = 1 so slot = warm_start_count + iteration * 1 + fp_index
+        let mut pool = CutPool::new(100, 2, 1, 0);
+
+        // Add a cut at slot 0 (iteration 0, fp 0).
+        pool.add_cut(0, 0, 5.0, &[1.0, 2.0]);
+
+        // Manually populate a further 99 slots as inactive to extend
+        // populated_count to 100 without going through add_cut (which marks
+        // them active).  We write directly to the active flag so that
+        // populated_count is extended to 100 while cached_active_count stays 1.
+        //
+        // We do this by exploiting that slot_index(i, 0) = i * 1 + 0 = i.
+        // We need slot 99 to be "populated" (high-water mark = 100) so that
+        // the old O(populated) walk would have to visit all 100 slots.
+        pool.populated_count = 100;
+        // active[0] is already true; active[1..100] are all false (default).
+
+        assert_eq!(pool.cached_active_count, 1);
+        assert_eq!(pool.populated_count, 100);
+
+        // The iterator must yield exactly 1 item.
+        let result: Vec<_> = pool.active_cuts().collect();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 0, "yielded slot must be 0");
+        assert_eq!(result[0].1, 5.0, "intercept must match");
+        assert_eq!(result[0].2, &[1.0, 2.0], "coefficients must match");
+    }
+
+    /// Verify that `candidates_buf` retains its allocation across successive
+    /// `enforce_budget` calls (i.e., the scratch buffer is reused, not dropped
+    /// and reallocated each time).
+    #[test]
+    fn enforce_budget_candidates_buf_is_reused() {
+        let mut pool = CutPool::new(100, 2, 10, 0);
+
+        // Add cuts spread across several iterations so there are always
+        // eviction candidates regardless of current_iteration.
+        for iter in 0..5_u64 {
+            pool.add_cut(iter, 0, 1.0, &[1.0, 0.0]);
+        }
+        assert_eq!(pool.active_count(), 5);
+
+        // First enforce: evicts some cuts, candidates_buf gets populated.
+        pool.enforce_budget(3, 5, 10);
+        let cap_after_first = pool.candidates_buf.capacity();
+        assert!(
+            cap_after_first >= 1,
+            "candidates_buf must have acquired capacity after first enforce_budget"
+        );
+
+        // Re-add cuts so the second call also has candidates.
+        // We need iteration offsets past the existing slots; restart with a
+        // new pool to keep slot arithmetic simple.
+        let mut pool2 = CutPool::new(100, 2, 10, 0);
+        for iter in 0..5_u64 {
+            pool2.add_cut(iter, 0, 1.0, &[1.0, 0.0]);
+        }
+        pool2.enforce_budget(3, 5, 10);
+        let cap_after_first2 = pool2.candidates_buf.capacity();
+
+        // Second call on the same pool2 — re-add some cuts first.
+        // Since slots 0, 10, 20, 30, 40 are now inactive, add at iter 6..=8.
+        pool2.add_cut(6, 0, 2.0, &[0.0, 1.0]);
+        pool2.add_cut(7, 0, 2.0, &[0.0, 1.0]);
+        pool2.add_cut(8, 0, 2.0, &[0.0, 1.0]);
+        pool2.enforce_budget(2, 9, 10);
+        let cap_after_second2 = pool2.candidates_buf.capacity();
+
+        // The capacity must not have shrunk — Vec::clear() preserves the heap
+        // allocation, so the second call reuses the buffer.
+        assert!(
+            cap_after_second2 >= cap_after_first2,
+            "candidates_buf capacity must not shrink across calls (was {cap_after_first2}, now {cap_after_second2})"
+        );
     }
 }

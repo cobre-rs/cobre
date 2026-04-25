@@ -52,5 +52,5 @@ pub use types::{BackendError, CommError, ReduceOp};
 #[cfg(feature = "mpi")]
 pub use ferrompi::FerrompiBackend;
 
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+#[cfg(feature = "mpi")]
 pub use factory::CommBackend;

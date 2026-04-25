@@ -22,16 +22,16 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use arrow::array::{Array, BooleanArray, Float64Array, Int32Array, Int64Array, Int8Array};
+use arrow::array::{Array, BooleanArray, Float64Array, Int8Array, Int32Array, Int64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use pyo3::BoundObject;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyList, PyString};
-use pyo3::BoundObject;
 
 /// Canonicalize a path and return an appropriate Python error on failure.
 fn canonicalize_dir(path: &Path) -> PyResult<PathBuf> {
@@ -1081,7 +1081,6 @@ pub fn load_simulation_arrow(
 ///                     "intercept": 42.0,
 ///                     "coefficients": [1.0, 2.0, ...],
 ///                     "is_active": True,
-///                     "domination_count": 0,
 ///                 },
 ///                 ...
 ///             ]
@@ -1162,7 +1161,6 @@ pub fn load_policy(py: Python<'_>, output_dir: PathBuf) -> PyResult<Py<PyAny>> {
             cut_dict.set_item("coefficients", coeffs_list)?;
 
             cut_dict.set_item("is_active", PyBool::new(py, cut.is_active).to_owned())?;
-            cut_dict.set_item("domination_count", into_py(py, cut.domination_count)?)?;
 
             cuts_list.append(cut_dict)?;
         }

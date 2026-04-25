@@ -33,7 +33,7 @@ use cobre_sddp::{
     EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
     build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
     inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
-    setup::{build_ncs_factor_entries, load_load_factors_for_stochastic},
+    setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -45,8 +45,7 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    BroadcastConfig, BroadcastOpeningTree, broadcast_value, stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -89,12 +88,7 @@ fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
     1
 }
 
-/// Return type of [`load_case_and_config`]: the values loaded on rank 0.
-///
-/// The [`PrepareStochasticResult`] bundles the updated system, built stochastic
-/// context, and optional estimation report from the pre-setup pipeline.
-/// The [`PrepareHydroModelsResult`] bundles the resolved production and evaporation
-/// models for all hydro plants.
+/// Values loaded on rank 0 by [`load_case_and_config`].
 type LoadedCase = (
     PrepareStochasticResult,
     PrepareHydroModelsResult,
@@ -102,12 +96,7 @@ type LoadedCase = (
     cobre_io::Config,
 );
 
-/// Load the case directory and parse the config on rank 0.
-///
-/// Extracted into a separate function so that errors are captured as `Err`
-/// rather than causing an early return from `execute()`. This allows
-/// `execute()` to always reach the `broadcast_value` calls, ensuring all
-/// MPI ranks participate in the collectives even when rank 0 fails.
+/// Load case and config on rank 0, capturing errors for MPI collective participation.
 fn load_case_and_config(
     args: &RunArgs,
     quiet: bool,
@@ -143,10 +132,7 @@ fn load_case_and_config(
     Ok((prepared, hydro_models, bcast, config))
 }
 
-/// Shared context threaded through the `execute` phase functions.
-///
-/// Constructed once during communicator setup and passed by reference to
-/// each subsequent phase. Avoids threading 6+ separate values individually.
+/// Shared context for execute phases (communicator, output, topology, etc.).
 struct RunContext<C: Communicator> {
     /// The MPI (or local) communicator.
     comm: C,
@@ -162,16 +148,17 @@ struct RunContext<C: Communicator> {
     term_width: u16,
     /// Terminal handle for stderr output.
     stderr: Term,
+    /// Rendering strategy for progress events — chosen once at startup
+    /// from stderr's TTY status so non-TTY streams (mpirun pipes, log
+    /// files, CI) get append-only lines instead of cursor-driven bars.
+    render_mode: crate::progress::RenderMode,
     /// Execution topology gathered during communicator setup.
     topology: ExecutionTopology,
     /// Solver version string (e.g. `"1.8.0"`).
     solver_version: String,
 }
 
-/// Result of the load-and-broadcast phase.
-///
-/// Bundles the values produced by [`broadcast_and_build_setup`] that are
-/// consumed by subsequent training and output phases.
+/// Output of [`broadcast_and_build_setup`]: system, setup, config, and metadata.
 struct LoadBroadcastResult {
     system: System,
     setup: StudySetup,
@@ -187,10 +174,7 @@ struct LoadBroadcastResult {
     policy_mode: cobre_io::PolicyMode,
 }
 
-/// Result of the training phase.
-///
-/// Bundles the values produced by [`run_training_phase`] that are consumed
-/// by the simulation phase and the post-training error check.
+/// Output of [`run_training_phase`]: result, training output, and optional error.
 struct TrainingPhaseResult {
     result: cobre_sddp::TrainingResult,
     output: cobre_io::TrainingOutput,
@@ -282,6 +266,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                 setup: &setup,
                 training_result: &training.result,
                 output_ctx: &training_ctx,
+                hydro_models: &setup.hydro_models,
                 quiet: ctx.quiet,
                 stderr: &ctx.stderr,
             })?;
@@ -309,10 +294,10 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
             });
         }
 
-        if setup.n_scenarios() > 0 {
+        if setup.simulation_config.n_scenarios > 0 {
             run_simulation_phase(ctx, &system, &mut setup, &training.result, &hostname)?;
         }
-    } else if setup.n_scenarios() > 0 {
+    } else if setup.simulation_config.n_scenarios > 0 {
         // Training disabled but simulation requested: load policy from disk.
         let training_result =
             load_policy_for_simulation(ctx, &system, &mut setup, root_config.as_ref())?;
@@ -349,7 +334,7 @@ fn load_and_validate_checkpoint(
             #[allow(clippy::cast_possible_truncation)]
             let n_stages = system.stages().iter().filter(|s| s.id >= 0).count() as u32;
             let state_dim =
-                u32::try_from(setup.fcf().state_dimension).map_err(|e| CliError::Internal {
+                u32::try_from(setup.fcf.state_dimension).map_err(|e| CliError::Internal {
                     message: format!("state_dimension overflows u32: {e}"),
                 })?;
             cobre_sddp::validate_policy_compatibility(&checkpoint.metadata, state_dim, n_stages)
@@ -370,7 +355,7 @@ fn apply_training_policy(
 ) -> Result<(), CliError> {
     match policy_mode {
         cobre_io::PolicyMode::WarmStart => {
-            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            let policy_dir = ctx.output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
                     message: format!(
@@ -389,20 +374,20 @@ fn apply_training_policy(
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(CliError::from)?;
             setup.replace_fcf(warm_fcf);
             if ctx.is_root && !ctx.quiet {
-                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let warm_count = setup.fcf.pools[0].warm_start_count;
                 let _ = ctx.stderr.write_line(&format!(
                     "Warm-start: loaded {warm_count} cuts per stage from prior policy."
                 ));
             }
         }
         cobre_io::PolicyMode::Resume => {
-            let policy_dir = ctx.output_dir.join(setup.policy_path());
+            let policy_dir = ctx.output_dir.join(&setup.policy_path);
             if !policy_dir.exists() {
                 return Err(CliError::Internal {
                     message: format!(
@@ -419,24 +404,24 @@ fn apply_training_policy(
             }
             let checkpoint = load_and_validate_checkpoint(&policy_dir, system, setup, root_config)?;
             let completed = u64::from(checkpoint.metadata.completed_iterations);
-            if completed >= setup.max_iterations() && ctx.is_root && !ctx.quiet {
+            if completed >= setup.loop_params.max_iterations && ctx.is_root && !ctx.quiet {
                 let _ = ctx.stderr.write_line(&format!(
                     "WARNING: Checkpoint already completed {completed} iterations \
                      (max_iterations = {}). No additional training will occur.",
-                    setup.max_iterations()
+                    setup.loop_params.max_iterations
                 ));
             }
             // Reserve one extra slot for cuts added in the final iteration.
             let warm_fcf = cobre_sddp::FutureCostFunction::new_with_warm_start(
                 &checkpoint.stage_cuts,
-                setup.forward_passes(),
-                setup.max_iterations().saturating_add(1),
+                setup.loop_params.forward_passes,
+                setup.loop_params.max_iterations.saturating_add(1),
             )
             .map_err(CliError::from)?;
             setup.replace_fcf(warm_fcf);
             setup.set_start_iteration(completed);
             if ctx.is_root && !ctx.quiet {
-                let warm_count = setup.fcf().pools[0].warm_start_count;
+                let warm_count = setup.fcf.pools[0].warm_start_count;
                 let _ = ctx.stderr.write_line(&format!(
                     "Resume: loaded {warm_count} cuts per stage, \
                      resuming from iteration {completed}."
@@ -445,6 +430,28 @@ fn apply_training_policy(
         }
         cobre_io::PolicyMode::Fresh => {}
     }
+
+    // Boundary cuts — orthogonal to policy mode. Runs after the match block so
+    // that warm-start and boundary cuts compose correctly: warm-start replaces the
+    // entire FCF first, then boundary cuts overwrite only the terminal pool.
+    if let Some(bp) = root_config.and_then(|c| c.policy.boundary.as_ref()) {
+        let boundary_path = ctx.output_dir.join(&bp.path);
+        #[allow(clippy::cast_possible_truncation)]
+        let state_dim = setup.fcf.state_dimension as u32;
+        let boundary_records =
+            cobre_sddp::load_boundary_cuts(&boundary_path, bp.source_stage, state_dim)
+                .map_err(CliError::from)?;
+        cobre_sddp::inject_boundary_cuts(setup, &boundary_records);
+        if ctx.is_root && !ctx.quiet {
+            let _ = ctx.stderr.write_line(&format!(
+                "Boundary cuts: loaded {} cuts from stage {} of {}",
+                boundary_records.len(),
+                bp.source_stage,
+                boundary_path.display()
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -461,7 +468,7 @@ fn load_policy_for_simulation(
             .write_line("Training disabled. Loading policy for simulation-only mode...");
     }
 
-    let policy_dir = ctx.output_dir.join(setup.policy_path());
+    let policy_dir = ctx.output_dir.join(&setup.policy_path);
     if !policy_dir.exists() {
         return Err(CliError::Internal {
             message: format!(
@@ -478,24 +485,29 @@ fn load_policy_for_simulation(
         .map_err(CliError::from)?;
     setup.replace_fcf(loaded_fcf);
 
-    let basis_cache =
-        cobre_sddp::build_basis_cache_from_checkpoint(setup.num_stages(), &checkpoint.stage_bases);
+    let basis_cache = cobre_sddp::build_basis_cache_from_checkpoint(
+        setup.stage_data.stage_templates.templates.len(),
+        &checkpoint.stage_bases,
+    );
 
-    Ok(cobre_sddp::TrainingResult {
-        iterations: checkpoint.metadata.completed_iterations.into(),
-        final_lb: checkpoint.metadata.final_lower_bound,
-        final_ub: checkpoint
+    Ok(cobre_sddp::TrainingResult::new(
+        checkpoint.metadata.final_lower_bound,
+        checkpoint
             .metadata
             .best_upper_bound
             .unwrap_or(f64::INFINITY),
-        final_ub_std: 0.0,
-        final_gap: 0.0,
-        total_time_ms: 0,
-        reason: "loaded from checkpoint".to_string(),
-        solver_stats_log: Vec::new(),
+        0.0,
+        0.0,
+        checkpoint.metadata.completed_iterations.into(),
+        "loaded from checkpoint".to_string(),
+        0,
         basis_cache,
-        visited_archive: None,
-    })
+        Vec::new(),
+        None,
+        // Baked templates are not stored in policy checkpoints. simulate() re-bakes all stage
+        // templates at startup from the FCF row pool when baked_templates is None.
+        None,
+    ))
 }
 
 /// Set up the communicator, terminal, rayon pool, and resolve the output directory.
@@ -518,13 +530,28 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
     // `comm.topology()` is non-collective and allocation-free after this point.
     let topology = comm.topology().clone();
 
-    let n_threads = resolve_thread_count(args.threads);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
+    let configured_threads = resolve_thread_count(args.threads);
+    let actual_threads = match rayon::ThreadPoolBuilder::new()
+        .num_threads(configured_threads)
         .build_global()
-        .unwrap_or_else(|_| {
-            tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
+    {
+        Ok(()) => configured_threads,
+        Err(err) => {
+            let actual = rayon::current_num_threads();
+            tracing::warn!(
+                configured = configured_threads,
+                actual,
+                %err,
+                "rayon global thread pool init failed; using existing pool",
+            );
+            actual
+        }
+    };
+    if actual_threads == 0 {
+        return Err(CliError::Internal {
+            message: "rayon reported zero active threads — unexpected state".to_string(),
         });
+    }
 
     let solver_version = cobre_solver::highs_version();
 
@@ -533,7 +560,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         crate::summary::print_execution_topology(
             &stderr,
             &topology,
-            n_threads,
+            actual_threads,
             "HiGHS",
             Some(&solver_version),
         );
@@ -544,15 +571,17 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         .clone()
         .unwrap_or_else(|| args.case_dir.join("output"));
     let term_width = crate::progress::resolve_term_width();
+    let render_mode = crate::progress::RenderMode::auto();
 
     Ok(RunContext {
         comm,
         is_root,
         quiet,
-        n_threads,
+        n_threads: actual_threads,
         output_dir,
         term_width,
         stderr,
+        render_mode,
         topology,
         solver_version,
     })
@@ -744,6 +773,12 @@ fn broadcast_and_build_setup(
             OpeningTreeInputs {
                 user_tree,
                 historical_library: opening_tree_library.as_ref(),
+                external_scenario_counts: None,
+                // noise_group_ids: None for non-root ranks — the opened tree
+                // is broadcast from rank 0 when auto-generated, so independent
+                // noise per stage is acceptable here. noise-group wiring for
+                // non-root SAA tree generation is deferred.
+                noise_group_ids: None,
             },
             cobre_stochastic::ClassSchemes {
                 inflow: Some(training_src.inflow_scheme),
@@ -791,32 +826,30 @@ fn build_study_setup(
     hydro_models: PrepareHydroModelsResult,
 ) -> Result<StudySetup, CliError> {
     let stopping_rule_set = stopping_rules_from_broadcast(bcast_config);
-    let cut_selection = std::mem::replace(
-        &mut bcast_config.cut_selection,
-        BroadcastCutSelection::Disabled,
-    )
-    .into_strategy();
-    let mut setup = StudySetup::from_broadcast_params(
+    let cut_selection = bcast_config.cut_selection.take();
+    let config = ConstructionConfig {
+        seed: bcast_config.seed,
+        forward_passes: bcast_config.forward_passes,
+        stopping_rule_set,
+        n_scenarios: bcast_config.n_scenarios,
+        io_channel_capacity: usize::try_from(bcast_config.io_channel_capacity).unwrap_or(64),
+        policy_path: bcast_config.policy_path.clone(),
+        inflow_method: bcast_config.inflow_method.clone(),
+        cut_selection,
+        cut_activity_tolerance: bcast_config.cut_activity_tolerance,
+        basis_activity_window: bcast_config.basis_activity_window,
+        budget: bcast_config.budget,
+        export_states: bcast_config.export_states,
+    };
+    StudySetup::from_broadcast_params(
         system,
         stochastic,
-        bcast_config.seed,
-        bcast_config.forward_passes,
-        stopping_rule_set,
-        bcast_config.n_scenarios,
-        usize::try_from(bcast_config.io_channel_capacity).unwrap_or(64),
-        bcast_config.policy_path.clone(),
-        bcast_config.inflow_method.clone(),
-        cut_selection,
-        bcast_config.cut_activity_tolerance,
-        bcast_config.angular_pruning,
+        config,
         hydro_models,
         &bcast_config.training_source,
         &bcast_config.simulation_source,
     )
-    .map_err(CliError::from)?;
-    setup.set_export_states(bcast_config.export_states);
-    setup.set_budget(bcast_config.budget);
-    Ok(setup)
+    .map_err(CliError::from)
 }
 
 /// Print summaries, export stochastic artifacts, and write the scaling report.
@@ -829,7 +862,7 @@ fn run_pre_training(
     root_estimation_path: Option<cobre_sddp::EstimationPath>,
 ) -> Result<(), CliError> {
     if !ctx.quiet && ctx.is_root {
-        let hydro_summary = build_hydro_model_summary(setup.hydro_models(), system);
+        let hydro_summary = build_hydro_model_summary(&setup.hydro_models, system);
         crate::summary::print_hydro_model_summary(&ctx.stderr, &hydro_summary);
     }
 
@@ -839,7 +872,7 @@ fn run_pre_training(
             let provenance = cobre_sddp::build_provenance_report(
                 path,
                 root_estimation_report,
-                setup.stochastic().provenance(),
+                setup.stochastic.provenance(),
                 system.hydros().len(),
             );
             if !ctx.quiet {
@@ -857,7 +890,7 @@ fn run_pre_training(
     if ctx.is_root && root_config.is_some_and(|c| c.exports.stochastic) {
         export_stochastic_artifacts(
             &ctx.output_dir,
-            setup.stochastic(),
+            &setup.stochastic,
             system,
             root_estimation_report,
             ctx.quiet,
@@ -867,11 +900,11 @@ fn run_pre_training(
 
     if ctx.is_root {
         let scaling_path = ctx.output_dir.join("training/scaling_report.json");
-        cobre_io::write_scaling_report(&scaling_path, setup.scaling_report()).map_err(|e| {
-            CliError::Internal {
+        cobre_io::write_scaling_report(&scaling_path, &setup.stage_data.scaling_report).map_err(
+            |e| CliError::Internal {
                 message: format!("failed to write scaling report: {e}"),
-            }
-        })?;
+            },
+        )?;
     }
 
     ctx.comm.barrier().map_err(|e| CliError::Internal {
@@ -887,7 +920,7 @@ fn run_training_phase(
     ctx: &RunContext<impl Communicator>,
     setup: &mut StudySetup,
 ) -> Result<TrainingPhaseResult, CliError> {
-    let solver_factory = HighsSolver::new;
+    let solver_factory = || HighsSolver::new();
 
     let mut solver = HighsSolver::new().map_err(|e| CliError::Solver {
         message: format!("HiGHS initialisation failed: {e}"),
@@ -903,7 +936,8 @@ fn run_training_phase(
         quiet_rx = None;
         Some(crate::progress::run_progress_thread(
             event_rx,
-            setup.max_iterations(),
+            ctx.render_mode,
+            setup.loop_params.max_iterations,
             ctx.term_width,
         ))
     };
@@ -951,27 +985,39 @@ fn run_training_phase(
     })?;
 
     // Aggregate solver stats from the stats log and allreduce across ranks.
+    // Every rank's backward entries cover *all* ranks (allgatherv in backward.rs
+    // populates the full set so rank 0 can write them to parquet). Filter to this
+    // rank's own contribution here so the subsequent allreduce(Sum) produces
+    // correct global totals instead of multiplying backward by world_size.
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    let my_rank = ctx.comm.rank() as i32;
     let (
         local_first_try,
         local_retried,
         local_failed,
-        local_solve_time_s,
-        local_basis_offered,
-        local_basis_rejections,
-        local_simplex_iter,
-    ) = aggregate_solver_stats(&training_result.solver_stats_log);
+        local_forward_solve_s,
+        local_backward_solve_s,
+    ) = aggregate_solver_stats(&training_result.solver_stats_log, my_rank);
+
+    // Guard the three u64 counters cast to f64 in the training allreduce
+    // buffer below.
+    let training_guard_delta = cobre_sddp::SolverStatsDelta {
+        lp_successes: local_first_try.saturating_add(local_retried),
+        first_try_successes: local_first_try,
+        lp_failures: local_failed,
+        ..cobre_sddp::SolverStatsDelta::default()
+    };
+    check_stats_overflow(&training_guard_delta)?;
 
     #[allow(clippy::cast_precision_loss)]
     let send_stats = [
         local_first_try as f64,
         local_retried as f64,
         local_failed as f64,
-        local_solve_time_s,
-        local_basis_offered as f64,
-        local_basis_rejections as f64,
-        local_simplex_iter as f64,
+        local_forward_solve_s,
+        local_backward_solve_s,
     ];
-    let mut recv_stats = [0.0_f64; 7];
+    let mut recv_stats = [0.0_f64; 5];
     ctx.comm
         .allreduce(&send_stats, &mut recv_stats, ReduceOp::Sum)
         .map_err(|e| CliError::Internal {
@@ -982,19 +1028,27 @@ fn run_training_phase(
         total_first_try,
         total_retried,
         total_failed,
-        total_solve_time_s,
-        total_basis_offered,
-        total_basis_rejections,
-        total_simplex_iter,
+        total_forward_solve_s,
+        total_backward_solve_s,
     ) = (
         recv_stats[0] as u64,
         recv_stats[1] as u64,
         recv_stats[2] as u64,
         recv_stats[3],
-        recv_stats[4] as u64,
-        recv_stats[5] as u64,
-        recv_stats[6] as u64,
+        recv_stats[4],
     );
+
+    // Pull iter-1 gap from the in-memory convergence records. Used in the
+    // summary line "Gap: X% (started at Y%)". The records are not yet
+    // persisted to parquet at this point in the run flow, so reading them
+    // from disk would return None; the in-memory copy is authoritative.
+    let initial_gap_percent = training_output
+        .convergence_records
+        .first()
+        .and_then(|r| r.gap_percent);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);
 
     // Print training summary on rank 0.
     let training_summary = TrainingSummary {
@@ -1010,17 +1064,17 @@ fn run_training_phase(
         upper_bound: training_result.final_ub,
         upper_bound_std: training_result.final_ub_std,
         gap_percent: training_result.final_gap * 100.0,
-        total_cuts_active: training_output.cut_stats.total_active,
-        total_cuts_generated: training_output.cut_stats.total_generated,
+        total_rows_active: training_output.cut_stats.total_active,
+        total_rows_generated: training_output.cut_stats.total_generated,
         total_lp_solves: global_lp_solves,
         total_time_ms: training_result.total_time_ms,
         total_first_try: Some(total_first_try),
         total_retried: Some(total_retried),
         total_failed: Some(total_failed),
-        total_solve_time_seconds: Some(total_solve_time_s),
-        total_basis_offered: Some(total_basis_offered),
-        total_basis_rejections: Some(total_basis_rejections),
-        total_simplex_iterations: Some(total_simplex_iter),
+        total_forward_solve_seconds: Some(total_forward_solve_s),
+        total_backward_solve_seconds: Some(total_backward_solve_s),
+        parallelism: Some(parallelism),
+        initial_gap_percent,
     };
     if !ctx.quiet && ctx.is_root {
         crate::summary::print_training_summary(&ctx.stderr, &training_summary);
@@ -1033,35 +1087,94 @@ fn run_training_phase(
     })
 }
 
-/// Aggregate solver statistics from the training stats log.
+/// Aggregate this rank's own contribution from the training stats log.
+///
+/// Backward entries are replicated across ranks (allgatherv in `backward.rs`
+/// populates the full set on every rank so rank 0 can write them to parquet).
+/// Filtering by the entry's originating rank yields the per-rank local totals
+/// that can then be correctly summed across ranks via `allreduce(Sum)`.
+/// Forward and `lower_bound` entries carry this rank's MPI rank, so they pass
+/// through unchanged.
 fn aggregate_solver_stats(
-    stats_log: &[(u64, &'static str, i32, cobre_sddp::SolverStatsDelta)],
-) -> (u64, u64, u64, f64, u64, u64, u64) {
+    stats_log: &[(
+        u64,
+        &'static str,
+        i32,
+        i32,
+        i32,
+        i32,
+        cobre_sddp::SolverStatsDelta,
+    )],
+    my_rank: i32,
+) -> (u64, u64, u64, f64, f64) {
     let mut first_try = 0u64;
     let mut retried = 0u64;
     let mut failed = 0u64;
-    let mut solve_time = 0.0_f64;
-    let mut basis_offered = 0u64;
-    let mut basis_rejections = 0u64;
-    let mut simplex = 0u64;
-    for (_, _, _, delta) in stats_log {
+    let mut forward_solve_ms = 0.0_f64;
+    let mut backward_solve_ms = 0.0_f64;
+    for (_, phase, _, _, entry_rank, _, delta) in stats_log {
+        if *entry_rank != my_rank {
+            continue;
+        }
         first_try += delta.first_try_successes;
         retried += delta.lp_successes.saturating_sub(delta.first_try_successes);
         failed += delta.lp_failures;
-        solve_time += delta.solve_time_ms;
-        basis_offered += delta.basis_offered;
-        basis_rejections += delta.basis_rejections;
-        simplex += delta.simplex_iterations;
+        match *phase {
+            "forward" => forward_solve_ms += delta.solve_time_ms,
+            "backward" => backward_solve_ms += delta.solve_time_ms,
+            _ => {}
+        }
     }
     (
         first_try,
         retried,
         failed,
-        solve_time / 1000.0,
-        basis_offered,
-        basis_rejections,
-        simplex,
+        forward_solve_ms / 1000.0,
+        backward_solve_ms / 1000.0,
     )
+}
+
+/// Guard-rail for the `u64 as f64` cast performed before packing solver-stats
+/// counters into an MPI `allreduce(Sum)` buffer via [`cobre_sddp::pack_delta_scalars`].
+///
+/// `f64` can represent all integers exactly up to `2^53`. Any `u64` value greater
+/// than `2^53` loses precision when cast to `f64`, which would produce incorrect
+/// global totals after `allreduce(Sum)`. This function checks all nine `u64` fields
+/// of [`cobre_sddp::SolverStatsDelta`] that are cast to `f64` by `pack_delta_scalars`
+/// (indices 0–8) and returns `Err` if any exceeds the limit.
+///
+/// The four `f64` timing fields (`solve_time_ms`, `load_model_time_ms`,
+/// `set_bounds_time_ms`, `basis_set_time_ms`) are native `f64` and excluded from
+/// this check. `basis_reconstructions` and `retry_level_histogram` are not packed
+/// by `pack_delta_scalars` and are also excluded.
+fn check_stats_overflow(delta: &cobre_sddp::SolverStatsDelta) -> Result<(), CliError> {
+    const F64_INTEGER_LIMIT: u64 = 1u64 << 53;
+    for (label, value) in [
+        ("lp_solves", delta.lp_solves),
+        ("lp_successes", delta.lp_successes),
+        ("first_try_successes", delta.first_try_successes),
+        ("lp_failures", delta.lp_failures),
+        ("retry_attempts", delta.retry_attempts),
+        ("basis_offered", delta.basis_offered),
+        (
+            "basis_consistency_failures",
+            delta.basis_consistency_failures,
+        ),
+        ("simplex_iterations", delta.simplex_iterations),
+        ("load_model_count", delta.load_model_count),
+    ] {
+        if value > F64_INTEGER_LIMIT {
+            return Err(CliError::Internal {
+                message: format!(
+                    "solver stats counter '{label}' = {value} \
+                     exceeds 2^53 (f64 integer-precision limit). MPI \
+                     allreduce(Sum) packing would lose precision. \
+                     Reduce iteration count or split the run."
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Run the simulation phase: workspace pool, Parquet writing, and output.
@@ -1072,12 +1185,12 @@ fn run_simulation_phase(
     training_result: &cobre_sddp::TrainingResult,
     hostname: &str,
 ) -> Result<(), CliError> {
-    let solver_factory = HighsSolver::new;
-    let n_scenarios = setup.n_scenarios();
+    let solver_factory = || HighsSolver::new();
+    let n_scenarios = setup.simulation_config.n_scenarios;
     let sim_config = setup.simulation_config();
 
     let mut sim_pool = setup
-        .create_workspace_pool(ctx.n_threads, solver_factory)
+        .create_workspace_pool(&ctx.comm, ctx.n_threads, solver_factory)
         .map_err(|e| CliError::Solver {
             message: format!("HiGHS initialisation failed for simulation pool: {e}"),
         })?;
@@ -1089,6 +1202,7 @@ fn run_simulation_phase(
     } else {
         Some(crate::progress::run_progress_thread(
             sim_event_rx,
+            ctx.render_mode,
             u64::from(n_scenarios),
             ctx.term_width,
         ))
@@ -1130,6 +1244,7 @@ fn run_simulation_phase(
             &ctx.comm,
             &result_tx,
             Some(sim_event_tx),
+            training_result.baked_templates.as_deref(),
             &training_result.basis_cache,
         )
         .map_err(CliError::from);
@@ -1163,19 +1278,22 @@ fn run_simulation_phase(
     // Aggregate simulation cost statistics across all MPI ranks so that
     // the printed mean/std/CI95 reflect ALL scenarios, not just rank 0's.
     let cost_summary =
-        cobre_sddp::aggregate_simulation(&sim_run_result.costs, &sim_config, &ctx.comm).map_err(
+        cobre_sddp::aggregate_simulation(&sim_run_result.costs, sim_config, &ctx.comm).map_err(
             |e| CliError::Internal {
                 message: format!("simulation cost aggregation error: {e}"),
             },
         )?;
 
     if !ctx.quiet && ctx.is_root {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let parallelism = (ctx.n_threads as u32).saturating_mul(ctx.comm.size() as u32);
         print_sim_summary(
             &ctx.stderr,
             n_scenarios,
             sim_time_ms,
             &global_agg,
             &cost_summary,
+            parallelism,
         );
     }
 
@@ -1254,6 +1372,7 @@ fn print_sim_summary(
     sim_time_ms: u64,
     agg: &cobre_sddp::SolverStatsDelta,
     cost_summary: &cobre_sddp::SimulationSummary,
+    parallelism: u32,
 ) {
     crate::summary::print_simulation_summary(
         stderr,
@@ -1269,9 +1388,7 @@ fn print_sim_summary(
             total_retried: Some(agg.lp_successes.saturating_sub(agg.first_try_successes)),
             total_failed_solves: Some(agg.lp_failures),
             total_solve_time_seconds: Some(agg.solve_time_ms / 1000.0),
-            total_basis_offered: Some(agg.basis_offered),
-            total_basis_rejections: Some(agg.basis_rejections),
-            total_simplex_iterations: Some(agg.simplex_iterations),
+            parallelism: Some(parallelism),
         },
     );
 }
@@ -1396,7 +1513,7 @@ fn merge_simulation_metadata<C: Communicator>(
 #[allow(clippy::cast_possible_truncation)]
 fn aggregate_simulation_solver_stats<C: Communicator>(
     comm: &C,
-    local_stats: &[(u32, cobre_sddp::SolverStatsDelta)],
+    local_stats: &[(u32, i32, cobre_sddp::SolverStatsDelta)],
 ) -> Result<
     (
         cobre_sddp::SolverStatsDelta,
@@ -1405,12 +1522,9 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
     CliError,
 > {
     // ── Part A: summary allreduce (F1-002) ────────────────────────────────────
-    let local_agg = cobre_sddp::SolverStatsDelta::aggregate(
-        &local_stats
-            .iter()
-            .map(|(_, d)| d.clone())
-            .collect::<Vec<_>>(),
-    );
+    let local_agg = cobre_sddp::SolverStatsDelta::aggregate(local_stats.iter().map(|(_, _, d)| d));
+    // Guard all nine u64 fields before the u64 → f64 cast in pack_delta_scalars.
+    check_stats_overflow(&local_agg)?;
     let send_scalars = cobre_sddp::pack_delta_scalars(&local_agg);
     let mut recv_scalars = [0.0_f64; cobre_sddp::SOLVER_STATS_DELTA_SCALAR_FIELDS];
     comm.allreduce(&send_scalars, &mut recv_scalars, ReduceOp::Sum)
@@ -1419,9 +1533,15 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
         })?;
     let global_agg = cobre_sddp::unpack_delta_scalars(&recv_scalars);
 
-    // ── Part B: per-scenario allgatherv (F1-003) ──────────────────────────────
+    // ── Part B: per-scenario allgatherv ───────────────────────────────────────
+    // Strip the opening field (always -1 for simulation) before packing — the
+    // MPI wire format does not carry the opening field.
+    let local_stats_stripped: Vec<(u32, cobre_sddp::SolverStatsDelta)> = local_stats
+        .iter()
+        .map(|(id, _opening, delta)| (*id, delta.clone()))
+        .collect();
     let n_ranks = comm.size();
-    let local_buf = cobre_sddp::pack_scenario_stats(local_stats);
+    let local_buf = cobre_sddp::pack_scenario_stats(&local_stats_stripped);
     let local_count = local_buf.len();
 
     // Step 1: exchange per-rank buffer lengths.
@@ -1458,36 +1578,43 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
     Ok((global_agg, global_scenario_stats))
 }
 
-/// Write training checkpoint and results to the output directory.
-///
 /// Convert a [`SolverStatsDelta`] into a [`SolverStatsRow`] for Parquet output.
 ///
 /// The `id` parameter is the row identifier: iteration number for training phases,
-/// scenario ID for the simulation phase.
+/// scenario ID for the simulation phase. `opening` is `Some(ω)` for backward rows
+/// and `None` for forward, `lower_bound`, and simulation rows. `rank` and `worker_id`
+/// are `Some` for backward rows (from allgatherv unpack) and `None` for forward,
+/// `lower_bound`, and simulation rows (no per-worker dimension yet).
 #[allow(clippy::cast_possible_truncation)]
 fn delta_to_stats_row(
     id: u32,
     phase: &str,
     stage: i32,
+    opening: Option<i32>,
+    rank: Option<i32>,
+    worker_id: Option<i32>,
     delta: &cobre_sddp::SolverStatsDelta,
 ) -> cobre_io::SolverStatsRow {
     cobre_io::SolverStatsRow {
         iteration: id,
         phase: phase.to_string(),
         stage,
+        opening,
+        rank,
+        worker_id,
         lp_solves: delta.lp_solves as u32,
         lp_successes: delta.lp_successes as u32,
         lp_retries: delta.lp_successes.saturating_sub(delta.first_try_successes) as u32,
         lp_failures: delta.lp_failures as u32,
         retry_attempts: delta.retry_attempts as u32,
         basis_offered: delta.basis_offered as u32,
-        basis_rejections: delta.basis_rejections as u32,
+        basis_consistency_failures: delta.basis_consistency_failures as u32,
         simplex_iterations: delta.simplex_iterations,
         solve_time_ms: delta.solve_time_ms,
         load_model_time_ms: delta.load_model_time_ms,
-        add_rows_time_ms: delta.add_rows_time_ms,
         set_bounds_time_ms: delta.set_bounds_time_ms,
         basis_set_time_ms: delta.basis_set_time_ms,
+        basis_reconstructions: delta.basis_reconstructions,
         retry_level_histogram: delta.retry_level_histogram.clone(),
     }
 }
@@ -1501,12 +1628,13 @@ struct WriteTrainingArgs<'a> {
     setup: &'a StudySetup,
     training_result: &'a cobre_sddp::TrainingResult,
     output_ctx: &'a cobre_io::OutputContext,
+    hydro_models: &'a cobre_sddp::PrepareHydroModelsResult,
     quiet: bool,
     stderr: &'a Term,
 }
 
 /// Write training artifacts: policy checkpoint, training results, solver stats,
-/// and cut selection records. Called immediately after training completes, before
+/// and row-selection records. Called immediately after training completes, before
 /// simulation starts.
 fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> {
     if !args.quiet {
@@ -1516,15 +1644,15 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
     }
     let write_start = std::time::Instant::now();
 
-    let policy_dir = args.output_dir.join(args.setup.policy_path());
+    let policy_dir = args.output_dir.join(&args.setup.policy_path);
     crate::policy_io::write_checkpoint(
         &policy_dir,
-        args.setup.fcf(),
+        &args.setup.fcf,
         args.training_result,
         &crate::policy_io::CheckpointParams {
-            max_iterations: args.setup.max_iterations(),
-            forward_passes: args.setup.forward_passes(),
-            seed: args.setup.seed(),
+            max_iterations: args.setup.loop_params.max_iterations,
+            forward_passes: args.setup.loop_params.forward_passes,
+            seed: args.setup.loop_params.seed,
             export_states: args.config.exports.states,
         },
     )?;
@@ -1538,24 +1666,54 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
     )
     .map_err(CliError::from)?;
 
+    if !args.hydro_models.fpha_export_rows.is_empty() {
+        let fpha_path = args
+            .output_dir
+            .join("hydro_models")
+            .join("fpha_hyperplanes.parquet");
+        cobre_io::output::write_fpha_hyperplanes(&fpha_path, &args.hydro_models.fpha_export_rows)
+            .map_err(CliError::from)?;
+    }
+
     // Write training solver stats to training/solver/iterations.parquet.
+    // Each entry in solver_stats_log is a 7-tuple
+    // (iteration, phase, stage, opening, rank, worker_id, delta).
+    // Backward rows carry non-negative opening/rank/worker_id from allgatherv unpack.
+    // Forward/LB rows carry opening=-1 → None; worker_id=-1 → None (no per-worker
+    // dimension yet on those phases).
     if !args.training_result.solver_stats_log.is_empty() {
         let rows: Vec<cobre_io::SolverStatsRow> = args
             .training_result
             .solver_stats_log
             .iter()
-            .map(|(iter, phase, stage, delta)| {
+            .map(|(iter, phase, stage, opening, rank, worker_id, delta)| {
+                let opening_opt = if *opening == -1 { None } else { Some(*opening) };
+                // worker_id == -1 means "no per-worker dimension" → NULL in parquet.
+                let worker_id_opt = if *worker_id == -1 {
+                    None
+                } else {
+                    Some(*worker_id)
+                };
                 #[allow(clippy::cast_possible_truncation)] // iteration count fits in u32
-                delta_to_stats_row(*iter as u32, phase, *stage, delta)
+                let id = *iter as u32;
+                delta_to_stats_row(
+                    id,
+                    phase,
+                    *stage,
+                    opening_opt,
+                    Some(*rank),
+                    worker_id_opt,
+                    delta,
+                )
             })
             .collect();
         cobre_io::write_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
     }
 
-    // Write per-stage cut selection records to training/cut_selection/iterations.parquet.
+    // Write per-stage row-selection records to training/cut_selection/iterations.parquet.
     if !args.training_output.cut_selection_records.is_empty() {
         let parquet_config = cobre_io::ParquetWriterConfig::default();
-        cobre_io::write_cut_selection_records(
+        cobre_io::write_row_selection_records(
             args.output_dir,
             &args.training_output.cut_selection_records,
             &parquet_config,
@@ -1595,11 +1753,15 @@ fn write_simulation_outputs(args: &WriteSimulationArgs<'_>) -> Result<(), CliErr
         .map_err(CliError::from)?;
 
     // Write simulation solver stats to simulation/solver/iterations.parquet.
+    // Simulation has no opening dimension and no per-worker dimension yet;
+    // opening, rank, and worker_id are all None.
     if !args.sim_solver_stats.is_empty() {
         let rows: Vec<cobre_io::SolverStatsRow> = args
             .sim_solver_stats
             .iter()
-            .map(|(scenario_id, delta)| delta_to_stats_row(*scenario_id, "simulation", -1, delta))
+            .map(|(scenario_id, delta)| {
+                delta_to_stats_row(*scenario_id, "simulation", -1, None, None, None, delta)
+            })
             .collect();
         cobre_io::write_simulation_solver_stats(args.output_dir, &rows).map_err(CliError::from)?;
     }
@@ -1728,8 +1890,22 @@ fn export_stochastic_artifacts(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::panic
+)]
 mod tests {
-    use super::resolve_thread_count;
+    use super::{check_stats_overflow, delta_to_stats_row, resolve_thread_count};
+    use cobre_sddp::SolverStatsDelta;
+
+    fn make_delta(lp_solves: u64) -> SolverStatsDelta {
+        SolverStatsDelta {
+            lp_solves,
+            ..SolverStatsDelta::default()
+        }
+    }
 
     #[test]
     fn test_resolve_thread_count_cli_value() {
@@ -1739,5 +1915,116 @@ mod tests {
     #[test]
     fn test_resolve_thread_count_default() {
         assert_eq!(resolve_thread_count(Some(1)), 1);
+    }
+
+    #[test]
+    fn test_delta_to_stats_row_backward_carries_opening_rank_worker() {
+        // Backward rows must carry Some(opening), Some(rank), Some(worker_id).
+        let delta = make_delta(10);
+        let row = delta_to_stats_row(1, "backward", 2, Some(0), Some(1), Some(3), &delta);
+        assert_eq!(row.opening, Some(0));
+        assert_eq!(row.rank, Some(1));
+        assert_eq!(row.worker_id, Some(3));
+        assert_eq!(row.stage, 2);
+        assert_eq!(row.phase, "backward");
+        assert_eq!(row.lp_solves, 10);
+    }
+
+    #[test]
+    fn test_delta_to_stats_row_forward_opening_and_worker_id_are_none() {
+        // Forward rows must carry None for opening and worker_id; rank is Some.
+        // forward rows use stage = real stage index, not -1.
+        let delta = make_delta(4);
+        let row = delta_to_stats_row(1, "forward", 0, None, Some(0), None, &delta);
+        assert_eq!(row.opening, None);
+        assert_eq!(row.rank, Some(0));
+        assert_eq!(row.worker_id, None);
+        assert_eq!(row.stage, 0);
+        assert_eq!(row.lp_solves, 4);
+    }
+
+    #[test]
+    fn test_delta_to_stats_row_simulation_rank_and_worker_id_are_none() {
+        // Simulation rows must carry None for opening, rank, and worker_id.
+        let delta = make_delta(7);
+        let row = delta_to_stats_row(42, "simulation", -1, None, None, None, &delta);
+        assert_eq!(row.opening, None);
+        assert_eq!(row.rank, None);
+        assert_eq!(row.worker_id, None);
+        assert_eq!(row.iteration, 42);
+    }
+
+    // ── overflow guard tests ──────────────────────────────────────────────────
+
+    fn delta_with_field(field: &str, value: u64) -> SolverStatsDelta {
+        let mut d = SolverStatsDelta::default();
+        match field {
+            "lp_solves" => d.lp_solves = value,
+            "lp_successes" => d.lp_successes = value,
+            "first_try_successes" => d.first_try_successes = value,
+            "lp_failures" => d.lp_failures = value,
+            "retry_attempts" => d.retry_attempts = value,
+            "basis_offered" => d.basis_offered = value,
+            "basis_consistency_failures" => d.basis_consistency_failures = value,
+            "simplex_iterations" => d.simplex_iterations = value,
+            "load_model_count" => d.load_model_count = value,
+            other => panic!("unknown field: {other}"),
+        }
+        d
+    }
+
+    /// AC1: every u64 counter packed by `pack_delta_scalars` (indices 0–8) must
+    /// be rejected with an error containing "exceeds 2^53" and the field label
+    /// when its value exceeds 2^53.
+    #[test]
+    fn test_overflow_guard_rejects_excessive_counter() {
+        let over_limit = (1u64 << 53) + 1;
+
+        let fields = [
+            "lp_solves",
+            "lp_successes",
+            "first_try_successes",
+            "lp_failures",
+            "retry_attempts",
+            "basis_offered",
+            "basis_consistency_failures",
+            "simplex_iterations",
+            "load_model_count",
+        ];
+
+        for field in fields {
+            let delta = delta_with_field(field, over_limit);
+            let err = check_stats_overflow(&delta).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("exceeds 2^53"),
+                "field '{field}': message was: {msg}"
+            );
+            assert!(
+                msg.contains(field),
+                "field '{field}': label missing in message: {msg}"
+            );
+        }
+    }
+
+    /// AC2: a counter exactly equal to 2^53 (the largest integer exactly
+    /// representable as f64) must NOT trigger the guard.
+    #[test]
+    fn test_overflow_guard_allows_exact_limit() {
+        let at_limit = 1u64 << 53;
+        let delta = SolverStatsDelta {
+            lp_solves: at_limit,
+            lp_successes: at_limit,
+            first_try_successes: at_limit,
+            lp_failures: at_limit,
+            retry_attempts: at_limit,
+            basis_offered: at_limit,
+            basis_consistency_failures: at_limit,
+            simplex_iterations: at_limit,
+            load_model_count: at_limit,
+            ..SolverStatsDelta::default()
+        };
+        check_stats_overflow(&delta)
+            .expect("2^53 is representable in f64 and must not trigger the guard");
     }
 }

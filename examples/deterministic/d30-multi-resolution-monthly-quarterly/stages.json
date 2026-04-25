@@ -1,0 +1,300 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cobre-rs/cobre/refs/heads/main/book/src/schemas/stages.schema.json",
+  "season_definitions": {
+    "cycle_type": "custom",
+    "seasons": [
+      {
+        "id": 0,
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 1,
+        "day_end": 31,
+        "label": "January"
+      },
+      {
+        "id": 1,
+        "month_start": 2,
+        "day_start": 1,
+        "month_end": 2,
+        "day_end": 28,
+        "label": "February"
+      },
+      {
+        "id": 2,
+        "month_start": 3,
+        "day_start": 1,
+        "month_end": 3,
+        "day_end": 31,
+        "label": "March"
+      },
+      {
+        "id": 3,
+        "month_start": 4,
+        "day_start": 1,
+        "month_end": 4,
+        "day_end": 30,
+        "label": "April"
+      },
+      {
+        "id": 4,
+        "month_start": 5,
+        "day_start": 1,
+        "month_end": 5,
+        "day_end": 31,
+        "label": "May"
+      },
+      {
+        "id": 5,
+        "month_start": 6,
+        "day_start": 1,
+        "month_end": 6,
+        "day_end": 30,
+        "label": "June"
+      },
+      {
+        "id": 6,
+        "month_start": 7,
+        "day_start": 1,
+        "month_end": 7,
+        "day_end": 31,
+        "label": "July"
+      },
+      {
+        "id": 7,
+        "month_start": 8,
+        "day_start": 1,
+        "month_end": 8,
+        "day_end": 31,
+        "label": "August"
+      },
+      {
+        "id": 8,
+        "month_start": 9,
+        "day_start": 1,
+        "month_end": 9,
+        "day_end": 30,
+        "label": "September"
+      },
+      {
+        "id": 9,
+        "month_start": 10,
+        "day_start": 1,
+        "month_end": 10,
+        "day_end": 31,
+        "label": "October"
+      },
+      {
+        "id": 10,
+        "month_start": 11,
+        "day_start": 1,
+        "month_end": 11,
+        "day_end": 30,
+        "label": "November"
+      },
+      {
+        "id": 11,
+        "month_start": 12,
+        "day_start": 1,
+        "month_end": 12,
+        "day_end": 31,
+        "label": "December"
+      },
+      {
+        "id": 12,
+        "month_start": 7,
+        "day_start": 1,
+        "month_end": 9,
+        "day_end": 30,
+        "label": "Q3"
+      },
+      {
+        "id": 13,
+        "month_start": 10,
+        "day_start": 1,
+        "month_end": 12,
+        "day_end": 31,
+        "label": "Q4"
+      },
+      {
+        "id": 14,
+        "month_start": 1,
+        "day_start": 1,
+        "month_end": 3,
+        "day_end": 31,
+        "label": "Q1"
+      },
+      {
+        "id": 15,
+        "month_start": 4,
+        "day_start": 1,
+        "month_end": 6,
+        "day_end": 30,
+        "label": "Q2"
+      }
+    ]
+  },
+  "policy_graph": {
+    "type": "finite_horizon",
+    "annual_discount_rate": 0.0
+  },
+  "pre_study_stages": [
+    {
+      "id": -1,
+      "start_date": "2023-12-01",
+      "end_date": "2024-01-01",
+      "season_id": 11
+    }
+  ],
+  "stages": [
+    {
+      "id": 0,
+      "start_date": "2024-01-01",
+      "end_date": "2024-02-01",
+      "season_id": 0,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 1,
+      "start_date": "2024-02-01",
+      "end_date": "2024-03-01",
+      "season_id": 1,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 696.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 2,
+      "start_date": "2024-03-01",
+      "end_date": "2024-04-01",
+      "season_id": 2,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 3,
+      "start_date": "2024-04-01",
+      "end_date": "2024-05-01",
+      "season_id": 3,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 4,
+      "start_date": "2024-05-01",
+      "end_date": "2024-06-01",
+      "season_id": 4,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 744.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 5,
+      "start_date": "2024-06-01",
+      "end_date": "2024-07-01",
+      "season_id": 5,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 720.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 6,
+      "start_date": "2024-07-01",
+      "end_date": "2024-10-01",
+      "season_id": 12,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 2208.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 7,
+      "start_date": "2024-10-01",
+      "end_date": "2025-01-01",
+      "season_id": 13,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 2208.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 8,
+      "start_date": "2025-01-01",
+      "end_date": "2025-04-01",
+      "season_id": 14,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 2160.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    },
+    {
+      "id": 9,
+      "start_date": "2025-04-01",
+      "end_date": "2025-07-01",
+      "season_id": 15,
+      "blocks": [
+        {
+          "id": 0,
+          "name": "SINGLE",
+          "hours": 2184.0
+        }
+      ],
+      "state_variables": { "storage": true, "inflow_lags": true },
+      "num_scenarios": 5
+    }
+  ]
+}

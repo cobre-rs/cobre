@@ -7,7 +7,7 @@
 //! 0.0, and computes `D = V * diag(√λ) * Vᵀ`. This handles non-positive-
 //! definite and rank-deficient matrices naturally.
 //!
-//! The NEWAVE-style transform `b = D * z` where `z ~ N(0, I)` produces
+//! The transform `b = D * z` where `z ~ N(0, I)` produces
 //! spatially correlated noise `b` with covariance `D * Dᵀ = C` (or the nearest
 //! positive-semidefinite approximation to `C` in the spectral sense).
 
@@ -154,17 +154,17 @@ impl SpectralFactor {
     ///
     /// # Panics
     ///
-    /// Panics in debug builds if `independent.len() != self.dim` or
+    /// Panics if `independent.len() != self.dim` or
     /// `correlated.len() != self.dim`.
     pub fn transform(&self, independent: &[f64], correlated: &mut [f64]) {
-        debug_assert_eq!(
+        assert_eq!(
             independent.len(),
             self.dim,
             "SpectralFactor::transform: independent.len()={} != dim={}",
             independent.len(),
             self.dim
         );
-        debug_assert_eq!(
+        assert_eq!(
             correlated.len(),
             self.dim,
             "SpectralFactor::transform: correlated.len()={} != dim={}",

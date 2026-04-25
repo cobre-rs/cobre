@@ -549,7 +549,6 @@ pub struct SystemBuilder {
     pumping_stations: Vec<PumpingStation>,
     contracts: Vec<EnergyContract>,
     non_controllable_sources: Vec<NonControllableSource>,
-    // New fields from tickets 004-007
     stages: Vec<Stage>,
     policy_graph: PolicyGraph,
     penalties: ResolvedPenalties,
@@ -2264,6 +2263,7 @@ mod tests {
             }],
             filling_storage: vec![],
             past_inflows: vec![],
+            recent_observations: vec![],
         };
 
         let system = SystemBuilder::new()

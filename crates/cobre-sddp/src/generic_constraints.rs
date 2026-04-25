@@ -2,7 +2,7 @@
 //!
 //! This module provides `resolve_variable_ref`, which maps a [`VariableRef`]
 //! and block index to a list of `(column_index, coefficient_multiplier)` pairs.
-//! The LP builder (ticket-004) calls this function for each [`cobre_core::LinearTerm`] in a
+//! The LP builder calls this function for each [`cobre_core::LinearTerm`] in a
 //! generic constraint expression to produce the CSC matrix entries.
 //!
 //! ## Column index arithmetic
@@ -78,7 +78,6 @@ pub(crate) struct EntityPositionMaps<'a, S: BuildHasher = std::hash::RandomState
 /// - The variable type references a stub entity with no LP columns (pumping
 ///   stations, contracts, non-controllable sources, diversion, withdrawal).
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub(crate) fn resolve_variable_ref<S: BuildHasher>(
     var_ref: &VariableRef,
     block_idx: usize,
@@ -95,34 +94,11 @@ pub(crate) fn resolve_variable_ref<S: BuildHasher>(
     match var_ref {
         // ── Stage-level hydro variables ────────────────────────────────────
         VariableRef::HydroStorage { hydro_id } => {
-            // Outgoing storage column (stage-level, not per-block).
-            // indexer.storage[h] = storage.start + h
-            if let Some(&pos) = hydro_pos.get(hydro_id) {
-                vec![(indexer.storage.start + pos, 1.0)]
-            } else {
-                vec![]
-            }
+            resolve_hydro_storage(*hydro_id, indexer, hydro_pos)
         }
 
         VariableRef::HydroEvaporation { hydro_id } => {
-            // Maps to the Q_ev column for the matching evaporation hydro.
-            // The evaporation hydro list uses a local index; we must find
-            // the local index by matching the system-level hydro position.
-            if let Some(&sys_pos) = hydro_pos.get(hydro_id) {
-                if let Some(local_idx) = indexer
-                    .evap_hydro_indices
-                    .iter()
-                    .position(|&p| p == sys_pos)
-                {
-                    let q_ev_col = indexer.evap_indices[local_idx].q_ev_col;
-                    vec![(q_ev_col, 1.0)]
-                } else {
-                    // Hydro exists but has no linearized evaporation at this stage.
-                    vec![]
-                }
-            } else {
-                vec![]
-            }
+            resolve_hydro_evaporation(*hydro_id, indexer, hydro_pos)
         }
 
         // ── Block-level hydro variables ────────────────────────────────────
@@ -147,69 +123,19 @@ pub(crate) fn resolve_variable_ref<S: BuildHasher>(
         ),
 
         VariableRef::HydroOutflow { hydro_id, block_id } => {
-            // HydroOutflow expands to turbine + spillage (both with coefficient 1.0).
-            let mut result = Vec::with_capacity(2);
-            result.extend(resolve_block_variable(
-                *hydro_id,
-                *block_id,
-                block_idx,
-                n_blks,
-                indexer.turbine.start,
-                hydro_pos,
-                1.0,
-            ));
-            result.extend(resolve_block_variable(
-                *hydro_id,
-                *block_id,
-                block_idx,
-                n_blks,
-                indexer.spillage.start,
-                hydro_pos,
-                1.0,
-            ));
-            result
+            resolve_hydro_outflow(*hydro_id, *block_id, block_idx, n_blks, indexer, hydro_pos)
         }
 
-        VariableRef::HydroGeneration { hydro_id, block_id } => {
-            // Dispatch depends on the production model for this hydro at this stage.
-            // - FPHA hydros: maps to the generation column at fpha_local_idx * n_blks + blk.
-            // - Constant-productivity hydros: generation = productivity * turbined,
-            //   so map to turbine column with the productivity as the multiplier.
-            if let Some(&sys_pos) = hydro_pos.get(hydro_id) {
-                match production_models.model(sys_pos, stage_idx) {
-                    ResolvedProductionModel::Fpha { .. } => {
-                        // Find this hydro's FPHA local index.
-                        if let Some(fpha_local_idx) = indexer
-                            .fpha_hydro_indices
-                            .iter()
-                            .position(|&p| p == sys_pos)
-                        {
-                            let effective_blk = block_id.unwrap_or(block_idx);
-                            let col =
-                                indexer.generation.start + fpha_local_idx * n_blks + effective_blk;
-                            vec![(col, 1.0)]
-                        } else {
-                            // Should not happen if indexer and production_models are consistent.
-                            vec![]
-                        }
-                    }
-                    ResolvedProductionModel::ConstantProductivity { productivity } => {
-                        // generation = productivity * turbined → map to turbine column.
-                        resolve_block_variable(
-                            *hydro_id,
-                            *block_id,
-                            block_idx,
-                            n_blks,
-                            indexer.turbine.start,
-                            hydro_pos,
-                            *productivity,
-                        )
-                    }
-                }
-            } else {
-                vec![]
-            }
-        }
+        VariableRef::HydroGeneration { hydro_id, block_id } => resolve_hydro_generation(
+            *hydro_id,
+            *block_id,
+            block_idx,
+            n_blks,
+            stage_idx,
+            indexer,
+            production_models,
+            hydro_pos,
+        ),
 
         // ── Thermal ────────────────────────────────────────────────────────
         VariableRef::ThermalGeneration {
@@ -247,30 +173,12 @@ pub(crate) fn resolve_variable_ref<S: BuildHasher>(
         ),
 
         VariableRef::LineExchange { line_id, block_id } => {
-            // Net exchange = forward - reverse: return two entries with opposite signs.
-            if let Some(&pos) = line_pos.get(line_id) {
-                let effective_blk = block_id.unwrap_or(block_idx);
-                let fwd_col = indexer.line_fwd.start + pos * n_blks + effective_blk;
-                let rev_col = indexer.line_rev.start + pos * n_blks + effective_blk;
-                vec![(fwd_col, 1.0), (rev_col, -1.0)]
-            } else {
-                vec![]
-            }
+            resolve_line_exchange(*line_id, *block_id, block_idx, n_blks, indexer, line_pos)
         }
 
         // ── Bus deficit / excess ───────────────────────────────────────────
         VariableRef::BusDeficit { bus_id, block_id } => {
-            // Deficit expands over all S segments for the bus.
-            // Column layout: deficit.start + b_pos * S * n_blks + seg * n_blks + blk
-            if let Some(&b_pos) = bus_pos.get(bus_id) {
-                let effective_blk = block_id.unwrap_or(block_idx);
-                let s = indexer.max_deficit_segments;
-                let base = indexer.deficit.start + b_pos * s * n_blks + effective_blk;
-                // Return one entry per segment (each with coefficient 1.0).
-                (0..s).map(|seg| (base + seg * n_blks, 1.0)).collect()
-            } else {
-                vec![]
-            }
+            resolve_bus_deficit(*bus_id, *block_id, block_idx, n_blks, indexer, bus_pos)
         }
 
         VariableRef::BusExcess { bus_id, block_id } => resolve_block_variable(
@@ -309,6 +217,167 @@ pub(crate) fn resolve_variable_ref<S: BuildHasher>(
         | VariableRef::ContractExport { .. }
         | VariableRef::NonControllableGeneration { .. }
         | VariableRef::NonControllableCurtailment { .. } => vec![],
+    }
+}
+
+/// Resolve `HydroStorage` to its stage-level outgoing storage column.
+///
+/// `indexer.storage[h] = storage.start + h`. Returns empty vec when the hydro
+/// ID is not found in `hydro_pos`.
+fn resolve_hydro_storage<S: BuildHasher>(
+    hydro_id: EntityId,
+    indexer: &StageIndexer,
+    hydro_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    if let Some(&pos) = hydro_pos.get(&hydro_id) {
+        vec![(indexer.storage.start + pos, 1.0)]
+    } else {
+        vec![]
+    }
+}
+
+/// Resolve `HydroEvaporation` to the `Q_ev` column for the matching hydro.
+///
+/// The evaporation list uses a local index; we find it by matching the
+/// system-level hydro position. Returns empty vec when the hydro has no
+/// linearized evaporation at this stage.
+fn resolve_hydro_evaporation<S: BuildHasher>(
+    hydro_id: EntityId,
+    indexer: &StageIndexer,
+    hydro_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    if let Some(&sys_pos) = hydro_pos.get(&hydro_id) {
+        if let Some(local_idx) = indexer
+            .evap_hydro_indices
+            .iter()
+            .position(|&p| p == sys_pos)
+        {
+            let q_ev_col = indexer.evap_indices[local_idx].q_ev_col;
+            vec![(q_ev_col, 1.0)]
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    }
+}
+
+/// Resolve `HydroOutflow` (turbine + spillage) to two block-level columns.
+fn resolve_hydro_outflow<S: BuildHasher>(
+    hydro_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    n_blks: usize,
+    indexer: &StageIndexer,
+    hydro_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    let mut result = Vec::with_capacity(2);
+    result.extend(resolve_block_variable(
+        hydro_id,
+        block_id,
+        block_idx,
+        n_blks,
+        indexer.turbine.start,
+        hydro_pos,
+        1.0,
+    ));
+    result.extend(resolve_block_variable(
+        hydro_id,
+        block_id,
+        block_idx,
+        n_blks,
+        indexer.spillage.start,
+        hydro_pos,
+        1.0,
+    ));
+    result
+}
+
+/// Resolve `HydroGeneration` by dispatching on the production model.
+///
+/// - FPHA hydros: maps to the generation column at `fpha_local_idx * n_blks + blk`.
+/// - Constant-productivity hydros: maps to the turbine column scaled by productivity.
+fn resolve_hydro_generation<S: BuildHasher>(
+    hydro_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    n_blks: usize,
+    stage_idx: usize,
+    indexer: &StageIndexer,
+    production_models: &ProductionModelSet,
+    hydro_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    let Some(&sys_pos) = hydro_pos.get(&hydro_id) else {
+        return vec![];
+    };
+    match production_models.model(sys_pos, stage_idx) {
+        ResolvedProductionModel::Fpha { .. } => {
+            if let Some(fpha_local_idx) = indexer
+                .fpha_hydro_indices
+                .iter()
+                .position(|&p| p == sys_pos)
+            {
+                let effective_blk = block_id.unwrap_or(block_idx);
+                let col = indexer.generation.start + fpha_local_idx * n_blks + effective_blk;
+                vec![(col, 1.0)]
+            } else {
+                // Should not happen if indexer and production_models are consistent.
+                vec![]
+            }
+        }
+        ResolvedProductionModel::ConstantProductivity { productivity } => {
+            // generation = productivity * turbined → map to turbine column.
+            resolve_block_variable(
+                hydro_id,
+                block_id,
+                block_idx,
+                n_blks,
+                indexer.turbine.start,
+                hydro_pos,
+                *productivity,
+            )
+        }
+    }
+}
+
+/// Resolve `LineExchange` (net = forward − reverse) to two columns with signs.
+fn resolve_line_exchange<S: BuildHasher>(
+    line_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    n_blks: usize,
+    indexer: &StageIndexer,
+    line_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    if let Some(&pos) = line_pos.get(&line_id) {
+        let effective_blk = block_id.unwrap_or(block_idx);
+        let fwd_col = indexer.line_fwd.start + pos * n_blks + effective_blk;
+        let rev_col = indexer.line_rev.start + pos * n_blks + effective_blk;
+        vec![(fwd_col, 1.0), (rev_col, -1.0)]
+    } else {
+        vec![]
+    }
+}
+
+/// Resolve `BusDeficit` to one column per deficit segment.
+///
+/// Column layout: `deficit.start + b_pos * S * n_blks + seg * n_blks + blk`.
+fn resolve_bus_deficit<S: BuildHasher>(
+    bus_id: EntityId,
+    block_id: Option<usize>,
+    block_idx: usize,
+    n_blks: usize,
+    indexer: &StageIndexer,
+    bus_pos: &HashMap<EntityId, usize, S>,
+) -> Vec<(usize, f64)> {
+    if let Some(&b_pos) = bus_pos.get(&bus_id) {
+        let effective_blk = block_id.unwrap_or(block_idx);
+        let s = indexer.max_deficit_segments;
+        let base = indexer.deficit.start + b_pos * s * n_blks + effective_blk;
+        // Return one entry per segment (each with coefficient 1.0).
+        (0..s).map(|seg| (base + seg * n_blks, 1.0)).collect()
+    } else {
+        vec![]
     }
 }
 
@@ -493,7 +562,7 @@ mod tests {
 
     // ── ThermalGeneration tests ───────────────────────────────────────────────
 
-    /// AC from ticket: ThermalGeneration block_id=None at block 1 of 3.
+    /// ThermalGeneration block_id=None at block 1 of 3.
     ///
     /// thermal.start = 49, thermal_pos[5] = 0, n_blks = 3, block_idx = 1
     /// Expected column = 49 + 0 * 3 + 1 = 50
@@ -586,7 +655,7 @@ mod tests {
 
     // ── HydroStorage tests ────────────────────────────────────────────────────
 
-    /// AC from ticket: HydroStorage returns stage-level storage column.
+    /// HydroStorage returns stage-level storage column.
     ///
     /// storage.start = 0, hydro_pos[EntityId(10)] = 0
     /// Expected column = 0 + 0 = 0, regardless of block_idx.
@@ -635,7 +704,7 @@ mod tests {
 
     // ── HydroOutflow tests ────────────────────────────────────────────────────
 
-    /// AC from ticket: HydroOutflow returns 2 entries (turbine + spillage).
+    /// HydroOutflow returns 2 entries (turbine + spillage).
     ///
     /// hydro_pos[EntityId(40)] = 3 (position 3), block_id=None, block_idx=0
     /// turbine.start = 13, spillage.start = 25, n_blks = 3
@@ -700,7 +769,7 @@ mod tests {
 
     // ── HydroGeneration tests ─────────────────────────────────────────────────
 
-    /// AC from ticket: HydroGeneration for constant-productivity hydro returns
+    /// HydroGeneration for constant-productivity hydro returns
     /// turbine column with productivity multiplier.
     ///
     /// hydro_pos[EntityId(20)] = 1 → constant productivity 2.5
@@ -733,7 +802,7 @@ mod tests {
         assert_eq!(result, vec![(13 + 1 * 3 + 0, 2.5)]);
     }
 
-    /// AC from ticket: HydroGeneration for FPHA hydro returns generation column.
+    /// HydroGeneration for FPHA hydro returns generation column.
     ///
     /// hydro_pos[EntityId(10)] = 0 → FPHA (local FPHA index = 0)
     /// generation.start = 79, n_blks = 3, block_idx = 0
@@ -931,7 +1000,7 @@ mod tests {
 
     // ── Stub entity tests ─────────────────────────────────────────────────────
 
-    /// AC from ticket: PumpingFlow returns empty vec.
+    /// PumpingFlow returns empty vec.
     #[test]
     fn pumping_flow_returns_empty() {
         let indexer = make_indexer();
@@ -1041,7 +1110,7 @@ mod tests {
 
     // ── Missing entity ID test ─────────────────────────────────────────────────
 
-    /// AC from ticket: missing entity ID returns empty vec (defense-in-depth).
+    /// missing entity ID returns empty vec (defense-in-depth).
     #[test]
     fn missing_entity_id_returns_empty() {
         let indexer = make_indexer();
@@ -1071,7 +1140,7 @@ mod tests {
 
     // ── BusDeficit tests ──────────────────────────────────────────────────────
 
-    /// AC from ticket: BusDeficit with S=2 deficit segments returns 2 column entries.
+    /// BusDeficit with S=2 deficit segments returns 2 column entries.
     ///
     /// bus_pos[EntityId(100)] = 0, deficit.start = 61, max_deficit_segments = 2,
     /// n_blks = 3, block_idx = 0

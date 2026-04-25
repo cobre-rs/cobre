@@ -30,16 +30,18 @@ use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics,
 /// # Mutability Convention
 ///
 /// - Mutating methods (`load_model`, `add_rows`, `set_row_bounds`,
-///   `set_col_bounds`, `solve`, `solve_with_basis`, `reset`) take `&mut self`.
+///   `set_col_bounds`, `solve`) take `&mut self`.
 /// - Methods that write to internal scratch buffers (`get_basis`) take `&mut self`.
 /// - Read-only query methods (`statistics`, `name`) take `&self`.
 ///
-/// # Error Recovery Contract
+/// # Solve-to-solve Contract
 ///
-/// When `solve` or `solve_with_basis` returns `Err`, the solver's
-/// internal state is unspecified. The **caller** is responsible for calling
-/// `reset()` before reusing the instance for another solve sequence. Failing to
-/// call `reset()` after an error may produce incorrect results or panics.
+/// Implementations MAY retain internal state (factorization, simplex basis)
+/// between consecutive `solve` calls on the same instance as a performance
+/// optimization. Callers that need a reproducible reset between runs must
+/// either call `load_model` (which resets topology) or pass an explicit
+/// `Basis` via `solve(Some(&b))`. See [`SolverInterface::solve`] for the
+/// full solve-to-solve contract.
 ///
 /// # Usage as a Generic Bound
 ///
@@ -47,7 +49,7 @@ use crate::types::{Basis, RowBatch, SolutionView, SolverError, SolverStatistics,
 /// use cobre_solver::{SolverInterface, SolutionView, SolverError};
 ///
 /// fn run_solve<S: SolverInterface>(solver: &mut S) -> Result<SolutionView<'_>, SolverError> {
-///     solver.solve()
+///     solver.solve(None)
 /// }
 /// ```
 ///
@@ -63,13 +65,35 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.1.
     fn load_model(&mut self, template: &StageTemplate);
 
-    /// Appends constraint rows to the dynamic constraint region (step 2 of rebuild).
+    /// Append constraint rows to the dynamic constraint region.
     ///
-    /// Requires [`load_model`](Self::load_model) called first and `cuts` to have
-    /// valid CSR data with column indices in `[0, num_cols)` (panic on violation).
+    /// Requires [`load_model`](Self::load_model) called first and
+    /// `rows` to have valid CSR data with column indices in
+    /// `[0, num_cols)` (panic on violation).
+    ///
+    /// # Caller patterns
+    ///
+    /// In a baked-template architecture, the primary LP solve path
+    /// loads pre-materialized templates that already contain all
+    /// active rows as structural rows; that path does not call
+    /// `add_rows`. Three legitimate caller patterns survive:
+    ///
+    /// 1. **Per-iteration delta append**: when a downstream pass
+    ///    needs to extend a previously-baked template with rows
+    ///    generated mid-iteration, `add_rows` appends those delta
+    ///    rows on top of the baked template rather than triggering
+    ///    a re-bake at every stage.
+    /// 2. **Append-only LP managers**: an LP that grows
+    ///    monotonically across iterations (cuts only added, never
+    ///    removed) keeps cumulative setup cost at `O(n)` by
+    ///    appending rather than re-baking. Re-baking the template
+    ///    each iteration would be `O(n^2)` and is not pursued.
+    /// 3. **Test-only fallback**: a no-tracking-map branch in some
+    ///    test contexts performs a full rebuild via
+    ///    [`load_model`](Self::load_model) followed by `add_rows`.
     ///
     /// See Solver Interface Trait SS2.2.
-    fn add_rows(&mut self, cuts: &RowBatch);
+    fn add_rows(&mut self, rows: &RowBatch);
 
     /// Updates row bounds (step 3 of rebuild; patching for scenario realization).
     ///
@@ -89,31 +113,83 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.3a.
     fn set_col_bounds(&mut self, indices: &[usize], lower: &[f64], upper: &[f64]);
 
-    /// Solves the LP, returning a zero-copy view or terminal error after retry exhaustion.
+    /// Solve the LP currently loaded on the backend.
     ///
-    /// Hot-path method encapsulating internal retry logic. Requires [`Self::load_model`]
-    /// called first and scenario patches applied. On error, caller must call
-    /// [`Self::reset`] before reusing. The returned [`SolutionView`] borrows
-    /// solver-internal buffers and is valid until the next `&mut self` call. Call
-    /// [`SolutionView::to_owned`] when the solution must outlive the borrow.
+    /// Hot-path method encapsulating internal retry logic and optional warm-start.
+    /// Requires [`Self::load_model`] called first and scenario patches applied.
+    /// The returned [`SolutionView`] borrows solver-internal buffers and is valid
+    /// until the next `&mut self` call. Call [`SolutionView::to_owned`] when the
+    /// solution must outlive the borrow.
+    ///
+    /// # Contract — solve-to-solve behavior (revised 2026-04-19)
+    ///
+    /// `solve` returns the optimum of the LP currently loaded on the backend,
+    /// subject to the current column/row bounds. If `basis` is `Some(&b)`, the
+    /// solver attempts to warm-start from `b`; a basis that fails
+    /// `isBasisConsistent` returns [`SolverError::BasisInconsistent`].
+    ///
+    /// `basis = Some(&b)` installs `b` before running the simplex.
+    /// `basis = None` warm-starts from whatever basis this instance currently
+    /// holds (itself determined by prior `solve` history on the same instance).
+    ///
+    /// Implementations MAY retain internal state (factorization, simplex basis)
+    /// between consecutive `solve` calls on the same instance as a performance
+    /// optimization. This means the result of a cold-start `solve(None)` can
+    /// depend on prior `solve` history on the same instance through the retained
+    /// internal basis. Callers that need a reproducible reset between runs must
+    /// either call `load_model` (which resets topology) or pass an explicit
+    /// `Basis` via `solve(Some(&b))`.
+    ///
+    /// [`crate::HighsSolver`] retains its internal simplex basis and
+    /// factorization across consecutive `solve` calls as a warm-start
+    /// optimization. This is the primary warm-start mechanism for backward-pass
+    /// workloads where the LP shape is constant across trial points at the same
+    /// (stage, opening). Callers that need solve-independence must pass an
+    /// explicit `Basis` (or call `load_model` to reset topology). The performance
+    /// fix in commit `25f1351` (April 2026) removed an unconditional
+    /// `Highs_clearSolver` call that defeated this optimization;
+    /// cross-sampled-state reproducibility concerns raised during that fix are
+    /// documented at the plan level and deferred to a follow-up design
+    /// (see known-concerns).
     ///
     /// # Errors
     ///
-    /// Returns `Err(SolverError)` when all internal retry attempts exhausted.
-    /// Possible variants: [`SolverError::Infeasible`], [`SolverError::Unbounded`],
-    /// [`SolverError::NumericalDifficulty`], [`SolverError::TimeLimitExceeded`],
-    /// [`SolverError::IterationLimit`], or [`SolverError::InternalError`].
+    /// Returns `Err(SolverError)` after internal retry exhaustion.
+    /// Variants:
+    /// - [`SolverError::Infeasible`] — LP has no feasible solution.
+    /// - [`SolverError::Unbounded`] — objective is unbounded below.
+    /// - [`SolverError::NumericalDifficulty`] — retry sequence exhausted without
+    ///   convergence.
+    /// - [`SolverError::TimeLimitExceeded`] — wall-clock budget exceeded.
+    /// - [`SolverError::IterationLimit`] — simplex iteration budget exceeded
+    ///   across all retry levels.
+    /// - [`SolverError::InternalError`] — FFI layer returned an error.
+    /// - [`SolverError::BasisInconsistent`] — ONLY when `basis = Some(&b)` and
+    ///   `b` fails the solver's consistency check.
     ///
-    /// See Solver Interface Trait SS2.4.
-    fn solve(&mut self) -> Result<SolutionView<'_>, SolverError>;
-
-    /// Clears internal solver state for error recovery or LP structure change.
+    /// # Examples
     ///
-    /// Requires [`Self::load_model`] before next solve. Preserves `SolverStatistics`
-    /// counters; does not zero them.
+    /// ```no_run
+    /// use cobre_solver::{Basis, HighsSolver, SolverInterface};
     ///
-    /// See Solver Interface Trait SS2.6.
-    fn reset(&mut self);
+    /// let mut solver = HighsSolver::new().expect("HiGHS init");
+    /// # let template = unimplemented!();
+    /// solver.load_model(&template);
+    ///
+    /// // Cold-start solve: no stored basis.
+    /// let cold = solver.solve(None).expect("cold solve");
+    /// let cold_obj = cold.objective;
+    ///
+    /// // Warm-start solve: reinstall a previously captured basis.
+    /// let basis: Basis = unimplemented!("previously captured");
+    /// let warm = solver.solve(Some(&basis)).expect("warm solve");
+    /// assert!((warm.objective - cold_obj).abs() < 1e-9);
+    /// ```
+    ///
+    /// See [Solver Interface Trait SS2.4] for the post-conditions on
+    /// [`SolutionView`] lifetime and the thread-safety constraints inherited
+    /// from the trait's `Send` bound.
+    fn solve(&mut self, basis: Option<&Basis>) -> Result<SolutionView<'_>, SolverError>;
 
     /// Writes solver-native `i32` status codes into a caller-owned [`Basis`] buffer.
     ///
@@ -127,23 +203,9 @@ pub trait SolverInterface: Send {
     /// See Solver Interface Trait SS2.7.
     fn get_basis(&mut self, out: &mut Basis);
 
-    /// Injects a basis and solves, returning a zero-copy [`SolutionView`].
-    ///
-    /// Status codes in `basis` are injected directly without per-element enum
-    /// translation. On success the returned view borrows solver-internal buffers
-    /// and is valid until the next `&mut self` call. Call [`SolutionView::to_owned`]
-    /// when the solution must outlive the borrow.
-    ///
-    /// # Errors
-    ///
-    /// Same error contract as [`solve`](Self::solve).
-    ///
-    /// See Solver Interface Trait SS2.5.
-    fn solve_with_basis(&mut self, basis: &Basis) -> Result<SolutionView<'_>, SolverError>;
-
     /// Returns accumulated solve metrics (snapshot of monotonically increasing counters).
     ///
-    /// Statistics accumulate since construction; [`Self::reset`] does not zero them.
+    /// Statistics accumulate since construction; they are never zeroed.
     /// All fields non-negative.
     ///
     /// See Solver Interface Trait SS2.8.
@@ -162,6 +224,12 @@ pub trait SolverInterface: Send {
     ///
     /// See Solver Interface Trait SS2.9.
     fn solver_name_version(&self) -> String;
+
+    /// Record that `reconstruct_basis` applied a stored basis via slot reconciliation.
+    /// Default implementation is a no-op; `HighsSolver` overrides to increment
+    /// `SolverStatistics::basis_reconstructions` by 1.
+    /// A non-zero count indicates basis reconstruction is active on this solver instance.
+    fn record_reconstruction_stats(&mut self) {}
 }
 
 #[cfg(test)]
@@ -176,32 +244,23 @@ mod tests {
     impl SolverInterface for NoopSolver {
         fn load_model(&mut self, _template: &crate::types::StageTemplate) {}
 
-        fn add_rows(&mut self, _cuts: &crate::types::RowBatch) {}
+        fn add_rows(&mut self, _rows: &crate::types::RowBatch) {}
 
         fn set_row_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
         fn set_col_bounds(&mut self, _indices: &[usize], _lower: &[f64], _upper: &[f64]) {}
 
-        fn solve(&mut self) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
-            Err(crate::types::SolverError::InternalError {
-                message: "noop".to_string(),
-                error_code: None,
-            })
-        }
-
-        fn reset(&mut self) {}
-
-        fn get_basis(&mut self, _out: &mut crate::types::Basis) {}
-
-        fn solve_with_basis(
+        fn solve(
             &mut self,
-            _basis: &crate::types::Basis,
+            _basis: Option<&crate::types::Basis>,
         ) -> Result<crate::types::SolutionView<'_>, crate::types::SolverError> {
             Err(crate::types::SolverError::InternalError {
                 message: "noop".to_string(),
                 error_code: None,
             })
         }
+
+        fn get_basis(&mut self, _out: &mut crate::types::Basis) {}
 
         fn statistics(&self) -> crate::types::SolverStatistics {
             crate::types::SolverStatistics::default()
@@ -260,13 +319,22 @@ mod tests {
     }
 
     #[test]
-    fn test_noop_solver_solve_with_basis_returns_internal_error() {
+    fn test_noop_solver_solve_with_optional_basis_returns_internal_error() {
         use crate::types::{Basis, SolverError};
 
         let mut solver = NoopSolver;
         let raw = Basis::new(0, 0);
-        let result = solver.solve_with_basis(&raw);
+        let result = solver.solve(Some(&raw));
         assert!(matches!(result, Err(SolverError::InternalError { .. })));
+    }
+
+    #[test]
+    fn test_unsupported_display_format() {
+        use crate::types::SolverError;
+        let err = SolverError::Unsupported("test message");
+        let formatted = format!("{err}");
+        assert!(formatted.contains("unsupported"), "got {formatted}");
+        assert!(formatted.contains("test message"), "got {formatted}");
     }
 
     #[test]
@@ -309,9 +377,7 @@ mod tests {
         solver.set_row_bounds(&[], &[], &[]);
         solver.set_col_bounds(&[], &[], &[]);
 
-        let result = solver.solve();
+        let result = solver.solve(None);
         assert!(matches!(result, Err(SolverError::InternalError { .. })));
-
-        solver.reset();
     }
 }

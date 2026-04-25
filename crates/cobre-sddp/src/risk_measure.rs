@@ -1,8 +1,7 @@
-//! Risk measure abstraction for cut aggregation and risk-adjusted cost evaluation.
+//! Risk measure for cut aggregation and risk-adjusted cost evaluation.
 //!
-//! [`RiskMeasure`] is a flat enum with two variants — [`RiskMeasure::Expectation`]
-//! and [`RiskMeasure::CVaR`] — dispatched via `match` at each backward pass stage.
-//! This uses enum dispatch for closed variant sets (avoids `Box<dyn>`; enum dispatch for closed variant sets).
+//! [`RiskMeasure`] is an enum dispatched via `match` (enum dispatch for closed
+//! variant sets, avoiding `Box<dyn>`): `Expectation` and `CVaR` variants.
 //!
 //! ## Aggregation semantics
 //!
@@ -34,6 +33,41 @@
 //! assert!((intercept - 20.0).abs() < 1e-10);
 //! ```
 
+/// Per-worker scratch buffers for `CVaR` weight computation.
+///
+/// Holds the three intermediate `Vec`s that `compute_cvar_weights_into` and
+/// `compute_cvar_weights_from_costs_into` write during each backward pass
+/// stage. By storing them here and passing `&mut RiskMeasureScratch` to those
+/// functions, the allocation is paid once on first use (when capacities grow
+/// to `n_openings`) and then reused for all subsequent calls.
+///
+/// Stored as a field of `BackwardAccumulators` so each
+/// rayon worker owns an exclusive instance — no synchronisation needed.
+#[derive(Debug, Default, Clone)]
+pub struct RiskMeasureScratch {
+    /// Per-scenario upper bounds `μ̄_ω = (1-λ)·p_ω + λ·p_ω/α`.
+    pub upper_bounds: Vec<f64>,
+    /// Sorted indices of scenarios, descending by objective/cost value.
+    pub order: Vec<usize>,
+    /// Computed risk weights `μ*_ω` (result of the greedy allocation).
+    pub mu: Vec<f64>,
+}
+
+impl RiskMeasureScratch {
+    /// Create an empty scratch with no pre-allocated capacity.
+    ///
+    /// Capacities grow lazily on the first call to `compute_cvar_weights_into`
+    /// or `compute_cvar_weights_from_costs_into` and are retained thereafter.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            upper_bounds: Vec::new(),
+            order: Vec::new(),
+            mu: Vec::new(),
+        }
+    }
+}
+
 /// Results from solving one backward pass opening at a single stage.
 ///
 /// Each opening produces an intercept and a coefficient vector derived
@@ -58,28 +92,9 @@ pub struct BackwardOutcome {
     pub objective_value: f64,
 }
 
-/// Risk measure for cut aggregation and risk-adjusted cost evaluation.
+/// Risk measure for stage-level cut aggregation.
 ///
-/// Each stage in the training loop holds one `RiskMeasure` value, resolved
-/// from the `risk_measure` field in `stages.json` during configuration
-/// loading. The enum is matched at each backward pass stage to select the
-/// aggregation behaviour.
-///
-/// ## Variants
-///
-/// - [`RiskMeasure::Expectation`]: risk-neutral expected value. Aggregation
-///   weights equal the opening probabilities: `μ*_ω = p(ω)`.
-/// - [`RiskMeasure::CVaR`]: convex combination of expectation and `CVaR`.
-///   Weights are computed by the greedy allocation described in Risk
-///   Measures SS7.
-///
-/// ## Dispatch
-///
-/// Both variants are dispatched via `match` (enum dispatch for closed variant sets,
-/// avoids `Box<dyn>`; enum dispatch for closed variant sets).
-/// `aggregate_cut` and `evaluate_risk` are pure query methods — they do
-/// not return `Result` because all inputs are validated at configuration
-/// load time.
+/// Variants determine how opening-level outcomes are weighted into a single cut.
 ///
 /// ## Examples
 ///
@@ -174,6 +189,51 @@ impl RiskMeasure {
         }
     }
 
+    /// Aggregate per-opening backward pass results into caller-provided buffers.
+    ///
+    /// Buffer variant of [`aggregate_cut`](RiskMeasure::aggregate_cut) that
+    /// writes results into caller-provided buffers using caller-provided
+    /// scratch. No allocation after warm-up.
+    ///
+    /// For `Expectation`, `scratch` is not accessed. For `CVaR`, the three
+    /// internal `Vec`s of `scratch` are grown lazily on first call and
+    /// reused on subsequent calls to avoid per-call heap allocation.
+    ///
+    /// ## Preconditions
+    ///
+    /// - `outcomes.len() == probabilities.len()` (one probability per opening)
+    /// - `outcomes.len() > 0` (at least one opening)
+    /// - `coefficients_out.len() == outcomes[0].coefficients.len()`
+    /// - All `outcomes[i].coefficients` have equal length
+    pub(crate) fn aggregate_cut_into(
+        &self,
+        outcomes: &[BackwardOutcome],
+        probabilities: &[f64],
+        intercept_out: &mut f64,
+        coefficients_out: &mut [f64],
+        scratch: &mut RiskMeasureScratch,
+    ) {
+        debug_assert_eq!(
+            outcomes.len(),
+            probabilities.len(),
+            "aggregate_cut_into: outcomes and probabilities must have the same length"
+        );
+        debug_assert!(
+            !outcomes.is_empty(),
+            "aggregate_cut_into: at least one outcome required"
+        );
+
+        match self {
+            RiskMeasure::Expectation => {
+                aggregate_weighted_into(outcomes, probabilities, intercept_out, coefficients_out);
+            }
+            RiskMeasure::CVaR { alpha, lambda } => {
+                compute_cvar_weights_into(outcomes, probabilities, *alpha, *lambda, scratch);
+                aggregate_weighted_into(outcomes, &scratch.mu, intercept_out, coefficients_out);
+            }
+        }
+    }
+
     /// Evaluate the risk-adjusted scalar cost from a vector of cost values.
     ///
     /// Used for convergence bound computation during the forward pass.
@@ -223,71 +283,120 @@ impl RiskMeasure {
     }
 }
 
+/// Compute `CVaR` weights into caller-provided scratch (continuous knapsack on objective values).
+///
+/// Writes the per-scenario upper bounds, sorted order, and final weights `μ*_ω`
+/// into `scratch`, reusing existing `Vec` capacity. On first call the three
+/// internal `Vec`s grow to `n = outcomes.len()`; subsequent calls with the
+/// same or smaller `n` incur no allocation.
+///
+/// After this call, `scratch.mu[i]` holds the risk weight for scenario `i`.
+pub fn compute_cvar_weights_into(
+    outcomes: &[BackwardOutcome],
+    probabilities: &[f64],
+    alpha: f64,
+    lambda: f64,
+    scratch: &mut RiskMeasureScratch,
+) {
+    let n = outcomes.len();
+
+    scratch.upper_bounds.clear();
+    scratch.upper_bounds.extend(
+        probabilities
+            .iter()
+            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
+    );
+
+    scratch.order.clear();
+    scratch.order.extend(0..n);
+    scratch.order.sort_by(|&i, &j| {
+        outcomes[j]
+            .objective_value
+            .total_cmp(&outcomes[i].objective_value)
+    });
+
+    scratch.mu.clear();
+    scratch.mu.resize(n, 0.0);
+    let mut remaining = 1.0_f64;
+    for &idx in &scratch.order {
+        if remaining <= 0.0 {
+            break;
+        }
+        let alloc = scratch.upper_bounds[idx].min(remaining);
+        scratch.mu[idx] = alloc;
+        remaining -= alloc;
+    }
+}
+
+/// Compute `CVaR` weights into caller-provided scratch (continuous knapsack on scalar cost values).
+///
+/// Variant of [`compute_cvar_weights_into`] that operates on raw `costs: &[f64]` instead of
+/// `&[BackwardOutcome]`. Used by [`RiskMeasure::evaluate_risk`].
+///
+/// After this call, `scratch.mu[i]` holds the risk weight for scenario `i`.
+pub fn compute_cvar_weights_from_costs_into(
+    costs: &[f64],
+    probabilities: &[f64],
+    alpha: f64,
+    lambda: f64,
+    scratch: &mut RiskMeasureScratch,
+) {
+    let n = costs.len();
+
+    scratch.upper_bounds.clear();
+    scratch.upper_bounds.extend(
+        probabilities
+            .iter()
+            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
+    );
+
+    scratch.order.clear();
+    scratch.order.extend(0..n);
+    scratch
+        .order
+        .sort_by(|&i, &j| costs[j].total_cmp(&costs[i]));
+
+    scratch.mu.clear();
+    scratch.mu.resize(n, 0.0);
+    let mut remaining = 1.0_f64;
+    for &idx in &scratch.order {
+        if remaining <= 0.0 {
+            break;
+        }
+        let alloc = scratch.upper_bounds[idx].min(remaining);
+        scratch.mu[idx] = alloc;
+        remaining -= alloc;
+    }
+}
+
 /// Compute `CVaR` weights via greedy allocation (continuous knapsack on objective values).
+///
+/// Allocating compatibility wrapper around [`compute_cvar_weights_into`].
+/// Prefer passing an explicit `&mut RiskMeasureScratch` on hot paths.
 fn compute_cvar_weights(
     outcomes: &[BackwardOutcome],
     probabilities: &[f64],
     alpha: f64,
     lambda: f64,
 ) -> Vec<f64> {
-    let n = outcomes.len();
-    let upper_bounds: Vec<f64> = probabilities
-        .iter()
-        .map(|&p| (1.0 - lambda) * p + lambda * p / alpha)
-        .collect();
-
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&i, &j| {
-        outcomes[j]
-            .objective_value
-            .partial_cmp(&outcomes[i].objective_value)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut mu = vec![0.0_f64; n];
-    let mut remaining = 1.0_f64;
-    for &idx in &order {
-        if remaining <= 0.0 {
-            break;
-        }
-        let alloc = upper_bounds[idx].min(remaining);
-        mu[idx] = alloc;
-        remaining -= alloc;
-    }
-    mu
+    let mut scratch = RiskMeasureScratch::new();
+    compute_cvar_weights_into(outcomes, probabilities, alpha, lambda, &mut scratch);
+    scratch.mu
 }
 
 /// Compute `CVaR` weights via greedy allocation on scalar cost values.
+///
+/// Allocating compatibility wrapper around [`compute_cvar_weights_from_costs_into`].
+/// Prefer passing an explicit `&mut RiskMeasureScratch` on hot paths.
 fn compute_cvar_weights_from_costs(
     costs: &[f64],
     probabilities: &[f64],
     alpha: f64,
     lambda: f64,
 ) -> Vec<f64> {
-    let n = costs.len();
-    let upper_bounds: Vec<f64> = probabilities
-        .iter()
-        .map(|&p| (1.0 - lambda) * p + lambda * p / alpha)
-        .collect();
-
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&i, &j| {
-        costs[j]
-            .partial_cmp(&costs[i])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut mu = vec![0.0_f64; n];
-    let mut remaining = 1.0_f64;
-    for &idx in &order {
-        if remaining <= 0.0 {
-            break;
-        }
-        let alloc = upper_bounds[idx].min(remaining);
-        mu[idx] = alloc;
-        remaining -= alloc;
-    }
-    mu
+    let mut scratch = RiskMeasureScratch::new();
+    compute_cvar_weights_from_costs_into(costs, probabilities, alpha, lambda, &mut scratch);
+    scratch.mu
 }
 
 fn aggregate_weighted(outcomes: &[BackwardOutcome], weights: &[f64]) -> (f64, Vec<f64>) {
@@ -296,14 +405,35 @@ fn aggregate_weighted(outcomes: &[BackwardOutcome], weights: &[f64]) -> (f64, Ve
     let mut agg_intercept = 0.0_f64;
     let mut agg_coefficients = vec![0.0_f64; state_dim];
 
+    aggregate_weighted_into(outcomes, weights, &mut agg_intercept, &mut agg_coefficients);
+
+    (agg_intercept, agg_coefficients)
+}
+
+/// Write weighted-aggregation results into caller-provided output buffers.
+///
+/// Produces bit-identical results to [`aggregate_weighted`] while avoiding
+/// the allocation of a new `Vec<f64>` for coefficients. The caller pre-zeros
+/// both buffers; this function accumulates into them from scratch.
+///
+/// ## Preconditions
+///
+/// - `outcomes.len() == weights.len()`
+/// - `coefficients_out.len() == outcomes[0].coefficients.len()`
+pub(crate) fn aggregate_weighted_into(
+    outcomes: &[BackwardOutcome],
+    weights: &[f64],
+    intercept_out: &mut f64,
+    coefficients_out: &mut [f64],
+) {
+    coefficients_out.fill(0.0);
+    *intercept_out = 0.0;
     for (outcome, &w) in outcomes.iter().zip(weights) {
-        agg_intercept += w * outcome.intercept;
-        for (agg, &coeff) in agg_coefficients.iter_mut().zip(&outcome.coefficients) {
+        *intercept_out += w * outcome.intercept;
+        for (agg, &coeff) in coefficients_out.iter_mut().zip(&outcome.coefficients) {
             *agg += w * coeff;
         }
     }
-
-    (agg_intercept, agg_coefficients)
 }
 
 #[cfg(test)]
@@ -614,5 +744,207 @@ mod tests {
                 lambda: 0.5
             }
         ));
+    }
+
+    #[test]
+    fn aggregate_weighted_into_matches_aggregate_weighted() {
+        // Verify that aggregate_weighted_into produces bit-identical results
+        // to aggregate_weighted for both uniform and non-uniform weights.
+        use super::aggregate_weighted_into;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 2.0, 3.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![4.0, 5.0, 6.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![7.0, 8.0, 9.0]),
+        ];
+        let weights = vec![0.5, 0.3, 0.2];
+
+        // Reference: aggregate_cut (which calls aggregate_weighted)
+        let (ref_intercept, ref_coeffs) =
+            RiskMeasure::Expectation.aggregate_cut(&outcomes, &weights);
+
+        // Under test: aggregate_weighted_into
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 3];
+        aggregate_weighted_into(
+            &outcomes,
+            &weights,
+            &mut intercept_out,
+            &mut coefficients_out,
+        );
+
+        assert_eq!(
+            intercept_out, ref_intercept,
+            "intercept must be bit-identical"
+        );
+        assert_eq!(
+            coefficients_out, ref_coeffs,
+            "coefficients must be bit-identical"
+        );
+    }
+
+    #[test]
+    fn aggregate_cut_into_matches_aggregate_cut_expectation() {
+        // Verify that aggregate_cut_into produces bit-identical results to
+        // aggregate_cut for RiskMeasure::Expectation.
+        use super::RiskMeasureScratch;
+
+        let outcomes = vec![
+            outcome_with_coeffs(5.0, 5.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(15.0, 15.0, vec![0.0, 1.0]),
+        ];
+        let probs = vec![0.6, 0.4];
+
+        let (ref_intercept, ref_coeffs) = RiskMeasure::Expectation.aggregate_cut(&outcomes, &probs);
+
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 2];
+        let mut scratch = RiskMeasureScratch::new();
+        RiskMeasure::Expectation.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept_out,
+            &mut coefficients_out,
+            &mut scratch,
+        );
+
+        assert_eq!(intercept_out, ref_intercept, "intercept bit-identical");
+        assert_eq!(coefficients_out, ref_coeffs, "coefficients bit-identical");
+    }
+
+    #[test]
+    fn aggregate_cut_into_matches_aggregate_cut_cvar() {
+        // Verify that aggregate_cut_into produces bit-identical results to
+        // aggregate_cut for RiskMeasure::CVaR.
+        use super::RiskMeasureScratch;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![0.0, 1.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![1.0, 1.0]),
+        ];
+        let probs = vec![1.0 / 3.0; 3];
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 1.0,
+        };
+
+        let (ref_intercept, ref_coeffs) = rm.aggregate_cut(&outcomes, &probs);
+
+        let mut intercept_out = 0.0_f64;
+        let mut coefficients_out = vec![0.0_f64; 2];
+        let mut scratch = RiskMeasureScratch::new();
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept_out,
+            &mut coefficients_out,
+            &mut scratch,
+        );
+
+        assert_eq!(intercept_out, ref_intercept, "CVaR intercept bit-identical");
+        assert_eq!(
+            coefficients_out, ref_coeffs,
+            "CVaR coefficients bit-identical"
+        );
+    }
+
+    #[test]
+    fn compute_cvar_weights_into_matches_allocating_variant() {
+        // Verify the _into variant produces identical mu output to the
+        // allocating compute_cvar_weights for the same inputs.
+        use super::{RiskMeasureScratch, compute_cvar_weights_into};
+
+        let outcomes = vec![
+            outcome(10.0, 10.0),
+            outcome(20.0, 20.0),
+            outcome(30.0, 30.0),
+            outcome(40.0, 40.0),
+        ];
+        let probs = vec![0.25; 4];
+
+        // Reference: allocating aggregate_cut for CVaR
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 1.0,
+        };
+        let (ref_intercept, _) = rm.aggregate_cut(&outcomes, &probs);
+
+        // Under test: _into variant drives the same greedy allocation
+        let mut scratch = RiskMeasureScratch::new();
+        compute_cvar_weights_into(&outcomes, &probs, 0.5, 1.0, &mut scratch);
+
+        // mu weights produce the same intercept when applied
+        let weighted_intercept: f64 = outcomes
+            .iter()
+            .zip(scratch.mu.iter())
+            .map(|(o, w)| o.intercept * w)
+            .sum();
+        assert!(
+            (weighted_intercept - ref_intercept).abs() < 1e-10,
+            "into variant must produce identical weighted result: got {weighted_intercept}, expected {ref_intercept}"
+        );
+        // Weights sum to 1
+        let weight_sum: f64 = scratch.mu.iter().sum();
+        assert!(
+            (weight_sum - 1.0).abs() < 1e-10,
+            "weights must sum to 1.0, got {weight_sum}"
+        );
+    }
+
+    #[test]
+    fn risk_measure_cvar_aggregate_cut_into_reuses_scratch() {
+        // Call aggregate_cut_into twice with the same RiskMeasureScratch and assert:
+        // (1) identical results on both calls
+        // (2) scratch.mu.capacity() is non-decreasing (no shrink)
+        use super::RiskMeasureScratch;
+
+        let outcomes = vec![
+            outcome_with_coeffs(10.0, 10.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(20.0, 20.0, vec![0.0, 1.0]),
+            outcome_with_coeffs(30.0, 30.0, vec![1.0, 1.0]),
+        ];
+        let probs = vec![1.0 / 3.0; 3];
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.5,
+            lambda: 1.0,
+        };
+
+        let mut scratch = RiskMeasureScratch::new();
+
+        let mut intercept1 = 0.0_f64;
+        let mut coefficients1 = vec![0.0_f64; 2];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept1,
+            &mut coefficients1,
+            &mut scratch,
+        );
+        let cap_after_first = scratch.mu.capacity();
+
+        let mut intercept2 = 0.0_f64;
+        let mut coefficients2 = vec![0.0_f64; 2];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probs,
+            &mut intercept2,
+            &mut coefficients2,
+            &mut scratch,
+        );
+        let cap_after_second = scratch.mu.capacity();
+
+        assert_eq!(
+            intercept1, intercept2,
+            "results must be identical across calls"
+        );
+        assert_eq!(
+            coefficients1, coefficients2,
+            "coefficients must be identical across calls"
+        );
+        assert!(
+            cap_after_second >= cap_after_first,
+            "scratch capacity must not shrink: first={cap_after_first}, second={cap_after_second}"
+        );
     }
 }

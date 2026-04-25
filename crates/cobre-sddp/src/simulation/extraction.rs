@@ -20,9 +20,12 @@
 //! [theta+1, ...)     equipment    — turbine, spillage, thermal, lines, deficit, excess
 //! ```
 //!
-//! Equipment columns (thermals, buses, lines) are read when the indexer was
-//! constructed via [`StageIndexer::with_equipment`]. Stub entity types
-//! (pumping stations, contracts, non-controllables) that contribute zero LP
+//! The full column layout — including turbine, spillage, diversion, thermal,
+//! line, deficit, excess, inflow-slack, FPHA generation, evaporation,
+//! withdrawal slacks, operational violation slacks (outflow/turbine/generation
+//! min/max), NCS generation, and generic constraint slacks — is defined by
+//! [`StageIndexer`] and `StageLayout`.
+//! Stub entity types (pumping stations, contracts) that contribute zero LP
 //! variables remain as zero-valued placeholders.
 
 use std::collections::HashMap;
@@ -31,7 +34,7 @@ use std::ops::Range;
 use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
-use crate::StageIndexer;
+use crate::indexer::StageIndexer;
 use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
@@ -868,12 +871,80 @@ pub fn extract_stage_result(
     }
 }
 
+/// Per-constraint hydro violation costs extracted from a solution view.
+struct HydroViolationCosts {
+    evaporation: f64,
+    withdrawal: f64,
+    outflow_below: f64,
+    outflow_above: f64,
+    turbined: f64,
+    generation: f64,
+}
+
+impl HydroViolationCosts {
+    fn total(&self) -> f64 {
+        self.evaporation
+            + self.withdrawal
+            + self.outflow_below
+            + self.outflow_above
+            + self.turbined
+            + self.generation
+    }
+}
+
+/// Compute the 6 per-constraint hydro violation costs from a solution view.
+fn compute_hydro_violation_costs(
+    indexer: &StageIndexer,
+    col_cost: impl Fn(usize) -> f64,
+    range_sum: impl Fn(std::ops::Range<usize>) -> f64,
+) -> HydroViolationCosts {
+    let evaporation = indexer
+        .evap_indices
+        .iter()
+        .map(|ei| col_cost(ei.f_evap_plus_col) + col_cost(ei.f_evap_minus_col))
+        .sum::<f64>()
+        * COST_SCALE_FACTOR;
+
+    let withdrawal = if indexer.withdrawal_slack_neg.is_empty() {
+        0.0
+    } else {
+        (range_sum(indexer.withdrawal_slack_neg.clone())
+            + range_sum(indexer.withdrawal_slack_pos.clone()))
+            * COST_SCALE_FACTOR
+    };
+
+    let (outflow_below, outflow_above, turbined, generation) = if indexer.has_operational_violations
+    {
+        (
+            range_sum(indexer.outflow_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.outflow_above_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.turbine_below_slack.clone()) * COST_SCALE_FACTOR,
+            range_sum(indexer.generation_below_slack.clone()) * COST_SCALE_FACTOR,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+
+    HydroViolationCosts {
+        evaporation,
+        withdrawal,
+        outflow_below,
+        outflow_above,
+        turbined,
+        generation,
+    }
+}
+
 /// Compute the single-stage cost breakdown from an LP solution view.
 ///
 /// All cost fields are returned in original monetary units. The LP operates
 /// in scaled cost space (objective coefficients divided by [`COST_SCALE_FACTOR`]);
 /// this function multiplies back by [`COST_SCALE_FACTOR`] at the reporting
 /// boundary to recover original units.
+// RATIONALE: 152 lines — enumerates all cost components (thermal, hydro, NCS, load shed,
+// deficit, generic violations) from the LP solution view in a single linear extraction pass.
+// Each component uses a different indexer slice, so no sub-function extraction is possible
+// without propagating the same indexer and scale arguments throughout.
 #[allow(clippy::too_many_lines)]
 fn compute_cost_result(
     view: &SolutionView<'_>,
@@ -884,9 +955,6 @@ fn compute_cost_result(
     ncs_curtailment_cost: f64,
     stage_id: u32,
 ) -> SimulationCostResult {
-    // col_cost yields a scaled cost; multiply by COST_SCALE_FACTOR at the end.
-    // Divide objective_coeffs by col_scale to remove the stray scaling factor
-    // introduced by the prescaler.
     let scale_factor = |col: usize| -> f64 {
         if col < col_scale.len() {
             let d = col_scale[col];
@@ -906,6 +974,7 @@ fn compute_cost_result(
     let theta_contribution = view.primal[indexer.theta] * theta_obj_coeff;
     let future_cost = theta_contribution * COST_SCALE_FACTOR;
     let immediate_cost = (view.objective - theta_contribution) * COST_SCALE_FACTOR;
+
     let thermal_cost = if indexer.thermal.is_empty() {
         0.0
     } else {
@@ -937,10 +1006,6 @@ fn compute_cost_result(
     } else {
         range_sum(indexer.excess.clone()) * COST_SCALE_FACTOR
     };
-
-    // FPHA turbined cost: sum primal[col] * objective[col] over all FPHA turbine
-    // columns. Non-FPHA turbine columns have zero objective coefficient, but we
-    // restrict the sum explicitly to FPHA hydros for clarity.
     let fpha_turbined_cost = if indexer.generation.is_empty() {
         0.0
     } else {
@@ -956,74 +1021,30 @@ fn compute_cost_result(
             .sum::<f64>()
             * COST_SCALE_FACTOR
     };
-
-    // Inflow non-negativity penalty: sum over inflow_slack columns.
     let inflow_penalty_cost = if indexer.inflow_slack.is_empty() {
         0.0
     } else {
         range_sum(indexer.inflow_slack.clone()) * COST_SCALE_FACTOR
     };
-
-    // Hydro violation cost: decomposed into 6 per-constraint components.
-    // Evaporation violation slacks (linearised evaporation constraint).
-    let evaporation_violation_cost: f64 = indexer
-        .evap_indices
-        .iter()
-        .map(|ei| col_cost(ei.f_evap_plus_col) + col_cost(ei.f_evap_minus_col))
-        .sum::<f64>()
-        * COST_SCALE_FACTOR;
-
-    // Water withdrawal violation slacks (both under- and over-withdrawal).
-    let withdrawal_violation_cost = if indexer.withdrawal_slack_neg.is_empty() {
-        0.0
-    } else {
-        (range_sum(indexer.withdrawal_slack_neg.clone())
-            + range_sum(indexer.withdrawal_slack_pos.clone()))
-            * COST_SCALE_FACTOR
-    };
-
-    // Operational violation slacks: 4 separate constraint types.
-    let (
-        outflow_violation_below_cost,
-        outflow_violation_above_cost,
-        turbined_violation_cost,
-        generation_violation_cost,
-    ) = if indexer.has_operational_violations {
-        (
-            range_sum(indexer.outflow_below_slack.clone()) * COST_SCALE_FACTOR,
-            range_sum(indexer.outflow_above_slack.clone()) * COST_SCALE_FACTOR,
-            range_sum(indexer.turbine_below_slack.clone()) * COST_SCALE_FACTOR,
-            range_sum(indexer.generation_below_slack.clone()) * COST_SCALE_FACTOR,
-        )
-    } else {
-        (0.0, 0.0, 0.0, 0.0)
-    };
-
-    let hydro_violation_cost = evaporation_violation_cost
-        + withdrawal_violation_cost
-        + outflow_violation_below_cost
-        + outflow_violation_above_cost
-        + turbined_violation_cost
-        + generation_violation_cost;
-    debug_assert!(
-        (hydro_violation_cost
-            - (outflow_violation_below_cost
-                + outflow_violation_above_cost
-                + turbined_violation_cost
-                + generation_violation_cost
-                + evaporation_violation_cost
-                + withdrawal_violation_cost))
-            .abs()
-            < 1e-6,
-        "hydro_violation_cost must equal sum of components"
-    );
-
-    // Diversion cost: regularisation term on diversion flow variables.
     let diversion_cost = if indexer.diversion.is_empty() {
         0.0
     } else {
         range_sum(indexer.diversion.clone()) * COST_SCALE_FACTOR
     };
+
+    let hv = compute_hydro_violation_costs(indexer, col_cost, range_sum);
+    debug_assert!(
+        (hv.total()
+            - (hv.outflow_below
+                + hv.outflow_above
+                + hv.turbined
+                + hv.generation
+                + hv.evaporation
+                + hv.withdrawal))
+            .abs()
+            < 1e-6,
+        "hydro_violation_cost must equal sum of components"
+    );
 
     SimulationCostResult {
         stage_id,
@@ -1038,13 +1059,13 @@ fn compute_cost_result(
         excess_cost,
         storage_violation_cost: 0.0,
         filling_target_cost: 0.0,
-        hydro_violation_cost,
-        outflow_violation_below_cost,
-        outflow_violation_above_cost,
-        turbined_violation_cost,
-        generation_violation_cost,
-        evaporation_violation_cost,
-        withdrawal_violation_cost,
+        hydro_violation_cost: hv.total(),
+        outflow_violation_below_cost: hv.outflow_below,
+        outflow_violation_above_cost: hv.outflow_above,
+        turbined_violation_cost: hv.turbined,
+        generation_violation_cost: hv.generation,
+        evaporation_violation_cost: hv.evaporation,
+        withdrawal_violation_cost: hv.withdrawal,
         inflow_penalty_cost,
         generic_violation_cost,
         spillage_cost: spillage_cost + diversion_cost,
@@ -1348,7 +1369,7 @@ mod tests {
         EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
         assign_scenarios, extract_stage_result,
     };
-    use crate::StageIndexer;
+    use crate::indexer::StageIndexer;
     use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------

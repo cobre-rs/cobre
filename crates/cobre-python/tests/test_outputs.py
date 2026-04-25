@@ -242,7 +242,7 @@ def test_d28_convergence_has_iterations(d28_output: pathlib.Path) -> None:
     meta_path = d28_output / "training" / "metadata.json"
     meta = json.loads(meta_path.read_text())
     assert "status" in meta
-    assert meta.get("convergence", {}).get("iterations", 0) > 0
+    assert meta.get("iterations", {}).get("completed", 0) > 0
 
     conv_path = d28_output / "training" / "convergence.parquet"
     table = pq.read_table(conv_path)

@@ -21,8 +21,7 @@ fn python3_available() -> bool {
     Command::new("python3")
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 #[test]

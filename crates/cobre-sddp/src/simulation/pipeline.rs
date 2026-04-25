@@ -516,14 +516,12 @@ fn solve_simulation_stage<S: SolverInterface>(
             rebuild_from_downstream: false,
         },
     );
-    let downstream_par_order = {
-        let h = ws.scratch.lag_accumulator.len();
-        if h == 0 {
-            0
-        } else {
-            ws.scratch.downstream_completed_lags.len() / h
-        }
-    };
+    let downstream_par_order = ws
+        .scratch
+        .downstream_completed_lags
+        .len()
+        .checked_div(ws.scratch.lag_accumulator.len())
+        .unwrap_or(0);
     // Pass unscaled_primal as a separate borrow so the borrow checker sees it is
     // disjoint from the &mut ws.scratch.lag_* fields passed alongside it.
     let unscaled_primal_ref: &[f64] = &ws.scratch.unscaled_primal;

@@ -474,7 +474,7 @@ pub fn standardize_historical_windows(
                 let order_h = par.order(h);
                 for (l, slot) in lag_buf.iter_mut().enumerate().take(order_h) {
                     debug_assert!(
-                        max_order + t >= l + 1,
+                        max_order + t > l,
                         "lag index underflow: t={t}, l={l}, max_order={max_order}",
                     );
                     let seq_idx = max_order + t - (l + 1);

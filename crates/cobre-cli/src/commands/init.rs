@@ -99,10 +99,7 @@ fn execute_scaffold(
     })?;
 
     if directory.exists() {
-        let is_nonempty = directory
-            .read_dir()
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false);
+        let is_nonempty = directory.read_dir().is_ok_and(|mut d| d.next().is_some());
 
         if is_nonempty && !force {
             return Err(CliError::Io {

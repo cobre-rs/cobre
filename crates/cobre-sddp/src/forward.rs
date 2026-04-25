@@ -1020,14 +1020,12 @@ pub(crate) fn run_forward_stage<S: SolverInterface + Send>(
             rebuild_from_downstream: false,
         },
     );
-    let downstream_par_order = {
-        let h = ws.scratch.lag_accumulator.len();
-        if h == 0 {
-            0
-        } else {
-            ws.scratch.downstream_completed_lags.len() / h
-        }
-    };
+    let downstream_par_order = ws
+        .scratch
+        .downstream_completed_lags
+        .len()
+        .checked_div(ws.scratch.lag_accumulator.len())
+        .unwrap_or(0);
     crate::noise::accumulate_and_shift_lag_state(
         &mut ws.current_state,
         &ws.scratch.lag_matrix_buf,

@@ -939,11 +939,7 @@ impl BasisStore {
     /// Return the number of scenarios this store was allocated for.
     #[must_use]
     pub fn num_scenarios(&self) -> usize {
-        if self.num_stages == 0 {
-            0
-        } else {
-            self.bases.len() / self.num_stages
-        }
+        self.bases.len().checked_div(self.num_stages).unwrap_or(0)
     }
 
     /// Return the number of stages.

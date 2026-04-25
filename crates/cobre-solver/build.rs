@@ -122,6 +122,18 @@ fn main() {
     add_system_or_include(&mut build, target_env == "msvc", &highs_include);
     add_system_or_include(&mut build, target_env == "msvc", &highs_include_highs);
 
+    // MSVC: link against static CRT (`/MT`) to match the static-CRT HiGHS
+    // build above. Without this the cc-compiled wrappers default to the
+    // dynamic CRT (`/MD`) and the linker rejects the mixed runtime objects
+    // (`LNK2038: 'RuntimeLibrary' mismatch MT_StaticRelease vs
+    // MD_DynamicRelease`). cargo-dist Windows builds happen to set
+    // `+crt-static` via `RUSTFLAGS`, which the cc crate honours, but the
+    // PyO3/maturin Python wheel build does not — so an explicit override
+    // is required for the wheel to link.
+    if target_env == "msvc" {
+        build.static_crt(true);
+    }
+
     // GCC/Clang-specific warning suppression.
     if target_env != "msvc" {
         build.flag("-Wno-unused-function");
@@ -148,9 +160,12 @@ fn main() {
 
     build_cpp.flag_if_supported("-std=c++17");
 
-    // Mirror the MSVC CRT setting used for the HiGHS cmake build above.
+    // Mirror the MSVC CRT setting used for the HiGHS cmake build above:
+    // static CRT (`/MT`) so that the linker accepts the C++ wrapper
+    // alongside HiGHS's C++ objects (which were also compiled `/MT`).
     if target_env == "msvc" {
         build_cpp.flag("/std:c++17");
+        build_cpp.static_crt(true);
     } else {
         build_cpp.flag("-Wno-unused-function");
     }

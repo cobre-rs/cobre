@@ -937,13 +937,19 @@ pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
                     .resize(pop, 0u64);
             }
             ws.backward_accum.metadata_sync_contribution[..pop].fill(0);
-            // Grow window contribution buffer monotonically (not cleared per-stage;
-            // cleared once per iteration at the start of run()).
+            // Per-stage clear: slot indices in the contribution buffer are
+            // per-pool. Slot N in pool[s] is a different cut than slot N in
+            // pool[s+1], but the buffer is shared across all stages within an
+            // iteration. Without this clear, bits set while processing stage
+            // s+1 (binding observations on pool[s+1] cuts) leak into stage
+            // s's sync (incorrectly setting active_window bit 0 on pool[s]
+            // cuts at the same slot index).
             if ws.backward_accum.metadata_sync_window_contribution.len() < pop {
                 ws.backward_accum
                     .metadata_sync_window_contribution
                     .resize(pop, 0u32);
             }
+            ws.backward_accum.metadata_sync_window_contribution[..pop].fill(0);
             ws.backward_accum
                 .per_opening_stats
                 .resize_with(n_openings, SolverStatsDelta::default);

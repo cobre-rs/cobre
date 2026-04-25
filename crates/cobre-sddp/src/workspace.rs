@@ -385,11 +385,12 @@ pub(crate) struct BackwardAccumulators {
     /// Per-worker sliding-window binding-activity contribution, indexed by cut pool slot.
     ///
     /// Each element is a `u32` bitmask where bit 0 indicates that the cut at
-    /// that slot was binding (dual > tolerance) during at least one trial point
-    /// processed by this worker in the current iteration. Grown monotonically
-    /// via `.resize(pop, 0)` when the pool grows (like `metadata_sync_contribution`),
-    /// but cleared once per iteration (not per stage) because the window
-    /// tracks iteration-level activity across all stages.
+    /// that slot was binding (dual > tolerance) during at least one trial
+    /// point processed by this worker for the current stage. Grown
+    /// monotonically via `.resize(pop, 0)` when the pool grows, and zeroed
+    /// per stage via `.fill(0)` because the slot index is pool-scoped:
+    /// slot `N` in pool `s` and slot `N` in pool `s+1` refer to different
+    /// cuts, so bits must not leak across stages.
     ///
     /// After the parallel region the sequential merge phase ORs contributions
     /// across all workers into `metadata_sync_window_buf` (`BackwardPassState`),

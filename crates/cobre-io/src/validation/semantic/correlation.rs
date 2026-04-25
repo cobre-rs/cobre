@@ -4,7 +4,7 @@
 //! off-diagonal values within [-1.0, 1.0], and inflow-vs-load
 //! same-type matrix-shape compatibility.
 
-use super::super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 use super::CORR_TOLERANCE;
 
 // ── Rules 14-16: Correlation matrix validation ────────────────────────────────

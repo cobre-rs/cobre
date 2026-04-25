@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 // ── Rules 27+29: Season ID range coverage and resolution consistency ──────────
 
@@ -146,11 +146,7 @@ pub(super) fn check_observation_season_alignment(data: &ParsedData, ctx: &mut Va
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date {
-                Some(sid)
-            } else {
-                None
-            }
+            if row.date < end_date { Some(sid) } else { None }
         } else {
             None
         }
@@ -285,11 +281,7 @@ pub(super) fn check_season_observation_coverage(
         let pos = stage_index.partition_point(|(start, _, _)| *start <= row.date);
         let season_id = if pos > 0 {
             let (_, end_date, sid) = stage_index[pos - 1];
-            if row.date < end_date {
-                Some(sid)
-            } else {
-                None
-            }
+            if row.date < end_date { Some(sid) } else { None }
         } else {
             None
         };

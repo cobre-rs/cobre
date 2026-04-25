@@ -59,7 +59,7 @@
 //! |31  | Observation resolution must not be finer than season resolution          | `scenarios/inflow_history.parquet`             | `BusinessRuleViolation`  |
 //! |32  | Each `season_id` in `past_inflows[i].season_ids` must exist in `SeasonMap` | `initial_conditions.json`                    | `BusinessRuleViolation`  |
 
-use super::{schema::ParsedData, ValidationContext};
+use super::{ValidationContext, schema::ParsedData};
 
 mod correlation;
 mod hydro;
@@ -147,6 +147,7 @@ mod tests {
     use super::season::*;
     use super::*;
     use cobre_core::{
+        EntityId,
         entities::{Bus, Hydro, HydroGenerationModel, HydroPenalties, Line, Thermal},
         initial_conditions::InitialConditions,
         penalty::GlobalPenaltyDefaults,
@@ -154,14 +155,13 @@ mod tests {
             BlockMode, NoiseMethod, PolicyGraph, PolicyGraphType, ScenarioSourceConfig, Stage,
             StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use crate::{
         config::Config,
         extensions::{FphaHyperplaneRow, HydroGeometryRow},
         stages::StagesData,
-        validation::{schema::ParsedData, ErrorKind, ValidationContext},
+        validation::{ErrorKind, ValidationContext, schema::ParsedData},
     };
 
     // ── Test helpers ──────────────────────────────────────────────────────────

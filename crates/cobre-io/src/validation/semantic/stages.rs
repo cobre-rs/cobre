@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use cobre_core::temporal::{PolicyGraphType, StageRiskConfig};
 
-use super::super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 use super::PROB_TOLERANCE;
 
 /// Validates policy graph transitions, block durations, and `CVaR` parameters.

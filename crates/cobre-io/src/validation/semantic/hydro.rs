@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 pub(super) fn check_cascade_acyclic(data: &ParsedData, ctx: &mut ValidationContext) {
     if data.hydros.is_empty() {

@@ -338,18 +338,13 @@ Cobre is currently maintained by [@rjmalves](https://github.com/rjmalves). Major
 Before tagging a new release:
 
 1. Update `CHANGELOG.md` with the new version's changes
-2. Update `CLAUDE.md` "Current State" section:
-   - Version number matches `Cargo.toml`
-   - Test count is current (`cargo test --workspace --all-features 2>&1 | grep "test result:" | awk '{sum += $4} END {print sum}'`)
-   - Feature list and known gaps are accurate
-3. Run quality checks:
+2. Run quality checks:
    ```bash
-   python3 scripts/check_claudemd_version.py
    python3 scripts/check_book_version.py
    python3 scripts/check_python_parity.py --max 0
    ```
-4. Run `cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings`
-5. Tag: `git tag v<version>`
+3. Run `cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings`
+4. Tag: `git tag v<version>`
 
 ## License
 

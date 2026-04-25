@@ -3,7 +3,7 @@
 //! Verifies that stages declaring the Sobol noise method have a
 //! `branching_factor` that is a power of 2.
 
-use super::super::{schema::ParsedData, ErrorKind, ValidationContext};
+use super::super::{ErrorKind, ValidationContext, schema::ParsedData};
 
 /// Warns when a stage uses `QmcSobol` with a non-power-of-2 `branching_factor`.
 ///

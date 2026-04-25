@@ -13,11 +13,10 @@ keywords = ["linear-programming", "optimization", "solver", "highs", "lp"]
 categories = ["science", "mathematics"]
 
 [features]
-default = ["highs"]
-highs = []
+default = []
 # Exposes FFI option-setting helpers for integration tests.
 # Must NOT be enabled in production builds.
-test-support = ["highs"]
+test-support = []
 
 # Override unsafe_code to "allow" for this crate because FFI bindings to HiGHS
 # require unsafe blocks. All other workspace lints are manually replicated here

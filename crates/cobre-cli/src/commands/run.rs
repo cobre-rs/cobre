@@ -45,8 +45,7 @@ use crate::error::CliError;
 use crate::summary::{SimulationSummary, TrainingSummary};
 
 use super::broadcast::{
-    BroadcastConfig, BroadcastCutSelection, BroadcastOpeningTree, broadcast_value,
-    stopping_rules_from_broadcast,
+    BroadcastConfig, BroadcastOpeningTree, broadcast_value, stopping_rules_from_broadcast,
 };
 
 /// Arguments for the `cobre run` subcommand.
@@ -827,11 +826,7 @@ fn build_study_setup(
     hydro_models: PrepareHydroModelsResult,
 ) -> Result<StudySetup, CliError> {
     let stopping_rule_set = stopping_rules_from_broadcast(bcast_config);
-    let cut_selection = std::mem::replace(
-        &mut bcast_config.cut_selection,
-        BroadcastCutSelection::Disabled,
-    )
-    .into_strategy();
+    let cut_selection = bcast_config.cut_selection.take();
     let config = ConstructionConfig {
         seed: bcast_config.seed,
         forward_passes: bcast_config.forward_passes,

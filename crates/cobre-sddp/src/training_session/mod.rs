@@ -22,7 +22,6 @@ use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    SddpError, TrainingConfig,
     backward_pass_state::{BackwardPassInputs, BackwardPassState},
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
@@ -33,11 +32,12 @@ use crate::{
     forward::{build_cut_row_batch_into, sync_forward},
     forward_pass_state::{ForwardPassInputs, ForwardPassState},
     lower_bound::{LbEvalScratchBundle, LbEvalSpec},
-    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
+    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
-    training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
+    training::{broadcast_basis_cache, TrainingOutcome, TrainingResult},
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
+    SddpError, TrainingConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -898,7 +898,9 @@ impl<'a, S: SolverInterface + Send, C: Communicator> TrainingSession<'a, S, C> {
         // starts clear. Placed AFTER cut selection and BEFORE template baking.
         for pool in &mut self.fcf.pools {
             for m in pool.metadata.iter_mut().take(pool.populated_count) {
-                m.active_window = (m.active_window & !crate::basis_reconstruct::SEED_BIT) << 1;
+                // Bit 31 (SEED_BIT) shifts off the top of u32 in the `<< 1` below;
+                // masking it first is redundant.
+                m.active_window <<= 1;
             }
         }
 
@@ -1020,7 +1022,6 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
-        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1029,21 +1030,22 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
     };
     use cobre_solver::{
         Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
+        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
     };
 
     use super::{IterationOutcome, TrainingSession};
     use crate::{
+        context::{StageContext, TrainingContext},
+        cut::fcf::FutureCostFunction,
         CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
         RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
         TrainingConfig,
-        context::{StageContext, TrainingContext},
-        cut::fcf::FutureCostFunction,
     };
 
     // ── Shared helpers (mirrors training.rs test helpers) ──────────────────

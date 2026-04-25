@@ -658,56 +658,19 @@ impl Default for EstimationConfig {
 /// Export flags controlling which outputs are written to disk
 /// (`config.json → exports`).
 ///
-/// The struct uses multiple `bool` fields because each flag maps directly to a
-/// JSON field name in the `exports` section of `config.json`. A state machine
-/// would not improve clarity for a flat set of independent output toggles.
-#[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Only the two flags with active consumers are retained. Keys for removed
+/// fields (`training`, `cuts`, `vertices`, `simulation`, `forward_detail`,
+/// `backward_detail`, `compression`) are silently ignored when present in
+/// legacy `config.json` files.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExportsConfig {
-    /// Export training summary metrics.
-    pub training: bool,
-
-    /// Export row pool (piecewise-linear envelope).
-    pub cuts: bool,
-
     /// Export visited forward-pass trial points to the policy checkpoint.
     pub states: bool,
 
-    /// Export inner approximation vertices.
-    pub vertices: bool,
-
-    /// Export simulation results.
-    pub simulation: bool,
-
-    /// Export per-scenario forward-pass detail.
-    pub forward_detail: bool,
-
-    /// Export per-scenario backward-pass detail.
-    pub backward_detail: bool,
-
     /// Export stochastic preprocessing artifacts to `output/stochastic/`.
     pub stochastic: bool,
-
-    /// Compression algorithm for output files: `"zstd"`, `"lz4"`, or `"none"`.
-    pub compression: Option<String>,
-}
-
-impl Default for ExportsConfig {
-    fn default() -> Self {
-        Self {
-            training: true,
-            cuts: true,
-            states: false,
-            vertices: true,
-            simulation: true,
-            forward_detail: false,
-            backward_detail: false,
-            stochastic: false,
-            compression: None,
-        }
-    }
 }
 
 /// Load and validate `config.json` from `path`.
@@ -1052,8 +1015,6 @@ mod tests {
         assert_eq!(cfg.policy.mode, PolicyMode::Fresh);
         assert_eq!(cfg.policy.path, "./policy");
         assert!(cfg.policy.validate_compatibility);
-        assert!(cfg.exports.training);
-        assert!(cfg.exports.cuts);
     }
 
     /// AC-2: missing `training.forward_passes` → SchemaError with field name.
@@ -1155,14 +1116,8 @@ mod tests {
             "output_mode": "streaming"
           },
           "exports": {
-            "training": true,
-            "cuts": true,
             "states": true,
-            "vertices": true,
-            "simulation": true,
-            "forward_detail": false,
-            "backward_detail": false,
-            "compression": "zstd"
+            "stochastic": true
           }
         }"#;
 
@@ -1198,9 +1153,8 @@ mod tests {
         assert_eq!(cfg.simulation.policy_type, "outer");
 
         // Exports
-        assert!(cfg.exports.training);
-        assert_eq!(cfg.exports.compression.as_deref(), Some("zstd"));
-        assert!(!cfg.exports.forward_detail);
+        assert!(cfg.exports.states);
+        assert!(cfg.exports.stochastic);
     }
 
     /// AC-5: invalid JSON syntax → ParseError.
@@ -1942,5 +1896,30 @@ mod tests {
             threshold_warns.is_empty(),
             "expected no WARN events about threshold deprecation when field is absent, got: {threshold_warns:?}"
         );
+    }
+
+    /// Stale `exports` keys (`training`, `cuts`, `vertices`, `simulation`,
+    /// `forward_detail`, `backward_detail`, `compression`) are silently
+    /// ignored by serde rather than producing a parse error. This preserves
+    /// forward-compat for users with legacy config files.
+    #[test]
+    fn parse_config_ignores_removed_exports_fields() {
+        let json = r#"{
+            "training": { "forward_passes": 4, "stopping_rules": [] },
+            "exports": {
+                "training": true,
+                "cuts": false,
+                "vertices": true,
+                "simulation": true,
+                "forward_detail": true,
+                "backward_detail": true,
+                "compression": "zstd"
+            }
+        }"#;
+        let cfg: Config = serde_json::from_str(json).unwrap();
+        // The two surviving fields use their defaults because the JSON
+        // does not specify them.
+        assert!(!cfg.exports.states);
+        assert!(!cfg.exports.stochastic);
     }
 }

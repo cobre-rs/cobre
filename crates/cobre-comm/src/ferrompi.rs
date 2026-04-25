@@ -200,20 +200,6 @@ impl FerrompiBackend {
     pub fn size(&self) -> usize {
         self.size
     }
-
-    /// Returns a reference to the world communicator.
-    // Reserved for use by the `SharedMemoryProvider` trait implementation.
-    #[allow(dead_code)]
-    pub(crate) fn world(&self) -> &ferrompi::Communicator {
-        &self.world
-    }
-
-    /// Returns a reference to the intra-node shared communicator, if present.
-    // Reserved for use by the `SharedMemoryProvider` trait implementation.
-    #[allow(dead_code)]
-    pub(crate) fn shared(&self) -> Option<&ferrompi::Communicator> {
-        self.shared.as_ref()
-    }
 }
 
 /// Extract a concise library identifier from `MPI_Get_library_version`.

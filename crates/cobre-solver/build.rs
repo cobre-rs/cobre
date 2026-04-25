@@ -18,10 +18,6 @@ fn main() {
     println!("cargo:rerun-if-changed=csrc/highs_wrapper.h");
     println!("cargo:rerun-if-changed=csrc/highs_wrapper_cpp.cpp");
 
-    if env::var("CARGO_FEATURE_HIGHS").is_err() {
-        return;
-    }
-
     let manifest_dir = PathBuf::from(
         env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by Cargo"),
     );

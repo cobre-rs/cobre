@@ -196,7 +196,7 @@ impl<T: CommData> HeapRegion<T> {
     /// Used by backends other than `LocalBackend` (e.g., `FerrompiBackend`)
     /// that reuse `HeapRegion` as their `Region<T>` type but cannot access the
     /// private `data` field directly.
-    #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+    #[cfg(feature = "mpi")]
     pub(crate) fn new(count: usize) -> Self {
         Self {
             data: vec![T::default(); count],
@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+    #[cfg(feature = "mpi")]
     fn test_heap_region_new_crate_visible() {
         let region = HeapRegion::<f64>::new(5);
         assert_eq!(region.as_slice().len(), 5);

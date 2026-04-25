@@ -404,6 +404,16 @@ impl CutPool {
     /// zero-based slot positions. Out-of-bounds indices are silently ignored
     /// in release builds; a debug assertion fires for out-of-bounds access.
     ///
+    /// # Idempotency
+    ///
+    /// Passing an index that is already inactive is a silent no-op: the
+    /// `active` flag stays `false` and `cached_active_count` is not
+    /// decremented a second time, preventing underflow. This means passing
+    /// the same index more than once in `indices` is safe — only the first
+    /// occurrence takes effect. In debug builds a `debug_assert!` fires on
+    /// the second occurrence to surface accidental duplicate-index calls
+    /// during testing.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -421,6 +431,10 @@ impl CutPool {
         for &idx in indices {
             let i = idx as usize;
             debug_assert!(i < self.capacity, "deactivate index {i} out of bounds");
+            debug_assert!(
+                self.active[i],
+                "deactivate called with index {i} that is already inactive"
+            );
             if i < self.capacity && self.active[i] {
                 self.active[i] = false;
                 self.cached_active_count -= 1;
@@ -1020,6 +1034,29 @@ mod tests {
         pool.add_cut(0, 0, 1.0, &[1.0]);
         pool.deactivate(&[]);
         assert_eq!(pool.active_count(), 1);
+    }
+
+    /// `deactivate` silently skips already-inactive indices.
+    ///
+    /// In debug builds the `debug_assert!` would fire on a duplicate
+    /// input, so the test is gated to release-only. When a release
+    /// build receives `&[0, 0, 0]`, the active count drops by exactly
+    /// 1 (not 3) and `active[0]` becomes `false`.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn deactivate_duplicate_index_is_silently_skipped() {
+        let mut pool = CutPool::new(10, 1, 1, 0);
+        pool.add_cut(0, 0, 1.0, &[1.0]);
+        pool.add_cut(1, 0, 2.0, &[2.0]);
+        assert_eq!(pool.active_count(), 2);
+        pool.deactivate(&[0, 0, 0]);
+        assert_eq!(
+            pool.active_count(),
+            1,
+            "duplicate indices must not double-decrement"
+        );
+        assert!(!pool.active[0]);
+        assert!(pool.active[1]);
     }
 
     #[test]

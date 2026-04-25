@@ -34,7 +34,6 @@
     )
 )]
 
-#[cfg(feature = "highs")]
 pub mod ffi;
 
 pub mod trait_def;
@@ -48,11 +47,8 @@ pub use types::{
 pub mod baking;
 pub use baking::bake_rows_into_template;
 
-#[cfg(feature = "highs")]
 pub mod highs;
-#[cfg(feature = "highs")]
 pub use highs::HighsSolver;
-#[cfg(feature = "highs")]
 pub use highs::highs_version;
 
 #[cfg(feature = "test-support")]

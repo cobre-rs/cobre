@@ -139,8 +139,13 @@ pub struct DeactivationSet {
 /// variant per run). All stages use the same strategy. Selection runs
 /// periodically via [`should_run`] to amortize the cost of scanning the pool.
 ///
+/// This type derives [`serde::Serialize`] and [`serde::Deserialize`] so it can
+/// be postcard-serialized directly for MPI broadcast without a wrapper enum.
+/// Variant names and field names are stable wire-format identifiers — do not
+/// rename them without a migration.
+///
 /// [`should_run`]: CutSelectionStrategy::should_run
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CutSelectionStrategy {
     /// Level-1 selection: retain any cut that has ever been binding.
     ///

@@ -1,8 +1,8 @@
 //! Per-invocation runtime-handle sub-struct for one training run.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use cobre_core::TrainingEvent;
 

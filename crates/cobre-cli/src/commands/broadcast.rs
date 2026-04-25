@@ -26,80 +26,6 @@ pub(crate) enum BroadcastStoppingMode {
     All,
 }
 
-/// Postcard-serializable row-selection strategy.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) enum BroadcastCutSelection {
-    Disabled,
-    Level1 {
-        threshold: u64,
-        check_frequency: u64,
-    },
-    Lml1 {
-        memory_window: u64,
-        check_frequency: u64,
-    },
-    Dominated {
-        threshold: f64,
-        check_frequency: u64,
-    },
-}
-
-impl BroadcastCutSelection {
-    pub(crate) fn from_strategy(strategy: Option<&CutSelectionStrategy>) -> Self {
-        match strategy {
-            None => Self::Disabled,
-            Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }) => Self::Level1 {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }) => Self::Lml1 {
-                memory_window: *memory_window,
-                check_frequency: *check_frequency,
-            },
-            Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }) => Self::Dominated {
-                threshold: *threshold,
-                check_frequency: *check_frequency,
-            },
-        }
-    }
-
-    pub(crate) fn into_strategy(self) -> Option<CutSelectionStrategy> {
-        match self {
-            Self::Disabled => None,
-            Self::Level1 {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Level1 {
-                threshold,
-                check_frequency,
-            }),
-            Self::Lml1 {
-                memory_window,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Lml1 {
-                memory_window,
-                check_frequency,
-            }),
-            Self::Dominated {
-                threshold,
-                check_frequency,
-            } => Some(CutSelectionStrategy::Dominated {
-                threshold,
-                check_frequency,
-            }),
-        }
-    }
-}
-
 /// Configuration snapshot broadcast from rank 0 to all ranks.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BroadcastConfig {
@@ -111,7 +37,7 @@ pub(crate) struct BroadcastConfig {
     pub(crate) io_channel_capacity: u32,
     pub(crate) policy_path: String,
     pub(crate) inflow_method: InflowNonNegativityMethod,
-    pub(crate) cut_selection: BroadcastCutSelection,
+    pub(crate) cut_selection: Option<CutSelectionStrategy>,
     pub(crate) cut_activity_tolerance: f64,
     /// Activity-window size for the basis-reconstruction classifier (1..=31).
     pub(crate) basis_activity_window: u32,
@@ -185,7 +111,7 @@ impl BroadcastConfig {
             StoppingMode::Any => BroadcastStoppingMode::Any,
         };
 
-        let cut_selection = BroadcastCutSelection::from_strategy(params.cut_selection.as_ref());
+        let cut_selection = params.cut_selection.clone();
 
         Ok(Self {
             seed: params.seed,

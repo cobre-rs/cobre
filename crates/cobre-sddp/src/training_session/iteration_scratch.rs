@@ -18,8 +18,8 @@
 use cobre_solver::{RowBatch, StageTemplate};
 
 use crate::{
-    TrajectoryRecord, context::StageContext, cut::CutRowMap, lower_bound::LbEvalScratch,
-    lp_builder::PatchBuffer,
+    context::StageContext, cut::CutRowMap, lower_bound::LbEvalScratch, lp_builder::PatchBuffer,
+    TrajectoryRecord,
 };
 
 /// Per-training-run iteration scratch owned by `TrainingSession`.

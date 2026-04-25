@@ -581,6 +581,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobre-mcp"
+version = "0.5.0"
+
+[[package]]
 name = "cobre-sddp"
 version = "0.5.0"
 dependencies = [
@@ -625,6 +629,10 @@ dependencies = [
  "thiserror",
  "tracing",
 ]
+
+[[package]]
+name = "cobre-tui"
+version = "0.5.0"
 
 [[package]]
 name = "cobs"

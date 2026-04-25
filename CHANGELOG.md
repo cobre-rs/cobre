@@ -84,6 +84,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SimulationSummary::stage_stats: Option<Vec<StageSummaryStats>>`
   field and the `StageSummaryStats` struct were removed; the field
   was always `None` in production output and had no consumers.
+- `ExportsConfig` reduced to two flags: `states` and `stochastic`.
+  The seven previously declared fields (`training`, `cuts`,
+  `vertices`, `simulation`, `forward_detail`, `backward_detail`,
+  `compression`) had no runtime consumers and have been removed
+  from the public config surface. Existing `config.json` files
+  that set these keys will continue to load — the keys are
+  silently ignored.
+- Cargo features `tcp = []` and `shm = []` removed from `cobre-comm`
+  (no runtime backends were declared under either feature).
+  `highs = []` removed from `cobre-solver`; the HiGHS FFI is
+  compiled unconditionally. Downstream `Cargo.toml` files that
+  specified `cobre-comm = { features = ["tcp"] }` or
+  `cobre-solver = { features = ["highs"] }` must drop those entries.
 
 ### Verified
 

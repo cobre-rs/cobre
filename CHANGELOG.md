@@ -31,8 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Single-rank runs are unchanged. Previously, rank 0 reported its local count
   against the global total, producing a misleading `50/100` final line on a
   2-rank run.
+- `cobre-comm` now requires `ferrompi >= 0.4.0`. The MPI bitwise-OR allreduce
+  used to synchronize the active-window bitmap is dispatched directly to
+  `MPI_Allreduce` with `MPI_BOR` instead of being emulated via an
+  `allgatherv` + bytewise fold workaround.
 
 ### Removed
+
+- `FerrompiScratch` and the `FerrompiBackend::scratch` interior-mutability
+  field. The native bitwise-OR allreduce no longer needs per-call scratch
+  for counts/displs vectors. `unsafe impl Send + Sync for FerrompiBackend`
+  comments were updated accordingly.
 
 ### Verified
 

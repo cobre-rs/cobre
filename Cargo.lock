@@ -895,13 +895,12 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "ferrompi"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e48d51c95b5db1ebda1e145b277672036498710cb0fbaf7309242b938eff9bc"
+checksum = "c57fba647db90baf33caad2601d1b20a1c5d2df499aef20b2c2d5b29afa8faf7"
 dependencies = [
  "cc",
  "pkg-config",
- "thiserror",
 ]
 
 [[package]]

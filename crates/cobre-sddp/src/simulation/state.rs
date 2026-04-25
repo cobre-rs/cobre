@@ -32,11 +32,12 @@ use cobre_core::TrainingEvent;
 use cobre_solver::{RowBatch, SolverInterface, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
-    build_forward_sampler, ClassDimensions, ForwardSampler, ForwardSamplerConfig,
+    ClassDimensions, ForwardSampler, ForwardSamplerConfig, build_forward_sampler,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 use crate::{
+    FutureCostFunction,
     context::{StageContext, TrainingContext},
     forward::{build_cut_row_batch_into, partition},
     simulation::{
@@ -44,14 +45,13 @@ use crate::{
         error::SimulationError,
         extraction::assign_scenarios,
         pipeline::{
-            dispatch_scenario_result, emit_sim_progress, process_scenario_stages, ScenarioIds,
-            SimulationOutputSpec, SimulationRunResult, WorkerCosts, WorkerStats,
-            SIMULATION_SEED_OFFSET,
+            SIMULATION_SEED_OFFSET, ScenarioIds, SimulationOutputSpec, SimulationRunResult,
+            WorkerCosts, WorkerStats, dispatch_scenario_result, emit_sim_progress,
+            process_scenario_stages,
         },
     },
     solver_stats::SolverStatsDelta,
     workspace::{CapturedBasis, SolverWorkspace},
-    FutureCostFunction,
 };
 
 /// Per-call argument bundle for [`SimulationState::run`].

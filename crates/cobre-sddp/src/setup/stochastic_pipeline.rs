@@ -376,7 +376,7 @@ pub fn prepare_stochastic(
     let opening_tree_library = build_opening_tree_library(&system, training_source)?;
     let external_scenario_counts = compute_external_scenario_counts(&system, training_source);
 
-    // Compute noise group IDs for Pattern C noise sharing.
+    // Compute noise group IDs for noise-group sharing.
     // Groups stages with the same (season_id, year) so weekly stages within
     // the same monthly bucket share noise draws in the opening tree.
     // For uniform monthly studies each stage has a unique group ID, so no

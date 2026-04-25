@@ -1439,7 +1439,7 @@ fn external_library_population_sweep() {
 /// Build a 12-stage monthly system where every stage has a distinct
 /// `(season_id, year)` pair — i.e. every stage gets a unique noise group ID
 /// from `precompute_noise_groups`. This simulates the normal monthly study
-/// layout where Pattern C noise sharing is structurally inactive.
+/// layout where noise-group sharing is structurally inactive.
 ///
 /// Returns the system and an `InSample` scenario source so the test is
 /// deterministic and exercises the common production path.

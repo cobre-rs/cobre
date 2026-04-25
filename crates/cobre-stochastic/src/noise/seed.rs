@@ -53,7 +53,7 @@ pub fn derive_opening_seed(base_seed: u64, opening_index: u32, stage: u32) -> u6
 /// Derive a deterministic seed for grouped forward-pass noise generation.
 ///
 /// Uses `group_id` instead of a per-stage ID, so all stages that belong to
-/// the same noise group draw from the same seed. This enables Pattern C
+/// the same noise group draw from the same seed. This enables noise-group sharing
 /// (weekly stages sharing monthly PAR noise): assign the same group ID to all
 /// stages within a `(season_id, year)` bucket, then call this function with
 /// that group ID to obtain a shared seed.

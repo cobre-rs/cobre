@@ -33,7 +33,7 @@ pub(crate) struct FreshNoiseSpec {
     pub iteration: u32,
     pub scenario: u32,
     pub stage_id: u32,
-    /// Noise group identifier used for seed derivation (Pattern C sharing).
+    /// Noise group identifier used for seed derivation (noise-group sharing).
     ///
     /// Stages within the same `(season_id, year)` bucket share the same
     /// `noise_group_id` so that their noise draws are identical.

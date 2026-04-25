@@ -40,7 +40,7 @@ pub struct StageData {
     /// [`crate::lag_transition::precompute_stage_lag_transitions`].
     pub(crate) stage_lag_transitions: Vec<StageLagTransition>,
 
-    /// Pre-computed noise group assignments for noise sharing in Pattern C.
+    /// Pre-computed noise group assignments for noise sharing via noise-group sharing.
     ///
     /// Stages with the same `(season_id, year)` share a noise group. Computed at
     /// setup time by `precompute_noise_groups`.

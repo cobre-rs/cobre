@@ -51,7 +51,7 @@ pub struct StageContext<'a> {
     /// Populated by `crate::lag_transition::precompute_stage_lag_transitions`
     /// at setup time. Used by the forward pass and simulation pipeline.
     pub stage_lag_transitions: &'a [StageLagTransition],
-    /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
+    /// Noise group IDs for noise-group sharing, indexed by stage array index.
     ///
     /// Stages with the same group ID share the same noise draw in the opening
     /// tree and forward pass. For uniform monthly studies every stage has a

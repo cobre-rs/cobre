@@ -776,7 +776,7 @@ fn broadcast_and_build_setup(
                 external_scenario_counts: None,
                 // noise_group_ids: None for non-root ranks — the opened tree
                 // is broadcast from rank 0 when auto-generated, so independent
-                // noise per stage is acceptable here. Pattern C wiring for
+                // noise per stage is acceptable here. noise-group wiring for
                 // non-root SAA tree generation is deferred.
                 noise_group_ids: None,
             },

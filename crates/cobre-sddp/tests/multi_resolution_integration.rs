@@ -1,6 +1,6 @@
-//! End-to-end integration test for the Pattern D multi-resolution pipeline.
+//! End-to-end integration test for the multi-resolution stage-transition pipeline.
 //!
-//! Exercises all Pattern D feature components together on the D30 test case
+//! Exercises all multi-resolution feature components together on the D30 test case
 //! (6 monthly stages Jan-Jun 2024 + 4 quarterly stages Q3 2024 – Q2 2025),
 //! confirming they compose correctly:
 //!
@@ -86,14 +86,14 @@ impl Communicator for StubComm {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Return the path to the d30-pattern-d-monthly-quarterly example case.
+/// Return the path to the d30-multi-resolution-monthly-quarterly example case.
 fn d30_case_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap()
-        .join("examples/deterministic/d30-pattern-d-monthly-quarterly")
+        .join("examples/deterministic/d30-multi-resolution-monthly-quarterly")
 }
 
 /// Build a `StudySetup` for the D30 case using the config's declared scenario
@@ -118,17 +118,17 @@ fn build_setup(case_dir: &Path, config: &cobre_io::Config) -> StudySetup {
 // Test: structural properties, training, and simulation
 // ---------------------------------------------------------------------------
 
-/// Verify Pattern D structural properties, downstream lag transition fields,
-/// training correctness, and simulation completion for the D30 case.
+/// Verify multi-resolution structural properties, downstream lag transition
+/// fields, training correctness, and simulation completion for the D30 case.
 ///
 /// D30 has 6 monthly stages (Jan-Jun 2024, stage indices 0-5) followed by
 /// 4 quarterly stages (Q3 2024 – Q2 2025, stage indices 6-9). The season map
 /// is `Custom` with 16 seasons: ids 0-11 (monthly) + ids 12-15 (quarterly).
 ///
 /// This test confirms that the multi-resolution pipeline components compose
-/// correctly into a functioning end-to-end Pattern D workflow.
+/// correctly into a functioning end-to-end multi-resolution workflow.
 #[test]
-fn pattern_d_structural_properties_and_training() {
+fn multi_resolution_structural_properties_and_training() {
     let case_dir = d30_case_dir();
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config");

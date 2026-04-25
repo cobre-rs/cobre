@@ -42,7 +42,7 @@ pub struct ClassSchemes {
 /// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals),
 /// a pre-padding external scenario count per stage used to clamp openings
 /// for stages whose external library was padded from fewer raw scenarios,
-/// and per-stage noise group IDs for the Pattern C noise sharing feature.
+/// and per-stage noise group IDs for the noise-group sharing feature.
 ///
 /// When all optional fields are `None` the opening tree is generated from SAA/LHS/QMC
 /// noise depending on each stage's `scenario_config.noise_method`.
@@ -60,7 +60,7 @@ pub struct OpeningTreeInputs<'a> {
     /// configured branching factor. `None` when no entity class uses External
     /// sampling. When `Some`, length must equal the number of study stages.
     pub external_scenario_counts: Option<Vec<usize>>,
-    /// Noise group IDs for Pattern C noise sharing, indexed by stage array index.
+    /// Noise group IDs for noise-group sharing, indexed by stage array index.
     ///
     /// Stages with the same group ID share the same noise draw in the opening
     /// tree, enabling weekly stages within the same monthly bucket to receive

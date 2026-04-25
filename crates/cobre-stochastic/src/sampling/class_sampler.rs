@@ -54,7 +54,7 @@ pub struct ClassSampleRequest {
     pub stage_idx: usize,
     /// Total scenario count across all ranks (for LHS stratification).
     pub total_scenarios: u32,
-    /// Noise group identifier for seed derivation (Pattern C sharing).
+    /// Noise group identifier for seed derivation (noise-group sharing).
     ///
     /// Stages within the same `(season_id, year)` bucket share the same
     /// `noise_group_id` so that their `OutOfSample` noise draws are identical.

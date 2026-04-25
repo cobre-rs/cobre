@@ -1707,7 +1707,7 @@ fn d19_multi_hydro_par_truncation() {
 /// Updated from 1,332,425.292_764_49 after `noise_group_ids` was wired
 /// to the opening tree. D19 has all 3 study stages with
 /// `season_id=0` in year 2024, so `precompute_noise_groups` assigns them
-/// the same group ID. The Pattern C copy path in `generate_opening_tree`
+/// the same group ID. The noise-group copy path in `generate_opening_tree`
 /// therefore makes stages 1 and 2 share stage 0's correlated noise draws,
 /// producing a different — but still deterministic — optimal cost.
 ///
@@ -2785,7 +2785,7 @@ fn d28_decomp_weekly_monthly_loads_and_trains() {
     );
 }
 
-/// D29: Pattern C — weekly stages with PAR(1) noise sharing.
+/// D29: weekly stages with PAR(1) noise-group sharing.
 ///
 /// ## System
 ///
@@ -2800,14 +2800,14 @@ fn d28_decomp_weekly_monthly_loads_and_trains() {
 ///
 /// This is the end-to-end verification that noise group precomputation,
 /// ForwardSampler integration, opening tree integration, and setup wiring
-/// compose correctly for the Pattern C workflow.
+/// compose correctly for the noise-group-sharing workflow.
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "slow: run with --features slow-tests"
 )]
 #[test]
-fn d29_pattern_c_weekly_par() {
-    let case_dir = Path::new("../../examples/deterministic/d29-pattern-c-weekly-par");
+fn d29_weekly_par_noise_sharing() {
+    let case_dir = Path::new("../../examples/deterministic/d29-weekly-par-noise-sharing");
 
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config must parse");
@@ -2894,7 +2894,7 @@ fn d29_pattern_c_weekly_par() {
     );
 }
 
-/// D30: Pattern D — monthly-to-quarterly resolution transition.
+/// D30: monthly-to-quarterly multi-resolution stage transition.
 ///
 /// ## System
 ///
@@ -2909,16 +2909,16 @@ fn d29_pattern_c_weekly_par() {
 /// - Training completes at least 1 iteration with a positive lower bound.
 ///
 /// Full structural and downstream-lag-transition assertions are in the dedicated
-/// `pattern_d_integration.rs` test file, which verifies composition correctness
-/// including noise group IDs, accumulate_downstream flags, rebuild_from_downstream,
-/// and simulation.
+/// `multi_resolution_integration.rs` test file, which verifies composition
+/// correctness including noise group IDs, accumulate_downstream flags,
+/// rebuild_from_downstream, and simulation.
 #[cfg_attr(
     not(feature = "slow-tests"),
     ignore = "slow: run with --features slow-tests"
 )]
 #[test]
-fn d30_pattern_d_monthly_quarterly_loads_and_trains() {
-    let case_dir = Path::new("../../examples/deterministic/d30-pattern-d-monthly-quarterly");
+fn d30_multi_resolution_loads_and_trains() {
+    let case_dir = Path::new("../../examples/deterministic/d30-multi-resolution-monthly-quarterly");
 
     let config_path = case_dir.join("config.json");
     let config = cobre_io::parse_config(&config_path).expect("config must parse");

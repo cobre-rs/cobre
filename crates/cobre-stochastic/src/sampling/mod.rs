@@ -172,10 +172,10 @@ pub struct SampleRequest<'b> {
     pub perm_scratch: &'b mut [usize],
     /// Total scenario count across all ranks (for LHS stratification).
     pub total_scenarios: u32,
-    /// Noise group identifier for seed derivation (Pattern C sharing).
+    /// Noise group identifier for seed derivation (noise-group sharing).
     ///
     /// Stages within the same `(season_id, year)` bucket share the same
-    /// `noise_group_id` so that their noise draws are identical (Pattern C
+    /// `noise_group_id` so that their noise draws are identical (noise-group sharing
     /// sharing). Callers supply
     /// `stage.id as u32` to preserve current per-stage seed behaviour.
     pub noise_group_id: u32,

@@ -493,7 +493,7 @@ fn compute_downstream_transitions(
 /// Stages sharing the same `(season_id, year)` pair are assigned the same
 /// group ID, where `year` is derived from `stage.start_date.year()`. This
 /// allows the forward sampler to draw a single noise sample per group and
-/// broadcast it to all stages in that group (Pattern C: weekly stages with
+/// broadcast it to all stages in that group (noise-group sharing — weekly stages with
 /// monthly PAR noise).
 ///
 /// # Assignment rules

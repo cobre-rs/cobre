@@ -267,6 +267,7 @@ fn execute_inner<C: Communicator>(ctx: &RunContext<C>, args: &RunArgs) -> Result
                 setup: &setup,
                 training_result: &training.result,
                 output_ctx: &training_ctx,
+                hydro_models: &setup.hydro_models,
                 quiet: ctx.quiet,
                 stderr: &ctx.stderr,
             })?;
@@ -530,13 +531,28 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
     // `comm.topology()` is non-collective and allocation-free after this point.
     let topology = comm.topology().clone();
 
-    let n_threads = resolve_thread_count(args.threads);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(n_threads)
+    let configured_threads = resolve_thread_count(args.threads);
+    let actual_threads = match rayon::ThreadPoolBuilder::new()
+        .num_threads(configured_threads)
         .build_global()
-        .unwrap_or_else(|_| {
-            tracing::warn!("rayon global thread pool already initialized; ignoring --threads");
+    {
+        Ok(()) => configured_threads,
+        Err(err) => {
+            let actual = rayon::current_num_threads();
+            tracing::warn!(
+                configured = configured_threads,
+                actual,
+                %err,
+                "rayon global thread pool init failed; using existing pool",
+            );
+            actual
+        }
+    };
+    if actual_threads == 0 {
+        return Err(CliError::Internal {
+            message: "rayon reported zero active threads — unexpected state".to_string(),
         });
+    }
 
     let solver_version = cobre_solver::highs_version();
 
@@ -545,7 +561,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         crate::summary::print_execution_topology(
             &stderr,
             &topology,
-            n_threads,
+            actual_threads,
             "HiGHS",
             Some(&solver_version),
         );
@@ -562,7 +578,7 @@ fn setup_communicator(args: &RunArgs) -> Result<RunContext<impl Communicator>, C
         comm,
         is_root,
         quiet,
-        n_threads,
+        n_threads: actual_threads,
         output_dir,
         term_width,
         stderr,
@@ -990,6 +1006,22 @@ fn run_training_phase(
         local_simplex_iter,
     ) = aggregate_solver_stats(&training_result.solver_stats_log, my_rank);
 
+    // Build a temporary delta with the six u64 fields cast to f64 in the
+    // training allreduce buffer below. `lp_solves`, `retry_attempts`, and
+    // `load_model_count` are not packed in the training buffer; they are
+    // guarded by `check_stats_overflow` in the simulation path via
+    // `aggregate_simulation_solver_stats`.
+    let training_guard_delta = cobre_sddp::SolverStatsDelta {
+        lp_successes: local_first_try.saturating_add(local_retried),
+        first_try_successes: local_first_try,
+        lp_failures: local_failed,
+        basis_offered: local_basis_offered,
+        basis_consistency_failures: local_basis_consistency_failures,
+        simplex_iterations: local_simplex_iter,
+        ..cobre_sddp::SolverStatsDelta::default()
+    };
+    check_stats_overflow(&training_guard_delta)?;
+
     #[allow(clippy::cast_precision_loss)]
     let send_stats = [
         local_first_try as f64,
@@ -1110,6 +1142,49 @@ fn aggregate_solver_stats(
         basis_consistency_failures,
         simplex,
     )
+}
+
+/// Guard-rail for the `u64 as f64` cast performed before packing solver-stats
+/// counters into an MPI `allreduce(Sum)` buffer via [`cobre_sddp::pack_delta_scalars`].
+///
+/// `f64` can represent all integers exactly up to `2^53`. Any `u64` value greater
+/// than `2^53` loses precision when cast to `f64`, which would produce incorrect
+/// global totals after `allreduce(Sum)`. This function checks all nine `u64` fields
+/// of [`cobre_sddp::SolverStatsDelta`] that are cast to `f64` by `pack_delta_scalars`
+/// (indices 0–8) and returns `Err` if any exceeds the limit.
+///
+/// The four `f64` timing fields (`solve_time_ms`, `load_model_time_ms`,
+/// `set_bounds_time_ms`, `basis_set_time_ms`) are native `f64` and excluded from
+/// this check. `basis_reconstructions` and `retry_level_histogram` are not packed
+/// by `pack_delta_scalars` and are also excluded.
+fn check_stats_overflow(delta: &cobre_sddp::SolverStatsDelta) -> Result<(), CliError> {
+    const F64_INTEGER_LIMIT: u64 = 1u64 << 53;
+    for (label, value) in [
+        ("lp_solves", delta.lp_solves),
+        ("lp_successes", delta.lp_successes),
+        ("first_try_successes", delta.first_try_successes),
+        ("lp_failures", delta.lp_failures),
+        ("retry_attempts", delta.retry_attempts),
+        ("basis_offered", delta.basis_offered),
+        (
+            "basis_consistency_failures",
+            delta.basis_consistency_failures,
+        ),
+        ("simplex_iterations", delta.simplex_iterations),
+        ("load_model_count", delta.load_model_count),
+    ] {
+        if value > F64_INTEGER_LIMIT {
+            return Err(CliError::Internal {
+                message: format!(
+                    "solver stats counter '{label}' = {value} \
+                     exceeds 2^53 (f64 integer-precision limit). MPI \
+                     allreduce(Sum) packing would lose precision. \
+                     Reduce iteration count or split the run."
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Run the simulation phase: workspace pool, Parquet writing, and output.
@@ -1456,6 +1531,8 @@ fn aggregate_simulation_solver_stats<C: Communicator>(
 > {
     // ── Part A: summary allreduce (F1-002) ────────────────────────────────────
     let local_agg = cobre_sddp::SolverStatsDelta::aggregate(local_stats.iter().map(|(_, _, d)| d));
+    // Guard all nine u64 fields before the u64 → f64 cast in pack_delta_scalars.
+    check_stats_overflow(&local_agg)?;
     let send_scalars = cobre_sddp::pack_delta_scalars(&local_agg);
     let mut recv_scalars = [0.0_f64; cobre_sddp::SOLVER_STATS_DELTA_SCALAR_FIELDS];
     comm.allreduce(&send_scalars, &mut recv_scalars, ReduceOp::Sum)
@@ -1559,6 +1636,7 @@ struct WriteTrainingArgs<'a> {
     setup: &'a StudySetup,
     training_result: &'a cobre_sddp::TrainingResult,
     output_ctx: &'a cobre_io::OutputContext,
+    hydro_models: &'a cobre_sddp::PrepareHydroModelsResult,
     quiet: bool,
     stderr: &'a Term,
 }
@@ -1595,6 +1673,15 @@ fn write_training_outputs(args: &WriteTrainingArgs<'_>) -> Result<(), CliError> 
         args.output_ctx,
     )
     .map_err(CliError::from)?;
+
+    if !args.hydro_models.fpha_export_rows.is_empty() {
+        let fpha_path = args
+            .output_dir
+            .join("hydro_models")
+            .join("fpha_hyperplanes.parquet");
+        cobre_io::output::write_fpha_hyperplanes(&fpha_path, &args.hydro_models.fpha_export_rows)
+            .map_err(CliError::from)?;
+    }
 
     // Write training solver stats to training/solver/iterations.parquet.
     // Each entry in solver_stats_log is a 7-tuple
@@ -1818,7 +1905,7 @@ fn export_stochastic_artifacts(
     clippy::panic
 )]
 mod tests {
-    use super::{delta_to_stats_row, resolve_thread_count};
+    use super::{check_stats_overflow, delta_to_stats_row, resolve_thread_count};
     use cobre_sddp::SolverStatsDelta;
 
     fn make_delta(lp_solves: u64) -> SolverStatsDelta {
@@ -1873,5 +1960,79 @@ mod tests {
         assert_eq!(row.rank, None);
         assert_eq!(row.worker_id, None);
         assert_eq!(row.iteration, 42);
+    }
+
+    // ── overflow guard tests ──────────────────────────────────────────────────
+
+    fn delta_with_field(field: &str, value: u64) -> SolverStatsDelta {
+        let mut d = SolverStatsDelta::default();
+        match field {
+            "lp_solves" => d.lp_solves = value,
+            "lp_successes" => d.lp_successes = value,
+            "first_try_successes" => d.first_try_successes = value,
+            "lp_failures" => d.lp_failures = value,
+            "retry_attempts" => d.retry_attempts = value,
+            "basis_offered" => d.basis_offered = value,
+            "basis_consistency_failures" => d.basis_consistency_failures = value,
+            "simplex_iterations" => d.simplex_iterations = value,
+            "load_model_count" => d.load_model_count = value,
+            other => panic!("unknown field: {other}"),
+        }
+        d
+    }
+
+    /// AC1: every u64 counter packed by `pack_delta_scalars` (indices 0–8) must
+    /// be rejected with an error containing "exceeds 2^53" and the field label
+    /// when its value exceeds 2^53.
+    #[test]
+    fn test_overflow_guard_rejects_excessive_counter() {
+        let over_limit = (1u64 << 53) + 1;
+
+        let fields = [
+            "lp_solves",
+            "lp_successes",
+            "first_try_successes",
+            "lp_failures",
+            "retry_attempts",
+            "basis_offered",
+            "basis_consistency_failures",
+            "simplex_iterations",
+            "load_model_count",
+        ];
+
+        for field in fields {
+            let delta = delta_with_field(field, over_limit);
+            let err = check_stats_overflow(&delta).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("exceeds 2^53"),
+                "field '{field}': message was: {msg}"
+            );
+            assert!(
+                msg.contains(field),
+                "field '{field}': label missing in message: {msg}"
+            );
+        }
+    }
+
+    /// AC2: a counter exactly equal to 2^53 (the largest integer exactly
+    /// representable as f64) must NOT trigger the guard.
+    #[test]
+    fn test_overflow_guard_allows_exact_limit() {
+        let at_limit = 1u64 << 53;
+        let delta = SolverStatsDelta {
+            lp_solves: at_limit,
+            lp_successes: at_limit,
+            first_try_successes: at_limit,
+            lp_failures: at_limit,
+            retry_attempts: at_limit,
+            basis_offered: at_limit,
+            basis_consistency_failures: at_limit,
+            simplex_iterations: at_limit,
+            load_model_count: at_limit,
+            ..SolverStatsDelta::default()
+        };
+        check_stats_overflow(&delta)
+            .expect("2^53 is representable in f64 and must not trigger the guard");
     }
 }

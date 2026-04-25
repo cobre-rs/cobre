@@ -970,7 +970,7 @@ fn compute_pearson_correlation_matrix(hydro_residuals: &[HashMap<NaiveDate, f64>
             }
 
             // Sort for deterministic iteration across HashMap orderings.
-            pairs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            pairs.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
 
             #[allow(clippy::cast_precision_loss)]
             let np = pairs.len() as f64;

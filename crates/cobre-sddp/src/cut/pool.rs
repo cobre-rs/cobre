@@ -1386,7 +1386,7 @@ mod tests {
         assert_eq!(result.active_after, 1);
     }
 
-    // ── ticket-007 new tests ────────────────────────────────────────────────
+    // ── active_cuts early-exit tests ─────────────────────────────────────────
 
     /// Verify that `active_cuts()` stops iterating once all active cuts have
     /// been yielded — it must not scan up to `populated_count` when

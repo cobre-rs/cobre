@@ -307,7 +307,27 @@ pub fn worker_opening_stats_buffer_size(n_workers: usize, n_slots: usize) -> usi
 /// Pack the 13 scalar fields of a [`SolverStatsDelta`] into a fixed-size `f64` array.
 /// Indices 0–7: eight `u64` fields cast to `f64`. Indices 8–12: five native `f64` fields.
 /// The `retry_level_histogram` is excluded from MPI packing and Parquet output.
-/// `u64` casts are exact for realistic event counts (≤ 2^53).
+///
+/// # Precision contract
+///
+/// `u64` casts are exact for event counts up to `2^53` (9,007,199,254,740,992). Beyond
+/// that threshold `f64` cannot represent consecutive integers exactly, and an
+/// `allreduce(Sum)` across MPI ranks would silently lose precision.
+///
+/// **The caller is responsible for enforcing the `2^53` ceiling before calling this
+/// function.** This function does not validate counter values. For the CLI training
+/// path the guard is implemented in `check_stats_overflow` in
+/// `crates/cobre-cli/src/commands/run.rs`, which runs before the `[f64; 7]` pack and
+/// returns `Err(CliError::Internal)` if any counter exceeds the limit.
+///
+/// # Timing precision
+///
+/// `solve_time_ms` (index 9) and the other `f64` timing fields are summed natively
+/// without a cast. `f64` addition is non-associative, so rank-order changes across
+/// MPI runs can cause ULP-level drift in `total_solve_time_seconds`. This is
+/// acceptable: timing metrics require semantic parity (same order of magnitude),
+/// not bit-for-bit reproducibility. Solve-count correctness is the strict invariant;
+/// timing totals across ranks are informational.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn pack_delta_scalars(delta: &SolverStatsDelta) -> [f64; SOLVER_STATS_DELTA_SCALAR_FIELDS] {

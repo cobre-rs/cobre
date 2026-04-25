@@ -50,6 +50,13 @@ pub struct CapturedBasis {
     pub state_at_capture: Vec<f64>,
 }
 
+/// Wire-format version for `CapturedBasis` broadcast payloads.
+///
+/// Stored as the second `i32` in every `Some`-path payload, immediately
+/// after the presence sentinel (`1_i32`). Bump this constant and update
+/// `try_from_broadcast_payload` whenever the field layout changes.
+pub const BASIS_BROADCAST_WIRE_VERSION: i32 = 1;
+
 impl CapturedBasis {
     /// Construct an empty `CapturedBasis` with the given capacities.
     ///
@@ -96,6 +103,7 @@ impl CapturedBasis {
     ///
     /// Pushes the following into `i32_buf` in order:
     /// - `1_i32` sentinel (present)
+    /// - [`BASIS_BROADCAST_WIRE_VERSION`] as `i32` (wire version)
     /// - `col_status.len()` as `i32`
     /// - `row_status.len()` as `i32`
     /// - `base_row_count` as `i32`
@@ -113,6 +121,7 @@ impl CapturedBasis {
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     pub fn to_broadcast_payload(&self, i32_buf: &mut Vec<i32>, f64_buf: &mut Vec<f64>) {
         i32_buf.push(1_i32);
+        i32_buf.push(BASIS_BROADCAST_WIRE_VERSION);
         i32_buf.push(self.basis.col_status.len() as i32);
         i32_buf.push(self.basis.row_status.len() as i32);
         i32_buf.push(self.base_row_count as i32);
@@ -133,16 +142,33 @@ impl CapturedBasis {
     ///
     /// Returns `Ok(None)` when the sentinel read is `0` (no basis
     /// for this stage). Returns `Ok(Some(captured))` when the
-    /// sentinel is `1` and the payload is complete.
+    /// sentinel is `1`, the version matches [`BASIS_BROADCAST_WIRE_VERSION`],
+    /// and the payload is complete.
+    ///
+    /// # Layout (`Some` path)
+    ///
+    /// Reads from `i32_buf` in order:
+    /// - `1_i32` sentinel (present)
+    /// - [`BASIS_BROADCAST_WIRE_VERSION`] as `i32` (wire version)
+    /// - `col_status.len()` as `i32`
+    /// - `row_status.len()` as `i32`
+    /// - `base_row_count` as `i32`
+    /// - `cut_row_slots.len()` as `i32`
+    /// - `state_at_capture.len()` as `i32`
+    /// - `col_status[..]`
+    /// - `row_status[..]`
+    /// - `cut_row_slots[..]` (stored as `i32`, cast back to `u32`)
+    ///
+    /// Reads `state_at_capture[..]` from `f64_buf`.
     ///
     /// # Errors
     ///
     /// Returns `SddpError::Validation` if the `i32_buf` or
     /// `f64_buf` is truncated at any of the bounded reads
-    /// (sentinel, five length fields, `col_status`, `row_status`,
-    /// `cut_row_slots`, `state_at_capture`). The error message names
-    /// the affected stage and the expected vs. available byte
-    /// count.
+    /// (sentinel, version, five length fields, `col_status`, `row_status`,
+    /// `cut_row_slots`, `state_at_capture`), or if the version field does
+    /// not match [`BASIS_BROADCAST_WIRE_VERSION`]. The error message names
+    /// the affected stage and the expected vs. available byte count.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -171,6 +197,22 @@ impl CapturedBasis {
 
         if sentinel == 0 {
             return Ok(None);
+        }
+
+        // Read wire version — present only on the Some path, immediately after
+        // the presence sentinel.
+        if *i32_cursor >= i32_buf.len() {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: buffer truncated reading version at stage {stage}"
+            )));
+        }
+        let version = i32_buf[*i32_cursor];
+        *i32_cursor += 1;
+        if version != BASIS_BROADCAST_WIRE_VERSION {
+            return Err(crate::SddpError::Validation(format!(
+                "try_from_broadcast_payload: unsupported wire version {version} at stage \
+                 {stage} (expected {BASIS_BROADCAST_WIRE_VERSION})"
+            )));
         }
 
         // Read 5 length/metadata fields: col_len, row_len, base_row_count,
@@ -1697,5 +1739,172 @@ mod tests {
             }
             other => panic!("expected SddpError::Validation, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Version-byte tests
+    // ---------------------------------------------------------------------------
+
+    /// Round-trip verification that `to_broadcast_payload` emits
+    /// `BASIS_BROADCAST_WIRE_VERSION` at offset 1 of the `i32_buf` (immediately
+    /// after the presence sentinel).
+    ///
+    /// AC1 + AC5: the constant is referenced by the pack method; the unpacked
+    /// basis matches the input field-by-field.
+    #[test]
+    fn to_broadcast_payload_emits_version_byte() {
+        use super::BASIS_BROADCAST_WIRE_VERSION;
+
+        let original = CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2, 3, 4],
+                row_status: vec![5_i32, 6, 7, 8],
+            },
+            base_row_count: 2,
+            cut_row_slots: vec![10_u32, 20],
+            state_at_capture: vec![0.5_f64, 1.5],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        original.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        // Offset 0 is the presence sentinel (1_i32).
+        assert_eq!(i32_buf[0], 1_i32, "offset 0 must be the presence sentinel");
+        // Offset 1 must be the wire version.
+        assert_eq!(
+            i32_buf[1], BASIS_BROADCAST_WIRE_VERSION,
+            "offset 1 must be BASIS_BROADCAST_WIRE_VERSION"
+        );
+
+        // Full round-trip must return a bit-equal CapturedBasis.
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let recovered = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("round-trip must not fail")
+        .expect("sentinel is 1; must return Some");
+
+        assert_eq!(recovered.basis.col_status, original.basis.col_status);
+        assert_eq!(recovered.basis.row_status, original.basis.row_status);
+        assert_eq!(recovered.base_row_count, original.base_row_count);
+        assert_eq!(recovered.cut_row_slots, original.cut_row_slots);
+        assert_eq!(recovered.state_at_capture, original.state_at_capture);
+        assert_eq!(i32_cursor, i32_buf.len(), "i32_cursor must be at end");
+        assert_eq!(f64_cursor, f64_buf.len(), "f64_cursor must be at end");
+    }
+
+    /// Manually overwrite the version field (offset 1) to `2_i32` and assert
+    /// that `try_from_broadcast_payload` returns `Err(SddpError::Validation)`
+    /// whose message contains `"unsupported wire version 2"`.
+    ///
+    /// AC2: future-version peer detection.
+    #[test]
+    fn try_from_broadcast_payload_rejects_wrong_version() {
+        use crate::SddpError;
+
+        let cb = CapturedBasis {
+            basis: Basis {
+                col_status: vec![1_i32, 2, 3, 4],
+                row_status: vec![5_i32, 6, 7, 8],
+            },
+            base_row_count: 2,
+            cut_row_slots: vec![10_u32, 20],
+            state_at_capture: vec![0.5_f64, 1.5],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        cb.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        // Corrupt the version field (offset 1) to simulate a future-version peer.
+        i32_buf[1] = 2_i32;
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+        let err = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect_err("mismatched version must return Err");
+
+        match err {
+            SddpError::Validation(ref msg) => {
+                assert!(
+                    msg.contains("unsupported wire version 2"),
+                    "error must contain 'unsupported wire version 2', got: {msg}"
+                );
+            }
+            other => panic!("expected SddpError::Validation, got {other:?}"),
+        }
+    }
+
+    /// A `None` payload (sentinel `0_i32`) returns `Ok(None)` and advances the
+    /// i32 cursor by exactly 1 — the version byte is never consumed.
+    ///
+    /// AC3: version byte is absent on the `None` path.
+    #[test]
+    fn try_from_broadcast_payload_none_does_not_consume_version_byte() {
+        // Build a buffer that starts with a 0 sentinel followed by sentinel=1
+        // data for a second stage.  After unpacking stage 0 the cursor must
+        // sit at offset 1 (i.e. the 0 sentinel was the only consumed element).
+        let populated = CapturedBasis {
+            basis: Basis {
+                col_status: vec![7_i32],
+                row_status: vec![8_i32],
+            },
+            base_row_count: 1,
+            cut_row_slots: vec![],
+            state_at_capture: vec![],
+        };
+
+        let mut i32_buf: Vec<i32> = Vec::new();
+        let mut f64_buf: Vec<f64> = Vec::new();
+        // Stage 0: None sentinel.
+        i32_buf.push(0_i32);
+        // Stage 1: Some.
+        populated.to_broadcast_payload(&mut i32_buf, &mut f64_buf);
+
+        let mut i32_cursor = 0_usize;
+        let mut f64_cursor = 0_usize;
+
+        // Unpack stage 0 — must return None.
+        let stage0 = CapturedBasis::try_from_broadcast_payload(
+            0,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("stage 0 must not fail");
+        assert!(stage0.is_none(), "stage 0 sentinel is 0; must return None");
+        // Only the sentinel was consumed (1 element).
+        assert_eq!(
+            i32_cursor, 1,
+            "None path must advance cursor by exactly 1 (only the sentinel)"
+        );
+
+        // Unpack stage 1 — must still succeed (version byte is intact).
+        let stage1 = CapturedBasis::try_from_broadcast_payload(
+            1,
+            &i32_buf,
+            &mut i32_cursor,
+            &f64_buf,
+            &mut f64_cursor,
+        )
+        .expect("stage 1 must not fail")
+        .expect("stage 1 sentinel is 1; must return Some");
+        assert_eq!(stage1.basis.col_status, populated.basis.col_status);
+        assert_eq!(stage1.basis.row_status, populated.basis.row_status);
+        assert_eq!(i32_cursor, i32_buf.len(), "i32_cursor must be at end");
+        assert_eq!(f64_cursor, f64_buf.len(), "f64_cursor must be at end");
     }
 }

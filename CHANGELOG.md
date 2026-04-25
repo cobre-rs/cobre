@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-TTY progress lines (pipes, `mpirun` aggregators, log files) now include
   an `[elapsed HH:MM:SS < eta HH:MM:SS]` trailing cell matching the interactive
   bar.
+- Wire-format version bytes added to both the basis broadcast payload and cut
+  records. The basis version field is at position 1 of the `i32` metadata
+  buffer; the cut version byte is at byte 0 of each serialized cut record.
+  Mismatches between sender and receiver produce typed validation errors rather
+  than silent data corruption or panics.
+- Typed errors for MPI correctness conditions:
+  - Non-uniform worker counts across ranks are detected during the
+    backward-pass handshake and reported as a validation error naming both the
+    minimum and maximum observed counts.
+  - Basis broadcast `i32` length overflow (more than `i32::MAX` elements)
+    is detected before the MPI call and reported as `CommError::InvalidBufferSize`.
+  - Wire-format version mismatches in the basis broadcast and in cut
+    deserialization are reported as validation errors naming both expected and
+    received versions.
+  - Violated cut-count invariants in `sync_cuts` (negotiated count differs from
+    actual serialized count) are reported as a validation error.
+  - Stats counter values exceeding `2^53` (the f64 integer precision limit),
+    which would corrupt MPI allreduce sums, are detected before the allreduce
+    call and reported as an internal error.
 
 ### Changed
 
@@ -35,6 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to synchronize the active-window bitmap is dispatched directly to
   `MPI_Allreduce` with `MPI_BOR` instead of being emulated via an
   `allgatherv` + bytewise fold workaround.
+- FPHA hyperplane file is now written to `<output_dir>/hydro_models/fpha_hyperplanes.parquet`
+  in both the CLI (`--output` flag) and Python bindings (`output_dir` parameter).
+  Previously the file was always written to `<case_dir>/output/hydro_models/`,
+  ignoring the caller-specified output directory. Under multi-rank execution
+  the file is written by rank 0 only; previously all ranks raced to write the
+  same path.
+- All sort comparators on `f64` in the hot path now use `f64::total_cmp` for
+  deterministic NaN handling. `partial_cmp(...).unwrap_or(Equal)` patterns
+  on the production training and simulation paths have been replaced.
+- Rayon global thread pool initialization failure now emits a structured
+  warning (configured threads, actual threads, error reason) and continues
+  using the already-initialized pool. Previously a silent fallback was applied
+  without any diagnostic output.
 
 ### Removed
 

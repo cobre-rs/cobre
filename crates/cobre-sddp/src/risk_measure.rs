@@ -312,8 +312,7 @@ pub fn compute_cvar_weights_into(
     scratch.order.sort_by(|&i, &j| {
         outcomes[j]
             .objective_value
-            .partial_cmp(&outcomes[i].objective_value)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&outcomes[i].objective_value)
     });
 
     scratch.mu.clear();
@@ -353,11 +352,9 @@ pub fn compute_cvar_weights_from_costs_into(
 
     scratch.order.clear();
     scratch.order.extend(0..n);
-    scratch.order.sort_by(|&i, &j| {
-        costs[j]
-            .partial_cmp(&costs[i])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    scratch
+        .order
+        .sort_by(|&i, &j| costs[j].total_cmp(&costs[i]));
 
     scratch.mu.clear();
     scratch.mu.resize(n, 0.0);

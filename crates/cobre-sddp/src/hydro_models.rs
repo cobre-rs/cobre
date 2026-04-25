@@ -382,6 +382,15 @@ pub struct PrepareHydroModelsResult {
     /// envelope had kappa < 0.95.  An empty vector means no warnings were
     /// generated.
     pub kappa_warnings: Vec<(String, f64)>,
+    /// Hyperplane rows produced by the computed-FPHA fitting pipeline.
+    ///
+    /// Non-empty only when at least one hydro uses `source: "computed"`.
+    /// The write site lives in the calling entry point (CLI or Python),
+    /// which writes to the run-scoped output directory under
+    /// `hydro_models/fpha_hyperplanes.parquet`.  Non-root MPI ranks never
+    /// reach the write site; they receive an identical copy of these rows
+    /// via the same deterministic preprocessing path.
+    pub fpha_export_rows: Vec<cobre_io::FphaHyperplaneRow>,
 }
 
 impl PrepareHydroModelsResult {
@@ -453,6 +462,7 @@ impl PrepareHydroModelsResult {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         }
     }
 }
@@ -603,7 +613,7 @@ pub fn prepare_hydro_models(
     system: &System,
     case_dir: &Path,
 ) -> Result<PrepareHydroModelsResult, SddpError> {
-    let (production, production_sources, kappa_warnings) =
+    let (production, production_sources, kappa_warnings, fpha_export_rows) =
         resolve_production_models(system, case_dir)?;
     let (evaporation, evaporation_sources, evaporation_reference_sources) =
         resolve_evaporation_models(system, case_dir)?;
@@ -617,17 +627,23 @@ pub fn prepare_hydro_models(
             evaporation_reference_sources,
         },
         kappa_warnings,
+        fpha_export_rows,
     })
 }
 
 // ── FPHA production model resolution ─────────────────────────────────────────
 
 /// Return type for [`resolve_production_models`]: the model set, provenance vector,
-/// and low-kappa warnings collected during computed FPHA fitting.
+/// low-kappa warnings, and computed-FPHA export rows.
+///
+/// The export rows are non-empty only when at least one hydro uses
+/// `source: "computed"`.  The write site is the calling entry point;
+/// `resolve_production_models` never performs any I/O.
 type ResolveProductionResult = (
     ProductionModelSet,
     Vec<(EntityId, ProductionModelSource)>,
     Vec<(String, f64)>,
+    Vec<cobre_io::FphaHyperplaneRow>,
 );
 
 /// Resolve per-hydro per-stage production models from the case directory.
@@ -775,18 +791,8 @@ pub fn resolve_production_models(
         all_models.push(stage_models);
     }
 
-    // Write exported hyperplane rows for computed-source hydros when any exist.
-    if !export_rows.is_empty() {
-        let export_path = case_dir
-            .join("output")
-            .join("hydro_models")
-            .join("fpha_hyperplanes.parquet");
-        cobre_io::output::write_fpha_hyperplanes(&export_path, &export_rows)
-            .map_err(|e| SddpError::Validation(e.to_string()))?;
-    }
-
     let set = ProductionModelSet::new(all_models, n_hydros, n_stages);
-    Ok((set, provenance, kappa_warnings))
+    Ok((set, provenance, kappa_warnings, export_rows))
 }
 
 /// Load precomputed FPHA hyperplane rows from disk when any config uses `source: "precomputed"`.
@@ -840,11 +846,7 @@ fn build_geometry_map(
         geometry_map.entry(row.hydro_id).or_default().push(row);
     }
     for rows in geometry_map.values_mut() {
-        rows.sort_by(|a, b| {
-            a.volume_hm3
-                .partial_cmp(&b.volume_hm3)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        rows.sort_by(|a, b| a.volume_hm3.total_cmp(&b.volume_hm3));
     }
     geometry_map
 }
@@ -1401,11 +1403,7 @@ pub fn resolve_evaporation_models(
     // Sort each hydro's rows by volume_hm3 ascending (should already be sorted,
     // but guarantee it here since we rely on sorted order for interpolation).
     for rows in geometry_map.values_mut() {
-        rows.sort_by(|a, b| {
-            a.volume_hm3
-                .partial_cmp(&b.volume_hm3)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        rows.sort_by(|a, b| a.volume_hm3.total_cmp(&b.volume_hm3));
     }
 
     // ── Step 5: collect study stages (id >= 0) ────────────────────────────────
@@ -2741,6 +2739,7 @@ mod tests {
             evaporation: evap_set,
             provenance: prov,
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         };
         let _ = format!("{result:?}");
     }
@@ -3753,6 +3752,7 @@ mod tests {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);
@@ -3854,6 +3854,7 @@ mod tests {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         }
     }
 
@@ -3929,6 +3930,7 @@ mod tests {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         }
     }
 
@@ -3994,6 +3996,7 @@ mod tests {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         }
     }
 
@@ -4188,6 +4191,7 @@ mod tests {
                 evaporation_reference_sources,
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);
@@ -4568,6 +4572,7 @@ mod tests {
                 )],
             },
             kappa_warnings: Vec::new(),
+            fpha_export_rows: Vec::new(),
         };
 
         let summary = build_hydro_model_summary(&result, &system);
@@ -4646,6 +4651,48 @@ mod tests {
             msg.contains(&hydro.name),
             "error must include hydro name '{}', got: {msg}",
             hydro.name
+        );
+    }
+
+    // ── 2-rank parity test ────────────────────────────────────────────────────
+
+    /// Simulates two independent MPI ranks both calling `prepare_hydro_models` on
+    /// a computed-FPHA case (d07-fpha-computed). Asserts that `fpha_export_rows` is
+    /// non-empty and bit-identical between the two calls, confirming that the
+    /// preprocessing is deterministic and rank-independent.
+    ///
+    /// No real MPI is used. The test simply calls `prepare_hydro_models` twice from
+    /// the same source data and compares the results.
+    #[test]
+    fn prepare_hydro_models_fpha_export_rows_are_identical_across_ranks() {
+        let case_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cobre-sddp parent dir must exist")
+            .parent()
+            .expect("crates parent dir must exist")
+            .join("examples/deterministic/d07-fpha-computed");
+
+        let system =
+            cobre_io::load_case(&case_dir).expect("d07-fpha-computed must load successfully");
+
+        // Simulated rank 0: call prepare_hydro_models and capture rows.
+        let result_rank0 = super::prepare_hydro_models(&system, &case_dir)
+            .expect("prepare_hydro_models must succeed for rank 0");
+
+        // Simulated rank 1: independent call with the same inputs.
+        let result_rank1 = super::prepare_hydro_models(&system, &case_dir)
+            .expect("prepare_hydro_models must succeed for rank 1");
+
+        // Post-condition: computed-FPHA rows must be present.
+        assert!(
+            !result_rank0.fpha_export_rows.is_empty(),
+            "rank 0: fpha_export_rows must be non-empty for a computed-FPHA case"
+        );
+
+        // Parity: both ranks must produce bit-identical rows.
+        assert_eq!(
+            result_rank0.fpha_export_rows, result_rank1.fpha_export_rows,
+            "fpha_export_rows must be bit-identical across ranks (deterministic preprocessing)"
         );
     }
 }

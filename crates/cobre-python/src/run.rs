@@ -56,11 +56,22 @@ struct SimSummary {
     completed: u32,
 }
 
-fn init_rayon(threads: Option<u32>) {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads.map_or(1, |t| t as usize))
+fn init_rayon(threads: Option<u32>) -> usize {
+    let configured = threads.map_or(1, |t| t as usize);
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(configured)
         .build_global()
-        .unwrap_or(());
+    {
+        Ok(()) => configured,
+        Err(err) => {
+            let actual = rayon::current_num_threads();
+            eprintln!(
+                "cobre-python: rayon init warning: configured={configured}, \
+                 actual={actual}, error={err}"
+            );
+            actual
+        }
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -479,9 +490,6 @@ fn run_simulation_phase_py(
 }
 
 /// Run the full solve lifecycle without MPI or progress bars (GIL released for computation).
-// This function is an orchestrator that sequences stochastic prep, training, and
-// simulation in a single call.  Extracting sub-phases further would fragment the
-// control flow without meaningful cohesion improvement.
 #[allow(clippy::too_many_lines)]
 fn run_inner(
     case_dir: &std::path::Path,
@@ -489,8 +497,7 @@ fn run_inner(
     threads: Option<u32>,
     skip_simulation: bool,
 ) -> Result<RunSummary, String> {
-    init_rayon(threads);
-    let n_threads = threads.map_or(1, |t| t as usize);
+    let n_threads = init_rayon(threads);
 
     let system = cobre_io::load_case(case_dir).map_err(|e| e.to_string())?;
     let config = cobre_io::parse_config(&case_dir.join("config.json"))
@@ -650,6 +657,20 @@ fn run_inner(
             seed,
             n_threads,
         )?;
+
+        // Write FPHA hyperplanes after training. This file represents the
+        // trained model and is only meaningful once training has completed;
+        // simulation-only runs do not write it.
+        if !setup.hydro_models.fpha_export_rows.is_empty() {
+            let fpha_path = output_dir
+                .join("hydro_models")
+                .join("fpha_hyperplanes.parquet");
+            cobre_io::output::write_fpha_hyperplanes(
+                &fpha_path,
+                &setup.hydro_models.fpha_export_rows,
+            )
+            .map_err(|e| format!("failed to write fpha_hyperplanes: {e}"))?;
+        }
 
         if let Some(ref e) = training.error {
             return Err(format!(
@@ -974,10 +995,18 @@ pub fn run(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp
+)]
 mod tests {
     use std::path::Path;
 
     use cobre_sddp::setup::prepare_stochastic;
+
+    use super::init_rayon;
 
     #[test]
     fn prepare_stochastic_succeeds_for_d01_case_via_python_path() {
@@ -1003,6 +1032,40 @@ mod tests {
             result.is_ok(),
             "prepare_stochastic failed for D01 via Python path: {:?}",
             result.err()
+        );
+    }
+
+    /// Verify that `init_rayon` returns the actual thread count when the global
+    /// pool is already initialized (i.e. it falls back to `rayon::current_num_threads()`
+    /// rather than returning the configured count).
+    ///
+    /// Nextest runs each test in an isolated process, so rayon global state does
+    /// not bleed across tests.  Under `cargo test` (single-process) the pre-init
+    /// step may silently fail if another test already initialized the pool; the
+    /// assertion `result == rayon::current_num_threads()` is still valid in that
+    /// case because `init_rayon` must always return the true active count.
+    #[test]
+    fn init_rayon_falls_back_to_actual_count() {
+        // Attempt to pre-initialize the global pool with 2 threads.
+        // Silently ignored if the pool is already initialized (ok() discards the error).
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build_global()
+            .ok();
+
+        // Now try to reinitialize with 99 threads — must fail and fall back.
+        let result = init_rayon(Some(99));
+
+        // The result must match the true active count, not the requested 99.
+        let actual = rayon::current_num_threads();
+        assert_eq!(
+            result, actual,
+            "init_rayon must return the active thread count on fallback, \
+             got {result} but rayon reports {actual} active threads"
+        );
+        assert_ne!(
+            result, 99,
+            "init_rayon must not return the configured count (99) on fallback"
         );
     }
 }

@@ -359,6 +359,31 @@ impl BackwardPassState {
             n_workers: inputs.workspaces.len() as f64,
         };
 
+        // Verify all ranks agree on n_workers_local. A mismatch silently
+        // corrupts the per-worker stats allgatherv buffer; surface it as a
+        // typed error before the exchange.
+        let local_workers = u64::try_from(inputs.workspaces.len())
+            .map_err(|_| SddpError::Validation("workspaces.len() exceeds u64::MAX".into()))?;
+        let send = [local_workers];
+        let mut min_recv = [0_u64; 1];
+        let mut max_recv = [0_u64; 1];
+        inputs
+            .comm
+            .allreduce(&send, &mut min_recv, ReduceOp::Min)
+            .map_err(SddpError::Communication)?;
+        inputs
+            .comm
+            .allreduce(&send, &mut max_recv, ReduceOp::Max)
+            .map_err(SddpError::Communication)?;
+        if min_recv[0] != max_recv[0] {
+            return Err(SddpError::Validation(format!(
+                "non-uniform n_workers_local across MPI ranks: \
+                 local={local_workers}, min={}, max={}; all ranks must \
+                 run with the same --threads value",
+                min_recv[0], max_recv[0],
+            )));
+        }
+
         let mut cuts_generated: usize = 0;
         let mut stage_stats: Vec<(usize, Vec<StageWorkerOpeningDelta>)> = Vec::new();
         let mut state_exchange_ms: u64 = 0;
@@ -1446,7 +1471,7 @@ mod tests {
         let comm = StubComm;
         let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let ctx = StageContext {
             templates: &templates,
@@ -1569,7 +1594,7 @@ mod tests {
         let comm = StubComm;
         let mut workspaces = single_workspace(MockSolver::always_ok(solution), n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let mut cut_batches = empty_cut_batches(n_stages);
         let ctx = StageContext {
             templates: &templates,

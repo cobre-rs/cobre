@@ -1293,7 +1293,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1386,7 +1386,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1479,7 +1479,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1568,7 +1568,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1657,7 +1657,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1744,7 +1744,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1876,7 +1876,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -1986,7 +1986,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2101,7 +2101,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2202,7 +2202,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2313,7 +2313,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2419,7 +2419,7 @@ mod tests {
         let mut basis_store =
             basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2518,7 +2518,7 @@ mod tests {
         let mut workspaces = single_workspace(solver, n_state);
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2625,7 +2625,7 @@ mod tests {
         let mut basis_store =
             basis_store_with_one(exchange.local_count(), n_stages, 0, 1, pre_basis);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -2790,7 +2790,7 @@ mod tests {
             noise_group_ids: &[],
             downstream_par_order: 0,
         };
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces_1,
             basis_store: &mut basis_store_1,
@@ -2875,7 +2875,7 @@ mod tests {
             })
             .collect();
         let mut basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces_4,
             basis_store: &mut basis_store_4,
@@ -3238,7 +3238,7 @@ mod tests {
         let load_bus_indices = vec![0_usize];
         let block_counts_per_stage = vec![1_usize; n_stages];
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -3401,7 +3401,7 @@ mod tests {
         let comm = StubComm;
         let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let _ = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -3569,7 +3569,7 @@ mod tests {
         let load_bus_indices = vec![0_usize];
         let block_counts_per_stage = vec![1_usize; n_stages];
 
-        let mut csb = CutSyncBuffers::new(n_state, 64, 1);
+        let mut csb = CutSyncBuffers::with_distribution(n_state, 64, 1, exchange.local_count());
         let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
             workspaces: &mut workspaces,
             basis_store: &mut basis_store,
@@ -5288,5 +5288,315 @@ mod tests {
             vec![5.0_f64],
             "state_at_capture must be updated to x_hat by the reuse path"
         );
+    }
+
+    /// T-HW01: handshake passes when all ranks agree on `n_workers_local`.
+    ///
+    /// Uses `StubComm` (echoes send→recv, i.e. min==max==local) with a
+    /// 2-worker setup and a 1-stage system so no backward stages are swept.
+    /// The test only validates that the uniformity check does not reject a
+    /// consistent 2-worker configuration.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn handshake_passes_with_local_backend() {
+        use crate::lp_builder::PatchBuffer;
+
+        let n_stages = 1_usize;
+        let n_workers = 2_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0()];
+        let base_rows = vec![1_usize];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let solution = solution_1_0(100.0, -5.0);
+
+        // Build 2 workspaces to exercise n_workers_local=2.
+        let mut workspaces: Vec<SolverWorkspace<MockSolver>> = (0..n_workers)
+            .map(|idx| SolverWorkspace {
+                rank: 0,
+                worker_id: i32::try_from(idx).expect("idx fits i32"),
+                solver: MockSolver::always_ok(solution.clone()),
+                patch_buf: PatchBuffer::new(1, 0, 0, 0),
+                current_state: Vec::with_capacity(n_state),
+                scratch: crate::workspace::ScratchBuffers {
+                    noise_buf: Vec::new(),
+                    inflow_m3s_buf: Vec::new(),
+                    lag_matrix_buf: Vec::new(),
+                    par_inflow_buf: Vec::new(),
+                    eta_floor_buf: Vec::new(),
+                    zero_targets_buf: Vec::new(),
+                    ncs_col_upper_buf: Vec::new(),
+                    ncs_col_lower_buf: Vec::new(),
+                    ncs_col_indices_buf: Vec::new(),
+                    load_rhs_buf: Vec::new(),
+                    row_lower_buf: Vec::new(),
+                    z_inflow_rhs_buf: Vec::new(),
+                    effective_eta_buf: Vec::new(),
+                    unscaled_primal: Vec::new(),
+                    unscaled_dual: Vec::new(),
+                    lag_accumulator: vec![],
+                    lag_weight_accum: 0.0,
+                    downstream_accumulator: Vec::new(),
+                    downstream_weight_accum: 0.0,
+                    downstream_completed_lags: Vec::new(),
+                    downstream_n_completed: 0,
+                    current_state_scratch: Vec::new(),
+                    recon_slot_lookup: Vec::new(),
+                    promotion_scratch: crate::basis_reconstruct::PromotionScratch::default(),
+                    trajectory_costs_buf: Vec::new(),
+                    raw_noise_buf: Vec::new(),
+                    perm_scratch: Vec::new(),
+                },
+                scratch_basis: Basis::new(0, 0),
+                backward_accum: BackwardAccumulators::default(),
+                worker_timing_buf: [0.0_f64; 16],
+            })
+            .collect();
+
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, 1, 1);
+        let comm = StubComm;
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
+
+        assert!(
+            result.is_ok(),
+            "handshake must pass when all ranks have the same n_workers_local; got: {result:?}"
+        );
+    }
+
+    /// T-HW02: handshake rejects non-uniform `n_workers_local` across ranks.
+    ///
+    /// `NonUniformStubComm` simulates a 2-rank cluster where min and max
+    /// worker counts differ. Its `allreduce(Min)` returns all `T::default()`
+    /// (zeros), while `allreduce(Max)` copies `send` to `recv` (the local
+    /// value). With `local_workers = 1`, `min_recv[0] = 0` and
+    /// `max_recv[0] = 1`, so `0 != 1` triggers the uniformity check.
+    /// `BackwardPassState::run` must return `SddpError::Validation` with the
+    /// expected substring before entering the stage loop.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn handshake_rejects_nonuniform_workers() {
+        /// Stub communicator that forces `allreduce(Min)` to return zeros and
+        /// `allreduce(Max)` to echo the send buffer, producing `min != max`
+        /// for any non-zero local value.
+        struct NonUniformStubComm;
+
+        impl Communicator for NonUniformStubComm {
+            fn allgatherv<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                _counts: &[usize],
+                _displs: &[usize],
+            ) -> Result<(), CommError> {
+                recv[..send.len()].copy_from_slice(send);
+                Ok(())
+            }
+
+            fn allreduce<T: CommData>(
+                &self,
+                send: &[T],
+                recv: &mut [T],
+                op: ReduceOp,
+            ) -> Result<(), CommError> {
+                match op {
+                    // Min: return T::default() (0) to simulate a remote rank
+                    // with zero workers, creating a min != max discrepancy.
+                    ReduceOp::Min => {
+                        for r in recv.iter_mut() {
+                            *r = T::default();
+                        }
+                    }
+                    // Max and all others: echo send so max == local value.
+                    _ => {
+                        recv[..send.len()].copy_from_slice(send);
+                    }
+                }
+                Ok(())
+            }
+
+            fn broadcast<T: CommData>(
+                &self,
+                _buf: &mut [T],
+                _root: usize,
+            ) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn barrier(&self) -> Result<(), CommError> {
+                Ok(())
+            }
+
+            fn rank(&self) -> usize {
+                0
+            }
+
+            fn size(&self) -> usize {
+                2
+            }
+
+            fn abort(&self, error_code: i32) -> ! {
+                std::process::exit(error_code)
+            }
+        }
+
+        let n_stages = 1_usize;
+        let stochastic = make_stochastic_context(n_stages, 1);
+        let indexer = StageIndexer::new(1, 0);
+        let templates = vec![minimal_template_1_0()];
+        let base_rows = vec![1_usize];
+        let n_state = indexer.n_state;
+        let forward_passes = 1_u32;
+        let mut fcf =
+            FutureCostFunction::new(n_stages, n_state, forward_passes, 10, &vec![0; n_stages]);
+        let mut exchange = exchange_with_states(n_state, vec![vec![10.0]]);
+        let horizon = HorizonMode::Finite {
+            num_stages: n_stages,
+        };
+        let risk_measures = vec![RiskMeasure::Expectation; n_stages];
+        let comm = NonUniformStubComm;
+        // n_workers_local = 1 on this rank; allreduce(Min) returns 0 and
+        // allreduce(Max) returns 1 → 0 != 1 triggers the validation error.
+        let mut workspaces =
+            single_workspace(MockSolver::always_ok(solution_1_0(100.0, -5.0)), n_state);
+        let mut basis_store = empty_basis_store(exchange.local_count(), n_stages);
+        let mut csb = CutSyncBuffers::new(n_state, 1, 1);
+
+        let result = run_backward_pass(&mut crate::backward_pass_state::BackwardPassInputs {
+            workspaces: &mut workspaces,
+            basis_store: &mut basis_store,
+            ctx: &StageContext {
+                templates: &templates,
+                base_rows: &base_rows,
+                noise_scale: &[],
+                n_hydros: 0,
+                n_load_buses: 0,
+                load_balance_row_starts: &[],
+                load_bus_indices: &[],
+                block_counts_per_stage: &[],
+                ncs_max_gen: &[],
+                discount_factors: &[],
+                cumulative_discount_factors: &[],
+                stage_lag_transitions: &[],
+                noise_group_ids: &[],
+                downstream_par_order: 0,
+            },
+            baked: &templates,
+            fcf: &mut fcf,
+            cut_batches: &mut empty_cut_batches(n_stages),
+            training_ctx: &TrainingContext {
+                horizon: &horizon,
+                indexer: &indexer,
+                inflow_method: &InflowNonNegativityMethod::None,
+                stochastic: &stochastic,
+                initial_state: &[],
+                inflow_scheme: SamplingScheme::InSample,
+                load_scheme: SamplingScheme::InSample,
+                ncs_scheme: SamplingScheme::InSample,
+                stages: &[],
+                historical_library: None,
+                external_inflow_library: None,
+                external_load_library: None,
+                external_ncs_library: None,
+                recent_accum_seed: &[],
+                recent_weight_seed: 0.0,
+            },
+            comm: &comm,
+            records: &[],
+            iteration: 0,
+            local_work: exchange.local_count(),
+            fwd_offset: 0,
+            risk_measures: &risk_measures,
+            exchange: &mut exchange,
+            cut_activity_tolerance: 0.0,
+            basis_activity_window: crate::basis_reconstruct::DEFAULT_BASIS_ACTIVITY_WINDOW,
+            cut_sync_bufs: &mut csb,
+            visited_archive: None,
+            event_sender: None,
+        });
+
+        match result {
+            Err(crate::SddpError::Validation(ref msg)) => {
+                assert!(
+                    msg.contains("non-uniform n_workers_local"),
+                    "error message must contain 'non-uniform n_workers_local'; got: {msg}"
+                );
+                assert!(
+                    msg.contains("min=0"),
+                    "error message must mention min=0 (stub Min returns T::default()); got: {msg}"
+                );
+                assert!(
+                    msg.contains("max=1"),
+                    "error message must mention max=1 (stub Max echoes local=1); got: {msg}"
+                );
+                assert!(
+                    msg.contains("local=1"),
+                    "error message must mention local=1 (single workspace); got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected Err(SddpError::Validation(_)) from non-uniform handshake, got: {other:?}"
+            ),
+        }
     }
 }

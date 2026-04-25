@@ -167,6 +167,21 @@ impl TrainingResult {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Convert a buffer length to `i32` for use as an MPI broadcast count.
+///
+/// Returns `Err(SddpError::Communication(CommError::InvalidBufferSize { .. }))`
+/// when `len > i32::MAX`, carrying the operation name, the maximum legal value
+/// (`i32::MAX as usize`), and the actual (oversized) length.
+fn checked_broadcast_len(len: usize, operation: &'static str) -> Result<i32, SddpError> {
+    i32::try_from(len).map_err(|_| {
+        SddpError::Communication(cobre_comm::CommError::InvalidBufferSize {
+            operation,
+            expected: i32::MAX as usize,
+            actual: len,
+        })
+    })
+}
+
 /// Build a `basis_cache` from the canonical global scenario 0, broadcasting
 /// rank 0's bases to all other ranks so that every rank has an identical
 /// warm-start basis for the simulation phase.
@@ -206,17 +221,14 @@ impl TrainingResult {
 ///
 /// # Errors
 ///
+/// Returns `SddpError::Communication(CommError::InvalidBufferSize { .. })`
+/// if either buffer length exceeds `i32::MAX` (the MPI count limit).
+/// Buffer length scalars are broadcast as i32 (MPI `CommData` requires Copy,
+/// ruling out usize); the usize→i32 conversions are checked via
+/// [`checked_broadcast_len`] before any MPI call is issued.
 /// Returns `SddpError::Communication` if any `comm.broadcast` call fails.
 /// Returns `SddpError::Validation` if any length prefix is inconsistent with
 /// the received buffer size, naming the offending stage in the message.
-// Buffer length scalars are broadcast as i32 (MPI CommData requires Copy,
-// ruling out usize). The usize→i32 casts are bounded by LP column/row
-// counts; the i32→usize casts on the receive side are lossless.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
 pub(crate) fn broadcast_basis_cache<C: Communicator>(
     basis_store: &crate::workspace::BasisStore,
     num_stages: usize,
@@ -252,19 +264,35 @@ pub(crate) fn broadcast_basis_cache<C: Communicator>(
     }
 
     // Step 1: broadcast the i32 buffer length so all ranks can allocate.
-    let mut len_buf = [buf.len() as i32];
+    let mut len_buf = [checked_broadcast_len(
+        buf.len(),
+        "broadcast_basis_cache_i32",
+    )?];
     comm.broadcast(&mut len_buf, 0).map_err(SddpError::from)?;
-    let total_len = len_buf[0] as usize;
+    let total_len = usize::try_from(len_buf[0]).map_err(|_| {
+        SddpError::Validation(format!(
+            "broadcast_basis_cache_i32: received negative length {}",
+            len_buf[0]
+        ))
+    })?;
 
     // Step 2: resize non-root i32 buffers and broadcast the i32 payload.
     buf.resize(total_len, 0_i32);
     comm.broadcast(&mut buf, 0).map_err(SddpError::from)?;
 
     // Step 3: broadcast the f64 buffer length so all ranks can allocate.
-    let mut f64_len_buf = [f64_buf.len() as i32];
+    let mut f64_len_buf = [checked_broadcast_len(
+        f64_buf.len(),
+        "broadcast_basis_cache_f64",
+    )?];
     comm.broadcast(&mut f64_len_buf, 0)
         .map_err(SddpError::from)?;
-    let f64_total_len = f64_len_buf[0] as usize;
+    let f64_total_len = usize::try_from(f64_len_buf[0]).map_err(|_| {
+        SddpError::Validation(format!(
+            "broadcast_basis_cache_f64: received negative length {}",
+            f64_len_buf[0]
+        ))
+    })?;
 
     // Step 4: resize non-root f64 buffers and broadcast the f64 payload.
     f64_buf.resize(f64_total_len, 0.0_f64);
@@ -3021,6 +3049,44 @@ mod tests {
                 );
             }
             other => panic!("expected SddpError::Validation, got: {other:?}"),
+        }
+    }
+
+    /// Regression test for the i32-truncation guard in `broadcast_basis_cache`.
+    ///
+    /// A buffer length that exceeds `i32::MAX` must be rejected by
+    /// `checked_broadcast_len` before any MPI broadcast call is issued.
+    /// The returned error must be
+    /// `SddpError::Communication(CommError::InvalidBufferSize { .. })`
+    /// with `actual == (i32::MAX as usize) + 1` and the operation string
+    /// `"broadcast_basis_cache_i32"`.
+    #[test]
+    fn broadcast_basis_cache_rejects_oversized_i32_payload() {
+        use super::checked_broadcast_len;
+
+        let oversized: usize = (i32::MAX as usize) + 1;
+        let result = checked_broadcast_len(oversized, "broadcast_basis_cache_i32");
+
+        match result {
+            Err(SddpError::Communication(CommError::InvalidBufferSize {
+                operation,
+                expected,
+                actual,
+            })) => {
+                assert_eq!(actual, oversized, "actual must equal the oversized length");
+                assert_eq!(
+                    expected,
+                    i32::MAX as usize,
+                    "expected must equal i32::MAX as usize"
+                );
+                assert_eq!(
+                    operation, "broadcast_basis_cache_i32",
+                    "operation string must be 'broadcast_basis_cache_i32'"
+                );
+            }
+            other => panic!(
+                "expected SddpError::Communication(CommError::InvalidBufferSize {{ .. }}), got: {other:?}"
+            ),
         }
     }
 

@@ -149,7 +149,7 @@ impl Default for LbEvalScratch {
 /// that the public signature of `evaluate_lower_bound` stays within the
 /// clippy `too-many-arguments-threshold = 9`.  Construct via
 /// [`LbEvalScratchBundle::from_scratch_fields`] when calling from a
-/// `TrainingSession` (disjoint-borrow factory pattern from Epic 03).
+/// `TrainingSession` (disjoint-borrow factory pattern).
 pub struct LbEvalScratchBundle<'a> {
     /// Reusable patch buffer for LP row-bound patching.
     pub patch_buf: &'a mut PatchBuffer,
@@ -164,9 +164,9 @@ pub struct LbEvalScratchBundle<'a> {
 impl<'a> LbEvalScratchBundle<'a> {
     /// Construct from disjoint fields of [`crate::training_session::IterationScratch`].
     ///
-    /// Analogous to `BackwardPassInputs::from_session_fields` (Epic 03): the
-    /// caller takes the fields it needs separately so that the borrow checker
-    /// can verify non-aliasing, then passes them here.
+    /// Analogous to `BackwardPassInputs::from_session_fields`: the caller takes
+    /// the fields it needs separately so that the borrow checker can verify
+    /// non-aliasing, then passes them here.
     ///
     /// ```text
     /// let bundle = LbEvalScratchBundle::from_scratch_fields(

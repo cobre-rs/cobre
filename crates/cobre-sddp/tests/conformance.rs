@@ -585,7 +585,7 @@ mod cut_conformance {
             &coefficients,
         );
 
-        let (header, recovered_coeffs) = deserialize_cut(&buf, n_state);
+        let (header, recovered_coeffs) = deserialize_cut(&buf, n_state).unwrap();
 
         // All header fields must match exactly.
         assert_eq!(

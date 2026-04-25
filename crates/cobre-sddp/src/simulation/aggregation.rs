@@ -311,7 +311,7 @@ fn compute_cvar(costs: &[f64], alpha: f64) -> f64 {
 
     // Sort descending (worst first) into a scratch buffer.
     let mut sorted = costs.to_vec();
-    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| b.total_cmp(a));
 
     // Use n - floor(alpha * n) to avoid floating-point imprecision in
     // ceil((1 - alpha) * n). Both formulas are mathematically equivalent

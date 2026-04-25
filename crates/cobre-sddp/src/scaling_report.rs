@@ -152,7 +152,10 @@ fn median(values: &[f64]) -> f64 {
         return 0.0;
     }
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // `total_cmp` provides IEEE-754 total ordering on f64; required so that
+    // NaN inputs land in a deterministic position and the sort is
+    // declaration-order-invariant (Cobre hard rule).
+    sorted.sort_by(f64::total_cmp);
     let n = sorted.len();
     if n % 2 == 0 {
         f64::midpoint(sorted[n / 2 - 1], sorted[n / 2])
@@ -358,5 +361,43 @@ mod tests {
         assert!((report.summary.worst_pre_scaling_matrix_ratio - 100_000.0).abs() < 1e-6);
         assert!((report.summary.worst_post_scaling_matrix_ratio - 10.0).abs() < 1e-6);
         assert!((report.summary.improvement_factor - 10_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn total_cmp_handles_nan_deterministically() {
+        // Verify that sorting with total_cmp produces a stable, NaN-safe order.
+        // NaN values must not cause a panic or non-deterministic ordering.
+        let mut values = [f64::NAN, 3.0, 1.0, f64::NAN, 2.0];
+        values.sort_by(f64::total_cmp);
+        // total_cmp places NaN after all finite values (NaN > everything in
+        // total order). The finite elements must be in ascending order.
+        assert_eq!(values[0], 1.0);
+        assert_eq!(values[1], 2.0);
+        assert_eq!(values[2], 3.0);
+        assert!(values[3].is_nan());
+        assert!(values[4].is_nan());
+
+        // Descending order (as used in compute_cvar / aggregation sort).
+        // total_cmp places +NaN > +inf > finite, so reversing it (b.total_cmp(a))
+        // puts +NaN at the front. The deterministic placement is what matters
+        // for declaration-order-invariance; downstream code should not see NaN
+        // in production, but if it does, the position is reproducible.
+        let mut desc = [f64::NAN, 3.0, 1.0, f64::NAN, 2.0];
+        desc.sort_by(|a, b| b.total_cmp(a));
+        assert!(desc[0].is_nan());
+        assert!(desc[1].is_nan());
+        assert_eq!(desc[2], 3.0);
+        assert_eq!(desc[3], 2.0);
+        assert_eq!(desc[4], 1.0);
+
+        // Determinism check: re-sorting the same input twice produces the
+        // same permutation by-bits.
+        let mut a = [f64::NAN, 3.0, 1.0, f64::NAN, 2.0];
+        let mut b = [f64::NAN, 3.0, 1.0, f64::NAN, 2.0];
+        a.sort_by(f64::total_cmp);
+        b.sort_by(f64::total_cmp);
+        for i in 0..a.len() {
+            assert_eq!(a[i].to_bits(), b[i].to_bits());
+        }
     }
 }

@@ -168,7 +168,7 @@ pub struct BackwardResult {
 /// point during the parallel backward sweep.
 ///
 /// Each worker thread populates one `StagedCut` per trial point instead of
-/// writing directly into the [`FutureCostFunction`]. After the parallel region,
+/// writing directly into the `FutureCostFunction`. After the parallel region,
 /// staged cuts are sorted by `trial_point_idx` and merged into the FCF in
 /// deterministic order regardless of thread completion order.
 pub(crate) struct StagedCut {
@@ -226,7 +226,7 @@ pub(crate) struct SuccessorSpec<'a> {
 
 /// Load the stage LP template and append delta cuts.
 ///
-/// Called at the top of every trial-point iteration in [`process_stage_backward`]
+/// Called at the top of every trial-point iteration in `process_stage_backward`
 /// to reset `HiGHS`'s retained simplex basis, factorization, and RNG position so
 /// that results do not depend on the scenario-to-worker partition. Within a
 /// trial point the LP structure is identical across openings — only the
@@ -718,11 +718,16 @@ mod tests {
 
     use super::{BackwardResult, run_backward_pass};
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
         solver_stats::SolverStatsDelta,
+        state_exchange::ExchangeBuffers,
+        trajectory::TrajectoryRecord,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -987,7 +992,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 
@@ -2780,7 +2785,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
         let mut basis_store_1 = empty_basis_store(exchange.local_count(), n_stages);
         let ctx = StageContext {
@@ -2880,7 +2885,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
         let mut basis_store_4 = empty_basis_store(exchange.local_count(), n_stages);
@@ -3235,7 +3240,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
 
@@ -3404,7 +3409,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -3568,7 +3573,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
         let mut workspaces = vec![ws];
         let comm = StubComm;
@@ -4354,7 +4359,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
 
@@ -4715,7 +4720,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
 
@@ -4937,7 +4942,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
 
@@ -5366,7 +5371,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
 

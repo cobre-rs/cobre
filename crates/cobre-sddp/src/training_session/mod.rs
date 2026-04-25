@@ -22,22 +22,22 @@ use cobre_solver::SolverInterface;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
+    SddpError, TrainingConfig,
     backward_pass_state::{BackwardPassInputs, BackwardPassState},
     context::{StageContext, TrainingContext},
     convergence::ConvergenceMonitor,
     cut::fcf::FutureCostFunction,
     cut_selection::DeactivationSet,
     cut_sync::CutSyncBuffers,
-    evaluate_lower_bound,
     forward::{build_cut_row_batch_into, sync_forward},
     forward_pass_state::{ForwardPassInputs, ForwardPassState},
+    lower_bound::evaluate_lower_bound,
     lower_bound::{LbEvalScratchBundle, LbEvalSpec},
-    solver_stats::{aggregate_solver_statistics, SolverStatsDelta},
+    solver_stats::{SolverStatsDelta, aggregate_solver_statistics},
     state_exchange::ExchangeBuffers,
     stopping_rule::RULE_GRACEFUL_SHUTDOWN,
-    training::{broadcast_basis_cache, TrainingOutcome, TrainingResult},
+    training::{TrainingOutcome, TrainingResult, broadcast_basis_cache},
     workspace::{BasisStore, WorkspacePool, WorkspaceSizing},
-    SddpError, TrainingConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -1022,6 +1022,7 @@ mod tests {
     use chrono::NaiveDate;
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_core::{
+        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
         scenario::{
             CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
             SamplingScheme,
@@ -1030,22 +1031,25 @@ mod tests {
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, EntityId, SystemBuilder, TrainingEvent, WorkerTimingPhase,
     };
     use cobre_solver::{
         Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
     };
     use cobre_stochastic::{
-        build_stochastic_context, ClassSchemes, OpeningTreeInputs, StochasticContext,
+        ClassSchemes, OpeningTreeInputs, StochasticContext, build_stochastic_context,
     };
 
     use super::{IterationOutcome, TrainingSession};
     use crate::{
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+        config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
-        CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-        RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-        TrainingConfig,
+        error::SddpError,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
     };
 
     // ── Shared helpers (mirrors training.rs test helpers) ──────────────────

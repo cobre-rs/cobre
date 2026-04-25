@@ -13,7 +13,7 @@
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::SimulationConfig;
+/// use cobre_sddp::simulation::SimulationConfig;
 ///
 /// let config = SimulationConfig {
 ///     n_scenarios: 500,
@@ -42,7 +42,7 @@ pub struct SimulationConfig {
     /// Larger values increase memory usage but allow the I/O thread more
     /// headroom to absorb bursts. Default in practice is 64.
     ///
-    /// [`SimulationScenarioResult`]: crate::SimulationScenarioResult
+    /// [`SimulationScenarioResult`]: crate::simulation::SimulationScenarioResult
     pub io_channel_capacity: usize,
 
     /// Activity-window size for the basis-reconstruction classifier (1..=31).

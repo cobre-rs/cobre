@@ -39,11 +39,20 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    CutManagementConfig, EntityCounts, EventConfig, ForwardResult, FutureCostFunction, HorizonMode,
-    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing, simulate, sync_forward,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    forward::{ForwardResult, sync_forward},
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    lp_builder::PatchBuffer,
+    risk_measure::RiskMeasure,
+    simulate,
+    simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
     train,
+    workspace::{SolverWorkspace, WorkspaceSizing},
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,
@@ -578,7 +587,7 @@ fn run_simulation(
     fx: &Fixture3H,
     fcf: &FutureCostFunction,
     n_scenarios: u32,
-) -> Vec<(u32, f64, cobre_sddp::ScenarioCategoryCosts)> {
+) -> Vec<(u32, f64, cobre_sddp::simulation::ScenarioCategoryCosts)> {
     let sim_config = SimulationConfig {
         n_scenarios,
         io_channel_capacity: 64,

@@ -14,7 +14,7 @@
     clippy::cast_precision_loss
 )]
 
-use cobre_sddp::{CapturedBasis, workspace::BASIS_BROADCAST_WIRE_VERSION};
+use cobre_sddp::workspace::{BASIS_BROADCAST_WIRE_VERSION, CapturedBasis};
 
 // ---------------------------------------------------------------------------
 // Helper: build a CapturedBasis with deterministic data

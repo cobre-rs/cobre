@@ -430,7 +430,7 @@ pub(crate) struct BackwardAccumulators {
     /// the closure return. Avoids the per-stage `Vec::with_capacity(n_local)`
     /// allocation in `process_stage_backward`.
     pub(crate) staged_cuts_buf: Vec<StagedCut>,
-    /// Scratch buffers for `CVaR` weight computation in [`RiskMeasure::CVaR`].
+    /// Scratch buffers for `CVaR` weight computation in `RiskMeasure::CVaR`.
     ///
     /// The three internal `Vec`s (`upper_bounds`, `order`, `mu`) grow lazily
     /// to `n_openings` on the first `CVaR` call and are reused thereafter.
@@ -536,13 +536,13 @@ pub(crate) struct ScratchBuffers {
     /// Per-worker trajectory-cost accumulator for the forward pass.
     ///
     /// Pre-sized to `max_local_fwd` at construction via [`WorkspaceSizing`].
-    /// Inside [`run_forward_worker`] the buffer is `clear()`ed then
+    /// Inside `run_forward_worker` the buffer is `clear()`ed then
     /// `resize(n_local, 0.0)`d so no heap allocation occurs on the hot path.
     /// At the worker boundary ownership is transferred via `std::mem::take`,
     /// leaving this field empty until the next iteration's resize.
     ///
     /// Named `trajectory_costs_buf` (not `trajectory_costs`) to avoid
-    /// collision with the identically-named field on [`ForwardWorkerResult`].
+    /// collision with the identically-named field on `ForwardWorkerResult`.
     pub(crate) trajectory_costs_buf: Vec<f64>,
 
     /// Per-worker raw-noise scratch for the forward-pass sampler and simulation
@@ -550,9 +550,9 @@ pub(crate) struct ScratchBuffers {
     ///
     /// Distinct from [`ScratchBuffers::noise_buf`] which is used by the
     /// backward inflow-patch path.  Pre-sized to `noise_dim` at construction.
-    /// Inside [`run_forward_worker`] the buffer is `resize(noise_dim, 0.0)`d
+    /// Inside `run_forward_worker` the buffer is `resize(noise_dim, 0.0)`d
     /// before the inner scenario loop so no per-call allocation occurs.
-    /// Inside [`run_worker_scenarios`] the buffer is `resize(noise_dim, 0.0)`d
+    /// Inside `run_worker_scenarios` the buffer is `resize(noise_dim, 0.0)`d
     /// before the scenario loop; neither use overlaps the other within a single
     /// `SolverWorkspace`.
     pub(crate) raw_noise_buf: Vec<f64>,
@@ -561,10 +561,10 @@ pub(crate) struct ScratchBuffers {
     /// simulation worker loop.
     ///
     /// Pre-sized to `total_forward_passes.max(1)` at construction.
-    /// Inside [`run_forward_worker`] the buffer is
+    /// Inside `run_forward_worker` the buffer is
     /// `resize(total_forward_passes.max(1), 0)`d before the inner scenario
     /// loop so no per-call allocation occurs.
-    /// Inside [`run_worker_scenarios`] the buffer is
+    /// Inside `run_worker_scenarios` the buffer is
     /// `resize(n_scenarios.max(1), 0)`d before the scenario loop; neither
     /// use overlaps the other within a single `SolverWorkspace`.
     pub(crate) perm_scratch: Vec<usize>,
@@ -619,14 +619,18 @@ pub struct SolverWorkspace<S: SolverInterface> {
     /// Zero-allocation timing payload buffer for [`cobre_core::TrainingEvent::WorkerTiming`].
     ///
     /// Accumulated by the rayon closure inside the parallel region (forward or
-    /// backward) and moved into the event payload after the region completes.
-    /// Reset to `[0.0; 16]` at the start of each iteration boundary before any
-    /// accumulation begins. The fixed-size array is stack-resident and Copy;
-    /// no heap allocation occurs per event.
+    /// backward) and moved by value into the event payload after the region
+    /// completes. Reset to `WorkerPhaseTimings::default()` at the start of
+    /// each iteration boundary before any accumulation begins.
+    /// `WorkerPhaseTimings` is `Copy` and stack-resident; no heap allocation
+    /// occurs per event.
     ///
-    /// Slot indices mirror `iteration_timing_schema` column order — see
-    /// [`cobre_core::WORKER_TIMING_SLOT_FWD_WALL`] and siblings for the mapping.
-    pub worker_timing_buf: [f64; 16],
+    /// Field-to-slot mapping for the writer record:
+    /// `forward_wall_ms` → `WORKER_TIMING_SLOT_FWD_WALL`,
+    /// `backward_wall_ms` → `WORKER_TIMING_SLOT_BWD_WALL`,
+    /// `bwd_setup_ms` → `WORKER_TIMING_SLOT_BWD_SETUP`,
+    /// `fwd_setup_ms` → `WORKER_TIMING_SLOT_FWD_SETUP`.
+    pub worker_timing_buf: cobre_core::WorkerPhaseTimings,
 }
 
 impl<S: SolverInterface> SolverWorkspace<S> {
@@ -666,7 +670,7 @@ impl<S: SolverInterface> SolverWorkspace<S> {
                 sizing.initial_pool_capacity,
                 sizing.n_state,
             ),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }
     }
 }
@@ -792,7 +796,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                         sizing.initial_pool_capacity,
                         sizing.n_state,
                     ),
-                    worker_timing_buf: [0.0_f64; 16],
+                    worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
                 }
             })
             .collect();
@@ -847,7 +851,7 @@ impl<S: SolverInterface> WorkspacePool<S> {
                     sizing.initial_pool_capacity,
                     sizing.n_state,
                 ),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             });
         }
         Ok(Self { workspaces })

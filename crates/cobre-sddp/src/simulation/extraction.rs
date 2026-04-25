@@ -34,7 +34,7 @@ use std::ops::Range;
 use cobre_core::ConstraintSense;
 use cobre_core::EntityId;
 
-use crate::StageIndexer;
+use crate::indexer::StageIndexer;
 use crate::lp_builder::{COST_SCALE_FACTOR, GenericConstraintRowEntry};
 use crate::simulation::types::{
     ScenarioCategoryCosts, SimulationBusResult, SimulationContractResult, SimulationCostResult,
@@ -1369,7 +1369,7 @@ mod tests {
         EntityCounts, SolutionView, StageExtractionSpec, accumulate_category_costs,
         assign_scenarios, extract_stage_result,
     };
-    use crate::StageIndexer;
+    use crate::indexer::StageIndexer;
     use crate::simulation::types::{ScenarioCategoryCosts, SimulationCostResult};
 
     // -------------------------------------------------------------------------

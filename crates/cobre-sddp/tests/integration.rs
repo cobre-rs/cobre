@@ -48,9 +48,15 @@ use cobre_stochastic::{
 };
 
 use cobre_sddp::{
-    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-    RiskMeasure, SddpError, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
+    SddpError, StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::fcf::FutureCostFunction,
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    risk_measure::RiskMeasure,
+    train,
 };
 
 // ===========================================================================
@@ -549,7 +555,7 @@ fn run_one_deterministic_pass(
     fx: &Fixture,
     stochastic: &StochasticContext,
     limit: u64,
-) -> cobre_sddp::TrainingOutcome {
+) -> cobre_sddp::training::TrainingOutcome {
     let mut fcf = make_fcf(fx.n_stages);
     let mut solver = MockSolver::with_fixed(50.0);
     let stage_ctx = StageContext {

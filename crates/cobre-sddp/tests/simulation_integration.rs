@@ -41,11 +41,19 @@ use cobre_io::{
     write_policy_checkpoint, write_results,
 };
 use cobre_sddp::{
-    CutManagementConfig, EntityCounts, EventConfig, FutureCostFunction, HorizonMode,
-    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing, build_training_output,
-    simulate, train,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, build_training_output,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    lp_builder::PatchBuffer,
+    risk_measure::RiskMeasure,
+    simulate,
+    simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    train,
+    workspace::{SolverWorkspace, WorkspaceSizing},
 };
 
 /// Single-rank communicator for testing.

@@ -86,9 +86,6 @@ pub enum BackendKind {
 #[cfg(feature = "mpi")]
 pub enum CommBackend {
     /// MPI backend powered by ferrompi.
-    ///
-    /// Only compiled when the `mpi` Cargo feature is enabled.
-    #[cfg(feature = "mpi")]
     Mpi(Box<crate::FerrompiBackend>),
 
     /// Single-process local backend.
@@ -98,16 +95,12 @@ pub enum CommBackend {
     Local(crate::LocalBackend),
 }
 
-// SAFETY: All inner backend types (FerrompiBackend, LocalBackend) are Send + Sync.
-// CommBackend is a sum type wrapping exactly one of them, so the composite is also
-// Send + Sync. LocalBackend is a ZST with no interior state. FerrompiBackend has an
-// explicit `unsafe impl Send + Sync` with documented invariants in ferrompi.rs.
 #[cfg(feature = "mpi")]
-unsafe impl Send for CommBackend {}
-
-// SAFETY: See Send justification above. All inner types are Sync.
-#[cfg(feature = "mpi")]
-unsafe impl Sync for CommBackend {}
+#[allow(dead_code)]
+const fn _assert_comm_backend_send_sync() {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<CommBackend>();
+}
 
 #[cfg(feature = "mpi")]
 impl crate::Communicator for CommBackend {

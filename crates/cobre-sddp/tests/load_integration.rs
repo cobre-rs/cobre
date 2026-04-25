@@ -38,9 +38,15 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-    RiskMeasure, StageContext, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-    TrainingConfig, TrainingContext, cut::fcf::FutureCostFunction, train,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::fcf::FutureCostFunction,
+    horizon_mode::HorizonMode,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    risk_measure::RiskMeasure,
+    train,
 };
 use cobre_solver::{
     Basis, RowBatch, SolverError, SolverInterface, SolverStatistics, StageTemplate,

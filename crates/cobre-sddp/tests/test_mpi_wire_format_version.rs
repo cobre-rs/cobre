@@ -12,9 +12,9 @@
 )]
 
 use cobre_sddp::{
-    CapturedBasis, SddpError,
+    SddpError,
     cut::wire::{cut_wire_size, deserialize_cut, serialize_cut},
-    workspace::BASIS_BROADCAST_WIRE_VERSION,
+    workspace::{BASIS_BROADCAST_WIRE_VERSION, CapturedBasis},
 };
 
 // ---------------------------------------------------------------------------

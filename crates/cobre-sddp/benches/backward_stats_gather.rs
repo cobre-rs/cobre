@@ -10,7 +10,7 @@
 
 use std::sync::mpsc;
 
-use cobre_core::{TrainingEvent, WORKER_TIMING_SLOT_COUNT, WorkerTimingPhase};
+use cobre_core::{TrainingEvent, WorkerTimingPhase};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use cobre_sddp::solver_stats::{SolverStatsDelta, StageWorkerStatsBuffer};
@@ -51,7 +51,7 @@ fn bench_worker_timing_emit(c: &mut Criterion) {
     c.bench_function("worker_timing_emit 10_workers", |b| {
         b.iter(|| {
             for w in 0..n_workers {
-                let timings = [black_box(0.0_f64); WORKER_TIMING_SLOT_COUNT];
+                let timings = black_box(cobre_core::WorkerPhaseTimings::default());
                 let event = TrainingEvent::WorkerTiming {
                     rank: 0,
                     worker_id: w,

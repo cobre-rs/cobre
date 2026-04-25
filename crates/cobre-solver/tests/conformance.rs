@@ -1406,8 +1406,14 @@ fn basis_dimensions_after_solve() {
     }
 }
 
-/// A basis extracted from a 2-row LP must remain valid after 2 Benders cuts are
-/// added, and the warm-started objective must equal 162.0.
+/// A basis extracted from a 2-row LP must remain valid after 2 inequality rows
+/// are added, and the warm-started objective must equal 162.0.
+///
+/// This test exercises the defensive BASIC-padding fallback path in `solve`.
+/// The production caller reconciles the basis size to the current LP row count
+/// before invoking `solve`, so the `debug_assert!` would fire on this fallback
+/// path. The test runs only when `debug_assertions` is disabled.
+#[cfg(not(debug_assertions))]
 #[test]
 fn basis_cut_extension() {
     let mut solver = HighsSolver::new().expect("solver");

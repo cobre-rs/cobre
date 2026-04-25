@@ -3,7 +3,8 @@
 use cobre_core::{Stage, temporal::StageLagTransition};
 
 use crate::{
-    StageIndexer, StageTemplates, scaling_report::ScalingReport, simulation::EntityCounts,
+    indexer::StageIndexer, lp_builder::StageTemplates, scaling_report::ScalingReport,
+    simulation::EntityCounts,
 };
 
 /// All per-stage and stage-indexed data owned by [`super::StudySetup`].
@@ -21,7 +22,7 @@ pub struct StageData {
 
     /// Study stages (id >= 0) in index order.
     ///
-    /// Borrowed by [`crate::TrainingContext`] so that
+    /// Borrowed by `TrainingContext` so that
     /// [`cobre_stochastic::build_forward_sampler`] can read per-stage noise
     /// methods when constructing an `OutOfSample` sampler.
     pub(crate) stages: Vec<Stage>,

@@ -1,12 +1,12 @@
 //! [`MethodologyConfig`] — stochastic numerical methodology parameters.
 
-use crate::{HorizonMode, InflowNonNegativityMethod};
+use crate::{horizon_mode::HorizonMode, inflow_method::InflowNonNegativityMethod};
 
 /// Stochastic numerical methodology parameters stored on [`super::StudySetup`].
 ///
 /// Groups the two fields that govern how the solver treats the study horizon
 /// and inflow non-negativity enforcement. These are distinct from cut-pool
-/// machinery ([`crate::CutManagementConfig`]) and output events
+/// machinery ([`crate::config::CutManagementConfig`]) and output events
 /// ([`crate::config::EventParams`]).
 ///
 /// # Construction

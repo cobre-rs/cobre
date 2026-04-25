@@ -5,7 +5,7 @@
 //!
 //! ## Callers
 //!
-//! Production call sites of [`crate::simulate`] (via [`super::StudySetup::simulate`]):
+//! Production call sites of [`crate::simulate`] (via `StudySetup::simulate`):
 //!
 //! | Caller | File | `baked_templates` |
 //! |--------|------|-------------------|
@@ -503,7 +503,7 @@ fn build_sim_sampler<'a>(
 fn rebake_templates_if_needed(
     fcf: &FutureCostFunction,
     ctx: &StageContext<'_>,
-    indexer: &crate::StageIndexer,
+    indexer: &crate::indexer::StageIndexer,
     num_stages: usize,
     caller_baked: Option<&[StageTemplate]>,
     bake_batch: &mut RowBatch,

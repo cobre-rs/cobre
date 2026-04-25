@@ -131,7 +131,7 @@ pub struct StageTemplates {
 /// Construct a [`StageTemplate`] for a single study stage.
 ///
 /// Returns the template, the row index of the water-balance block
-/// (used as `base_row` by the [`PatchBuffer`] noise injection), the
+/// (used as `base_row` by the `PatchBuffer` noise injection), the
 /// row index of the load-balance block (used for load-noise patches),
 /// the generic constraint row entries for this stage, NCS metadata
 /// (column start, count, and active system indices), and z-inflow

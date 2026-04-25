@@ -809,9 +809,11 @@ mod lb_conformance {
     //! LB monotonicity conformance: adding cuts can only increase the lower bound.
 
     use cobre_sddp::{
-        InflowNonNegativityMethod, LbEvalScratch, LbEvalScratchBundle, PatchBuffer, RiskMeasure,
-        StageIndexer,
-        lower_bound::{LbEvalSpec, evaluate_lower_bound},
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        lower_bound::{LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound},
+        lp_builder::PatchBuffer,
+        risk_measure::RiskMeasure,
     };
     use cobre_solver::RowBatch;
 
@@ -933,7 +935,7 @@ mod lb_conformance {
 /// empty (0..0) ranges for a constraint family that should be present.
 #[test]
 fn indexer_constraint_inventory() {
-    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+    use cobre_sddp::indexer::{EquipmentCounts, FphaColumnLayout, StageIndexer};
 
     let indexer = StageIndexer::with_equipment(
         &EquipmentCounts {
@@ -1059,7 +1061,7 @@ fn indexer_constraint_inventory() {
 fn constraint_extraction_regression_guard() {
     use std::ops::Range;
 
-    use cobre_sddp::{EquipmentCounts, FphaColumnLayout, StageIndexer};
+    use cobre_sddp::indexer::{EquipmentCounts, FphaColumnLayout, StageIndexer};
 
     let indexer = StageIndexer::with_equipment(
         &EquipmentCounts {

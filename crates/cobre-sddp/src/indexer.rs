@@ -665,7 +665,7 @@ impl StageIndexer {
     /// # Examples
     ///
     /// ```
-    /// use cobre_sddp::StageIndexer;
+    /// use cobre_sddp::indexer::StageIndexer;
     ///
     /// // Worked example from spec SS5.5.3: N = 3, L = 2
     /// let idx = StageIndexer::new(3, 2);
@@ -809,7 +809,7 @@ impl StageIndexer {
     /// # Examples
     ///
     /// ```
-    /// use cobre_sddp::StageIndexer;
+    /// use cobre_sddp::indexer::StageIndexer;
     ///
     /// // N=1 hydro, L=0 lags, T=2 thermals, L_n=1 line, B=2 buses, K=1 block, no penalty
     /// // theta = N*(3+L) = 1*(3+0) = 3
@@ -822,11 +822,11 @@ impl StageIndexer {
     /// // line_rev:  10..11  (1 line * 1 block)
     /// // deficit:   11..13  (2 buses * 1 block)
     /// // excess:    13..15  (2 buses * 1 block)
-    /// let counts = cobre_sddp::EquipmentCounts {
+    /// let counts = cobre_sddp::indexer::EquipmentCounts {
     ///     hydro_count: 1, max_par_order: 0, n_thermals: 2, n_lines: 1,
     ///     n_buses: 2, n_blks: 1, has_inflow_penalty: false, max_deficit_segments: 1,
     /// };
-    /// let fpha = cobre_sddp::FphaColumnLayout { hydro_indices: vec![], planes_per_hydro: vec![] };
+    /// let fpha = cobre_sddp::indexer::FphaColumnLayout { hydro_indices: vec![], planes_per_hydro: vec![] };
     /// let idx = StageIndexer::with_equipment(&counts, &fpha);
     /// assert_eq!(idx.turbine,    4..5);
     /// assert_eq!(idx.spillage,   5..6);
@@ -1061,7 +1061,7 @@ impl StageIndexer {
     /// # Examples
     ///
     /// ```
-    /// use cobre_sddp::StageIndexer;
+    /// use cobre_sddp::indexer::StageIndexer;
     /// use cobre_solver::StageTemplate;
     ///
     /// let template = StageTemplate {

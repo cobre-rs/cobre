@@ -4,7 +4,9 @@ use cobre_core::{Stage, scenario::SamplingScheme, temporal::StageLagTransition};
 use cobre_solver::StageTemplate;
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
-use crate::{HorizonMode, InflowNonNegativityMethod, StageIndexer};
+use crate::{
+    horizon_mode::HorizonMode, indexer::StageIndexer, inflow_method::InflowNonNegativityMethod,
+};
 
 /// Immutable per-stage LP layout and noise scaling parameters.
 ///

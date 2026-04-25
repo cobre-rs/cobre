@@ -6,9 +6,7 @@
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use cobre_core::{
-    TrainingEvent, WORKER_TIMING_SLOT_FWD_SETUP, WORKER_TIMING_SLOT_FWD_WALL, WorkerTimingPhase,
-};
+use cobre_core::{TrainingEvent, WorkerTimingPhase};
 use cobre_solver::{SolverInterface, SolverStatistics, StageTemplate};
 use cobre_stochastic::context::ClassSchemes;
 use cobre_stochastic::{
@@ -20,10 +18,13 @@ use rayon::iter::{
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    error::SddpError,
     forward::{ForwardResult, StageKey, partition, run_forward_stage},
+    indexer::StageIndexer,
     solver_stats::SolverStatsDelta,
+    trajectory::TrajectoryRecord,
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace},
 };
 
@@ -94,7 +95,7 @@ impl<'a, S: SolverInterface + Send> ForwardPassInputs<'a, S> {
         scratch: &'a mut crate::training_session::iteration_scratch::IterationScratch,
         fcf: &'a FutureCostFunction,
         training_ctx: &'a TrainingContext<'a>,
-        cut_mgmt: &'a crate::CutManagementConfig,
+        cut_mgmt: &'a crate::config::CutManagementConfig,
         ranks: &crate::training_session::rank_distribution::RankDistribution,
         runtime: &'a crate::training_session::runtime::RuntimeHandles,
         iteration: u64,
@@ -410,7 +411,7 @@ impl ForwardPassState {
 
         // Reset per-worker timing accumulators at the iteration boundary.
         for ws in inputs.workspaces.iter_mut() {
-            ws.worker_timing_buf.fill(0.0);
+            ws.worker_timing_buf = cobre_core::WorkerPhaseTimings::default();
         }
 
         // Parallel region: each worker processes its scenario partition.
@@ -545,9 +546,9 @@ impl ForwardPassState {
         )]
         let fwd_scheduling_ms = (parallel_wall_ms as f64 - max_worker_ms).max(0.0);
 
-        // Accumulate per-worker forward-setup time into timing buf slot FWD_SETUP.
+        // Accumulate per-worker forward-setup time into the named field.
         for (ws, delta) in inputs.workspaces.iter_mut().zip(&self.worker_deltas) {
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_SETUP] +=
+            ws.worker_timing_buf.fwd_setup_ms +=
                 delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
         }
         if let Some(sender) = inputs.event_sender {
@@ -788,8 +789,7 @@ pub(crate) fn run_forward_worker<S: SolverInterface + Send>(
     ws.scratch.perm_scratch = perm_scratch;
 
     let local_solves = ws.solver.statistics().solve_count - local_solve_count_before;
-    ws.worker_timing_buf[WORKER_TIMING_SLOT_FWD_WALL] +=
-        worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
+    ws.worker_timing_buf.forward_wall_ms += worker_wall_start.elapsed().as_secs_f64() * 1_000.0;
     Ok(ForwardWorkerResult {
         // R5: take the pre-allocated buffer out of ws; ForwardResult reassembles
         // the pieces, and post_process_worker_results later returns it via
@@ -823,8 +823,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        trajectory::TrajectoryRecord,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -967,7 +971,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }
     }
 

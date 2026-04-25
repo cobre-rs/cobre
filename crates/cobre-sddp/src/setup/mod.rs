@@ -4,8 +4,8 @@
 //! It builds LP templates, indexer, initial state, FCF, horizon mode, risk measures,
 //! and entity counts from a validated [`System`] and [`cobre_io::Config`].
 //!
-//! **Ownership**: `StudySetup` owns all data; callers borrow for [`TrainingContext`](crate::TrainingContext)
-//! and [`StageContext`](crate::StageContext) construction. The [`StochasticContext`] lifetime matches setup.
+//! **Ownership**: `StudySetup` owns all data; callers borrow for `TrainingContext`
+//! and `StageContext` construction. The [`StochasticContext`] lifetime matches setup.
 //!
 //! **Not included**: MPI communication (in CLI/Python), solver instances (caller-created),
 //! progress bars, event channels (caller-managed).
@@ -57,10 +57,14 @@ use cobre_core::{
 use cobre_stochastic::{ExternalScenarioLibrary, HistoricalScenarioLibrary, StochasticContext};
 
 use crate::{
-    CutManagementConfig, FutureCostFunction, HorizonMode, RiskMeasure, SddpError, StageIndexer,
-    build_stage_templates,
-    config::EventParams,
+    config::{CutManagementConfig, EventParams},
+    cut::FutureCostFunction,
+    error::SddpError,
+    horizon_mode::HorizonMode,
     hydro_models::{EvaporationModel, PrepareHydroModelsResult, ResolvedProductionModel},
+    indexer::StageIndexer,
+    lp_builder::build_stage_templates,
+    risk_measure::RiskMeasure,
     simulation::EntityCounts,
     stopping_rule::{StoppingRule, StoppingRuleSet},
 };
@@ -75,7 +79,7 @@ use crate::{
 /// [`cobre_io::Config`]. Owns all data so it can be held across async
 /// boundaries (e.g., Python GIL release) without lifetime issues.
 ///
-/// Callers build [`TrainingContext`](crate::TrainingContext) and [`StageContext`](crate::StageContext) by borrowing
+/// Callers build `TrainingContext` and `StageContext` by borrowing
 /// from `StudySetup`.
 #[derive(Debug)]
 pub struct StudySetup {
@@ -93,7 +97,7 @@ pub struct StudySetup {
     pub hydro_models: PrepareHydroModelsResult,
 
     pub(crate) ncs_entity_ids_per_stage: Vec<Vec<i32>>,
-    /// Max generation [MW] per stochastic NCS entity, sorted by entity ID.
+    /// Max generation \[MW\] per stochastic NCS entity, sorted by entity ID.
     pub(crate) ncs_max_gen: Vec<f64>,
 
     /// Sampling schemes and pre-built libraries for training and simulation phases.
@@ -770,8 +774,8 @@ fn build_initial_state(system: &System, indexer: &StageIndexer) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::StudySetup;
-    use crate::StageIndexer;
     use crate::hydro_models::PrepareHydroModelsResult;
+    use crate::indexer::StageIndexer;
 
     use cobre_core::{
         BoundsCountsSpec, BoundsDefaults, BusStagePenalties, ContractStageBounds, HydroStageBounds,

@@ -7,22 +7,22 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use cobre_comm::{Communicator, ReduceOp};
-use cobre_core::{
-    TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_BWD_WALL, WorkerTimingPhase,
-};
+use cobre_core::{TrainingEvent, WorkerPhaseTimings, WorkerTimingPhase};
 use cobre_solver::{RowBatch, SolverInterface, SolverStatistics, StageTemplate};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 
 use crate::{
-    CutManagementConfig, FutureCostFunction, SddpError, TrajectoryRecord,
     backward::{
         BackwardResult, StageWorkerOpeningDelta, StagedCut, SuccessorSpec, load_backward_lp,
         process_trial_point_backward,
     },
+    config::CutManagementConfig,
     context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
     cut_sync::CutSyncBuffers,
+    error::SddpError,
     forward::{build_delta_cut_row_batch_into, partition},
     risk_measure::RiskMeasure,
     solver_stats::{
@@ -34,6 +34,7 @@ use crate::{
         iteration_scratch::IterationScratch, rank_distribution::RankDistribution,
         runtime::RuntimeHandles,
     },
+    trajectory::TrajectoryRecord,
     visited_states::VisitedStatesArchive,
     workspace::{BasisStore, BasisStoreSliceMut, SolverWorkspace, WorkspacePool},
 };
@@ -342,7 +343,7 @@ impl BackwardPassState {
 
         // Reset per-worker timing and iteration-scoped window buffers.
         for ws in inputs.workspaces.iter_mut() {
-            ws.worker_timing_buf.fill(0.0);
+            ws.worker_timing_buf = WorkerPhaseTimings::default();
             ws.backward_accum.metadata_sync_window_contribution.fill(0);
         }
         self.metadata_sync_window_buf.fill(0);
@@ -530,7 +531,7 @@ impl BackwardPassState {
     ///
     /// Snapshots solver statistics after the parallel region, computes per-worker
     /// deltas against the before-snapshot already stored in `self.worker_stats_before`,
-    /// updates `WORKER_TIMING_SLOT_BWD_SETUP` on each workspace, and returns
+    /// updates `worker_timing_buf.bwd_setup_ms` on each workspace, and returns
     /// `(setup_ms_delta, imbalance_ms_delta, scheduling_ms_delta)`.
     fn collect_stage_timing_stats<S: SolverInterface + Send>(
         &mut self,
@@ -554,7 +555,7 @@ impl BackwardPassState {
             .map(|d| d.load_model_time_ms + d.set_bounds_time_ms + d.basis_set_time_ms)
             .sum();
         for (ws, delta) in workspaces.iter_mut().zip(&self.worker_deltas) {
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_SETUP] +=
+            ws.worker_timing_buf.bwd_setup_ms +=
                 delta.load_model_time_ms + delta.set_bounds_time_ms + delta.basis_set_time_ms;
         }
         self.worker_totals.clear();
@@ -982,7 +983,7 @@ pub(crate) fn process_stage_backward<S: SolverInterface + Send>(
             }
 
             // Accumulate per-worker elapsed into the iteration-level timing buffer.
-            ws.worker_timing_buf[WORKER_TIMING_SLOT_BWD_WALL] +=
+            ws.worker_timing_buf.backward_wall_ms +=
                 worker_stage_wall_start.elapsed().as_secs_f64() * 1_000.0;
 
             // Drain the buffer into an owned Vec to cross the rayon closure
@@ -1013,11 +1014,16 @@ mod tests {
     };
 
     use crate::{
-        ExchangeBuffers, FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure,
-        StageIndexer, TrajectoryRecord,
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
         cut_sync::CutSyncBuffers,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
         solver_stats::WORKER_STATS_ENTRY_STRIDE,
+        state_exchange::ExchangeBuffers,
+        trajectory::TrajectoryRecord,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -1203,7 +1209,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: WorkerPhaseTimings::default(),
         }]
     }
 

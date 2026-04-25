@@ -347,6 +347,11 @@ pub fn build_training_output(
     let converged = result.reason == crate::stopping_rule::RULE_BOUND_STALLING
         || result.reason == crate::stopping_rule::RULE_SIMULATION_BASED;
 
+    // `final_gap_percent` is reported only when `final_lb > 0.0`.
+    // For a non-positive lower bound the gap percentage is either
+    // undefined (`final_lb == 0.0`) or sign-inverted
+    // (`final_lb < 0.0`), so the writer reports `None` rather than
+    // a value that would mislead downstream consumers.
     let final_gap_percent = if result.final_lb > 0.0 {
         Some(result.final_gap * 100.0)
     } else {
@@ -424,6 +429,8 @@ fn build_worker_timing_records(
     };
 
     // Per-(iteration, rank, worker_id) merged timings for the per-worker rows.
+    // The BTreeMap value is the 16-wide writer record that bridges the four named
+    // WorkerPhaseTimings fields and the unchanged Parquet schema.
     let mut per_worker: BTreeMap<(u32, i32, i32), [u64; WORKER_TIMING_SLOT_COUNT]> =
         BTreeMap::new();
     for event in events {
@@ -440,13 +447,21 @@ fn build_worker_timing_records(
             let entry = per_worker
                 .entry((iter_u32, *rank, *worker_id))
                 .or_insert([0_u64; WORKER_TIMING_SLOT_COUNT]);
-            // Per-worker slots only; rank-only slots are zero
-            // on per-worker events. Both Forward and Backward emissions land on
-            // the same row, summed slot-wise — Forward fills FWD_WALL/FWD_SETUP,
-            // Backward fills BWD_WALL/BWD_SETUP.
+            // Map the four named fields into the corresponding writer-record slots.
+            // Forward fills FWD_WALL/FWD_SETUP (both 0 on Backward events).
+            // Backward fills BWD_WALL/BWD_SETUP (both 0 on Forward events).
+            // All other slots remain 0 on per-worker rows; rank-aggregated rows
+            // carry the rank-only columns.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            for (slot, value) in timings.iter().enumerate() {
-                entry[slot] = entry[slot].saturating_add(value.max(0.0).round() as u64);
+            {
+                entry[WORKER_TIMING_SLOT_FWD_WALL] = entry[WORKER_TIMING_SLOT_FWD_WALL]
+                    .saturating_add(timings.forward_wall_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_BWD_WALL] = entry[WORKER_TIMING_SLOT_BWD_WALL]
+                    .saturating_add(timings.backward_wall_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_BWD_SETUP] = entry[WORKER_TIMING_SLOT_BWD_SETUP]
+                    .saturating_add(timings.bwd_setup_ms.max(0.0).round() as u64);
+                entry[WORKER_TIMING_SLOT_FWD_SETUP] = entry[WORKER_TIMING_SLOT_FWD_SETUP]
+                    .saturating_add(timings.fwd_setup_ms.max(0.0).round() as u64);
             }
         }
     }
@@ -480,15 +495,6 @@ fn build_worker_timing_records(
 
     // Per-worker rows.
     for ((iteration, rank, worker_id), timings) in per_worker {
-        // Sanity: slot constants used to build the per-worker totals correspond
-        // to the per-worker slot positions (FWD_WALL=0, BWD_WALL=1,
-        // BWD_SETUP=8, FWD_SETUP=11). All others remain 0 on per-worker rows.
-        let _ = (
-            WORKER_TIMING_SLOT_FWD_WALL,
-            WORKER_TIMING_SLOT_BWD_WALL,
-            WORKER_TIMING_SLOT_BWD_SETUP,
-            WORKER_TIMING_SLOT_FWD_SETUP,
-        );
         out.push(cobre_io::WorkerTimingRecord {
             iteration,
             rank,

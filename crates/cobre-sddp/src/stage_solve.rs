@@ -9,13 +9,14 @@
 use cobre_solver::{SolutionView, SolverInterface, StageTemplate};
 
 use crate::{
-    SddpError, StageIndexer,
     basis_reconstruct::{
         PaddingContext, ReconstructionStats, ReconstructionTarget, enforce_basic_count_invariant,
         reconstruct_basis,
     },
     context::StageContext,
     cut::pool::CutPool,
+    error::SddpError,
+    indexer::StageIndexer,
     workspace::{CapturedBasis, SolverWorkspace},
 };
 

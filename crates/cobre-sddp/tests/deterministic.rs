@@ -157,7 +157,7 @@ fn run_with_simulation(
     case_dir: &Path,
 ) -> (
     cobre_sddp::TrainingResult,
-    Vec<cobre_sddp::SimulationScenarioResult>,
+    Vec<cobre_sddp::simulation::SimulationScenarioResult>,
     cobre_sddp::SimulationSummary,
 ) {
     let config_path = case_dir.join("config.json");
@@ -2321,7 +2321,11 @@ fn d23_bidirectional_withdrawal() {
 /// generation across all buses. It is accurate for single-bus systems. For
 /// multi-bus systems with exchange lines, a bus-entity mapping would be needed
 /// to validate per-bus balance individually.
-fn assert_bus_balance(stage: &cobre_sddp::SimulationStageResult, tolerance: f64, label: &str) {
+fn assert_bus_balance(
+    stage: &cobre_sddp::simulation::SimulationStageResult,
+    tolerance: f64,
+    label: &str,
+) {
     // Collect unique block IDs from bus results (buses always have block_id set).
     let mut block_ids: Vec<u32> = stage.buses.iter().filter_map(|b| b.block_id).collect();
     block_ids.sort_unstable();

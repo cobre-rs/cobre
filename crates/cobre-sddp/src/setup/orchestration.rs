@@ -9,10 +9,15 @@ use cobre_core::TrainingEvent;
 use cobre_solver::{SolverError, SolverInterface};
 
 use crate::{
-    CapturedBasis, CutManagementConfig, EventConfig, LoopConfig, SddpError, SimulationError,
-    SimulationRunResult, SimulationScenarioResult, SolverWorkspace, StageContext, TrainingConfig,
-    TrainingContext, TrainingOutcome, TrainingResult, WorkspacePool, WorkspaceSizing,
-    simulation::SimulationOutputSpec,
+    config::{CutManagementConfig, EventConfig, LoopConfig, TrainingConfig},
+    context::{StageContext, TrainingContext},
+    error::SddpError,
+    simulation::{
+        SimulationOutputSpec, error::SimulationError, pipeline::SimulationRunResult,
+        types::SimulationScenarioResult,
+    },
+    training::{TrainingOutcome, TrainingResult},
+    workspace::{CapturedBasis, SolverWorkspace, WorkspacePool, WorkspaceSizing},
 };
 
 use super::StudySetup;

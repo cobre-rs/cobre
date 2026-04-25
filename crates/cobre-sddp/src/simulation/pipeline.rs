@@ -570,7 +570,7 @@ fn extract_sim_stage_result(
     view_objective: f64,
     ctx: &StageContext<'_>,
     output: &SimulationOutputSpec<'_>,
-    indexer: &crate::StageIndexer,
+    indexer: &crate::indexer::StageIndexer,
     ids: &SimStageIds,
     n_stochastic_ncs: usize,
 ) -> (f64, SimulationStageResult) {
@@ -951,8 +951,12 @@ mod tests {
 
     use super::SimulationOutputSpec;
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, PatchBuffer, StageIndexer,
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        lp_builder::PatchBuffer,
         simulation::{
             config::SimulationConfig,
             error::SimulationError,
@@ -1456,7 +1460,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 
@@ -2291,7 +2295,7 @@ mod tests {
                 },
                 scratch_basis: Basis::new(0, 0),
                 backward_accum: BackwardAccumulators::default(),
-                worker_timing_buf: [0.0_f64; 16],
+                worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
             })
             .collect();
         let result_4 = run_simulate(
@@ -3314,7 +3318,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
 
         // load_balance_row_starts[0]=2 (load balance row is row 2 in the template).
@@ -3635,7 +3639,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }];
 
         let load_balance_row_starts = vec![2usize];
@@ -3945,7 +3949,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }]
     }
 

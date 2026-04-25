@@ -1135,6 +1135,13 @@ impl SolverInterface for HighsSolver {
         self.stats.total_set_bounds_time_seconds += t0.elapsed().as_secs_f64();
     }
 
+    /// # Preconditions
+    ///
+    /// When `basis` is `Some(b)`, the caller must size
+    /// `b.row_status` to exactly `self.num_rows` (the current LP
+    /// row count). Callers that grow the LP by adding rows are
+    /// responsible for reconciling their basis to the new row
+    /// count before invoking this method.
     fn solve(
         &mut self,
         basis: Option<&crate::types::Basis>,
@@ -1151,6 +1158,15 @@ impl SolverInterface for HighsSolver {
                 basis.col_status.len(),
                 self.num_cols
             );
+            debug_assert!(
+                basis.row_status.len() >= self.num_rows,
+                "solve(Some(&basis)): basis.row_status.len() ({}) < self.num_rows ({}); \
+                 callers introducing new rows must reconcile basis (e.g. extend with \
+                 NONBASIC_AT_LOWER for fresh inequality rows) before calling solve. \
+                 The defensive BASIC padding below is incorrect for inequality slacks.",
+                basis.row_status.len(),
+                self.num_rows
+            );
 
             // Track every warm-start call as a basis offer for diagnostics.
             self.stats.basis_offered += 1;
@@ -1159,9 +1175,21 @@ impl SolverInterface for HighsSolver {
             // translation. Zero-copy warm-start path.
             self.basis_col_i32[..self.num_cols].copy_from_slice(&basis.col_status);
 
-            // Handle dimension mismatch for dynamic cuts:
-            // - Fewer rows than LP: extend with BASIC.
-            // - More rows than LP: truncate (extra entries ignored).
+            // Precondition: the caller must size `basis.row_status` to
+            // exactly `self.num_rows`. The production caller reconciles
+            // the basis size to the current row count before invoking
+            // `solve(Some(&basis))`, so `basis_rows == lp_rows` always
+            // holds in practice.
+            //
+            // For defensive robustness if a future caller offers a
+            // mismatched basis:
+            // - `basis_rows < lp_rows`: pad missing tail rows with BASIC.
+            //   This is incorrect for newly added inequality rows, whose
+            //   slacks should be non-basic at the appropriate bound;
+            //   callers introducing new rows must reconcile the basis
+            //   themselves before calling solve.
+            // - `basis_rows > lp_rows`: truncate the trailing entries.
+            //   The solver ignores any basis entry beyond `num_rows`.
             let basis_rows = basis.row_status.len();
             let lp_rows = self.num_rows;
             let copy_len = basis_rows.min(lp_rows);
@@ -1750,6 +1778,13 @@ mod tests {
     /// When the basis has fewer rows than the current LP (2 vs 4 after `add_rows`),
     /// `solve(Some(&basis))` must extend missing rows as Basic and solve correctly.
     /// SS1.2 objective with both cuts active is 162.0.
+    ///
+    /// This test exercises the defensive BASIC-padding fallback path,
+    /// which the production caller never hits because it reconciles the
+    /// basis to the LP row count before invoking `solve`. The
+    /// `debug_assert!` in `solve` would fire on this fallback path, so
+    /// the test runs only when `debug_assertions` is disabled.
+    #[cfg(not(debug_assertions))]
     #[test]
     fn test_solve_warm_start_extends_missing_rows_as_basic() {
         let mut solver = HighsSolver::new().expect("HighsSolver::new() must succeed");

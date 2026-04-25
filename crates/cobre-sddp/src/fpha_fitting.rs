@@ -914,7 +914,7 @@ impl ProductionFunction {
 /// Represents the tangent plane at a specific operating point `(v0, q0, s0)`:
 /// `g(v, q, s) = gamma_0 + gamma_v * v + gamma_q * q + gamma_s * s`
 ///
-/// The intercept is NOT scaled by kappa (contrast with [`cobre_core::FphaPlane`],
+/// The intercept is NOT scaled by kappa (contrast with `cobre_core::FphaPlane`,
 /// where `intercept = gamma_0 * kappa`). By construction, the tangent-point
 /// identity holds: `evaluate(v0, q0, s0) == phi(v0, q0, s0)`.
 #[derive(Debug, Clone, Copy)]

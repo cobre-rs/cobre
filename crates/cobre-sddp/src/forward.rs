@@ -23,12 +23,15 @@ use cobre_stochastic::{
 };
 
 use crate::{
-    FutureCostFunction, SddpError, StageIndexer, TrajectoryRecord,
     context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
     cut::pool::CutPool,
+    error::SddpError,
+    indexer::StageIndexer,
     lp_builder::COST_SCALE_FACTOR,
     noise::{NcsNoiseOffsets, transform_inflow_noise, transform_load_noise, transform_ncs_noise},
     solver_stats::SolverStatsDelta,
+    trajectory::TrajectoryRecord,
     workspace::{BasisStore, BasisStoreSliceMut, CapturedBasis, SolverWorkspace},
 };
 
@@ -1244,10 +1247,15 @@ mod tests {
         build_delta_cut_row_batch_into, partition, run_forward_pass, sync_forward,
     };
     use crate::{
-        FutureCostFunction, HorizonMode, InflowNonNegativityMethod, RiskMeasure, StageIndexer,
-        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig, TrajectoryRecord,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
         config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
+        cut::FutureCostFunction,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
+        trajectory::TrajectoryRecord,
         workspace::{BackwardAccumulators, BasisStore, SolverWorkspace},
     };
 
@@ -1895,7 +1903,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         }
     }
 
@@ -3887,7 +3895,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -4027,7 +4035,7 @@ mod tests {
             },
             scratch_basis: Basis::new(0, 0),
             backward_accum: BackwardAccumulators::default(),
-            worker_timing_buf: [0.0_f64; 16],
+            worker_timing_buf: cobre_core::WorkerPhaseTimings::default(),
         };
 
         let templates = vec![minimal_template_1_0_with_base(100.0)];
@@ -4287,8 +4295,8 @@ mod tests {
     fn append_new_cuts_returns_zero_when_no_new_cuts() {
         use crate::cut::CutRowMap;
 
-        let fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
-        let indexer = crate::StageIndexer::new(1, 0);
+        let fcf = crate::cut::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let indexer = crate::indexer::StageIndexer::new(1, 0);
         let mut row_map = CutRowMap::new(10, 5);
         let mut batch_buf = empty_row_batch();
         let mut solver = RecordingMockSolver::new();
@@ -4311,11 +4319,11 @@ mod tests {
     fn append_new_cuts_appends_all_on_empty_row_map() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let mut fcf = crate::cut::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
-        let indexer = crate::StageIndexer::new(1, 0);
+        let indexer = crate::indexer::StageIndexer::new(1, 0);
         let mut row_map = CutRowMap::new(10, 5);
         let mut batch_buf = empty_row_batch();
         let mut solver = RecordingMockSolver::new();
@@ -4341,11 +4349,11 @@ mod tests {
     fn append_new_cuts_skips_already_mapped_cuts() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let mut fcf = crate::cut::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
-        let indexer = crate::StageIndexer::new(1, 0);
+        let indexer = crate::indexer::StageIndexer::new(1, 0);
         let mut row_map = CutRowMap::new(10, 5);
         // Pre-insert slot 0 as if it was already in the LP.
         row_map.insert(0);
@@ -4374,11 +4382,11 @@ mod tests {
     fn append_new_cuts_matches_build_cut_row_batch_into() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let mut fcf = crate::cut::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]); // slot 0
         fcf.add_cut(0, 1, 0, 20.0, &[3.0]); // slot 1
 
-        let indexer = crate::StageIndexer::new(1, 0);
+        let indexer = crate::indexer::StageIndexer::new(1, 0);
 
         // Build via build_cut_row_batch_into.
         let mut expected_batch = empty_row_batch();
@@ -4411,10 +4419,10 @@ mod tests {
     fn append_new_cuts_with_scaling_matches_build() {
         use crate::cut::CutRowMap;
 
-        let mut fcf = crate::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
+        let mut fcf = crate::cut::FutureCostFunction::new(2, 1, 1, 10, &[0; 2]);
         fcf.add_cut(0, 0, 0, 10.0, &[1.0]);
 
-        let indexer = crate::StageIndexer::new(1, 0);
+        let indexer = crate::indexer::StageIndexer::new(1, 0);
         // col_scale must have at least theta+1 = 4 entries.
         let col_scale = vec![0.5, 2.0, 1.0, 0.1];
 

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking Changes
 
 - `StoppingRuleResult.rule_name` is now `&'static str`; `StoppingRuleResult.detail` is now `Cow<'static, str>`. Call `.to_string()` on `rule_name` or use `detail.as_ref()` at consumers that previously expected `String`.
+- `TrainingEvent::WorkerTiming.timings` field type changed from `[f64; 16]`
+  (where 12 of 16 slots were always zero on per-worker events) to a new
+  `WorkerPhaseTimings` struct with four named fields: `forward_wall_ms`,
+  `backward_wall_ms`, `fwd_setup_ms`, `bwd_setup_ms`. The output Parquet schema
+  for `training/timing/iterations.parquet` is unchanged. Consumers that read
+  the variant payload directly must access the named fields rather than slot
+  indices. The rank-aggregated `WorkerTimingRecord` writer record retains its
+  16-column layout and the `WORKER_TIMING_SLOT_*` constants remain public as
+  the bridge between named fields and writer slots.
 
 ### Added
 
@@ -44,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Internal refactor of `cobre-io` semantic-validation: the
+  6 319-line `validation/semantic.rs` file is now split into
+  7 cohesive domain submodules (`hydro`, `thermal`, `stages`,
+  `scenarios`, `season`, `correlation`, `sobol`) plus a
+  placeholder `shared` module for future cross-domain helpers.
+  The two public entry functions
+  (`validate_semantic_hydro_thermal`,
+  `validate_semantic_stages_penalties_scenarios`) keep their
+  paths under `cobre_io::validation::semantic::*`. No semantic-
+  validation rule was added, removed, or modified.
 - `TrainingEvent::SimulationProgress.scenarios_complete` now carries a global
   estimate under multi-rank execution (`local × ranks`, clamped to
   `scenarios_total`), matching the `scenarios_total` field's global scope.
@@ -97,8 +116,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiled unconditionally. Downstream `Cargo.toml` files that
   specified `cobre-comm = { features = ["tcp"] }` or
   `cobre-solver = { features = ["highs"] }` must drop those entries.
-
-### Verified
+- `cobre-sddp` crate root re-export surface reduced from ~85 to
+  ~50 symbols. Implementation-detail types
+  (`BackwardOutcome`, `CutSyncBuffers`, `StageIndexer`,
+  `FphaColumnLayout`, `EvapConfig`, `LbEvalScratch*`,
+  `PatchBuffer`, `WorkspacePool`, `BasisStore*`,
+  `CapturedBasis`, `RiskMeasure*`, `EvaporationModel*`,
+  `FphaPlane`, `LinearizedEvaporation`, `MonitorState`,
+  `TrainingOutcome`, `TrainingContext`, `StageContext`,
+  and similar) are no longer accessible at `cobre_sddp::Type`.
+  They remain reachable via their full module path
+  (e.g., `cobre_sddp::cut::pool::CutPool`,
+  `cobre_sddp::workspace::SolverWorkspace`).
 
 ## [0.5.0] - 2026-04-22
 

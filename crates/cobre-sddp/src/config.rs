@@ -30,7 +30,8 @@
 //! # Examples
 //!
 //! ```rust
-//! use cobre_sddp::{TrainingConfig, LoopConfig, CutManagementConfig, EventConfig};
+//! use cobre_sddp::TrainingConfig;
+//! use cobre_sddp::config::{CutManagementConfig, EventConfig, LoopConfig};
 //!
 //! let config = TrainingConfig {
 //!     loop_config: LoopConfig {
@@ -102,7 +103,7 @@ pub struct LoopParams {
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::LoopConfig;
+/// use cobre_sddp::config::LoopConfig;
 ///
 /// let cfg = LoopConfig { forward_passes: 10, max_iterations: 200, ..LoopConfig::default() };
 /// assert_eq!(cfg.forward_passes, 10);
@@ -174,7 +175,7 @@ impl Default for LoopConfig {
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::CutManagementConfig;
+/// use cobre_sddp::config::CutManagementConfig;
 ///
 /// let cfg = CutManagementConfig { cut_activity_tolerance: 1e-8, ..CutManagementConfig::default() };
 /// assert_eq!(cfg.cut_activity_tolerance, 1e-8);
@@ -247,7 +248,7 @@ impl Default for CutManagementConfig {
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::EventConfig;
+/// use cobre_sddp::config::EventConfig;
 ///
 /// let cfg = EventConfig { checkpoint_interval: Some(10), ..EventConfig::default() };
 /// assert_eq!(cfg.checkpoint_interval, Some(10));
@@ -323,7 +324,8 @@ pub(crate) struct EventParams {
 /// # Examples
 ///
 /// ```rust
-/// use cobre_sddp::{TrainingConfig, LoopConfig, CutManagementConfig, EventConfig};
+/// use cobre_sddp::TrainingConfig;
+/// use cobre_sddp::config::{CutManagementConfig, EventConfig, LoopConfig};
 ///
 /// let config = TrainingConfig {
 ///     loop_config: LoopConfig {

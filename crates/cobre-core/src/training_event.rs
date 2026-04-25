@@ -47,21 +47,65 @@ pub enum WorkerTimingPhase {
     Backward,
 }
 
-/// Number of timing slots in the `[f64; 16]` payload of
-/// [`TrainingEvent::WorkerTiming`].
+/// Number of timing slots in the 16-wide `[u64; 16]` writer record
+/// (`cobre_io::WorkerTimingRecord`).
+///
+/// Per-worker event payloads now use [`WorkerPhaseTimings`] (4 named fields)
+/// rather than a sparse 16-element array. The constants below remain the
+/// canonical bridge between the four named fields and the writer-record slot
+/// positions — the Parquet schema is unchanged.
 pub const WORKER_TIMING_SLOT_COUNT: usize = 16;
 
-/// Slot index for `forward_wall_ms` (populated only on `Forward` phase events).
+/// Writer-record slot index for `forward_wall_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::forward_wall_ms`]
+/// into slot 0 of `cobre_io::WorkerTimingRecord`.
 pub const WORKER_TIMING_SLOT_FWD_WALL: usize = 0;
 
-/// Slot index for `backward_wall_ms` (populated only on `Backward` phase events).
+/// Writer-record slot index for `backward_wall_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::backward_wall_ms`]
+/// into slot 1 of `cobre_io::WorkerTimingRecord`.
 pub const WORKER_TIMING_SLOT_BWD_WALL: usize = 1;
 
-/// Slot index for `bwd_setup_ms` (populated only on `Backward` phase events).
+/// Writer-record slot index for `bwd_setup_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::bwd_setup_ms`]
+/// into slot 8 of `cobre_io::WorkerTimingRecord`.
 pub const WORKER_TIMING_SLOT_BWD_SETUP: usize = 8;
 
-/// Slot index for `fwd_setup_ms` (populated only on `Forward` phase events).
+/// Writer-record slot index for `fwd_setup_ms`.
+///
+/// Used in `training_output.rs` to map [`WorkerPhaseTimings::fwd_setup_ms`]
+/// into slot 11 of `cobre_io::WorkerTimingRecord`.
 pub const WORKER_TIMING_SLOT_FWD_SETUP: usize = 11;
+
+/// Per-worker timing payload for [`TrainingEvent::WorkerTiming`].
+///
+/// Names the four populated values explicitly. Replaces the previous
+/// `[f64; 16]` payload where 12 of 16 slots were always zero on per-worker
+/// events. `WorkerPhaseTimings` is `4 × f64 = 32 bytes`; the previous
+/// payload was 128 bytes (75% waste).
+///
+/// On `Forward`-phase events, `forward_wall_ms` and `fwd_setup_ms` are
+/// populated; the backward fields are 0. On `Backward`-phase events,
+/// `backward_wall_ms` and `bwd_setup_ms` are populated; the forward fields
+/// are 0.
+///
+/// The writer adapter in `training_output.rs` maps these four fields into the
+/// unchanged 16-wide `cobre_io::WorkerTimingRecord` via the
+/// `WORKER_TIMING_SLOT_*` constants, preserving the Parquet output schema.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WorkerPhaseTimings {
+    /// Forward-pass wall time in ms (populated on Forward; 0 on Backward).
+    pub forward_wall_ms: f64,
+    /// Backward-pass wall time in ms (populated on Backward; 0 on Forward).
+    pub backward_wall_ms: f64,
+    /// Forward setup time in ms (populated on Forward; 0 on Backward).
+    pub fwd_setup_ms: f64,
+    /// Backward setup time in ms (populated on Backward; 0 on Forward).
+    pub bwd_setup_ms: f64,
+}
 
 /// Result of evaluating a single stopping rule at a given iteration.
 ///
@@ -445,7 +489,7 @@ pub enum TrainingEvent {
         /// the global estimate is computed as `local_completed × ranks`,
         /// clamped to `scenarios_total`. The estimate is exact when work is
         /// evenly distributed and ranks finish at similar rates; it assumes
-        /// the balanced-workload invariant from [`assign_scenarios`].
+        /// the balanced-workload invariant of the simulation scheduler.
         scenarios_complete: u32,
         /// Total number of simulation scenarios to run across all ranks.
         scenarios_total: u32,
@@ -475,43 +519,32 @@ pub enum TrainingEvent {
     /// Emitted `n_workers_local` times per `(iteration, phase)` pair — once
     /// for every rayon worker in the local pool — after the parallel region
     /// completes. For a 10-worker / 50-iteration run this produces
-    /// `2 × 10 × 50 = 1 000` extra events; the fixed-size `[f64; 16]`
-    /// payload (128 bytes) is moved by value so no heap allocation occurs
-    /// per event.
+    /// `2 × 10 × 50 = 1 000` extra events; the [`WorkerPhaseTimings`]
+    /// payload (32 bytes, 4 named fields) is moved by value so no heap
+    /// allocation occurs per event.
     ///
-    /// ## Slot mapping
+    /// ## Payload fields
     ///
-    /// Slot indices map to columns of `iteration_timing_schema` in declaration
-    /// order (skipping `iteration`, which is the row key):
+    /// | Field              | Phase     | Per-worker?                              |
+    /// |--------------------|-----------|------------------------------------------|
+    /// | `forward_wall_ms`  | Forward   | yes — populated on Forward; 0 on Backward |
+    /// | `backward_wall_ms` | Backward  | yes — populated on Backward; 0 on Forward |
+    /// | `fwd_setup_ms`     | Forward   | yes — populated on Forward; 0 on Backward |
+    /// | `bwd_setup_ms`     | Backward  | yes — populated on Backward; 0 on Forward |
     ///
-    /// | Slot | Column                       | Per-worker?                         |
-    /// |------|------------------------------|-------------------------------------|
-    /// | 0    | `forward_wall_ms`            | yes — Forward emit only; 0 on Backward |
-    /// | 1    | `backward_wall_ms`           | yes — Backward emit only; 0 on Forward |
-    /// | 2    | `cut_selection_ms`           | NO (rank-only); always 0            |
-    /// | 3    | `mpi_allreduce_ms`           | NO (rank-only); always 0            |
-    /// | 4    | `cut_sync_ms`                | NO (rank-only); always 0            |
-    /// | 5    | `lower_bound_ms`             | NO (rank-only sequential); always 0 |
-    /// | 6    | `state_exchange_ms`          | NO (rank-only); always 0            |
-    /// | 7    | `cut_batch_build_ms`         | NO (rank-only sequential); always 0 |
-    /// | 8    | `bwd_setup_ms`               | yes — Backward emit only; 0 on Forward |
-    /// | 9    | `bwd_load_imbalance_ms`      | NO (synthetic rank-level); always 0 |
-    /// | 10   | `bwd_scheduling_overhead_ms` | NO (synthetic rank-level); always 0 |
-    /// | 11   | `fwd_setup_ms`               | yes — Forward emit only; 0 on Backward |
-    /// | 12   | `fwd_load_imbalance_ms`      | NO (synthetic rank-level); always 0 |
-    /// | 13   | `fwd_scheduling_overhead_ms` | NO (synthetic rank-level); always 0 |
-    /// | 14   | `overhead_ms`                | NO (rank-only residual); always 0   |
-    /// | 15   | reserved                     | always 0 (future use)               |
+    /// The writer adapter (`training_output.rs`) maps these four fields into
+    /// the 16-wide `cobre_io::WorkerTimingRecord` via [`WORKER_TIMING_SLOT_FWD_WALL`],
+    /// [`WORKER_TIMING_SLOT_BWD_WALL`], [`WORKER_TIMING_SLOT_BWD_SETUP`],
+    /// [`WORKER_TIMING_SLOT_FWD_SETUP`]. The rank-only slots (2–7, 9–10,
+    /// 12–15) are populated by the rank-aggregated `IterationSummary` rows
+    /// rather than per-worker events.
     ///
     /// ## Recovery invariant
     ///
-    /// For every slot that carries a per-worker value (0, 1, 8, 11):
-    /// `SUM(slot_value) GROUP BY (iteration, slot)` over the `WorkerTiming`
-    /// events for a given phase equals the corresponding field on the
-    /// rank-level `BackwardPassComplete` / `IterationSummary` event for the
-    /// same iteration. Slots 2–7, 9–10, 12–15 are always zero on
-    /// `WorkerTiming` events; the rank-level events carry the authoritative
-    /// values there.
+    /// `SUM(field) GROUP BY (iteration)` over the per-worker `WorkerTiming`
+    /// events equals the corresponding field on the rank-level
+    /// `BackwardPassComplete` / `IterationSummary` event for the same
+    /// iteration.
     WorkerTiming {
         /// MPI rank that owns this worker.
         rank: i32,
@@ -521,11 +554,8 @@ pub enum TrainingEvent {
         iteration: u64,
         /// Forward or Backward, distinguishing the two per-iteration emissions.
         phase: WorkerTimingPhase,
-        /// Fixed-size timing payload; slot mapping documented in the variant
-        /// doc comment above and in [`WORKER_TIMING_SLOT_FWD_WALL`],
-        /// [`WORKER_TIMING_SLOT_BWD_WALL`], [`WORKER_TIMING_SLOT_BWD_SETUP`],
-        /// [`WORKER_TIMING_SLOT_FWD_SETUP`].
-        timings: [f64; WORKER_TIMING_SLOT_COUNT],
+        /// Per-worker timing payload with four named fields. See [`WorkerPhaseTimings`].
+        timings: WorkerPhaseTimings,
     },
 }
 
@@ -534,7 +564,7 @@ mod tests {
     use std::borrow::Cow;
 
     use super::{
-        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_COUNT,
+        StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WorkerPhaseTimings,
         WorkerTimingPhase,
     };
 
@@ -660,7 +690,7 @@ mod tests {
                 worker_id: 2,
                 iteration: 1,
                 phase: WorkerTimingPhase::Backward,
-                timings: [0.0; WORKER_TIMING_SLOT_COUNT],
+                timings: WorkerPhaseTimings::default(),
             },
         ]
     }
@@ -891,12 +921,13 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_precision_loss)]
     fn worker_timing_fields_accessible() {
-        let mut timings = [0.0_f64; WORKER_TIMING_SLOT_COUNT];
-        for (i, slot) in timings.iter_mut().enumerate() {
-            *slot = (i as f64) * 1.5 + 0.25;
-        }
+        let timings = WorkerPhaseTimings {
+            forward_wall_ms: 10.0,
+            backward_wall_ms: 0.0,
+            fwd_setup_ms: 2.5,
+            bwd_setup_ms: 0.0,
+        };
         let event = TrainingEvent::WorkerTiming {
             rank: 2,
             worker_id: 3,
@@ -921,13 +952,10 @@ mod tests {
             !format!("{phase:?}").is_empty(),
             "WorkerTimingPhase::Forward debug must be non-empty"
         );
-        for (i, &v) in t.iter().enumerate() {
-            let expected = (i as f64) * 1.5 + 0.25;
-            assert!(
-                (v - expected).abs() < f64::EPSILON,
-                "slot {i}: expected {expected}, got {v}"
-            );
-        }
+        assert!((t.forward_wall_ms - 10.0).abs() < f64::EPSILON);
+        assert!((t.fwd_setup_ms - 2.5).abs() < f64::EPSILON);
+        assert_eq!(t.backward_wall_ms, 0.0);
+        assert_eq!(t.bwd_setup_ms, 0.0);
         // Verify Backward variant debug is also non-empty.
         let bwd = WorkerTimingPhase::Backward;
         assert!(

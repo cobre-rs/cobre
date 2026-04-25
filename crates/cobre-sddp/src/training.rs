@@ -455,11 +455,15 @@ mod tests {
 
     use super::train;
     use crate::{
-        CutManagementConfig, EventConfig, HorizonMode, InflowNonNegativityMethod, LoopConfig,
-        RiskMeasure, SddpError, StageIndexer, StoppingMode, StoppingRule, StoppingRuleSet,
-        TrainingConfig,
+        StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+        config::{CutManagementConfig, EventConfig, LoopConfig},
         context::{StageContext, TrainingContext},
         cut::fcf::FutureCostFunction,
+        error::SddpError,
+        horizon_mode::HorizonMode,
+        indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
+        risk_measure::RiskMeasure,
         solver_stats::SolverStatsDelta,
     };
 
@@ -1250,9 +1254,7 @@ mod tests {
     /// the same iteration (within ±1 ms numerical tolerance).
     #[test]
     fn ac_worker_timing_per_worker_event_count_and_setup_invariant() {
-        use cobre_core::{
-            WORKER_TIMING_SLOT_BWD_SETUP, WORKER_TIMING_SLOT_FWD_SETUP, WorkerTimingPhase,
-        };
+        use cobre_core::WorkerTimingPhase;
 
         let n_stages = 2;
         let indexer = StageIndexer::new(1, 0);
@@ -1381,17 +1383,17 @@ mod tests {
                         fwd_workers.insert(*worker_id),
                         "worker_id {worker_id} duplicated in Forward emissions"
                     );
-                    // Forward-only slots can be non-zero; backward-only slots must be 0.
-                    assert_eq!(timings[WORKER_TIMING_SLOT_BWD_SETUP], 0.0);
+                    // Forward-only fields can be non-zero; backward-only fields must be 0.
+                    assert_eq!(timings.bwd_setup_ms, 0.0);
                 }
                 WorkerTimingPhase::Backward => {
                     assert!(
                         bwd_workers.insert(*worker_id),
                         "worker_id {worker_id} duplicated in Backward emissions"
                     );
-                    bwd_setup_sum_ms += timings[WORKER_TIMING_SLOT_BWD_SETUP];
-                    // Backward-only slots can be non-zero; forward-only slots must be 0.
-                    assert_eq!(timings[WORKER_TIMING_SLOT_FWD_SETUP], 0.0);
+                    bwd_setup_sum_ms += timings.bwd_setup_ms;
+                    // Backward-only fields can be non-zero; forward-only fields must be 0.
+                    assert_eq!(timings.fwd_setup_ms, 0.0);
                 }
             }
         }

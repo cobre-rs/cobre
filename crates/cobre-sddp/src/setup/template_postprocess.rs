@@ -6,7 +6,7 @@ use crate::scaling_report::{
     LpDimensions, StageScalingReport, build_scaling_report, compute_coefficient_range,
     summarize_scale_factors,
 };
-use crate::{StageIndexer, StageTemplates, lp_builder};
+use crate::{indexer::StageIndexer, lp_builder, lp_builder::StageTemplates};
 
 /// Apply discount factors, LP scaling, and noise pre-scaling to stage templates.
 ///

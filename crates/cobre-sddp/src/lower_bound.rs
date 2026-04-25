@@ -33,11 +33,15 @@ use cobre_solver::{RowBatch, SolverError, SolverInterface};
 use cobre_stochastic::{OpeningTree, StochasticContext, evaluate_par_batch, solve_par_noise_batch};
 
 use crate::{
-    FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
-    StageIndexer,
+    cut::FutureCostFunction,
+    error::SddpError,
     forward::build_cut_row_batch_into,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
     lp_builder::COST_SCALE_FACTOR,
+    lp_builder::PatchBuffer,
     noise::{NcsNoiseOffsets, compute_effective_eta, transform_ncs_noise},
+    risk_measure::RiskMeasure,
 };
 use cobre_solver::StageTemplate;
 
@@ -565,8 +569,9 @@ mod tests {
         LbEvalScratch, LbEvalScratchBundle, LbEvalSpec, evaluate_lower_bound, lb_evaluate_stage_0,
     };
     use crate::{
-        FutureCostFunction, InflowNonNegativityMethod, PatchBuffer, RiskMeasure, SddpError,
-        StageIndexer,
+        cut::FutureCostFunction, error::SddpError, indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod, lp_builder::PatchBuffer,
+        risk_measure::RiskMeasure,
     };
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
     use cobre_solver::{

@@ -51,11 +51,20 @@ use cobre_core::{
     },
 };
 use cobre_sddp::{
-    CutManagementConfig, EntityCounts, EventConfig, FutureCostFunction, HorizonMode,
-    InflowNonNegativityMethod, LoopConfig, PatchBuffer, RiskMeasure, SimulationConfig,
-    SimulationOutputSpec, SolverWorkspace, StageContext, StageIndexer, StoppingMode, StoppingRule,
-    StoppingRuleSet, TrainingConfig, TrainingContext, WorkspaceSizing,
-    hydro_models::PrepareHydroModelsResult, lp_builder::build_stage_templates, simulate, train,
+    StoppingMode, StoppingRule, StoppingRuleSet, TrainingConfig,
+    config::{CutManagementConfig, EventConfig, LoopConfig},
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    horizon_mode::HorizonMode,
+    hydro_models::PrepareHydroModelsResult,
+    indexer::StageIndexer,
+    inflow_method::InflowNonNegativityMethod,
+    lp_builder::{PatchBuffer, build_stage_templates},
+    risk_measure::RiskMeasure,
+    simulate,
+    simulation::{EntityCounts, SimulationConfig, SimulationOutputSpec},
+    train,
+    workspace::{SolverWorkspace, WorkspaceSizing},
 };
 use cobre_solver::HighsSolver;
 use cobre_stochastic::{
@@ -436,7 +445,7 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
     let n_blks = system.stages().first().map_or(1, |s| s.blocks.len().max(1));
     let has_inflow_penalty = inflow_method.has_slack_columns() && first_tmpl.n_hydro > 0;
     let indexer = StageIndexer::with_equipment(
-        &cobre_sddp::EquipmentCounts {
+        &cobre_sddp::indexer::EquipmentCounts {
             hydro_count: first_tmpl.n_hydro,
             max_par_order: first_tmpl.max_par_order,
             n_thermals: system.thermals().len(),
@@ -446,7 +455,7 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
             has_inflow_penalty,
             max_deficit_segments: 1,
         },
-        &cobre_sddp::FphaColumnLayout {
+        &cobre_sddp::indexer::FphaColumnLayout {
             hydro_indices: vec![],
             planes_per_hydro: vec![],
         },
@@ -490,7 +499,7 @@ fn build_fixture_with_method(inflow_method: InflowNonNegativityMethod) -> Fixtur
 fn train_fixture(
     fx: &Fixture,
     iterations: u64,
-) -> Result<cobre_sddp::TrainingOutcome, cobre_sddp::SddpError> {
+) -> Result<cobre_sddp::training::TrainingOutcome, cobre_sddp::SddpError> {
     let n_stages = fx.stage_templates.templates.len();
     let mut fcf = FutureCostFunction::new(n_stages, fx.indexer.n_state, 1, 20, &vec![0; n_stages]);
     let mut solver = HighsSolver::new().expect("HighsSolver::new must succeed");
@@ -577,7 +586,7 @@ fn train_fixture(
 fn simulate_fixture(
     fx: &Fixture,
     fcf: &FutureCostFunction,
-) -> Result<Vec<cobre_sddp::SimulationScenarioResult>, cobre_sddp::SimulationError> {
+) -> Result<Vec<cobre_sddp::simulation::SimulationScenarioResult>, cobre_sddp::SimulationError> {
     let (result_tx, result_rx) = mpsc::sync_channel(32);
 
     let collector_thread = std::thread::spawn(move || {
@@ -909,7 +918,7 @@ fn per_plant_inflow_penalty_differentiates_objective_coefficients() {
     // and has_penalty=true, the indexer allocates 2 inflow slack columns.
     let n_blks = 1;
     let indexer = StageIndexer::with_equipment(
-        &cobre_sddp::EquipmentCounts {
+        &cobre_sddp::indexer::EquipmentCounts {
             hydro_count: tmpl0.n_hydro,
             max_par_order: tmpl0.max_par_order,
             n_thermals: 0,
@@ -919,7 +928,7 @@ fn per_plant_inflow_penalty_differentiates_objective_coefficients() {
             has_inflow_penalty: true,
             max_deficit_segments: 1,
         },
-        &cobre_sddp::FphaColumnLayout {
+        &cobre_sddp::indexer::FphaColumnLayout {
             hydro_indices: vec![],
             planes_per_hydro: vec![],
         },

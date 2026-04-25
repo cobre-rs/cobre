@@ -1127,7 +1127,7 @@ pub(super) fn fill_evaporation_entries(
 ///    - `==`: `row_lower = bound`, `row_upper = bound`
 ///
 /// 2. Iterates over the constraint expression terms, calls
-///    `resolve_variable_ref` for each [`LinearTerm`], and pushes
+///    `resolve_variable_ref` for each `LinearTerm`, and pushes
 ///    `(row_index, coefficient * multiplier)` entries into `col_entries`.
 ///
 /// 3. When `slack.enabled = true`, sets slack column bounds to `[0, +INF)` and
@@ -1457,7 +1457,7 @@ pub(super) fn fill_operational_violation_entries(
 ///
 /// Returns one `Vec<(row, value)>` per column. Entries are in insertion
 /// order; the caller is responsible for sorting by row index before
-/// assembling the final CSC arrays (see [`build_single_stage_template`]).
+/// assembling the final CSC arrays (see `build_single_stage_template`).
 pub(super) fn build_stage_matrix_entries(
     ctx: &TemplateBuildCtx<'_>,
     stage: &Stage,

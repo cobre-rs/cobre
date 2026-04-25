@@ -143,7 +143,7 @@ fn baseline_path(case: &str) -> std::path::PathBuf {
 fn compute_parity_hash(
     convergence_updates: &[(u64, f64, f64, f64, f64)],
     setup: &StudySetup,
-    mut scenario_results: Vec<cobre_sddp::SimulationScenarioResult>,
+    mut scenario_results: Vec<cobre_sddp::simulation::SimulationScenarioResult>,
 ) -> String {
     let mut hasher = Sha256::new();
 

@@ -17,9 +17,9 @@ use super::{GenericConstraintRowEntry, M3S_TO_HM3};
 
 /// System-level context shared across all stages during template construction.
 ///
-/// Bundles the references extracted from a [`System`] before the per-stage
-/// loop begins. Constructed once in [`build_stage_templates`] and borrowed by
-/// [`build_single_stage_template`] for each study stage.
+/// Bundles the references extracted from a `System` before the per-stage
+/// loop begins. Constructed once in `build_stage_templates` and borrowed by
+/// `build_single_stage_template` for each study stage.
 pub(crate) struct TemplateBuildCtx<'a> {
     pub(crate) hydros: &'a [Hydro],
     pub(crate) thermals: &'a [Thermal],

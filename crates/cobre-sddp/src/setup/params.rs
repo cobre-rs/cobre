@@ -158,8 +158,8 @@ impl StudyParams {
             // The CLI/Python layer may emit a more precise warning with the real
             // world_size after broadcast.
             if u64::from(b) < u64::from(forward_passes) {
-                eprintln!(
-                    "warning: max_active_per_stage ({b}) is less than forward_passes \
+                tracing::warn!(
+                    "max_active_per_stage ({b}) is less than forward_passes \
                      ({forward_passes}); budget enforcement will evict all \
                      non-current-iteration cuts every iteration"
                 );
@@ -255,13 +255,81 @@ pub struct ConstructionConfig {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use std::sync::{Arc, Mutex};
+
     use cobre_io::config::{
         Config, EstimationConfig, ExportsConfig, InflowNonNegativityConfig, ModelingConfig,
         PolicyConfig, RowSelectionConfig, SimulationConfig as IoSimulationConfig,
         StoppingRuleConfig, TrainingConfig, TrainingSolverConfig, UpperBoundEvaluationConfig,
     };
+    use tracing::{Event, Level, Metadata, Subscriber, span};
 
     use super::StudyParams;
+
+    // ---------------------------------------------------------------------------
+    // Minimal WARN-capturing subscriber for use in tests.
+    // ---------------------------------------------------------------------------
+
+    /// Records all WARN-level event messages into a shared `Vec<String>`.
+    struct WarnRecorder {
+        messages: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl WarnRecorder {
+        fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let messages = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    messages: Arc::clone(&messages),
+                },
+                messages,
+            )
+        }
+    }
+
+    impl Subscriber for WarnRecorder {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() <= Level::WARN
+        }
+
+        fn new_span(&self, _attrs: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            if *event.metadata().level() == Level::WARN {
+                struct MessageVisitor(String);
+                impl tracing::field::Visit for MessageVisitor {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        if field.name() == "message" {
+                            self.0 = format!("{value:?}");
+                        }
+                    }
+
+                    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                        if field.name() == "message" {
+                            self.0 = value.to_string();
+                        }
+                    }
+                }
+                let mut visitor = MessageVisitor(String::new());
+                event.record(&mut visitor);
+                self.messages.lock().unwrap().push(visitor.0);
+            }
+        }
+
+        fn enter(&self, _span: &span::Id) {}
+
+        fn exit(&self, _span: &span::Id) {}
+    }
 
     /// Build a minimal `cobre_io::Config` with the given
     /// `basis_activity_window` value in `training.cut_selection`.
@@ -339,5 +407,60 @@ mod tests {
         let params = StudyParams::from_config(&config_with_window(Some(31)))
             .expect("window=31 must succeed");
         assert_eq!(params.basis_activity_window, 31);
+    }
+
+    /// Build a minimal `cobre_io::Config` with `max_active_per_stage` and
+    /// `forward_passes` set so that the budget-below-forward-passes warning fires.
+    fn config_with_budget_below_forward_passes() -> Config {
+        Config {
+            schema: None,
+            modeling: ModelingConfig {
+                inflow_non_negativity: InflowNonNegativityConfig {
+                    method: "penalty".to_string(),
+                    penalty_cost: 1000.0,
+                },
+            },
+            training: TrainingConfig {
+                enabled: true,
+                tree_seed: Some(42),
+                forward_passes: Some(2),
+                stopping_rules: Some(vec![StoppingRuleConfig::IterationLimit { limit: 1 }]),
+                stopping_mode: "any".to_string(),
+                cut_formulation: None,
+                forward_pass: None,
+                cut_selection: RowSelectionConfig {
+                    max_active_per_stage: Some(1),
+                    ..RowSelectionConfig::default()
+                },
+                solver: TrainingSolverConfig::default(),
+                scenario_source: None,
+            },
+            upper_bound_evaluation: UpperBoundEvaluationConfig::default(),
+            policy: PolicyConfig::default(),
+            simulation: IoSimulationConfig::default(),
+            exports: ExportsConfig::default(),
+            estimation: EstimationConfig::default(),
+        }
+    }
+
+    /// AC: when `max_active_per_stage` is less than `forward_passes`, `StudyParams::from_config`
+    /// emits a WARN-level tracing event whose message contains `max_active_per_stage`.
+    #[test]
+    fn study_params_warns_when_budget_below_forward_passes() {
+        let (subscriber, messages) = WarnRecorder::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let _params = StudyParams::from_config(&config_with_budget_below_forward_passes())
+                .expect("config is valid; warning must not prevent construction");
+        });
+        let recorded = messages.lock().unwrap();
+        let relevant: Vec<&str> = recorded
+            .iter()
+            .map(std::string::String::as_str)
+            .filter(|msg| msg.contains("max_active_per_stage"))
+            .collect();
+        assert!(
+            !relevant.is_empty(),
+            "expected at least one WARN event containing 'max_active_per_stage', got: {recorded:?}"
+        );
     }
 }

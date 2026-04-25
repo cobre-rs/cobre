@@ -105,7 +105,7 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// ```rust
 /// use cobre_comm::LocalBackend;
 /// use cobre_sddp::simulation::aggregation::aggregate_simulation;
-/// use cobre_sddp::{SimulationConfig, ScenarioCategoryCosts};
+/// use cobre_sddp::simulation::{ScenarioCategoryCosts, SimulationConfig};
 ///
 /// let zero_cats = ScenarioCategoryCosts {
 ///     resource_cost: 0.0,
@@ -409,8 +409,8 @@ mod tests {
         CVAR_ALPHA, N_CATEGORIES, compute_cvar, compute_local_min_max, compute_mean_std,
         pack_category_costs,
     };
-    use crate::{
-        ScenarioCategoryCosts, SimulationConfig, simulation::aggregation::aggregate_simulation,
+    use crate::simulation::{
+        aggregation::aggregate_simulation, config::SimulationConfig, types::ScenarioCategoryCosts,
     };
 
     // ── Helpers ────────────────────────────────────────────────────────────────

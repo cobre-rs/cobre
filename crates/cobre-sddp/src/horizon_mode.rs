@@ -5,7 +5,7 @@
 //! implemented; `Cyclic` horizon is deferred to a future release.
 //!
 //! Discount factors are computed from the [`PolicyGraph`](cobre_core::PolicyGraph)
-//! at setup time and stored in [`StageTemplates`](crate::StageTemplates).
+//! at setup time and stored in `StageTemplates`.
 //!
 //! ## Stage indexing convention
 //!

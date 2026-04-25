@@ -270,17 +270,21 @@ pub fn aggregate_solver_statistics(
 /// - `iteration`: 1-based iteration number.
 /// - `phase`: `"forward"`, `"backward"`, or `"lower_bound"` — a `&'static str`
 ///   to avoid per-iteration heap allocation (F1-005 fix).
-/// - `stage`: stage index for backward phase (per-stage), `-1` for forward/LB.
+/// - `stage`: stage index — a non-negative stage index for backward and forward
+///   phases; `-1` only for the lower-bound (LB) phase, which is rank-aggregated
+///   and has no stage dimension. The writer maps `-1` to a NULL `Int32` column
+///   in `solver/iterations.parquet`.
 /// - `opening`: opening index `0..n_openings` for backward rows; `-1` for
 ///   forward, lower-bound, and simulation rows (no opening dimension).
 ///   The parquet writer maps `-1` to a NULL `Int32` column.
-/// - `rank`: MPI rank that produced this row. `-1` maps to NULL at the writer
-///   boundary. Forward and lower-bound rows carry the local rank; backward rows
-///   carry the actual rank from the allgatherv unpack.
+/// - `rank`: MPI rank that produced this row. Always `>= 0`; the writer adapter
+///   wraps it in `Some(rank)` when populating the per-rank `SolverStatsRow`.
+///   Rank-aggregated rows (none in the per-rank path) use `rank: None` at the
+///   writer side.
 /// - `worker_id`: rayon worker that produced this row. `-1` maps to NULL at the
 ///   writer boundary. Forward and lower-bound rows carry `-1` (no per-worker
-///   dimension yet); backward rows carry the actual `worker_id` from the `allgatherv`
-///   unpack.
+///   dimension yet); backward rows carry the real `worker_id` from the
+///   `allgatherv` unpack on backward.
 /// - `delta`: the solver counter delta for this entry.
 pub type SolverStatsEntry = (u64, &'static str, i32, i32, i32, i32, SolverStatsDelta);
 

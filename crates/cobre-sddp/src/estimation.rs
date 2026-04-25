@@ -689,10 +689,15 @@ fn validate_partial_estimation_coverage(
     // Step 5d: cross-season std ratio divergence check (advisory only).
     let std_ratio_warnings = check_std_ratio_divergence(system, fitting_stats, stages);
     for w in &std_ratio_warnings {
-        eprintln!(
-            "warning: hydro {} season {}->{} std ratio diverges {:.1}x between \
+        tracing::warn!(
+            "hydro {} season {}->{} std ratio diverges {:.1}x between \
              user ({:.2}) and estimated ({:.2})",
-            w.hydro_id.0, w.season_a, w.season_b, w.divergence, w.user_ratio, w.estimated_ratio
+            w.hydro_id.0,
+            w.season_a,
+            w.season_b,
+            w.divergence,
+            w.user_ratio,
+            w.estimated_ratio
         );
     }
 
@@ -737,11 +742,14 @@ fn check_lag_scale_warnings(
             continue;
         };
         if (lag_value - estimated_mean).abs() < (lag_value - user_mean).abs() {
-            eprintln!(
-                "warning: hydro {} initial lag ({:.1}) is closer to estimated mean \
-                 ({:.1}) than user mean ({:.1}) -- initial conditions may be at \
-                 historical scale",
-                past.hydro_id.0, lag_value, estimated_mean, user_mean
+            tracing::warn!(
+                "hydro {} initial lag ({:.1}) is closer to estimated mean \
+                 ({:.1}) than user mean ({:.1}); initial conditions may be \
+                 at historical scale",
+                past.hydro_id.0,
+                lag_value,
+                estimated_mean,
+                user_mean
             );
             warnings.push(LagScaleWarning {
                 hydro_id: past.hydro_id,
@@ -926,7 +934,7 @@ fn ar_rows_to_estimates(
 /// Extract user-provided seasonal stats from `system.inflow_models()` as
 /// [`InflowSeasonalStatsRow`] entries.
 ///
-/// Each [`InflowModel`] in the system contributes one row with its `mean_m3s`
+/// Each `InflowModel` in the system contributes one row with its `mean_m3s`
 /// and `std_m3s` preserved bitwise — no transformation is applied. This is
 /// used by [`run_partial_estimation`] to pass user stats into `assemble_inflow_models`
 /// instead of history-derived fitting stats.

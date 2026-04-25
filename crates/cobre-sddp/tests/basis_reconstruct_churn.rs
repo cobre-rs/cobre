@@ -493,7 +493,7 @@ fn test_basis_reconstruct_full_churn_no_rows_preserved() {
         .fcf
         .pools
         .iter()
-        .map(cobre_sddp::CutPool::active_count)
+        .map(cobre_sddp::cut::CutPool::active_count)
         .collect();
     let total_cuts_iter1: usize = cuts_after_iter1.iter().sum();
     assert!(

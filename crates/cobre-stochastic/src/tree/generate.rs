@@ -43,7 +43,7 @@ pub struct ClassDimensions {
 ///
 /// Groups the three optional parameters that extend the basic noise generation:
 /// a historical scenario library used when any stage is configured with
-/// [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals),
+/// [`cobre_core::temporal::NoiseMethod::HistoricalResiduals`],
 /// a pre-padding external scenario count per stage used to clamp openings, and
 /// per-stage noise group IDs for the Pattern C noise sharing feature.
 ///
@@ -51,7 +51,7 @@ pub struct ClassDimensions {
 /// noise depending on each stage's `scenario_config.noise_method`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OpeningTreeGenerationInputs<'a> {
-    /// Historical scenario library used for [`NoiseMethod::HistoricalResiduals`](cobre_core::temporal::NoiseMethod::HistoricalResiduals)
+    /// Historical scenario library used for [`cobre_core::temporal::NoiseMethod::HistoricalResiduals`]
     /// stages. Required when any study stage uses that noise method.
     pub historical_library: Option<&'a HistoricalScenarioLibrary>,
     /// Pre-padding external scenario count per stage. Used to clamp opening

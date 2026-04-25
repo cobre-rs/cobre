@@ -31,7 +31,7 @@
 
 use cobre_comm::Communicator;
 
-use crate::{SddpError, TrajectoryRecord};
+use crate::{error::SddpError, trajectory::TrajectoryRecord};
 
 /// Pre-allocated buffers for gathering state vectors across all MPI ranks.
 ///
@@ -67,7 +67,8 @@ use crate::{SddpError, TrajectoryRecord};
 ///
 /// ```rust
 /// use cobre_comm::LocalBackend;
-/// use cobre_sddp::{ExchangeBuffers, TrajectoryRecord};
+/// use cobre_sddp::state_exchange::ExchangeBuffers;
+/// use cobre_sddp::trajectory::TrajectoryRecord;
 ///
 /// // Three scenarios, two-element state vectors, single rank.
 /// let mut bufs = ExchangeBuffers::new(2, 3, 1);
@@ -386,7 +387,7 @@ mod tests {
     use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 
     use super::ExchangeBuffers;
-    use crate::TrajectoryRecord;
+    use crate::trajectory::TrajectoryRecord;
 
     // ── Helper ────────────────────────────────────────────────────────────────
 

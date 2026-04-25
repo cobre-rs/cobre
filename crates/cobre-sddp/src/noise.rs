@@ -249,7 +249,7 @@ pub(crate) struct DownstreamAccumState<'a> {
 
 /// Accumulate this stage's inflow and, when a lag period finalizes, shift the lag state.
 ///
-/// Replaces the direct [`shift_lag_state`] call for multi-resolution studies where
+/// Replaces the direct `shift_lag_state` call for multi-resolution studies where
 /// stages may be shorter than the lag granularity (for example, weekly stages feeding
 /// a monthly lag slot).  The three-step logic:
 ///
@@ -263,7 +263,7 @@ pub(crate) struct DownstreamAccumState<'a> {
 ///
 /// For the monthly identity case (`accumulate_weight=1.0, spillover_weight=0.0,
 /// finalize_period=true`) the function produces bit-for-bit identical results to
-/// [`shift_lag_state`].
+/// `shift_lag_state`.
 ///
 /// **Zero heap allocation.** All scratch work is performed in `lag.accumulator`,
 /// which is overwritten with the monthly averages during finalization before being
@@ -517,9 +517,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::{
-        HorizonMode, InflowNonNegativityMethod,
         context::{StageContext, TrainingContext},
+        horizon_mode::HorizonMode,
         indexer::StageIndexer,
+        inflow_method::InflowNonNegativityMethod,
         noise::{
             compute_effective_eta, shift_lag_state, transform_inflow_noise, transform_load_noise,
         },

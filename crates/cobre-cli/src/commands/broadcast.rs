@@ -95,8 +95,8 @@ impl BroadcastConfig {
                 // only and are not broadcastable; fold into iteration limit for
                 // non-root ranks. Warn so the user knows the rule was substituted.
                 StoppingRule::SimulationBased { .. } | StoppingRule::GracefulShutdown => {
-                    eprintln!(
-                        "warning: stopping rule not broadcastable, \
+                    tracing::warn!(
+                        "stopping rule not broadcastable, \
                          substituting IterationLimit({DEFAULT_MAX_ITERATIONS})"
                     );
                     BroadcastStoppingRule::IterationLimit {

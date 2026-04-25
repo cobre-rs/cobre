@@ -92,6 +92,6 @@ pub use topology::{BusGenerators, BusLineConnection, BusLoads, CascadeTopology, 
 pub use training_event::{
     StageRowSelectionRecord, StoppingRuleResult, TrainingEvent, WORKER_TIMING_SLOT_BWD_SETUP,
     WORKER_TIMING_SLOT_BWD_WALL, WORKER_TIMING_SLOT_COUNT, WORKER_TIMING_SLOT_FWD_SETUP,
-    WORKER_TIMING_SLOT_FWD_WALL, WorkerTimingPhase,
+    WORKER_TIMING_SLOT_FWD_WALL, WorkerPhaseTimings, WorkerTimingPhase,
 };
 pub use welford::WelfordAccumulator;

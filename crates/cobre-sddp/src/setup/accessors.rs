@@ -2,7 +2,11 @@
 
 use cobre_core::scenario::SamplingScheme;
 
-use crate::{FutureCostFunction, StageContext, TrainingContext, simulation::SimulationConfig};
+use crate::{
+    context::{StageContext, TrainingContext},
+    cut::FutureCostFunction,
+    simulation::SimulationConfig,
+};
 
 use super::StudySetup;
 

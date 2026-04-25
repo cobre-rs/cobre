@@ -14,12 +14,12 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Factory tests for builds where no distributed backend feature is compiled in.
 ///
-/// All tests in this module are compiled only when neither `mpi`, `tcp`, nor `shm`
-/// features are enabled, because in those builds `create_communicator()` returns
-/// `Result<LocalBackend, BackendError>`.
-#[cfg(not(any(feature = "mpi", feature = "tcp", feature = "shm")))]
+/// All tests in this module are compiled only when the `mpi` feature is
+/// disabled, because in `mpi` builds `create_communicator()` returns
+/// `Result<CommBackend, BackendError>` instead of `Result<LocalBackend, _>`.
+#[cfg(not(feature = "mpi"))]
 mod no_feature_factory {
-    use cobre_comm::{create_communicator, BackendError, Communicator};
+    use cobre_comm::{BackendError, Communicator, create_communicator};
 
     /// Unset `COBRE_COMM_BACKEND` → `Ok(LocalBackend)` with rank=0, size=1.
     #[test]
@@ -123,10 +123,10 @@ mod no_feature_factory {
 
 // ── any-feature factory tests ─────────────────────────────────────────────────
 
-/// Factory tests for builds with distributed backend features enabled.
-#[cfg(any(feature = "mpi", feature = "tcp", feature = "shm"))]
+/// Factory tests for builds with the `mpi` backend feature enabled.
+#[cfg(feature = "mpi")]
 mod any_feature_factory {
-    use cobre_comm::{create_communicator, BackendError, CommBackend, Communicator};
+    use cobre_comm::{BackendError, CommBackend, Communicator, create_communicator};
 
     /// `COBRE_COMM_BACKEND=local` → `Ok(CommBackend::Local(...))` with rank=0.
     #[test]

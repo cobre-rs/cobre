@@ -7,7 +7,7 @@
 //!
 //! [`IterationScratch::new`] performs `O(max_local_fwd * num_stages)`
 //! allocations at training-run startup:
-//! - N × [`TrajectoryRecord`](crate::TrajectoryRecord) with `state: Vec<f64>` of length `n_state`.
+//! - N × `TrajectoryRecord` with `state: Vec<f64>` of length `n_state`.
 //! - `num_stages` × `RowBatch` for cut-batch scratch.
 //! - `num_stages` × `RowBatch` for bake scratch.
 //! - `num_stages` × `StageTemplate` for baked templates.
@@ -19,7 +19,7 @@ use cobre_solver::{RowBatch, StageTemplate};
 
 use crate::{
     context::StageContext, cut::CutRowMap, lower_bound::LbEvalScratch, lp_builder::PatchBuffer,
-    TrajectoryRecord,
+    trajectory::TrajectoryRecord,
 };
 
 /// Per-training-run iteration scratch owned by `TrainingSession`.

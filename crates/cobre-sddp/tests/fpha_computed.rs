@@ -17,8 +17,9 @@ use std::{fs, path::Path};
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    ProductionModelSource, ResolvedProductionModel, StudySetup, aggregate_simulation,
-    hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    ProductionModelSource, StudySetup, aggregate_simulation,
+    hydro_models::{ResolvedProductionModel, prepare_hydro_models},
+    setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
 use tempfile::TempDir;

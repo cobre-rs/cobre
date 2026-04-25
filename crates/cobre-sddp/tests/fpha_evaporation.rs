@@ -25,8 +25,11 @@ use std::path::Path;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_sddp::{
-    EvaporationModel, EvaporationReferenceSource, ResolvedProductionModel, StudySetup,
-    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    StudySetup, aggregate_simulation,
+    hydro_models::{
+        EvaporationModel, EvaporationReferenceSource, ResolvedProductionModel, prepare_hydro_models,
+    },
+    setup::prepare_stochastic,
 };
 use cobre_solver::highs::HighsSolver;
 

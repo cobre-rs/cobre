@@ -54,7 +54,7 @@ pub struct StageContext<'a> {
     /// Stages with the same group ID share the same noise draw in the opening
     /// tree and forward pass. For uniform monthly studies every stage has a
     /// unique group ID, so no sharing is triggered. Populated from
-    /// [`StudySetup::noise_group_ids`](crate::setup::StudySetup::noise_group_ids)
+    /// `StudySetup::stage_data.noise_group_ids`
     /// at setup time. Length equals the number of study stages.
     pub noise_group_ids: &'a [u32],
     /// PAR order for the downstream (coarser-resolution) model.

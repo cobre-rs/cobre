@@ -3293,7 +3293,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Comprehensive periodic autocorrelation and matrix tests (E1/T003)
+    // Comprehensive periodic autocorrelation and matrix tests
     // -----------------------------------------------------------------------
 
     #[test]

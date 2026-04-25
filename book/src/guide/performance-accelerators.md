@@ -41,15 +41,6 @@ still affects the forward and backward passes — pool-deactivated rows
 remain as LP rows in the LB solver but are not re-evaluated, so they
 contribute only their binding value at the trial point.
 
-### Sparse Cut Representation
-
-Cut coefficient vectors are stored in sparse format: only non-zero entries
-are kept as `(dimension_index, value)` pairs, sorted ascending for
-reproducible dot products. This is motivated by PAR lag padding, which
-produces 29%+ exact zeros in coefficient vectors for systems with mixed
-AR orders. Only exact zeros are dropped, preserving bit-for-bit
-reproducibility with the dense representation.
-
 ### PatchBuffer Pre-Allocation
 
 The `PatchBuffer` holds three parallel arrays (`indices`, `lower`, `upper`)

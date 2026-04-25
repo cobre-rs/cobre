@@ -238,10 +238,10 @@ pub(crate) fn convergence_schema() -> Schema {
 
 /// Schema for `training/timing/iterations.parquet` — per-iteration timing breakdown.
 ///
-/// 18 fields. Row semantics (T007): one row per `(iteration, rank)` for
+/// 18 fields. Row semantics: one row per `(iteration, rank)` for
 /// rank-only sequential values (`worker_id = NULL`), and one row per
 /// `(iteration, rank, worker_id)` for per-worker parallel-region values.
-/// `SUM(col) GROUP BY iteration` recovers the pre-T007 single-row-per-iteration
+/// `SUM(col) GROUP BY iteration` recovers the single-row-per-iteration
 /// value for each of the 16 timing columns.
 ///
 /// Top-level non-overlapping phases: `forward_wall_ms`,
@@ -297,7 +297,7 @@ pub(crate) fn rank_timing_schema() -> Schema {
 /// backward rows; forward, `lower_bound`, and simulation rows carry
 /// `opening = NULL`. The `rank` and `worker_id` columns (positions 5 and 6,
 /// 0-indexed) are `Int32 nullable`; they are `NULL` for rank-aggregated rows
-/// and will carry real values once T005 (MPI allgatherv) is wired. Includes
+/// and carry the producing rank's index and worker index respectively. Includes
 /// one basis reconstruction column: `basis_reconstructions`.
 pub(crate) fn solver_iterations_schema() -> Schema {
     Schema::new(vec![

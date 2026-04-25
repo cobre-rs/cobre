@@ -900,9 +900,9 @@ pub(crate) fn dispatch_scenario_result(
 
 /// Evaluate the trained SDDP policy on a set of scenarios.
 ///
-/// Thin shim that delegates to [`crate::simulation::state::SimulationState::run`].
+/// Thin shim that delegates to `SimulationState::run`.
 /// All scheduling, bake logic, and rayon parallelism live in
-/// [`crate::simulation::state`].
+/// `crate::simulation::state`.
 ///
 /// # Errors
 ///

@@ -228,10 +228,9 @@ pub struct RowSelectionRecord {
     pub active_after_budget: Option<u32>,
 }
 
-/// One row in `training/timing/iterations.parquet` under the T007 schema.
+/// One row in `training/timing/iterations.parquet`.
 ///
-/// T007 expands the timing parquet from one row per iteration (pre-T007) to
-/// multiple rows per iteration:
+/// The timing parquet stores multiple rows per iteration:
 ///
 /// - One **rank-aggregated** row per `(iteration, rank)` carrying rank-only
 ///   timing columns (`worker_id = None`). Per-worker slots are `0` on this row.
@@ -239,7 +238,7 @@ pub struct RowSelectionRecord {
 ///   per-worker slots (`forward_wall_ms`, `backward_wall_ms`, `bwd_setup_ms`,
 ///   `fwd_setup_ms`). Rank-only slots are `0` on these rows.
 ///
-/// `SUM(col) GROUP BY iteration` across all rows recovers the pre-T007
+/// `SUM(col) GROUP BY iteration` across all rows recovers the
 /// single-row-per-iteration value for each of the 16 timing columns.
 #[derive(Debug, Clone)]
 pub struct WorkerTimingRecord {
@@ -302,7 +301,7 @@ pub struct TrainingOutput {
 
     /// Per-worker timing records for `training/timing/iterations.parquet`.
     ///
-    /// Populated by T007. Each entry is either a rank-aggregated row
+    /// Each entry is either a rank-aggregated row
     /// (`worker_id = None`) or a per-worker row (`worker_id = Some(w)`).
     /// Empty when timing data was not collected (e.g. single-threaded runs
     /// without the instrumentation wired). Written in iteration-major order:

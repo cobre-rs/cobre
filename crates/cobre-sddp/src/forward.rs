@@ -2,8 +2,14 @@
 //!
 //! [`run_forward_pass`] simulates scenario trajectories via stage LPs with the
 //! current Future Cost Function. Outputs [`TrajectoryRecord`]s and [`ForwardResult`]
-//! for the backward pass and synchronization step. Parallelized across workers
-//! with deterministic scenario assignment. No per-scenario allocations on hot path.
+//! for the backward pass and synchronisation step. Parallelised across workers
+//! with deterministic scenario assignment.
+//!
+//! The per-scenario hot loop lives in
+//! `forward_pass_state::ForwardPassState::run`. All scratch is owned by the
+//! workspace and reused across scenarios, except for the `unscaled_primal`
+//! `Vec<f64>` allocated per stage inside `run_forward_stage` (a borrow-checker
+//! lifetime constraint prevents reusing `ws.scratch.unscaled_primal` there).
 
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -662,7 +668,7 @@ pub struct ForwardPassBatch<'a> {
     /// Activity-window size for the basis-reconstruction classifier (1..=31).
     ///
     /// Forwarded verbatim from [`crate::config::CutManagementConfig::basis_activity_window`]
-    /// and threaded through [`StageKey`] into [`crate::stage_solve::StageInputs`].
+    /// and threaded through `StageKey` into [`crate::stage_solve::StageInputs`].
     pub basis_activity_window: u32,
 }
 
@@ -1170,11 +1176,11 @@ pub fn build_sampler_from_ctx<'a>(
 /// Structurally independent parameters: `workspaces` / `basis_store` are per-rank mutable,
 /// `ctx`/`baked`/`fcf` are per-stage read/write state, `training_ctx` is study-level,
 /// `batch` is per-iteration config, `records` is the trajectory output.
-/// Thin shim: delegates to [`crate::forward_pass_state::ForwardPassState::run`].
+/// Thin shim: delegates to `ForwardPassState::run`.
 ///
 /// Callers in the test suite pass arguments in the old free-function style;
-/// the shim constructs a temporary [`ForwardPassState`] and
-/// [`crate::forward_pass_state::ForwardPassInputs`] and calls `run` on them.
+/// the shim constructs a temporary `ForwardPassState` and
+/// `ForwardPassInputs` and calls `run` on them.
 /// Production callers use `TrainingSession::run_forward_phase` which drives
 /// `fwd_state.run(...)` directly.
 pub fn run_forward_pass<S: SolverInterface + Send>(

@@ -198,7 +198,7 @@ pub struct RowSelectionConfig {
     /// Use `memory_window` for lml1 and `domination_epsilon` for domination
     /// to avoid the integer limitation. This field is retained for backwards
     /// compatibility.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_deprecated_threshold")]
     pub threshold: Option<u32>,
 
     /// Memory window size for the `"lml1"` method (iterations).
@@ -590,6 +590,29 @@ impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
             other => Err(serde::de::Error::unknown_variant(other, &["pacf", "fixed"])),
         }
     }
+}
+
+/// Deserialize `RowSelectionConfig::threshold`, emitting a deprecation warning
+/// when a non-`None` value is present.
+///
+/// Used as the target of `#[serde(deserialize_with = ...)]` on the `threshold`
+/// field. The warning fires once per parse — i.e. once per config load — and
+/// mirrors the phrasing used for the deprecated `"fixed"` value of
+/// [`OrderSelectionMethod`].
+fn deserialize_deprecated_threshold<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<u32> = Option::deserialize(deserializer)?;
+    if value.is_some() {
+        tracing::warn!(
+            "RowSelectionConfig::threshold is deprecated and will be removed in a \
+             future release. Use `memory_window` for the \"lml1\" method and \
+             `domination_epsilon` for the \"domination\" method. Please update \
+             your config.json."
+        );
+    }
+    Ok(value)
 }
 
 /// Time series estimation settings (`config.json → estimation`).
@@ -1801,5 +1824,123 @@ mod tests {
         let boundary = restored.boundary.unwrap();
         assert_eq!(boundary.path, "../monthly/policy");
         assert_eq!(boundary.source_stage, 5);
+    }
+
+    // ── RowSelectionConfig::threshold deprecation warning tests ──────────────
+
+    /// Minimal tracing subscriber that records WARN-level event messages for
+    /// use in unit tests. Thread-safe via `Arc<Mutex<Vec<String>>>`.
+    mod test_subscriber {
+        use std::sync::{Arc, Mutex};
+        use tracing::{
+            Event, Level, Metadata, Subscriber,
+            span::{Attributes, Id, Record},
+        };
+
+        pub(super) struct WarnRecorder {
+            pub(super) messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl WarnRecorder {
+            pub(super) fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+                let messages = Arc::new(Mutex::new(Vec::new()));
+                (
+                    Self {
+                        messages: Arc::clone(&messages),
+                    },
+                    messages,
+                )
+            }
+        }
+
+        impl Subscriber for WarnRecorder {
+            fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+                *metadata.level() <= Level::WARN
+            }
+
+            fn new_span(&self, _attrs: &Attributes<'_>) -> Id {
+                Id::from_u64(1)
+            }
+
+            fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+            fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+            fn event(&self, event: &Event<'_>) {
+                if *event.metadata().level() == Level::WARN {
+                    struct MessageVisitor(String);
+                    impl tracing::field::Visit for MessageVisitor {
+                        fn record_debug(
+                            &mut self,
+                            field: &tracing::field::Field,
+                            value: &dyn std::fmt::Debug,
+                        ) {
+                            if field.name() == "message" {
+                                self.0 = format!("{value:?}");
+                            }
+                        }
+                        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                            if field.name() == "message" {
+                                self.0 = value.to_string();
+                            }
+                        }
+                    }
+                    let mut visitor = MessageVisitor(String::new());
+                    event.record(&mut visitor);
+                    self.messages.lock().unwrap().push(visitor.0);
+                }
+            }
+
+            fn enter(&self, _span: &Id) {}
+
+            fn exit(&self, _span: &Id) {}
+        }
+    }
+
+    /// AC: parsing `RowSelectionConfig` with `threshold: Some(5)` emits exactly
+    /// one WARN event whose message contains "threshold" and "deprecated".
+    #[test]
+    fn test_row_selection_threshold_deprecated_warning() {
+        let (subscriber, messages) = test_subscriber::WarnRecorder::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let json = r#"{"threshold": 5}"#;
+            let cfg: RowSelectionConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(cfg.threshold, Some(5), "threshold must be stored");
+        });
+        let recorded = messages.lock().unwrap();
+        let warn_events: Vec<&str> = recorded
+            .iter()
+            .map(std::string::String::as_str)
+            .filter(|msg| msg.contains("threshold") && msg.contains("deprecated"))
+            .collect();
+        assert!(
+            !warn_events.is_empty(),
+            "expected at least one WARN event containing 'threshold' and 'deprecated', got: {recorded:?}"
+        );
+    }
+
+    /// AC: parsing `RowSelectionConfig` without `threshold` emits no WARN event
+    /// from this code path.
+    #[test]
+    fn test_row_selection_threshold_absent_no_warning() {
+        let (subscriber, messages) = test_subscriber::WarnRecorder::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let json = r#"{"enabled": true, "method": "lml1", "memory_window": 10}"#;
+            let cfg: RowSelectionConfig = serde_json::from_str(json).unwrap();
+            assert!(
+                cfg.threshold.is_none(),
+                "threshold must be None when absent"
+            );
+        });
+        let recorded = messages.lock().unwrap();
+        let threshold_warns: Vec<&str> = recorded
+            .iter()
+            .map(std::string::String::as_str)
+            .filter(|msg| msg.contains("threshold") && msg.contains("deprecated"))
+            .collect();
+        assert!(
+            threshold_warns.is_empty(),
+            "expected no WARN events about threshold deprecation when field is absent, got: {threshold_warns:?}"
+        );
     }
 }

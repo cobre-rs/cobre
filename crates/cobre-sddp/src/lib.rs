@@ -113,8 +113,8 @@ pub use simulation::{
     SimulationGenericViolationResult, SimulationHydroResult, SimulationInflowLagResult,
     SimulationNonControllableResult, SimulationOutputSpec, SimulationPumpingResult,
     SimulationRunResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
-    SimulationThermalResult, StageSummaryStats, accumulate_category_costs, aggregate_simulation,
-    assign_scenarios, extract_stage_result, simulate,
+    SimulationThermalResult, accumulate_category_costs, aggregate_simulation, assign_scenarios,
+    extract_stage_result, simulate,
 };
 pub use solver_stats::{
     SCENARIO_STATS_STRIDE, SOLVER_STATS_DELTA_SCALAR_FIELDS, SolverStatsDelta, SolverStatsEntry,

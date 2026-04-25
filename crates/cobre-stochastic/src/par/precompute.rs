@@ -888,7 +888,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Pre-study lag season fallback tests (T003)
+    // Pre-study lag season fallback tests
     // -----------------------------------------------------------------------
 
     /// Build 12 monthly study stages (id `0..11`, `season_id` `0..11`).
@@ -1104,7 +1104,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Integration tests for AR conditioning at stage 0 (T006)
+    // Integration tests for AR conditioning at stage 0
     // -----------------------------------------------------------------------
 
     /// Season stats helper: `mean = 100 + season*10`, `std = 20 + season*2`.

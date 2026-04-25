@@ -413,7 +413,7 @@ pub fn build_training_output(
 ///   contributions (`forward_wall`, `backward_wall`, `fwd_setup`, `bwd_setup`)
 ///   merged from the `WorkerTiming{Forward}` and `WorkerTiming{Backward}` events.
 ///
-/// `SUM(col) GROUP BY iteration` recovers the pre-T007 single-row totals.
+/// `SUM(col) GROUP BY iteration` recovers the single-row totals.
 fn build_worker_timing_records(
     events: &[TrainingEvent],
     convergence_records: &[IterationRecord],
@@ -440,7 +440,7 @@ fn build_worker_timing_records(
             let entry = per_worker
                 .entry((iter_u32, *rank, *worker_id))
                 .or_insert([0_u64; WORKER_TIMING_SLOT_COUNT]);
-            // T006 convention: per-worker slots only; rank-only slots are zero
+            // Per-worker slots only; rank-only slots are zero
             // on per-worker events. Both Forward and Backward emissions land on
             // the same row, summed slot-wise — Forward fills FWD_WALL/FWD_SETUP,
             // Backward fills BWD_WALL/BWD_SETUP.

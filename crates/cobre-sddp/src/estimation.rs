@@ -3642,7 +3642,7 @@ mod tests {
         );
     }
 
-    // ── Pre-study stage expansion tests (T005) ──────────────────────────────
+    // ── Pre-study stage expansion tests ─────────────────────────────────────
 
     /// Build a Stage with the given parameters, suitable for expansion tests.
     fn make_expansion_stage(

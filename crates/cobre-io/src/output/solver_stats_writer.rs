@@ -29,11 +29,9 @@ pub struct SolverStatsRow {
     /// backward rows, `None` for forward, `lower_bound`, and simulation
     /// rows (which have no opening dimension).
     pub opening: Option<i32>,
-    /// MPI rank that produced this row. `None` for rank-aggregated rows (the
-    /// current state in T002); populated with real values in T005.
+    /// MPI rank that produced this row. `None` for rank-aggregated rows.
     pub rank: Option<i32>,
-    /// Worker thread ID within the rank. `None` for rank-aggregated rows (the
-    /// current state in T002); populated with real values in T005.
+    /// Rayon worker index within the rank's thread pool. `None` for rank-aggregated rows.
     pub worker_id: Option<i32>,
     /// Number of LP solves in this phase.
     pub lp_solves: u32,
@@ -524,9 +522,8 @@ mod tests {
     #[test]
     fn test_solver_stats_row_builds_with_none_rank_and_worker_id() {
         // Verify a row with rank=None, worker_id=None, opening=Some(3) can be
-        // written and read back without error. Both new nullable columns must
-        // appear as NULL in the output parquet (T002 produces all-NULL values;
-        // T005 will populate them with real values).
+        // written and read back without error. Both nullable columns must
+        // appear as NULL in the output parquet when not set.
         let dir = tempfile::TempDir::new().unwrap();
         let rows = vec![SolverStatsRow {
             iteration: 1,
@@ -564,7 +561,7 @@ mod tests {
         assert_eq!(
             rank_col.null_count(),
             1,
-            "rank must be NULL for every T002 row"
+            "rank must be NULL for rank-aggregated rows"
         );
 
         // worker_id column is at index 5, must be NULL.
@@ -572,7 +569,7 @@ mod tests {
         assert_eq!(
             worker_col.null_count(),
             1,
-            "worker_id must be NULL for every T002 row"
+            "worker_id must be NULL for rank-aggregated rows"
         );
 
         // opening column must carry the value we set (Some(3) → not NULL).

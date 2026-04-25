@@ -103,14 +103,14 @@ pub struct StudySetup {
     /// `scenario_libraries.simulation.<field>`.
     pub scenario_libraries: ScenarioLibraries,
 
-    /// Iteration-loop parameters projected from [`LoopConfig`].
+    /// Iteration-loop parameters projected from [`crate::config::LoopConfig`].
     ///
-    /// Holds the five pure-data fields of [`LoopConfig`] that are stable
+    /// Holds the five pure-data fields of [`crate::config::LoopConfig`] that are stable
     /// across training invocations. `n_fwd_threads` is excluded (derived
     /// at runtime) and supplied as a per-call argument to [`StudySetup::train`].
     pub loop_params: crate::config::LoopParams,
 
-    /// Simulation pipeline parameters, stored directly as [`SimulationConfig`].
+    /// Simulation pipeline parameters, stored directly as [`crate::simulation::SimulationConfig`].
     pub simulation_config: crate::simulation::SimulationConfig,
 
     /// Relative path to the policy output directory (e.g. `"training/policy"`).

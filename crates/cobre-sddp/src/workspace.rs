@@ -337,18 +337,18 @@ pub struct WorkspaceSizing {
     pub n_state: usize,
     /// Maximum number of forward-pass scenarios assigned to this rank.
     ///
-    /// Used to pre-size [`ScratchBuffers::trajectory_costs_buf`]. Pass `0`
+    /// Used to pre-size `ScratchBuffers::trajectory_costs_buf`. Pass `0`
     /// for backward-only or simulation-only workspaces; the buffer will start
     /// empty and resize on first use.
     pub max_local_fwd: usize,
     /// Total forward passes across all MPI ranks.
     ///
-    /// Used to pre-size [`ScratchBuffers::perm_scratch`]. Pass `0` for
+    /// Used to pre-size `ScratchBuffers::perm_scratch`. Pass `0` for
     /// backward-only or simulation-only workspaces.
     pub total_forward_passes: usize,
     /// Noise dimension for forward-pass sampling buffers.
     ///
-    /// Used to pre-size [`ScratchBuffers::raw_noise_buf`]. Pass `0` for
+    /// Used to pre-size `ScratchBuffers::raw_noise_buf`. Pass `0` for
     /// backward-only or simulation-only workspaces.
     pub noise_dim: usize,
 }
@@ -616,7 +616,7 @@ pub struct SolverWorkspace<S: SolverInterface> {
     /// start with empty buffers; the backward pass will never touch them.
     pub(crate) backward_accum: BackwardAccumulators,
 
-    /// Zero-allocation timing payload buffer for [`TrainingEvent::WorkerTiming`].
+    /// Zero-allocation timing payload buffer for [`cobre_core::TrainingEvent::WorkerTiming`].
     ///
     /// Accumulated by the rayon closure inside the parallel region (forward or
     /// backward) and moved into the event payload after the region completes.

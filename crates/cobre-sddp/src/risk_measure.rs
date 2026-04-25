@@ -41,7 +41,7 @@
 /// functions, the allocation is paid once on first use (when capacities grow
 /// to `n_openings`) and then reused for all subsequent calls.
 ///
-/// Stored as a field of [`crate::workspace::BackwardAccumulators`] so each
+/// Stored as a field of `BackwardAccumulators` so each
 /// rayon worker owns an exclusive instance — no synchronisation needed.
 #[derive(Debug, Default, Clone)]
 pub struct RiskMeasureScratch {

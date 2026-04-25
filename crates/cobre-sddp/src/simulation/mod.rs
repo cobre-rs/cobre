@@ -25,5 +25,5 @@ pub use types::{
     SimulationCostResult, SimulationExchangeResult, SimulationGenericViolationResult,
     SimulationHydroResult, SimulationInflowLagResult, SimulationNonControllableResult,
     SimulationPumpingResult, SimulationScenarioResult, SimulationStageResult, SimulationSummary,
-    SimulationThermalResult, StageSummaryStats,
+    SimulationThermalResult,
 };

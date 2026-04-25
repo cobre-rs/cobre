@@ -335,7 +335,7 @@ pub(crate) fn broadcast_basis_cache<C: Communicator>(
 ///
 /// ## Event channel
 ///
-/// When `config.event_sender` is `Some`, typed [`TrainingEvent`] values are
+/// When `config.event_sender` is `Some`, typed [`cobre_core::TrainingEvent`] values are
 /// emitted at each lifecycle step boundary. Event send failures (receiver
 /// dropped) are silently ignored so they cannot interrupt training.
 ///
@@ -345,7 +345,7 @@ pub(crate) fn broadcast_basis_cache<C: Communicator>(
 /// synchronisation. The strategy's `should_run(iteration)` gate controls the
 /// frequency; at eligible iterations every stage's cut pool is scanned and
 /// inactive cuts are deactivated. When `cut_selection` is `None`, step 5a is
-/// skipped entirely and no [`TrainingEvent::PolicySelectionComplete`] events are
+/// skipped entirely and no [`cobre_core::TrainingEvent::PolicySelectionComplete`] events are
 /// emitted.
 ///
 /// # Errors

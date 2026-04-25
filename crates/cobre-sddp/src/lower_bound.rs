@@ -84,7 +84,7 @@ pub struct LbEvalSpec<'a> {
 
 /// Per-evaluation scratch buffers for [`evaluate_lower_bound`] on rank 0.
 ///
-/// Allocated once and stored on [`crate::training_session::IterationScratch`];
+/// Allocated once and stored on `IterationScratch`;
 /// reused across training iterations to eliminate per-iteration heap allocation.
 /// The first call to `evaluate_lower_bound` still allocates (grows Vec capacity);
 /// subsequent iterations reuse the existing capacity.
@@ -162,7 +162,7 @@ pub struct LbEvalScratchBundle<'a> {
 }
 
 impl<'a> LbEvalScratchBundle<'a> {
-    /// Construct from disjoint fields of [`crate::training_session::IterationScratch`].
+    /// Construct from disjoint fields of `IterationScratch`.
     ///
     /// Analogous to `BackwardPassInputs::from_session_fields`: the caller takes
     /// the fields it needs separately so that the borrow checker can verify

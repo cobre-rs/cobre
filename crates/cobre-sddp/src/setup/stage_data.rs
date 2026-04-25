@@ -42,7 +42,7 @@ pub struct StageData {
     /// Pre-computed noise group assignments for noise sharing in Pattern C.
     ///
     /// Stages with the same `(season_id, year)` share a noise group. Computed at
-    /// setup time by [`crate::lag_transition::precompute_noise_groups`].
+    /// setup time by `precompute_noise_groups`.
     pub noise_group_ids: Vec<u32>,
 
     /// LP scaling report captured during template build.

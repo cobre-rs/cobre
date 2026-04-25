@@ -5,11 +5,13 @@
 //!
 //! ## Why slot identity matters
 //!
-//! The legacy `pad_basis_for_cuts` helper used the LP row count as the only
-//! reconciliation key.  If cut selection replaced one cut with another of equal
-//! count, the two bases were the same length but positionally misaligned — `HiGHS`
-//! received a basis with mismatched row statuses and crashed back to cold start
-//! (or, worse, warm-started with a corrupt basis).
+//! Length-keyed basis reconciliation (matching stored row statuses to
+//! the current LP by row count alone) breaks under cut-set churn:
+//! when cut selection replaces one cut with another of equal count,
+//! the two bases are the same length but positionally misaligned.
+//! `HiGHS` would then receive a basis with mismatched row statuses
+//! and either reject the basis (cold start) or warm-start with a
+//! corrupted basis.
 //!
 //! `reconstruct_basis` takes [`CapturedBasis::cut_row_slots`] as its key: each
 //! stored cut row carries the [`CutPool`](crate::cut::pool::CutPool) slot that
@@ -499,7 +501,7 @@ where
 {
     let mut lower_deficit: usize = 0;
 
-    for (target_slot, intercept, coefficients) in current_cut_rows {
+    for (target_slot, _intercept, _coefficients) in current_cut_rows {
         // Capture the output row index BEFORE the push.
         let out_row_index = out.row_status.len();
         debug_assert!(
@@ -540,7 +542,6 @@ where
             // (within-iter warm-start); it is cleared at end-of-iter so it
             // cannot carry into the next iteration's classifier.
             let active_window = cut_metadata.get(target_slot).map_or(0, |m| m.active_window);
-            let _ = (intercept, coefficients); // suppress unused-variable warnings
             if active_window & (recent_window_bits | SEED_BIT) != 0 {
                 // Activity-guided tight guess: classify LOWER.
                 stats.new_tight += 1;

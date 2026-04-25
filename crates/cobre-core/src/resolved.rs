@@ -28,7 +28,7 @@ use std::ops::Range;
 
 // ─── Per-(entity, stage) penalty structs ─────────────────────────────────────
 
-/// All 11 hydro penalty values for a given (hydro, stage) pair.
+/// All 16 hydro penalty values for a given (hydro, stage) pair.
 ///
 /// This is the stage-resolved form of [`crate::HydroPenalties`]. All fields hold
 /// the final effective penalty after the full three-tier cascade has been applied.
@@ -60,6 +60,7 @@ use std::ops::Range;
 /// let q = p;
 /// assert!((q.spillage_cost - 0.01).abs() < f64::EPSILON);
 /// ```
+// Field count is 16 — update the doc line above when adding/removing fields.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct HydroStagePenalties {

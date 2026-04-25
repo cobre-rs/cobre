@@ -6,10 +6,15 @@
 //!
 //! Key characteristics:
 //!
-//! - Wraps `ferrompi::Communicator` for rank/size queries and collective operations.
-//! - Supports persistent collectives (MPI 4.x) for iterative algorithms such as
-//!   the forward/backward pass, reducing per-call setup overhead by 10–30 %.
-//! - Nonblocking collectives allow overlap of communication with local LP solves.
+//! - Wraps `ferrompi::Communicator` for rank/size queries and
+//!   collective operations.
+//! - Uses native blocking MPI collectives (`MPI_Allreduce`,
+//!   `MPI_Allgatherv`, `MPI_Bcast`); the bitwise-OR allreduce
+//!   used to synchronise the active-window bitmap is dispatched
+//!   directly to `MPI_Allreduce` with `MPI_BOR` (ferrompi 0.4.0).
+//! - Manages the MPI environment lifecycle via the `Mpi` RAII
+//!   guard so `MPI_Finalize` runs only after all communicators
+//!   are freed.
 //!
 //! # Feature gate
 //!

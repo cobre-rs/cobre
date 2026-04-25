@@ -426,7 +426,7 @@ The JSON is an array of per-stage objects, each containing:
 ### `training/cut_selection/iterations.parquet`
 
 Per-stage cut selection statistics. One row per `(iteration, stage)` pair,
-written only at iterations where selection ran. 10 columns.
+written only at iterations where selection ran. 9 columns.
 
 | Column                | Type    | Nullable | Description                                                                 |
 | --------------------- | ------- | -------- | --------------------------------------------------------------------------- |

@@ -578,7 +578,7 @@ mod tests {
             .collect();
 
         // Build matching WorkerTimingRecord rank-aggregated rows directly so the
-        // writer has data to emit (post-T007, the timing parquet reads from
+        // writer has data to emit (the timing parquet reads from
         // worker_timing_records, not convergence_records).
         let worker_records: Vec<WorkerTimingRecord> = (1u32..=3)
             .map(|i| WorkerTimingRecord {
@@ -827,7 +827,7 @@ mod tests {
 
         let records: Vec<IterationRecord> = (1..=5).map(|i| make_record(i, Some(1.0))).collect();
         let mut training = make_training_output(records);
-        // Post-T007 the timing parquet reads from worker_timing_records, not
+        // The timing parquet reads from worker_timing_records, not
         // convergence_records. Add 5 rank-aggregated rows for parity with the
         // convergence rows.
         training.worker_timing_records = (1u32..=5).map(make_worker_timing_record).collect();
@@ -853,7 +853,7 @@ mod tests {
             .expect("reader");
         let batch = reader.next().expect("must have rows").expect("batch Ok");
         assert_eq!(batch.num_rows(), 5);
-        assert_eq!(batch.num_columns(), 18, "post-T007 schema has 18 columns");
+        assert_eq!(batch.num_columns(), 18, "timing schema has 18 columns");
     }
 
     #[test]

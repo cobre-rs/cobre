@@ -481,7 +481,7 @@ pub fn unpack_worker_opening_stats(
 ///
 /// Used in three configurations:
 /// - **Backward pass**: `n_slots = max_openings` — each worker writes its
-///   per-opening stats for the current stage. Cleared via [`reset`] between
+///   per-opening stats for the current stage. Cleared via [`Self::reset`] between
 ///   stages (one stage per backward iteration step).
 /// - **Forward pass**: `n_slots = n_stages` — each worker writes its
 ///   per-stage total for the full forward pass. Cleared between iterations.
@@ -527,8 +527,8 @@ impl StageWorkerStatsBuffer {
 
     /// Compute the flat index for `(worker_id, slot)`.
     ///
-    /// Equivalent to `worker_id * n_slots + slot`. Used by [`get`] and
-    /// [`set`] internally; exposed so callers can do bulk slice arithmetic
+    /// Equivalent to `worker_id * n_slots + slot`. Used by [`Self::get`] and
+    /// [`Self::set`] internally; exposed so callers can do bulk slice arithmetic
     /// without re-deriving the formula.
     ///
     /// # Panics (debug only)
@@ -1114,7 +1114,7 @@ mod tests {
         }
     }
 
-    /// T003: verify `index(w, k) = w * n_slots + k` for several values.
+    /// Verify `index(w, k) = w * n_slots + k` for several values.
     #[test]
     fn test_stage_worker_stats_buffer_index_layout() {
         let buf = StageWorkerStatsBuffer::new(3, 4);
@@ -1127,7 +1127,7 @@ mod tests {
         assert_eq!(buf.n_slots(), 4);
     }
 
-    /// T003: verify `reset()` zeros every slot, even after non-default writes.
+    /// Verify `reset()` zeros every slot, even after non-default writes.
     #[test]
     fn test_stage_worker_stats_buffer_reset_zeroes_all_slots() {
         let mut buf = StageWorkerStatsBuffer::new(2, 3);
@@ -1149,7 +1149,7 @@ mod tests {
         }
     }
 
-    /// T004: round-trip pack→unpack must preserve every scalar field for every (w,k) pair.
+    /// Round-trip pack→unpack must preserve every scalar field for every (w,k) pair.
     #[test]
     fn test_pack_worker_opening_stats_roundtrip() {
         let n_workers = 3;
@@ -1181,14 +1181,14 @@ mod tests {
         }
     }
 
-    /// T004: helper returns the precise `stride * n_workers * n_slots` size in `f64` units.
+    /// Helper returns the precise `stride * n_workers * n_slots` size in `f64` units.
     #[test]
     fn test_pack_worker_opening_stats_buffer_size() {
         assert_eq!(worker_opening_stats_buffer_size(10, 20), 10 * 20 * 15);
         assert_eq!(worker_opening_stats_buffer_size(10, 20), 3000);
     }
 
-    /// T004: layout invariants — `[w as f64, k as f64, ...]` per entry, row-major.
+    /// Layout invariants — `[w as f64, k as f64, ...]` per entry, row-major.
     #[test]
     fn test_pack_worker_opening_stats_layout_invariant() {
         let n_workers = 2;

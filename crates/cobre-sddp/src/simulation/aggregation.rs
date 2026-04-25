@@ -22,9 +22,9 @@
 //!    stride-5 `f64` buffer packed from the five `ScenarioCategoryCosts` fields.
 //!    Per-category mean, max, and frequency are computed from the gathered data.
 //!
-//! 4. **`SimulationSummary` assembled** with `stage_stats = None` and
-//!    operational statistics set to `0.0` (deferred — requires per-stage
-//!    deficit/spillage tracking not yet in the cost buffer).
+//! 4. **`SimulationSummary` assembled** with operational statistics set to
+//!    `0.0` (deferred — requires per-stage deficit/spillage tracking not yet
+//!    in the cost buffer).
 //!
 //! ## `CVaR` computation
 //!
@@ -93,7 +93,6 @@ const CATEGORY_NAMES: [&str; N_CATEGORIES] = [
 /// - `deficit_frequency`, `total_deficit_mwh`, `total_spillage_mwh` — `0.0`
 ///   (deferred: requires per-stage deficit/spillage accumulation in the
 ///   simulation forward pass).
-/// - `stage_stats` — `None` (deferred: requires per-stage aggregation).
 ///
 /// # Errors
 ///
@@ -227,7 +226,6 @@ pub fn aggregate_simulation<C: Communicator>(
         total_spillage_mwh: 0.0,
         #[allow(clippy::cast_possible_truncation)]
         n_scenarios: total_gathered as u32,
-        stage_stats: None,
     })
 }
 
@@ -718,16 +716,6 @@ mod tests {
         assert_eq!(summary.deficit_frequency, 0.0);
         assert_eq!(summary.total_deficit_mwh, 0.0);
         assert_eq!(summary.total_spillage_mwh, 0.0);
-    }
-
-    #[test]
-    fn aggregate_stage_stats_is_none() {
-        let local_costs = vec![(0u32, 50.0, zero_cats())];
-        let config = make_config(1);
-        let comm = LocalBackend;
-
-        let summary = aggregate_simulation(&local_costs, &config, &comm).unwrap();
-        assert!(summary.stage_stats.is_none());
     }
 
     #[test]

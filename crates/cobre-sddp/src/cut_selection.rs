@@ -49,10 +49,11 @@
 
 /// Per-cut tracking metadata for cut selection strategies.
 ///
-/// Stored alongside cut coefficients and intercepts in the pre-allocated cut
-/// pool. All fields are initialized to zero / default values when the cut
-/// slot is first populated. Updated inline during the backward pass (see
-/// `crates/cobre-sddp/src/backward.rs` around line 994).
+/// Stored alongside cut coefficients and intercepts in the pre-allocated
+/// cut pool. All fields are initialised to zero / default values when the
+/// cut slot is first populated. Updated inline during the backward pass
+/// in `crate::backward_pass_state::BackwardPassState` (the function
+/// that owns the per-stage cut-binding sync step).
 #[derive(Debug, Clone)]
 pub struct CutMetadata {
     /// Iteration at which this cut was generated (1-based).
@@ -71,16 +72,16 @@ pub struct CutMetadata {
     ///
     /// Used by [`CutSelectionStrategy::Level1`]: deactivate if
     /// `active_count <= threshold`.
-    /// Initialized to 0; incremented inline by the backward pass
-    /// (`backward.rs:994`).
+    /// Initialised to 0; incremented inline by the backward pass when the
+    /// associated cut row's dual exceeds `cut_activity_tolerance`.
     pub active_count: u64,
 
     /// Most recent iteration at which this cut was binding.
     ///
     /// Used by [`CutSelectionStrategy::Lml1`]: deactivate if
     /// `current_iteration - last_active_iter > memory_window`.
-    /// Initialized to `iteration_generated`; updated inline by the backward
-    /// pass (`backward.rs:995`).
+    /// Initialised to `iteration_generated`; updated inline by the backward
+    /// pass during the per-stage cut-binding sync.
     pub last_active_iter: u64,
 
     /// Sliding-window binding-activity bitmap.
@@ -179,7 +180,9 @@ pub enum CutSelectionStrategy {
     /// A cut is dominated if at every visited forward pass state, some other
     /// active cut achieves a higher (or equal within threshold) value.
     /// Computationally expensive: O(|active cuts| x |visited states|) per
-    /// stage per check.
+    /// stage per check. This is the only dominance-based variant of cut
+    /// selection in cobre-sddp; cuts are kept iff they contribute strictly
+    /// at some visited state.
     Dominated {
         /// Activity threshold epsilon. Ignored by the stub implementation.
         threshold: f64,

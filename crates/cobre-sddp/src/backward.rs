@@ -1,12 +1,12 @@
 //! Backward pass execution for the SDDP training loop.
 //!
-//! [`run_backward_pass`] sweeps stages in reverse order (`T-2` down to `0`),
+//! `run_backward_pass` sweeps stages in reverse order (`T-2` down to `0`),
 //! evaluating the cost-to-go at each trial point **assigned to this rank**
 //! during the forward pass. For each trial point, the backward pass iterates
 //! over every opening from the fixed opening tree, extracts LP duals to form
 //! Benders cut coefficients, and aggregates per-opening outcomes via
 //! [`RiskMeasure::aggregate_cut`] to produce one cut per trial point per
-//! stage. Each aggregated cut is inserted into the [`FutureCostFunction`].
+//! stage. Each aggregated cut is inserted into the [`crate::FutureCostFunction`].
 //!
 //! Although [`ExchangeBuffers`] contains trial points from all ranks (after
 //! `allgatherv`), each rank only processes its own forward pass assignments
@@ -31,7 +31,7 @@
 //! where `Q` is the LP objective and `dual[0..n_state]` are the duals of the
 //! fixing constraints (storage-fixing and lag-fixing rows).
 //!
-//! The coefficients stored in the [`FutureCostFunction`] are the raw (unscaled)
+//! The coefficients stored in the [`crate::FutureCostFunction`] are the raw (unscaled)
 //! duals of the state-fixing rows. Negation is applied later when building the
 //! LP cut row in `build_cut_row_batch_into` (forward.rs):
 //! `-coeff * x + theta >= intercept`.
@@ -98,6 +98,13 @@ use crate::{
 pub type StageWorkerOpeningDelta = (i32, i32, usize, SolverStatsDelta);
 
 /// Result produced by the backward pass on a single rank.
+///
+/// The per-worker timing data carried inside `stage_stats` is keyed
+/// by the `WORKER_TIMING_SLOT_*` constants exported from
+/// `cobre-core`. New per-worker timing slots should be added to
+/// that constant set (and the `WORKER_TIMING_SLOT_COUNT` updated)
+/// rather than as standalone fields on this struct, so the parquet
+/// timing schema picks them up automatically.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct BackwardResult {
@@ -627,9 +634,11 @@ pub(crate) fn process_trial_point_backward<S: SolverInterface + Send>(
         }
     }
 
-    // Aggregate into the pre-allocated scratch buffer, then copy to an owned
-    // Vec<f64> for the StagedCut. The copy is the one unavoidable allocation
-    // per trial point: the coefficients must outlive the parallel closure.
+    // Copy the aggregated coefficients out of the per-worker scratch
+    // buffer into an owned Vec<f64> so they outlive the parallel
+    // closure. This is the one allocation per trial point inside the
+    // parallel region; see the module-level "Hot-path allocation
+    // discipline" section for the full inventory.
     let n_openings = succ.probabilities.len();
     let mut agg_intercept = 0.0_f64;
     risk_measures[succ.t].aggregate_cut_into(
@@ -4631,9 +4640,9 @@ mod tests {
         assert_eq!(scheduling_ms, 0, "negative scheduling must be clamped to 0");
     }
 
-    // ── T005: allgatherv per-worker stats unit tests ──────────────────────────
+    // ── allgatherv per-worker stats unit tests ────────────────────────────────
 
-    /// T005-A: single-rank (np=1) backward pass with 2 workers.
+    /// Single-rank (np=1) backward pass with 2 workers.
     ///
     /// Constructs a 2-worker `StageWorkerStatsBuffer::new(2, 4)` and uses
     /// `StubComm` (which echoes send→recv, simulating `LocalBackend` np=1).
@@ -4799,7 +4808,7 @@ mod tests {
         );
     }
 
-    /// T005-B: multi-rank (np=2) backward pass with stub communicator.
+    /// Multi-rank (np=2) backward pass with stub communicator.
     ///
     /// Uses a `DualRankStubComm` whose `size()` returns 2 and whose
     /// `allgatherv` concatenates a manually injected "remote rank" payload

@@ -68,12 +68,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   using the already-initialized pool. Previously a silent fallback was applied
   without any diagnostic output.
 
+### Deprecated
+
+- `RowSelectionConfig::threshold` is deprecated. The field remains
+  parseable; supplying it now emits a `WARN`-level `tracing` event
+  directing the user to `memory_window` (for `"lml1"`) or
+  `domination_epsilon` (for `"domination"`).
+
 ### Removed
 
 - `FerrompiScratch` and the `FerrompiBackend::scratch` interior-mutability
   field. The native bitwise-OR allreduce no longer needs per-call scratch
   for counts/displs vectors. `unsafe impl Send + Sync for FerrompiBackend`
   comments were updated accordingly.
+- `SimulationSummary::stage_stats: Option<Vec<StageSummaryStats>>`
+  field and the `StageSummaryStats` struct were removed; the field
+  was always `None` in production output and had no consumers.
 
 ### Verified
 

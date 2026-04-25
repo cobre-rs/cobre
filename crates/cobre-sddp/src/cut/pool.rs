@@ -471,12 +471,15 @@ impl CutPool {
             .fold(f64::NEG_INFINITY, f64::max)
     }
 
-    /// Compute a report of exact-zero sparsity across all active cuts.
+    /// Diagnostic: count exact-zero coefficients across all active cuts.
     ///
-    /// Scans every coefficient of every active cut and counts exact zeros
-    /// (`value == 0.0`). Returns a [`SparsityReport`] with aggregate and
-    /// per-dimension statistics. Only exact zeros are counted to preserve
-    /// bit-for-bit reproducibility when sparse representations are used.
+    /// Walks every coefficient of every active cut and tallies exact
+    /// zeros (`value == 0.0`). Returns a [`SparsityReport`] with the
+    /// aggregate count, fraction, and per-dimension breakdown.
+    ///
+    /// Not on the hot path: allocates one `Vec<usize>` of length
+    /// `state_dimension` per call. Intended for offline analysis or
+    /// pre-release diagnostics, not per-iteration use.
     ///
     /// # Example
     ///
@@ -703,11 +706,11 @@ impl CutPool {
     }
 }
 
-/// Report of exact-zero sparsity across active cuts in a [`CutPool`].
+/// Diagnostic report of exact-zero coefficients across active cuts in a [`CutPool`].
 ///
-/// Produced by [`CutPool::sparsity_report`]. Only exact zeros (`value == 0.0`)
-/// are counted -- near-zero values are not included to preserve bit-for-bit
-/// reproducibility.
+/// Produced by [`CutPool::sparsity_report`]. Counts only exact
+/// zeros (`value == 0.0`); near-zero values are not collapsed to
+/// zero by this report.
 #[derive(Debug, Clone)]
 pub struct SparsityReport {
     /// Total number of coefficients scanned (`active_count * state_dimension`).

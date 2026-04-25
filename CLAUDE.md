@@ -41,7 +41,7 @@ These are non-negotiable. Violations must be fixed before committing.
   release consumers. Existing rustdoc/comment references predating this
   rule are tech debt; clean up opportunistically when touching the
   surrounding code.
-  
+
 ---
 
 ## Architecture Guides (Read When Relevant)
@@ -67,12 +67,15 @@ When adding new LP variables, constraints, or entity types, read:
 → `crates/cobre-sddp/src/lp_builder.rs` module docs and `crates/cobre-sddp/src/indexer.rs`
 
 When modifying study setup construction or scenario library building, note that
-`setup.rs` is now a directory module (`setup/mod.rs`) with six sub-modules:
+`setup.rs` is now a directory module (`setup/mod.rs`) with nine sub-modules:
 → `setup/params.rs` — `StudyParams`, `ConstructionConfig`, constants
 → `setup/stochastic_pipeline.rs` — `PrepareStochasticResult`, `prepare_stochastic`, helpers
 → `setup/template_postprocess.rs` — `postprocess_templates`
 → `setup/scenario_libraries.rs` — 4 scenario library builder functions
-→ `setup/accessors.rs` — 33 accessor methods and context builders
+→ `setup/scenario_library_set.rs` — `ScenarioLibraries` nested per-phase container
+→ `setup/stage_data.rs` — `StageData` stage-indexed sub-struct
+→ `setup/methodology_config.rs` — `MethodologyConfig` numerical-methodology params
+→ `setup/accessors.rs` — accessor methods and context builders
 → `setup/orchestration.rs` — `train`, `simulate`, `build_training_output`, `create_workspace_pool`
 The `StudySetup` struct, its two constructors (`new`, `from_broadcast_params`), and three
 private helpers remain in `setup/mod.rs`.

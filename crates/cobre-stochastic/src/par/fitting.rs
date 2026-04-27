@@ -2031,7 +2031,7 @@ pub fn solve_linear_system(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec
 /// - `sigma_12`: 2×k row-major (the conditioning set has `k` elements).
 /// - `sigma_22`: k×k row-major symmetric matrix.
 #[allow(clippy::struct_field_names)]
-struct PartitionedCov {
+pub(crate) struct PartitionedCov {
     /// 2×2 auto-covariance of `(Z_t, Z_{t−k})`, row-major.
     sigma_11: [f64; 4],
     /// 2×k cross-covariance between `(Z_t, Z_{t−k})` and the conditioning
@@ -2059,7 +2059,7 @@ struct PartitionedCov {
 /// - Rows/cols `i,j < k−1`: `ρ^{season−1}(|i−j|)` — periodic autocorrelation
 ///   of the `Z` block at season `m−1`. Diagonal entries are `1.0`.
 /// - Row/col `k−1` (the `A_{t−1}` entry):
-///   - Off-diagonal: `cross_correlation_z_a(season−1, k−2−i, …)` for `i < k−1`.
+///   - Off-diagonal: `cross_correlation_z_a(season−1, i, …)` for `i < k−1`.
 ///   - Diagonal `[k−1, k−1] = 1.0` (unit variance of standardised `A_{t−1}`).
 ///
 /// **`sigma_12`** (2×k): cross-covariance between `(Z_t, Z_{t−k})` and the
@@ -2068,7 +2068,7 @@ struct PartitionedCov {
 /// - Row 0, column `k−1`: `cross_correlation_a_z_neg1(season−1, …)`.
 /// - Row 1 (from `Z_{t−k}`), column `j < k−1`: `ρ^{season−k}(k−1−j)`.
 /// - Row 1, column `k−1`: `cross_correlation_z_a(season−1, k−1, …)`.
-fn assemble_partitioned_covariance(
+pub(crate) fn assemble_partitioned_covariance(
     season: usize,
     k: usize,
     n_seasons: usize,
@@ -2106,12 +2106,13 @@ fn assemble_partitioned_covariance(
     }
 
     // Cross-terms between the Z-block and A_{t−1} (column/row k−1).
-    // sigma_22[i, k−1] = cross_correlation_z_a(prev_season, k−2−i, …)
+    // sigma_22[i, k−1] = Corr(Z_{t−1−i}, A_{t−1}).
+    // Z_{t−1−i} is `i` steps older than A_{t−1}, so lag = i.
     // for i in 0..k−1 (and symmetrically sigma_22[k−1, i]).
     // Note: for k=1 there is no Z-block (k.saturating_sub(1)=0), so this
     // loop body is never entered.
     for i in 0..k.saturating_sub(1) {
-        let lag = k.saturating_sub(2).saturating_sub(i);
+        let lag = i;
         let rho =
             cross_correlation_z_a(prev_season, lag, n_seasons, obs_z, stats_z, obs_a, stats_a);
         sigma_22[i * k + (k - 1)] = rho;
@@ -4948,7 +4949,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        build_extended_periodic_yw_matrix, cross_correlation_a_z_neg1, cross_correlation_z_a,
+        assemble_partitioned_covariance, build_extended_periodic_yw_matrix,
+        cross_correlation_a_z_neg1, cross_correlation_z_a,
     };
 
     /// Helper: compute population mean and std (same as `pop_mean_std` above but
@@ -6089,5 +6091,85 @@ mod tests {
             result.residual_std_ratio, 1.0,
             "singular system must return residual_std_ratio=1.0"
         );
+    }
+
+    /// Regression test: `assemble_partitioned_covariance` sigma_22 cross-term
+    /// lag indexing for k=3.
+    ///
+    /// The cross-term `sigma_22[i, k-1]` must equal
+    /// `cross_correlation_z_a(prev_season, lag=i, ...)` because `Z_{t-1-i}` is
+    /// exactly `i` steps older than `A_{t-1}`.  The old (buggy) code used
+    /// `lag = k-2-i`, which is only coincidentally correct when `k=2` (both
+    /// formulae reduce to `lag=0`).  For `k=3` the bug swaps the lag-0 and
+    /// lag-1 cross-terms.
+    ///
+    /// This test FAILS on the old `k-2-i` formula and PASSES on the fixed `i`
+    /// formula.
+    #[test]
+    fn assemble_partitioned_covariance_sigma_22_cross_term_lag_indexing() {
+        // 4-season synthetic dataset, 20 years of data.
+        let n_seasons = 4;
+        let n_years = 20;
+
+        // Z observations: deterministic but non-trivial to avoid accidental
+        // symmetry that would make lag-0 == lag-1.
+        let z_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| {
+                        (s as f64 * 1.7 + y as f64 * 0.3).sin() * 4.0
+                            + (s as f64 * 0.6 - y as f64 * 1.4).cos() * 1.5
+                    })
+                    .collect()
+            })
+            .collect();
+        let a_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| (s as f64 * 0.9 + y as f64 * 0.7).cos() * 2.0 + (y as f64 * 0.2).sin())
+                    .collect()
+            })
+            .collect();
+
+        let obs_refs: Vec<&[f64]> = z_data.iter().map(Vec::as_slice).collect();
+        let ann_refs: Vec<&[f64]> = a_data.iter().map(Vec::as_slice).collect();
+        let stats: Vec<(f64, f64)> = z_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+        let ann_stats: Vec<(f64, f64)> = a_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+
+        let season = 0;
+        let k = 3;
+        let prev_season = (season + n_seasons - 1) % n_seasons;
+
+        let cov = assemble_partitioned_covariance(
+            season, k, n_seasons, &obs_refs, &stats, &ann_refs, &ann_stats,
+        );
+
+        // For k=3 the cross-term block covers i in 0..2 (i.e. i=0 and i=1).
+        // sigma_22[i, k-1] should equal cross_correlation_z_a(prev_season, lag=i, ...).
+        for i in 0..k - 1 {
+            let expected = cross_correlation_z_a(
+                prev_season,
+                i, // lag = i (the fix)
+                n_seasons,
+                &obs_refs,
+                &stats,
+                &ann_refs,
+                &ann_stats,
+            );
+            let actual = cov.sigma_22[i * k + (k - 1)];
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "sigma_22[{i}, {k_minus_1}] = {actual:.15} but \
+                 cross_correlation_z_a(prev_season={prev_season}, lag={i}) = {expected:.15}",
+                k_minus_1 = k - 1,
+            );
+            // Also check symmetry: sigma_22[k-1, i] == sigma_22[i, k-1].
+            let sym = cov.sigma_22[(k - 1) * k + i];
+            assert!(
+                (sym - expected).abs() < 1e-12,
+                "sigma_22[{k_minus_1}, {i}] = {sym:.15} not symmetric with sigma_22[{i}, {k_minus_1}]",
+                k_minus_1 = k - 1,
+            );
+        }
     }
 }

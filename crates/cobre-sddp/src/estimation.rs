@@ -1090,10 +1090,8 @@ struct ArEstimationConfig<'a> {
     max_order: usize,
     max_coeff_magnitude: Option<f64>,
     season_map: Option<&'a cobre_core::temporal::SeasonMap>,
-    /// When `true`, dispatch to the PAR-A path (conditional FACP + extended YW).
-    /// When `false` (the default), dispatch to the classical PACF path.
-    /// Epic 04 wires this from the public `OrderSelectionMethod` config; this
-    /// ticket only introduces the flag and routes to the new function.
+    /// When `true`, the PAR-A path (conditional FACP + extended YW) is used.
+    /// When `false` (the default), the classical PACF path is used.
     use_annual_component: bool,
 }
 
@@ -1209,7 +1207,10 @@ fn estimate_ar_with_pacf(
 /// 3. Per (hydro, season): calls [`conditional_facp_partitioned`] →
 ///    [`select_order_pacf_annual`] → [`estimate_periodic_ar_annual_coefficients`].
 ///
-/// Every returned [`ArCoefficientEstimate`] has `annual: Some(AnnualComponent { .. })`.
+/// Every returned [`ArCoefficientEstimate`] has `annual: Some(AnnualComponent { .. })`
+/// when the `(hydro, season)` pair has at least one rolling-window `A_t` observation;
+/// seasons with no rolling-window data fall through to the classical PAR(p) path with
+/// `annual: None`.
 /// The estimation report uses `method = "PACF_ANNUAL"`.
 ///
 /// # Errors

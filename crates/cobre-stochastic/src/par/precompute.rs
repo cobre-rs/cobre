@@ -53,7 +53,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
+use cobre_core::{scenario::InflowModel, temporal::Stage, EntityId};
 
 use crate::StochasticError;
 
@@ -446,7 +446,7 @@ struct StageArrayBuffers<'a> {
 /// # Errors
 ///
 /// Returns [`StochasticError::InvalidParParameters`] when a study stage has
-/// AR order > 0 but no `season_id`.
+/// AR order > 0 or an annual component but no `season_id`.
 fn fill_stage_arrays(
     stages: &[Stage],
     hydro_ids: &[EntityId],
@@ -622,8 +622,9 @@ fn fill_stage_arrays(
                         return Err(StochasticError::InvalidParParameters {
                             hydro_id: hydro_id.0,
                             stage_id,
-                            reason: "stage has AR order > 0 but no season_id; \
-                                     cannot perform coefficient unit conversion"
+                            reason: "stage has AR order > 0 or an annual component \
+                                     but no season_id; cannot perform lag-stage \
+                                     statistics lookup"
                                 .to_string(),
                         });
                     }
@@ -645,15 +646,15 @@ fn fill_stage_arrays(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
-    use super::{PrecomputedPar, resolve_season_id};
+    use super::{resolve_season_id, PrecomputedPar};
 
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
         Stage {

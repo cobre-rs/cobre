@@ -43,8 +43,8 @@ pub use simulation_writer::SimulationParquetWriter;
 pub use solver_stats_writer::{SolverStatsRow, write_simulation_solver_stats, write_solver_stats};
 pub use stochastic::{
     FittingReductionEntry, FittingReport, HydroFittingEntry, write_correlation_json,
-    write_fitting_report, write_inflow_ar_coefficients, write_inflow_seasonal_stats,
-    write_load_seasonal_stats, write_noise_openings,
+    write_fitting_report, write_inflow_annual_component, write_inflow_ar_coefficients,
+    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
 };
 pub use training_writer::{TrainingParquetWriter, write_row_selection_records};
 

@@ -916,6 +916,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -2210,6 +2211,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -2554,6 +2556,7 @@ mod tests {
                     std_m3s: 20.0,
                     ar_coefficients: vec![0.5, 0.3],
                     residual_std_ratio: 0.8,
+                    annual: None,
                 })
             })
             .collect();
@@ -3068,6 +3071,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -3339,6 +3343,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -3595,6 +3600,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -3880,6 +3886,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -4168,6 +4175,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 

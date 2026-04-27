@@ -123,6 +123,7 @@ fn make_inflow_model(
         std_m3s,
         ar_coefficients,
         residual_std_ratio,
+        annual: None,
     }
 }
 

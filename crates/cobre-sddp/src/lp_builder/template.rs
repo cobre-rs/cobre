@@ -951,6 +951,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: ar_coefficients.clone(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -1504,6 +1505,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -1972,6 +1974,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -2590,6 +2593,7 @@ mod tests {
                     std_m3s: 10.0,
                     ar_coefficients: vec![],
                     residual_std_ratio: 1.0,
+                    annual: None,
                 })
             })
             .collect();
@@ -2893,6 +2897,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -3116,6 +3121,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -4654,6 +4660,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
         let load_models = vec![LoadModel {
@@ -4916,6 +4923,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models = vec![LoadModel {
@@ -5983,6 +5991,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: ar_coefficients.clone(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -6429,6 +6438,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(3),
@@ -6437,6 +6447,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
 
@@ -6698,6 +6709,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -7777,6 +7789,7 @@ mod tests {
                 std_m3s: 0.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 0.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: h2_id,
@@ -7785,6 +7798,7 @@ mod tests {
                 std_m3s: 0.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 0.0,
+                annual: None,
             },
         ];
 
@@ -8204,6 +8218,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 

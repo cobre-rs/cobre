@@ -47,6 +47,7 @@ use crate::StochasticError;
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 ///
 /// let report = validate_par_parameters(&[model]).unwrap();
@@ -140,6 +141,7 @@ pub enum ParWarning {
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 /// let report = validate_par_parameters(&[valid]).unwrap();
 /// assert!(report.warnings.is_empty());
@@ -152,6 +154,7 @@ pub enum ParWarning {
 ///     std_m3s: 0.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 /// let result = validate_par_parameters(&[bad]);
 /// assert!(result.is_err());
@@ -212,6 +215,7 @@ mod tests {
             std_m3s,
             ar_coefficients,
             residual_std_ratio,
+            annual: None,
         }
     }
 

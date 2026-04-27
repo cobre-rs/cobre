@@ -841,6 +841,7 @@ fn build_system_for_par1_with_user_stats() -> cobre_core::System {
             std_m3s: USER_STD,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 

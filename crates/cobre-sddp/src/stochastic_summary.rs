@@ -511,6 +511,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![0.5, 0.3],
             residual_std_ratio: 0.8,
+            annual: None,
         }
     }
 
@@ -617,6 +618,7 @@ mod tests {
                 std_m3s: 30.0,
                 ar_coefficients: vec![0.5],
                 residual_std_ratio: 0.87,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(2),
@@ -625,6 +627,7 @@ mod tests {
                 std_m3s: 40.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let rows = inflow_models_to_stats_rows(&models);
@@ -650,6 +653,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![0.4, -0.1, 0.05],
                 residual_std_ratio: 0.92,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(2),
@@ -658,6 +662,7 @@ mod tests {
                 std_m3s: 15.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let rows = inflow_models_to_ar_rows(&models);

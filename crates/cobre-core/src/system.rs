@@ -459,6 +459,7 @@ impl System {
     ///     std_m3s: 10.0,
     ///     ar_coefficients: vec![],
     ///     residual_std_ratio: 1.0,
+    ///     annual: None,
     /// };
     /// let updated = system.with_scenario_models(vec![model], CorrelationModel::default());
     /// assert_eq!(updated.inflow_models().len(), 1);

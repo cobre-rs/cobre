@@ -38,12 +38,12 @@ use crate::{
     initial_conditions::parse_initial_conditions,
     penalties::parse_penalties,
     scenarios::{
-        ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowArCoefficientRow,
-        InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry, LoadSeasonalStatsRow,
-        NcsFactorEntry, load_correlation, load_external_inflow_scenarios,
-        load_external_load_scenarios, load_external_ncs_scenarios, load_inflow_ar_coefficients,
-        load_inflow_history, load_inflow_seasonal_stats, load_load_factors,
-        load_load_seasonal_stats, load_ncs_stats, load_non_controllable_factors,
+        ExternalLoadRow, ExternalNcsRow, ExternalScenarioRow, InflowAnnualComponentRow,
+        InflowArCoefficientRow, InflowHistoryRow, InflowSeasonalStatsRow, LoadFactorEntry,
+        LoadSeasonalStatsRow, NcsFactorEntry, load_correlation, load_external_inflow_scenarios,
+        load_external_load_scenarios, load_external_ncs_scenarios, load_inflow_annual_component,
+        load_inflow_ar_coefficients, load_inflow_history, load_inflow_seasonal_stats,
+        load_load_factors, load_load_seasonal_stats, load_ncs_stats, load_non_controllable_factors,
     },
     stages::StagesData,
     system::{
@@ -108,6 +108,8 @@ pub(crate) struct ParsedData {
     pub(crate) inflow_seasonal_stats: Vec<InflowSeasonalStatsRow>,
     /// Parsed `scenarios/inflow_ar_coefficients.parquet`. Empty when absent.
     pub(crate) inflow_ar_coefficients: Vec<InflowArCoefficientRow>,
+    /// Parsed `scenarios/inflow_annual_component.parquet`. Empty when absent.
+    pub(crate) inflow_annual_components: Vec<InflowAnnualComponentRow>,
     /// Parsed `scenarios/external_inflow_scenarios.parquet`. Empty when absent.
     pub(crate) external_scenarios: Vec<ExternalScenarioRow>,
     /// Parsed `scenarios/external_load_scenarios.parquet`. Empty when absent.
@@ -385,6 +387,18 @@ pub(crate) fn validate_schema(
         ctx,
     );
 
+    let inflow_annual_components = optional_or_error(
+        manifest.scenarios_inflow_annual_component_parquet,
+        || {
+            load_inflow_annual_component(Some(
+                &case_root.join("scenarios/inflow_annual_component.parquet"),
+            ))
+        },
+        Vec::new,
+        "scenarios/inflow_annual_component.parquet",
+        ctx,
+    );
+
     let external_scenarios = optional_or_error(
         manifest.scenarios_external_inflow_scenarios_parquet,
         || {
@@ -655,6 +669,7 @@ pub(crate) fn validate_schema(
         inflow_history,
         inflow_seasonal_stats,
         inflow_ar_coefficients,
+        inflow_annual_components,
         external_scenarios,
         external_load_scenarios,
         external_ncs_scenarios,

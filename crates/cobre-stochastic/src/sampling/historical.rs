@@ -876,6 +876,7 @@ mod tests {
                 std_m3s: 30.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: hydro,
@@ -884,6 +885,7 @@ mod tests {
                 std_m3s: 30.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
@@ -951,6 +953,7 @@ mod tests {
                 std_m3s: 25.0,
                 ar_coefficients: vec![0.5],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
@@ -1036,6 +1039,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: h1,
@@ -1044,6 +1048,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: h2,
@@ -1052,6 +1057,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: h2,
@@ -1060,6 +1066,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let par = PrecomputedPar::build(&models, &stages, &[h1, h2]).unwrap();
@@ -1143,6 +1150,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![0.0, 0.0],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
         // Also add pre-study models for stage_id -1 (Dec) and -2 (Nov)
@@ -1155,6 +1163,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![0.0, 0.0],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: hydro,
@@ -1163,6 +1172,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![0.0, 0.0],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let mut all_models = pre_study_models;
@@ -1220,6 +1230,7 @@ mod tests {
             std_m3s: 0.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
 
@@ -1443,6 +1454,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: hydro,
@@ -1451,6 +1463,7 @@ mod tests {
                 std_m3s: 15.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
@@ -1585,6 +1598,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
@@ -1688,6 +1702,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
         let par = PrecomputedPar::build(&models, &stages, &[hydro]).unwrap();
 
@@ -1762,6 +1777,7 @@ mod tests {
                     std_m3s: std_per_season[i],
                     ar_coefficients: vec![],
                     residual_std_ratio: 1.0,
+                    annual: None,
                 });
             }
         }

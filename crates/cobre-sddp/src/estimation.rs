@@ -519,7 +519,7 @@ fn run_estimation(
     let stats_rows = seasonal_stats_to_rows(&seasonal_stats, stages);
     let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
 
-    let inflow_models = assemble_inflow_models(stats_rows, coeff_rows)?;
+    let inflow_models = assemble_inflow_models(stats_rows, coeff_rows, vec![])?;
 
     Ok((
         system.with_scenario_models(inflow_models, correlation),
@@ -604,7 +604,7 @@ fn run_partial_estimation(
     // User stats (mean_m3s, std_m3s from the input system) drive LP assembly.
     let user_stats_rows = user_stats_to_rows(&system);
     let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
-    let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows)?;
+    let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows, vec![])?;
 
     estimation_report.white_noise_fallbacks = white_noise_fallbacks;
     estimation_report.lag_scale_warnings = lag_scale_warnings;
@@ -845,7 +845,7 @@ fn run_user_ar_estimation(
     // ar_coefficients / residual_std_ratio.
     let stats_rows = seasonal_stats_to_rows(&seasonal_stats, stages);
 
-    let inflow_models = assemble_inflow_models(stats_rows, user_ar_rows)?;
+    let inflow_models = assemble_inflow_models(stats_rows, user_ar_rows, vec![])?;
 
     // Build a minimal report: no AR was estimated, method is "user_provided".
     let estimation_report = EstimationReport {
@@ -1912,6 +1912,7 @@ mod tests {
             std_m3s: 1.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let system = SystemBuilder::new()
             .buses(vec![bus])
@@ -1935,6 +1936,7 @@ mod tests {
                 std_m3s: 5.0,
                 ar_coefficients: vec![0.4],
                 residual_std_ratio: 0.9,
+                annual: None,
             })
             .collect();
         let new_corr = CorrelationModel::default();
@@ -1971,6 +1973,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let system = minimal_system_with_inflow_models(vec![model]);
         assert_eq!(system.inflow_models().len(), 1);
@@ -2008,6 +2011,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![0.5],
             residual_std_ratio: 0.87,
+            annual: None,
         };
         let system = minimal_system_with_inflow_models(vec![model]);
         let original_len = system.inflow_models().len();
@@ -2045,6 +2049,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let system = minimal_system_with_inflow_models(vec![model]);
         let original_len = system.inflow_models().len();
@@ -2162,6 +2167,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(1),
@@ -2170,6 +2176,7 @@ mod tests {
                 std_m3s: 12.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(2),
@@ -2178,6 +2185,7 @@ mod tests {
                 std_m3s: 5.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let system = minimal_system_with_inflow_models(models.clone());
@@ -2328,6 +2336,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -2545,6 +2554,7 @@ mod tests {
             std_m3s: 50.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let past_inflows = if include_past_inflows {
             vec![HydroPastInflows {
@@ -2693,6 +2703,7 @@ mod tests {
             std_m3s: 50.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let ic = InitialConditions {
             storage: vec![],
@@ -3878,8 +3889,8 @@ mod tests {
         let coeff_rows = ar_estimates_to_rows(&ar_ests, &stages);
 
         // Assemble into InflowModel.
-        let inflow_models =
-            assemble_inflow_models(stats_rows, coeff_rows).expect("assembly should succeed");
+        let inflow_models = assemble_inflow_models(stats_rows, coeff_rows, vec![])
+            .expect("assembly should succeed");
 
         // Should have entries for pre-study stages.
         assert!(
@@ -4880,6 +4891,7 @@ mod tests {
                     std_m3s: 10.0,
                     ar_coefficients: vec![],
                     residual_std_ratio: 1.0,
+                    annual: None,
                 })
             })
             .collect();
@@ -5187,6 +5199,7 @@ mod tests {
                 std_m3s: user_stds[i],
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 

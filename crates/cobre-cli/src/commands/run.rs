@@ -1838,6 +1838,11 @@ fn export_stochastic_artifacts(
         }
     }
 
+    // Annual component (PAR(p)-A) is wired via `write_inflow_annual_component`
+    // once estimation produces fitted annual rows; the writer exists in
+    // `cobre-io` and Python parity will be wired when the fitting pipeline
+    // populates `InflowModel.annual`.
+
     if let Err(e) = write_correlation_json(
         &stochastic_dir.join("correlation.json"),
         system.correlation(),

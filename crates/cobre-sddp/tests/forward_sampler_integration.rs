@@ -374,6 +374,7 @@ fn build_single_hydro_system(
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 
@@ -438,6 +439,7 @@ fn build_two_hydro_system(
                 std_m3s: 30.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             });
         }
     }
@@ -769,6 +771,7 @@ fn build_historical_system(
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
     let history = build_inflow_history(id, n_history_years);
@@ -910,6 +913,7 @@ fn build_external_system(
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
     let ext_rows = build_external_inflow_rows(id, 3, n_scenarios);
@@ -1008,6 +1012,7 @@ fn build_mixed_system(
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
     let load_models: Vec<LoadModel> = (0..3)
@@ -1234,6 +1239,7 @@ fn build_external_load_system(
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
     let load_models: Vec<LoadModel> = (0..3)
@@ -1309,6 +1315,7 @@ fn build_external_ncs_system(
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
     let ncs_models: Vec<NcsModel> = (0..3)
@@ -1503,6 +1510,7 @@ fn build_monthly_unique_groups_system(
             std_m3s: 15.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 

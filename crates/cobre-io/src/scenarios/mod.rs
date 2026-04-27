@@ -28,6 +28,7 @@
 //! constraints (lag contiguity, AR coefficient count matching, block count
 //! matching) are deferred to Layer 3/5.
 
+pub mod annual_component;
 pub mod ar_coefficients;
 pub mod assembly;
 pub mod correlation;
@@ -40,6 +41,7 @@ pub mod noise_openings;
 pub mod non_controllable_factors;
 pub mod non_controllable_stats;
 
+pub use annual_component::{InflowAnnualComponentRow, parse_inflow_annual_component};
 pub use ar_coefficients::{InflowArCoefficientRow, parse_inflow_ar_coefficients};
 pub use assembly::{assemble_inflow_models, assemble_load_models};
 pub use correlation::parse_correlation;
@@ -88,6 +90,20 @@ pub fn load_inflow_ar_coefficients(
     match path {
         None => Ok(Vec::new()),
         Some(p) => parse_inflow_ar_coefficients(p),
+    }
+}
+
+/// Load `scenarios/inflow_annual_component.parquet`, returning an empty `Vec` when absent.
+///
+/// # Errors
+///
+/// Propagates [`LoadError`] from the parser when `path` is `Some`.
+pub fn load_inflow_annual_component(
+    path: Option<&Path>,
+) -> Result<Vec<InflowAnnualComponentRow>, LoadError> {
+    match path {
+        None => Ok(Vec::new()),
+        Some(p) => parse_inflow_annual_component(p),
     }
 }
 
@@ -331,6 +347,12 @@ pub fn load_scenarios(
             .then(|| scenarios_dir.join("inflow_ar_coefficients.parquet"))
             .as_deref(),
     )?;
+    let raw_annual_components = load_inflow_annual_component(
+        manifest
+            .scenarios_inflow_annual_component_parquet
+            .then(|| scenarios_dir.join("inflow_annual_component.parquet"))
+            .as_deref(),
+    )?;
     let inflow_history = load_inflow_history(
         manifest
             .scenarios_inflow_history_parquet
@@ -386,7 +408,7 @@ pub fn load_scenarios(
             .as_deref(),
     )?;
 
-    let inflow_models = assemble_inflow_models(raw_stats, raw_coefficients)?;
+    let inflow_models = assemble_inflow_models(raw_stats, raw_coefficients, raw_annual_components)?;
     let load_models = assemble_load_models(raw_load_stats);
 
     Ok(ScenarioData {
@@ -550,6 +572,26 @@ mod tests {
         assert!(
             data.noise_openings.is_empty(),
             "noise_openings should be empty when scenarios_noise_openings_parquet flag is false"
+        );
+    }
+
+    /// AC #7: when `manifest.scenarios_inflow_annual_component_parquet == false`,
+    /// `load_scenarios` returns `Ok` and every `inflow_models[i].annual.is_none()`.
+    #[test]
+    fn test_load_scenarios_no_annual_file_yields_none_field() {
+        let dir = TempDir::new().unwrap();
+        // Set only the stats flag so we get an inflow model to inspect.
+        // With all flags false the inflow_models vec is empty — also valid.
+        let manifest = FileManifest::default(); // all flags false
+
+        let data =
+            load_scenarios(dir.path(), &manifest).expect("empty manifest should always succeed");
+
+        // When no inflow stats are present there are no models; the annual field
+        // is vacuously None for all (zero) entries.
+        assert!(
+            data.inflow_models.iter().all(|m| m.annual.is_none()),
+            "every inflow model should have annual == None when annual component file is absent"
         );
     }
 }

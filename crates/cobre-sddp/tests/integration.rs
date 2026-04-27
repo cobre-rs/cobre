@@ -422,6 +422,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 

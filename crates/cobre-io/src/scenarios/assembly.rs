@@ -17,17 +17,21 @@ use std::path::Path;
 
 use cobre_core::{
     EntityId,
-    scenario::{InflowModel, LoadModel},
+    scenario::{AnnualComponent, InflowModel, LoadModel},
 };
 
 use crate::LoadError;
-use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
+use crate::scenarios::{
+    InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow,
+};
 
-/// Assemble `Vec<InflowModel>` by joining seasonal stats with AR coefficients.
+/// Assemble `Vec<InflowModel>` by joining seasonal stats with AR coefficients and
+/// annual component rows.
 ///
-/// Both inputs must be pre-sorted by their respective parsers:
+/// All inputs must be pre-sorted by their respective parsers:
 /// - `stats` sorted by `(hydro_id, stage_id)` ascending.
 /// - `coefficients` sorted by `(hydro_id, stage_id, lag)` ascending.
+/// - `annual_components` sorted by `(hydro_id, stage_id)` ascending.
 ///
 /// For each [`InflowSeasonalStatsRow`], all [`InflowArCoefficientRow`] entries
 /// with a matching `(hydro_id, stage_id)` are collected into `ar_coefficients`,
@@ -38,16 +42,23 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 /// [`InflowModel`] has an empty `ar_coefficients` vec and `residual_std_ratio = 1.0`
 /// (white-noise identity).
 ///
-/// When `stats` is empty (regardless of whether `coefficients` is non-empty),
-/// the function returns an empty `Vec` without error. The P7 estimation path
-/// (`UserArHistoryStats`) loads AR coefficients independently via
-/// `parse_inflow_ar_coefficients` and does not route them through this function.
+/// When an [`InflowAnnualComponentRow`] exists for a (hydro, stage) pair, the
+/// resulting [`InflowModel`] carries `annual: Some(AnnualComponent { ... })`;
+/// otherwise `annual: None` (classical PAR(p), no annual extension).
+///
+/// When `stats` is empty (regardless of whether `coefficients` or
+/// `annual_components` are non-empty), the function returns an empty `Vec`
+/// without error. The P7 estimation path (`UserArHistoryStats`) loads AR
+/// coefficients independently via `parse_inflow_ar_coefficients` and does not
+/// route them through this function.
 ///
 /// # Errors
 ///
-/// | Condition                                              | Error variant              |
-/// |--------------------------------------------------------|----------------------------|
-/// | Coefficient rows exist for a pair not in `stats`      | [`LoadError::SchemaError`] |
+/// | Condition                                                     | Error variant              |
+/// |---------------------------------------------------------------|----------------------------|
+/// | Coefficient rows exist for a pair not in `stats`             | [`LoadError::SchemaError`] |
+/// | Annual component rows exist for a pair not in `stats`        | [`LoadError::SchemaError`] |
+/// | Duplicate `(hydro_id, stage_id)` in `annual_components`      | [`LoadError::SchemaError`] |
 ///
 /// # Examples
 ///
@@ -64,7 +75,7 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 ///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 1, coefficient: 0.5, residual_std_ratio: 0.85 },
 ///     InflowArCoefficientRow { hydro_id: EntityId(1), stage_id: 0, lag: 2, coefficient: 0.2, residual_std_ratio: 0.85 },
 /// ];
-/// let models = assemble_inflow_models(stats, coefficients).expect("valid join");
+/// let models = assemble_inflow_models(stats, coefficients, vec![]).expect("valid join");
 /// assert_eq!(models.len(), 2);
 /// assert_eq!(models[0].ar_order(), 2);
 /// assert!((models[0].residual_std_ratio - 0.85).abs() < f64::EPSILON);
@@ -74,11 +85,13 @@ use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeaso
 pub fn assemble_inflow_models(
     stats: Vec<InflowSeasonalStatsRow>,
     coefficients: Vec<InflowArCoefficientRow>,
+    annual_components: Vec<InflowAnnualComponentRow>,
 ) -> Result<Vec<InflowModel>, LoadError> {
-    // Short-circuit: no stats means there is no base to join AR coefficients onto.
-    // When stats is empty the result is always an empty vec regardless of whether
-    // coefficients are present. The P7 estimation path (UserArHistoryStats) loads
-    // AR independently and does not depend on this join to produce inflow models.
+    // Short-circuit: no stats means there is no base to join AR coefficients or
+    // annual components onto. When stats is empty the result is always an empty vec
+    // regardless of whether coefficients or annual_components are present. The P7
+    // estimation path (UserArHistoryStats) loads AR independently and does not
+    // depend on this join to produce inflow models.
     if stats.is_empty() {
         return Ok(Vec::new());
     }
@@ -98,6 +111,29 @@ pub fn assemble_inflow_models(
     let total_coeff_keys = coeff_map.len();
     let mut consumed_keys: usize = 0;
 
+    // Build annual component map: (hydro_id, stage_id) → AnnualComponent.
+    // Detect duplicate (hydro_id, stage_id) pairs during the build.
+    let mut annual_map: HashMap<(EntityId, i32), AnnualComponent> =
+        HashMap::with_capacity(annual_components.len());
+    for row in annual_components {
+        let key = (row.hydro_id, row.stage_id);
+        let value = AnnualComponent {
+            coefficient: row.annual_coefficient,
+            mean_m3s: row.annual_mean_m3s,
+            std_m3s: row.annual_std_m3s,
+        };
+        if annual_map.insert(key, value).is_some() {
+            return Err(LoadError::SchemaError {
+                path: Path::new("scenarios/inflow_annual_component.parquet").to_path_buf(),
+                field: "inflow_annual_component".to_string(),
+                message: format!(
+                    "duplicate row for (hydro_id={}, stage_id={})",
+                    key.0.0, key.1,
+                ),
+            });
+        }
+    }
+
     let mut models = Vec::with_capacity(stats.len());
 
     for row in stats {
@@ -112,6 +148,8 @@ pub fn assemble_inflow_models(
                 (Vec::new(), 1.0_f64)
             };
 
+        let annual = annual_map.remove(&key);
+
         models.push(InflowModel {
             hydro_id: row.hydro_id,
             stage_id: row.stage_id,
@@ -119,28 +157,57 @@ pub fn assemble_inflow_models(
             std_m3s: row.std_m3s,
             ar_coefficients,
             residual_std_ratio,
+            annual,
         });
     }
 
     // Any remaining keys in coeff_map are orphaned (no matching stats row).
     if consumed_keys < total_coeff_keys {
-        let mut orphan_keys: Vec<_> = coeff_map.keys().collect();
-        orphan_keys.sort_by_key(|(id, stage)| (id.0, *stage));
-        let orphan_descriptions: Vec<String> = orphan_keys
-            .iter()
-            .map(|(id, stage)| format!("(hydro_id={}, stage_id={})", id.0, stage))
-            .collect();
-        return Err(LoadError::SchemaError {
-            path: Path::new("scenarios/inflow_ar_coefficients.parquet").to_path_buf(),
-            field: "inflow_ar_coefficients".to_string(),
-            message: format!(
-                "orphaned AR coefficients for {} have no matching inflow_seasonal_stats row",
-                orphan_descriptions.join(", "),
-            ),
-        });
+        return report_orphaned_keys(
+            coeff_map.keys(),
+            Path::new("scenarios/inflow_ar_coefficients.parquet"),
+            "inflow_ar_coefficients",
+            "AR coefficients",
+        );
+    }
+
+    // Any remaining keys in annual_map are orphaned (no matching stats row).
+    if !annual_map.is_empty() {
+        return report_orphaned_keys(
+            annual_map.keys(),
+            Path::new("scenarios/inflow_annual_component.parquet"),
+            "inflow_annual_component",
+            "annual_component rows",
+        );
     }
 
     Ok(models)
+}
+
+/// Report orphaned keys (present in a map but not in the base stats).
+fn report_orphaned_keys<'a, I>(
+    keys: I,
+    path: &Path,
+    field: &str,
+    label: &str,
+) -> Result<Vec<InflowModel>, LoadError>
+where
+    I: IntoIterator<Item = &'a (EntityId, i32)>,
+{
+    let mut orphan_keys: Vec<_> = keys.into_iter().collect();
+    orphan_keys.sort_by_key(|(id, stage)| (id.0, *stage));
+    let orphan_descriptions: Vec<String> = orphan_keys
+        .iter()
+        .map(|(id, stage)| format!("(hydro_id={}, stage_id={})", id.0, stage))
+        .collect();
+    Err(LoadError::SchemaError {
+        path: path.to_path_buf(),
+        field: field.to_string(),
+        message: format!(
+            "orphaned {label} for {} have no matching inflow_seasonal_stats row",
+            orphan_descriptions.join(", ")
+        ),
+    })
 }
 
 /// Assemble `Vec<LoadModel>` by mapping [`LoadSeasonalStatsRow`] 1:1 to [`LoadModel`].
@@ -182,6 +249,7 @@ pub fn assemble_load_models(stats: Vec<LoadSeasonalStatsRow>) -> Vec<LoadModel> 
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::panic,
     clippy::too_many_lines,
     clippy::doc_markdown
@@ -236,7 +304,7 @@ mod tests {
             },
         ];
 
-        let models = assemble_inflow_models(stats, coefficients).unwrap();
+        let models = assemble_inflow_models(stats, coefficients, vec![]).unwrap();
         assert_eq!(models.len(), 3);
 
         let m0 = &models[0];
@@ -272,7 +340,7 @@ mod tests {
             mean_m3s: 50.0,
             std_m3s: 5.0,
         }];
-        let models = assemble_inflow_models(stats, vec![]).unwrap();
+        let models = assemble_inflow_models(stats, vec![], vec![]).unwrap();
         assert_eq!(models.len(), 1);
         assert!(models[0].ar_coefficients.is_empty());
         assert_eq!(models[0].ar_order(), 0);
@@ -296,7 +364,7 @@ mod tests {
             residual_std_ratio: 0.85,
         }];
 
-        let err = assemble_inflow_models(stats, coefficients).unwrap_err();
+        let err = assemble_inflow_models(stats, coefficients, vec![]).unwrap_err();
         match &err {
             LoadError::SchemaError { field, message, .. } => {
                 assert!(
@@ -314,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_assemble_inflow_models_both_empty() {
-        let models = assemble_inflow_models(vec![], vec![]).unwrap();
+        let models = assemble_inflow_models(vec![], vec![], vec![]).unwrap();
         assert!(models.is_empty());
     }
 
@@ -336,7 +404,7 @@ mod tests {
             residual_std_ratio: 0.85,
         }];
 
-        let result = assemble_inflow_models(vec![], coefficients);
+        let result = assemble_inflow_models(vec![], coefficients, vec![]);
         assert!(
             result.is_ok(),
             "empty stats + non-empty AR must return Ok, got: {result:?}"
@@ -406,5 +474,157 @@ mod tests {
     fn test_assemble_load_models_empty() {
         let models = assemble_load_models(vec![]);
         assert!(models.is_empty());
+    }
+
+    /// AC #1: matching annual component row populates `annual: Some(...)` for the
+    /// matching (hydro, stage) and leaves `annual: None` for unmatched pairs.
+    #[test]
+    fn test_assemble_inflow_models_with_matching_annual_component() {
+        let stats = vec![
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                mean_m3s: 100.0,
+                std_m3s: 10.0,
+            },
+            InflowSeasonalStatsRow {
+                hydro_id: EntityId(1),
+                stage_id: 1,
+                mean_m3s: 80.0,
+                std_m3s: 8.0,
+            },
+        ];
+        let annual_components = vec![InflowAnnualComponentRow {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            annual_coefficient: 0.15,
+            annual_mean_m3s: 90.0,
+            annual_std_m3s: 12.0,
+        }];
+
+        let models = assemble_inflow_models(stats, vec![], annual_components).unwrap();
+        assert_eq!(models.len(), 2);
+
+        let m0 = &models[0];
+        assert_eq!(m0.hydro_id, EntityId(1));
+        assert_eq!(m0.stage_id, 0);
+        let ann = m0.annual.as_ref().expect("models[0].annual should be Some");
+        assert!((ann.coefficient - 0.15).abs() < f64::EPSILON);
+        assert!((ann.mean_m3s - 90.0).abs() < f64::EPSILON);
+        assert!((ann.std_m3s - 12.0).abs() < f64::EPSILON);
+
+        let m1 = &models[1];
+        assert_eq!(m1.hydro_id, EntityId(1));
+        assert_eq!(m1.stage_id, 1);
+        assert!(
+            m1.annual.is_none(),
+            "models[1].annual should be None (no matching annual row)"
+        );
+    }
+
+    /// AC #2: annual component row whose (hydro_id, stage_id) does not appear
+    /// in stats must return `Err(SchemaError)` with field `"inflow_annual_component"`
+    /// and message containing `"orphaned"`.
+    #[test]
+    fn test_assemble_inflow_models_orphaned_annual_component() {
+        let stats = vec![InflowSeasonalStatsRow {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+        }];
+        // Annual component for hydro 2 stage 0 — no matching stats row.
+        let annual_components = vec![InflowAnnualComponentRow {
+            hydro_id: EntityId(2),
+            stage_id: 0,
+            annual_coefficient: 0.15,
+            annual_mean_m3s: 90.0,
+            annual_std_m3s: 12.0,
+        }];
+
+        let err = assemble_inflow_models(stats, vec![], annual_components).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("inflow_annual_component"),
+                    "field should mention inflow_annual_component, got: {field}"
+                );
+                assert!(
+                    message.contains("orphaned"),
+                    "message should contain 'orphaned', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// AC #3: duplicate (hydro_id, stage_id) in `annual_components` must return
+    /// `Err(SchemaError)` with field `"inflow_annual_component"` and message
+    /// containing `"duplicate"`.
+    #[test]
+    fn test_assemble_inflow_models_duplicate_annual_component_rejected() {
+        let stats = vec![InflowSeasonalStatsRow {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+        }];
+        // Two annual rows for the same (hydro_id=1, stage_id=0).
+        let annual_components = vec![
+            InflowAnnualComponentRow {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                annual_coefficient: 0.15,
+                annual_mean_m3s: 90.0,
+                annual_std_m3s: 12.0,
+            },
+            InflowAnnualComponentRow {
+                hydro_id: EntityId(1),
+                stage_id: 0,
+                annual_coefficient: 0.20,
+                annual_mean_m3s: 95.0,
+                annual_std_m3s: 13.0,
+            },
+        ];
+
+        let err = assemble_inflow_models(stats, vec![], annual_components).unwrap_err();
+        match &err {
+            LoadError::SchemaError { field, message, .. } => {
+                assert!(
+                    field.contains("inflow_annual_component"),
+                    "field should mention inflow_annual_component, got: {field}"
+                );
+                assert!(
+                    message.contains("duplicate"),
+                    "message should contain 'duplicate', got: {message}"
+                );
+            }
+            other => panic!("expected SchemaError, got: {other:?}"),
+        }
+    }
+
+    /// AC #4: empty `stats` with non-empty `annual_components` must return
+    /// `Ok(vec![])` — mirrors the P7 short-circuit behaviour.
+    #[test]
+    fn test_assemble_inflow_models_empty_stats_with_annual_returns_empty() {
+        let annual_components = vec![InflowAnnualComponentRow {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            annual_coefficient: 0.1,
+            annual_mean_m3s: 90.0,
+            annual_std_m3s: 12.0,
+        }];
+
+        let result = assemble_inflow_models(vec![], vec![], annual_components);
+        assert!(
+            result.is_ok(),
+            "empty stats + non-empty annual_components must return Ok, got: {result:?}"
+        );
+        let models = result.unwrap();
+        assert!(
+            models.is_empty(),
+            "empty stats must produce empty InflowModel vec, got {} models",
+            models.len()
+        );
     }
 }

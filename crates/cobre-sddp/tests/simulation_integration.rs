@@ -246,6 +246,7 @@ fn make_stochastic_context(n_stages: usize, n_openings: usize) -> StochasticCont
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 
@@ -514,6 +515,7 @@ fn make_system() -> cobre_core::System {
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 
@@ -1084,6 +1086,7 @@ fn make_min_outflow_system() -> cobre_core::System {
             std_m3s: 0.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         })
         .collect();
 

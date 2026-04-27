@@ -240,6 +240,7 @@ fn build_system() -> cobre_core::System {
                     std_m3s: 30.0,
                     ar_coefficients: vec![],
                     residual_std_ratio: 1.0,
+                    annual: None,
                 })
         })
         .collect();

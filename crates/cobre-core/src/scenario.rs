@@ -197,6 +197,37 @@ impl HistoricalYears {
 
 // InflowModel (SS14 — per hydro, per stage)
 
+/// Annual component of a PAR(p)-A inflow model for one (hydro, stage) pair.
+///
+/// Augments the classical PAR(p) with an annual term capturing long-range persistence.
+/// All three sub-fields are required together for the runtime unit conversion
+/// `ψ̂ = ψ · σ_m / σ^A_m`:
+///
+/// - the standardized annual coefficient `ψ` (Yule-Walker output)
+/// - the sample mean `μ^A_m` of the rolling 12-month average
+/// - the sample std `σ^A_m` of the rolling 12-month average
+///
+/// When `InflowModel::annual` is `None`, the classical PAR(p) model is in effect.
+///
+/// Source: `inflow_annual_component.parquet` (one row per (hydro, stage)
+/// carrying coefficient, mean, and std).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AnnualComponent {
+    /// Standardized annual coefficient ψ (dimensionless, direct Yule-Walker output).
+    /// Relates the current-season inflow to the rolling 12-month average.
+    pub coefficient: f64,
+
+    /// Sample mean μ^A of the rolling 12-month average for the season, in m³/s.
+    /// Used to de-standardize the annual term at runtime.
+    pub mean_m3s: f64,
+
+    /// Sample std σ^A of the rolling 12-month average for the season, in m³/s.
+    /// Must be positive. Used together with `coefficient` and the seasonal std
+    /// to form the runtime annual coefficient: `ψ̂ = ψ · σ_m / σ^A_m`.
+    pub std_m3s: f64,
+}
+
 /// Raw PAR(p) model parameters for a single (hydro, stage) pair.
 ///
 /// Stores the seasonal mean, standard deviation, and standardized AR lag
@@ -207,6 +238,9 @@ impl HistoricalYears {
 /// direct Yule-Walker output). The `residual_std_ratio` field carries the ratio
 /// `σ_m` / `s_m` so that downstream crates can recover the runtime residual std as
 /// `std_m3s * residual_std_ratio` without re-deriving it from the coefficients.
+///
+/// The optional `annual` field activates the PAR(p)-A extension; when `None`,
+/// the classical PAR(p) model is in effect.
 ///
 /// The performance-adapted view (`PrecomputedPar`) is built from these
 /// parameters once at solver initialisation and belongs to downstream solver crates.
@@ -221,6 +255,8 @@ impl HistoricalYears {
 ///
 /// # Examples
 ///
+/// Classical PAR(p) model (no annual component):
+///
 /// ```
 /// use cobre_core::{EntityId, scenario::InflowModel};
 ///
@@ -231,10 +267,35 @@ impl HistoricalYears {
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![0.45, 0.22],
 ///     residual_std_ratio: 0.85,
+///     annual: None,
 /// };
 /// assert_eq!(model.ar_order(), 2);
 /// assert_eq!(model.ar_coefficients.len(), 2);
 /// assert!((model.residual_std_ratio - 0.85).abs() < f64::EPSILON);
+/// assert!(model.annual.is_none());
+/// ```
+///
+/// PAR(p)-A model with annual component:
+///
+/// ```
+/// use cobre_core::{EntityId, scenario::{AnnualComponent, InflowModel}};
+///
+/// let model = InflowModel {
+///     hydro_id: EntityId(1),
+///     stage_id: 3,
+///     mean_m3s: 150.0,
+///     std_m3s: 30.0,
+///     ar_coefficients: vec![0.45, 0.22],
+///     residual_std_ratio: 0.85,
+///     annual: Some(AnnualComponent {
+///         coefficient: 0.15,
+///         mean_m3s: 90.0,
+///         std_m3s: 12.0,
+///     }),
+/// };
+/// assert_eq!(model.ar_order(), 2);
+/// let ann = model.annual.as_ref().expect("annual present");
+/// assert!((ann.coefficient - 0.15).abs() < f64::EPSILON);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -261,6 +322,15 @@ pub struct InflowModel {
     /// `std_m3s * residual_std_ratio`. When `ar_coefficients` is empty
     /// (white noise), this is 1.0 (the AR model explains nothing).
     pub residual_std_ratio: f64,
+
+    /// Optional annual component for the PAR(p)-A extension.
+    ///
+    /// `None` — classical PAR(p) model; no annual term is applied.
+    /// `Some(AnnualComponent { ... })` — the PAR(p)-A extension is active for
+    /// this (hydro, stage); all three sub-fields (`coefficient`, `mean_m3s`,
+    /// `std_m3s`) are guaranteed to be present. See [`AnnualComponent`] for
+    /// field details and the mathematical role of each value.
+    pub annual: Option<AnnualComponent>,
 }
 
 impl InflowModel {
@@ -730,7 +800,7 @@ mod tests {
     #[cfg(feature = "serde")]
     use super::ScenarioSource;
     use super::{
-        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry, InflowModel, NcsModel, SamplingScheme,
     };
     use crate::EntityId;
@@ -744,6 +814,7 @@ mod tests {
             std_m3s: 55.0,
             ar_coefficients: vec![0.5, 0.2, 0.1],
             residual_std_ratio: 0.85,
+            annual: None,
         };
 
         assert_eq!(model.hydro_id, EntityId(7));
@@ -766,6 +837,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         assert_eq!(white_noise.ar_order(), 0);
 
@@ -777,6 +849,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![0.45, 0.22],
             residual_std_ratio: 0.85,
+            annual: None,
         };
         assert_eq!(par2.ar_order(), 2);
     }
@@ -998,6 +1071,7 @@ mod tests {
             std_m3s: 30.0,
             ar_coefficients: vec![0.45, 0.22],
             residual_std_ratio: 0.85,
+            annual: None,
         };
         let json = serde_json::to_string(&model).unwrap();
         let deserialized: InflowModel = serde_json::from_str(&json).unwrap();
@@ -1073,5 +1147,50 @@ mod tests {
 
         // AC: model.profiles["default"].groups[0].matrix.len() == 3
         assert_eq!(model.profiles["default"].groups[0].matrix.len(), 3);
+    }
+
+    #[test]
+    fn inflow_model_annual_default_none() {
+        let m = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![0.5],
+            residual_std_ratio: 0.85,
+            annual: None,
+        };
+        assert!(m.annual.is_none());
+    }
+
+    #[test]
+    fn inflow_model_annual_some_round_trip() {
+        let ann = AnnualComponent {
+            coefficient: 0.15,
+            mean_m3s: 90.0,
+            std_m3s: 12.0,
+        };
+        let m = InflowModel {
+            hydro_id: EntityId(1),
+            stage_id: 0,
+            mean_m3s: 100.0,
+            std_m3s: 10.0,
+            ar_coefficients: vec![0.5],
+            residual_std_ratio: 0.85,
+            annual: Some(ann.clone()),
+        };
+        assert_eq!(m.annual.as_ref().expect("annual present"), &ann);
+        assert_eq!(m.ar_order(), 1);
+    }
+
+    #[test]
+    fn annual_component_partial_eq_clone() {
+        let a = AnnualComponent {
+            coefficient: 0.15,
+            mean_m3s: 90.0,
+            std_m3s: 12.0,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
     }
 }

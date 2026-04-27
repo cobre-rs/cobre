@@ -128,6 +128,7 @@ fn make_inflow_model(hydro_id: i32, stage_id: i32) -> InflowModel {
         std_m3s: 30.0,
         ar_coefficients: vec![],
         residual_std_ratio: 1.0,
+        annual: None,
     }
 }
 

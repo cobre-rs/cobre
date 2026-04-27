@@ -113,6 +113,7 @@ fn resolve_season_id(stage_id: i32, n_seasons: usize, season_offset: usize) -> u
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 ///
 /// let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
@@ -634,6 +635,7 @@ mod tests {
             std_m3s: std,
             ar_coefficients: coeffs,
             residual_std_ratio: residual_ratio,
+            annual: None,
         }
     }
 

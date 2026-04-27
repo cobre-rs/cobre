@@ -65,7 +65,9 @@ fn denormalized_contribution(
 /// - `order` -- the AR order for this (entity, season) pair.
 /// - `coefficients_by_season` -- AR coefficients for each season, indexed by
 ///   season id. `coefficients_by_season[m]` is the coefficient vector for
-///   season `m`.
+///   season `m`. Under the PAR(p)-A extension the effective coefficient vector
+///   may have length 12 (annual ψ̂/12 contribution added to each lag slot);
+///   the function operates correctly on that vector without modification.
 /// - `std_by_season` -- standard deviations indexed by season id.
 ///
 /// # Returns
@@ -158,6 +160,9 @@ pub fn has_negative_phi1(coefficients: &[f64]) -> bool {
 /// Returns `contributions.len()` when all contributions are non-negative
 /// (the full order is valid). Returns `0` when the first contribution is
 /// negative (no autoregressive dependence is stable).
+///
+/// Under PAR(p)-A, the input may be a length-12 effective contribution vector;
+/// the return value is then in `[0, 12]`.
 #[must_use]
 pub fn find_max_valid_order(contributions: &[f64]) -> usize {
     contributions
@@ -409,5 +414,82 @@ mod tests {
     #[test]
     fn phi1_near_zero_negative_returns_true() {
         assert!(has_negative_phi1(&[-0.001]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for the length-12 effective polynomial produced by the annual extension
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compute_contributions_length_12_par_a_polynomial() {
+        // Fixture: single season (n_seasons = 1), order = 12.
+        // coefficients[0] = [0.5, 0.05, 0.05, ..., 0.05] (12 entries).
+        // std = [10.0] — uniform, so all std ratios are 1 and
+        // fi(0, j) == coefficients[0][j].
+        //
+        // The recursion for a single season with uniform std reduces to:
+        //   A[0] = phi           (base row)
+        //   A[i][j] = A[i-1][0] * phi[j] + A[i-1][j+1]
+        //   contribution[i] = A[i][0]
+        //
+        // Hand-computed reference values (phi = [0.5, 0.05 * 11]):
+        //   lag 1  = phi[0]                              = 0.5
+        //   lag 2  = 0.5 * 0.5 + 0.05                   = 0.300_000_000_000_000
+        //   lag 3  = 0.30 * 0.5 + (0.5 * 0.05 + 0.05)  = 0.225_000_000_000_000
+        //   lag 4  = 0.225 * 0.5 + (0.30 * 0.05 + 0.05)= 0.202_500_000_000_000
+        //   lag 5  = 0.2025 * 0.5 + ...                 = 0.202_500_000_000_000
+        //   (values determined by running the recursion offline)
+        //   lag 6  = 0.212_625_000_000_000
+        //   lag 7  = 0.227_812_500_000_000
+        //   lag 8  = 0.246_037_500_000_000
+        //   lag 9  = 0.266_540_625_000_000
+        //   lag 10 = 0.289_094_062_500_000
+        //   lag 11 = 0.313_697_812_500_000
+        //   lag 12 = 0.340_454_390_625_000
+        let phi: Vec<f64> = std::iter::once(0.5_f64)
+            .chain(std::iter::repeat_n(0.05_f64, 11))
+            .collect();
+        let coeffs: &[&[f64]] = &[phi.as_slice()];
+        let stds: &[f64] = &[10.0];
+        let result = compute_contributions(0, 1, 12, coeffs, stds);
+        assert_eq!(result.len(), 12, "contribution vector must have length 12");
+
+        let expected = [
+            0.5_f64,
+            0.300_000_000_000_000,
+            0.225_000_000_000_000,
+            0.202_500_000_000_000,
+            0.202_500_000_000_000,
+            0.212_625_000_000_000,
+            0.227_812_500_000_000,
+            0.246_037_500_000_000,
+            0.266_540_625_000_000,
+            0.289_094_062_500_000,
+            0.313_697_812_500_000,
+            0.340_454_390_625_000,
+        ];
+        for (k, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
+            assert_close(got, exp, &format!("lag {}", k + 1));
+        }
+    }
+
+    #[test]
+    fn find_max_valid_order_all_positive_length_12() {
+        // A length-12 contribution vector with all non-negative entries must
+        // return 12 (the full order is valid).
+        let contributions = [
+            0.3_f64, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05,
+        ];
+        assert_eq!(find_max_valid_order(&contributions), 12);
+    }
+
+    #[test]
+    fn find_max_valid_order_first_negative_at_seven_in_length_12() {
+        // A length-12 contribution vector with the first negative entry at
+        // index 7 (lag 8) must return 7.
+        let contributions = [
+            0.3_f64, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, -0.01, 0.05, 0.05, 0.05, 0.05,
+        ];
+        assert_eq!(find_max_valid_order(&contributions), 7);
     }
 }

@@ -1555,6 +1555,320 @@ pub fn build_periodic_yw_matrix_into(
 }
 
 // ---------------------------------------------------------------------------
+// Extended periodic Yule-Walker matrix (annual component)
+// ---------------------------------------------------------------------------
+
+/// Compute the cross-correlation between the annual component series `A` at
+/// season `ref_season` (with lag 0 meaning the same observation index) and the
+/// periodic series `Z` at season `ref_season - lag` (wrapping), for non-negative
+/// lag values.
+///
+/// This corresponds to `ρ_{Z,A}^{ref_season}(lag)` from the PAR-A extended
+/// Yule-Walker system. The cross-correlation is defined as:
+///
+/// ```text
+/// ρ_{Z,A}^{ref}(k) =
+///   E[(A_i − μ^A_{ref}) · (Z_{i−k} − μ_{ref−k})] / (σ^A_{ref} · σ_{ref−k})
+/// ```
+///
+/// where the expectation is approximated with a population (1/N) divisor.
+///
+/// # Cross-year alignment
+///
+/// When `lag > 0`, the `Z` series at the lagged season may belong to an earlier
+/// calendar year than the `A` series. The number of year boundaries crossed
+/// equals `lag / n_seasons` when `lag >= n_seasons`, or 1 when the lagged season
+/// index is **greater than** `ref_season` (wrap-around), otherwise 0.
+///
+/// **Lag-0 special case**: when `lag == 0`, `A` and `Z` refer to the same
+/// season and the same calendar year, so `years_crossed = 0` unconditionally.
+/// Using `usize::from(lag_season >= ref_season)` for `lag_season == ref_season`
+/// would incorrectly cross a year boundary, so lag 0 is handled explicitly.
+///
+/// # Parameters
+///
+/// - `ref_season` — 0-based season index for the `A` series.
+/// - `lag` — non-negative integer lag; `lag = 0` pairs each `A_i` with `Z_i`.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `annual_observations_by_season` — `A` observations grouped by season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+///
+/// # Returns
+///
+/// The normalised cross-correlation, clamped to `[-1.0, 1.0]`.
+/// Returns `0.0` when either standard deviation is below [`f64::EPSILON`],
+/// or when insufficient paired observations exist.
+#[must_use]
+pub fn cross_correlation_z_a(
+    ref_season: usize,
+    lag: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+) -> f64 {
+    let (mu_a, std_a) = annual_stats_by_season[ref_season];
+    let lag_season = (ref_season + n_seasons - lag % n_seasons) % n_seasons;
+    let (mu_z, std_z) = stats_by_season[lag_season];
+
+    // Zero-std guard: cross-correlation is undefined.
+    if std_a.abs() < f64::EPSILON || std_z.abs() < f64::EPSILON {
+        return 0.0;
+    }
+
+    let a_obs = annual_observations_by_season[ref_season];
+    let z_obs = observations_by_season[lag_season];
+
+    // Cross-year alignment.
+    //
+    // When lag == 0, A and Z refer to the same season and the same year, so
+    // years_crossed = 0 unconditionally. The branch
+    //   usize::from(lag_season >= ref_season)
+    // would return 1 when lag_season == ref_season (same season, lag 0), which
+    // is wrong for a cross-series correlation — it would skip a year.
+    let years_crossed = if lag == 0 {
+        0
+    } else if lag < n_seasons {
+        usize::from(lag_season >= ref_season)
+    } else {
+        lag / n_seasons
+    };
+
+    let a_start = years_crossed;
+    let n_pairs = a_obs.len().saturating_sub(years_crossed).min(z_obs.len());
+
+    // Insufficient data guard.
+    if n_pairs == 0 {
+        return 0.0;
+    }
+
+    // Cross-covariance with population divisor (1/N).
+    let mut gamma = 0.0_f64;
+    for i in 0..n_pairs {
+        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[i] - mu_z);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        gamma /= n_pairs as f64;
+    }
+
+    // Normalise and clamp.
+    let rho = gamma / (std_a * std_z);
+    rho.clamp(-1.0, 1.0)
+}
+
+/// Compute the "lag = -1" cross-correlation between the annual component `A`
+/// at season `ref_season` and the periodic series `Z` at the **next** season
+/// `(ref_season + 1) % n_seasons`.
+///
+/// This corresponds to `ρ_{Z,A}^{ref_season}(-1)` — equivalently,
+/// `ρ_{A,Z}^{ref_season}(+1)` with the arguments reversed. In the PAR-A
+/// extended Yule-Walker RHS (eq. 15), this entry pairs `A_{t-1}` (season `m-1`)
+/// with `Z_t` (season `m`), so `Z` is one step **ahead** of `A`.
+///
+/// # Cross-year alignment
+///
+/// `Z` lives at season `(ref_season + 1) % n_seasons`. When that wraps to
+/// season 0, the `Z` observation belongs to the **next** calendar year relative
+/// to `A`, so `years_crossed = 1`. Otherwise, `Z` is in the same year as `A`
+/// and `years_crossed = 0`.
+///
+/// # Parameters
+///
+/// - `ref_season` — 0-based season index for the `A` series.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `annual_observations_by_season` — `A` observations grouped by season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+///
+/// # Returns
+///
+/// The normalised cross-correlation, clamped to `[-1.0, 1.0]`.
+/// Returns `0.0` when either standard deviation is below [`f64::EPSILON`],
+/// or when insufficient paired observations exist.
+#[must_use]
+pub fn cross_correlation_a_z_neg1(
+    ref_season: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+) -> f64 {
+    let (mu_a, std_a) = annual_stats_by_season[ref_season];
+    let z_season = (ref_season + 1) % n_seasons;
+    let (mu_z, std_z) = stats_by_season[z_season];
+
+    // Zero-std guard: cross-correlation is undefined.
+    if std_a.abs() < f64::EPSILON || std_z.abs() < f64::EPSILON {
+        return 0.0;
+    }
+
+    let a_obs = annual_observations_by_season[ref_season];
+    let z_obs = observations_by_season[z_season];
+
+    // Cross-year alignment.
+    //
+    // Z is at season (ref_season + 1) % n_seasons. When that wraps to 0, Z
+    // belongs to the next calendar year, so one year boundary is crossed.
+    let years_crossed = usize::from(z_season == 0);
+
+    // A starts at the first year; Z starts years_crossed years ahead.
+    let z_start = years_crossed;
+    let n_pairs = z_obs.len().saturating_sub(years_crossed).min(a_obs.len());
+
+    // Insufficient data guard.
+    if n_pairs == 0 {
+        return 0.0;
+    }
+
+    // Cross-covariance with population divisor (1/N).
+    let mut gamma = 0.0_f64;
+    for i in 0..n_pairs {
+        gamma += (a_obs[i] - mu_a) * (z_obs[z_start + i] - mu_z);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        gamma /= n_pairs as f64;
+    }
+
+    // Normalise and clamp.
+    let rho = gamma / (std_a * std_z);
+    rho.clamp(-1.0, 1.0)
+}
+
+/// Build the extended periodic Yule-Walker matrix and right-hand side for the
+/// PAR-A model, augmenting the classical `order × order` system with one
+/// extra row and column for the annual component coefficient `ψ`.
+///
+/// The returned matrix has dimension `(order+1) × (order+1)`. Its layout is:
+///
+/// ```text
+/// [ classical_yw_matrix  |  cross_col ]
+/// [ cross_row            |  1.0       ]
+/// ```
+///
+/// where:
+/// - The top-left `order × order` block is the classical periodic YW matrix
+///   (same as [`build_periodic_yw_matrix`] for `season` and `order`).
+/// - The top-right column (indices `i * (order+1) + order` for `i < order`) and
+///   the bottom-left row (indices `order * (order+1) + j` for `j < order`) are
+///   filled symmetrically with
+///   `cross_correlation_z_a((season + n_seasons − 1) % n_seasons, i, …)`.
+/// - The bottom-right diagonal entry `(order, order)` is `1.0`.
+/// - `rhs[0..order]` mirrors the classical YW right-hand side.
+/// - `rhs[order]` is `cross_correlation_a_z_neg1((season + n_seasons − 1) % n_seasons, …)`.
+///
+/// All entries are normalised correlations, so the matrix is symmetric and has
+/// unit diagonal. The solution vector `[φ_1, …, φ_p, ψ]` contains
+/// **standardised** coefficients. Unit conversion is applied later by the
+/// caller.
+///
+/// # Parameters
+///
+/// - `season` — 0-based target season.
+/// - `order` — AR order `p`; the returned matrix has dimension `(order+1) × (order+1)`.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `annual_observations_by_season` — annual component `A` observations grouped by
+///   season. Entry `[s][y]` corresponds to the same year `y` as `observations_by_season[s][y]`.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+///
+/// # Returns
+///
+/// A tuple `(matrix, rhs)` where:
+/// - `matrix` is a flat `Vec<f64>` of length `(order+1)²` in row-major layout.
+///   Entry `R[i][j]` is at index `i * (order+1) + j`.
+/// - `rhs` is a `Vec<f64>` of length `order+1`.
+///
+/// When `order == 0`, returns `(vec![1.0], vec![rhs_annual_neg1])` — a 1×1
+/// system that solves directly for `ψ`.
+#[must_use]
+pub fn build_extended_periodic_yw_matrix(
+    season: usize,
+    order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+) -> (Vec<f64>, Vec<f64>) {
+    let dim = order + 1;
+    let prev_season = (season + n_seasons - 1) % n_seasons;
+
+    let mut matrix = vec![0.0_f64; dim * dim];
+    let mut rhs = vec![0.0_f64; dim];
+
+    // Fill the top-left order × order block (classical periodic YW structure).
+    // Diagonal entries are 1.0 (autocorrelation at lag 0).
+    // Off-diagonal: R[i][j] = periodic_autocorrelation(ref_month, |j-i|, ...)
+    // where ref_month = (season - (i+1)) % n_seasons.
+    for i in 0..order {
+        matrix[i * dim + i] = 1.0;
+        let ref_month = (season + n_seasons - (i + 1) % n_seasons) % n_seasons;
+        for j in (i + 1)..order {
+            let lag = j - i;
+            let rho = periodic_autocorrelation(
+                ref_month,
+                lag,
+                n_seasons,
+                observations_by_season,
+                stats_by_season,
+            );
+            matrix[i * dim + j] = rho;
+            matrix[j * dim + i] = rho; // symmetric
+        }
+    }
+
+    // Fill the classical RHS entries: rhs[i] = rho(season, i+1).
+    for (i, rhs_entry) in rhs.iter_mut().enumerate().take(order) {
+        *rhs_entry = periodic_autocorrelation(
+            season,
+            i + 1,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+    }
+
+    // Fill the right column and bottom row (annual extension).
+    // Entry (i, order) = (order, i) = cross_correlation_z_a(prev_season, i, ...).
+    for i in 0..order {
+        let rho = cross_correlation_z_a(
+            prev_season,
+            i,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+            annual_observations_by_season,
+            annual_stats_by_season,
+        );
+        matrix[i * dim + order] = rho;
+        matrix[order * dim + i] = rho; // symmetric
+    }
+
+    // Bottom-right diagonal entry for the annual component.
+    matrix[order * dim + order] = 1.0;
+
+    // Annual RHS entry: rho_{A,Z}^{prev_season}(-1).
+    rhs[order] = cross_correlation_a_z_neg1(
+        prev_season,
+        n_seasons,
+        observations_by_season,
+        stats_by_season,
+        annual_observations_by_season,
+        annual_stats_by_season,
+    );
+
+    (matrix, rhs)
+}
+
+// ---------------------------------------------------------------------------
 // Small matrix solver
 // ---------------------------------------------------------------------------
 
@@ -4017,6 +4331,394 @@ mod tests {
             "matrix not symmetric: [1,2]={} vs [2,1]={}",
             result[5],
             result[7]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_extended_periodic_yw_matrix tests
+    // -----------------------------------------------------------------------
+
+    use super::{
+        build_extended_periodic_yw_matrix, cross_correlation_a_z_neg1, cross_correlation_z_a,
+    };
+
+    /// Helper: compute population mean and std (same as `pop_mean_std` above but
+    /// repeated here so the extended-YW tests can be read in isolation).
+    fn pop_mean_std_ann(data: &[f64]) -> (f64, f64) {
+        let n = data.len() as f64;
+        if n < 1.0 {
+            return (0.0, 0.0);
+        }
+        let mean = data.iter().sum::<f64>() / n;
+        if n < 2.0 {
+            return (mean, 0.0);
+        }
+        let var = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, var.sqrt())
+    }
+
+    /// The top-left order×order block of [`build_extended_periodic_yw_matrix`] must
+    /// equal the output of [`build_periodic_yw_matrix`] for the same season/order.
+    #[test]
+    fn build_extended_periodic_yw_matrix_top_left_block_matches_classical() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let order = 2_usize;
+        let n_seasons = 2_usize;
+        let season = 0_usize;
+
+        let (ext_mat, ext_rhs) = build_extended_periodic_yw_matrix(
+            season, order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+        );
+        let (cls_mat, cls_rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, &stats);
+
+        // Extended matrix has dim = order+1 = 3; classical has dim = order = 2.
+        let dim_e = order + 1;
+        for i in 0..order {
+            for j in 0..order {
+                let ext_val = ext_mat[i * dim_e + j];
+                let cls_val = cls_mat[i * order + j];
+                assert!(
+                    (ext_val - cls_val).abs() < 1e-12,
+                    "top-left block mismatch at [{i},{j}]: ext={ext_val} cls={cls_val}"
+                );
+            }
+            assert!(
+                (ext_rhs[i] - cls_rhs[i]).abs() < 1e-12,
+                "rhs mismatch at [{i}]: ext={} cls={}",
+                ext_rhs[i],
+                cls_rhs[i]
+            );
+        }
+    }
+
+    /// The extended matrix must be symmetric for any valid inputs.
+    #[test]
+    fn build_extended_periodic_yw_matrix_is_symmetric() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let order = 2_usize;
+        let n_seasons = 2_usize;
+
+        let (mat, _rhs) = build_extended_periodic_yw_matrix(
+            0, order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+        );
+        let dim = order + 1;
+        for i in 0..dim {
+            for j in 0..dim {
+                assert!(
+                    (mat[i * dim + j] - mat[j * dim + i]).abs() < 1e-12,
+                    "matrix not symmetric at [{i},{j}]: {} vs {}",
+                    mat[i * dim + j],
+                    mat[j * dim + i]
+                );
+            }
+        }
+    }
+
+    /// `order=0` returns a 1×1 system: `matrix=[1.0]`, `rhs=[rho_neg1]`.
+    #[test]
+    fn build_extended_periodic_yw_matrix_order_zero_returns_one_by_one() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let n_seasons = 2_usize;
+        let season = 0_usize;
+
+        let (mat, rhs) = build_extended_periodic_yw_matrix(
+            season, 0, n_seasons, obs, &stats, ann_obs, &ann_stats,
+        );
+
+        assert_eq!(mat.len(), 1, "1×1 matrix expected");
+        assert_eq!(rhs.len(), 1, "length-1 rhs expected");
+        assert!(
+            (mat[0] - 1.0).abs() < 1e-12,
+            "matrix[0] must be 1.0, got {}",
+            mat[0]
+        );
+
+        // rhs[0] must equal cross_correlation_a_z_neg1 for prev_season.
+        let prev_season = (season + n_seasons - 1) % n_seasons; // = 1
+        let expected_rhs =
+            cross_correlation_a_z_neg1(prev_season, n_seasons, obs, &stats, ann_obs, &ann_stats);
+        assert!(
+            (rhs[0] - expected_rhs).abs() < 1e-12,
+            "rhs[0]={} expected={expected_rhs}",
+            rhs[0]
+        );
+    }
+
+    /// For any AR(1) extended matrix, the diagonal is all 1.0.
+    #[test]
+    fn build_extended_periodic_yw_matrix_diagonal_is_one_for_ar1() {
+        // 2 seasons, 5 years, AR(1)-ish data.
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let (mat, _rhs) =
+            build_extended_periodic_yw_matrix(0, 1, 2, obs, &stats, ann_obs, &ann_stats);
+
+        // dim = 2, entries at [0] and [3] are diagonal.
+        assert!((mat[0] - 1.0).abs() < 1e-12, "diagonal [0,0] = {}", mat[0]);
+        assert!((mat[3] - 1.0).abs() < 1e-12, "diagonal [1,1] = {}", mat[3]);
+    }
+
+    /// Hand-computed 3×3 case.
+    ///
+    /// Derivation (2 seasons, 5 years of data):
+    ///
+    /// ```text
+    /// z0=[1,3,2,5,4]  mu=3.0  pop_std=sqrt(2)~1.4142136
+    /// z1=[2,1,4,3,6]  mu=3.2  pop_std~1.7204651
+    /// a0=[1.5,2,3,4,3.5]  mu=2.8  pop_std~0.9273618
+    /// a1=[1,3,2.5,3.5,2]  mu=2.4  pop_std~0.8602325
+    ///
+    /// build_extended_periodic_yw_matrix(season=0, order=2, n_seasons=2)
+    ///   prev_season = 1
+    ///
+    /// Top-left 2x2 classical block (stride=3 in extended):
+    ///   [0,0]=1.0, [0,1]=[1,0]=R[0][1]
+    ///   R[0][1] = periodic_autocorrelation(ref_month=1, lag=1, n_seasons=2)
+    ///     lag_season=(1+2-1)%2=0; lag<n_seasons, lag_season<ref_season => years_crossed=0
+    ///     5 pairs: (z1-mu_z1)*(z0-mu_z0)
+    ///     gamma=[(-1.2)(-2)+(-2.2)(0)+(0.8)(-1)+(-0.2)(2)+(2.8)(1)]/5=4.0/5=0.8
+    ///     rho=0.8/(1.7204651*1.4142136) ~ 0.3287980
+    ///
+    /// Right column/bottom row (cross-correlations at prev_season=1):
+    ///   [0,2]=[2,0] = cross_correlation_z_a(ref=1, lag=0)
+    ///     lag==0 => years_crossed=0; 5 pairs
+    ///     gamma=[(-1.4)(-1.2)+0.6(-2.2)+0.1(0.8)+1.1(-0.2)+(-0.4)(2.8)]/5
+    ///          =[1.68-1.32+0.08-0.22-1.12]/5=-0.18/1=-0.18/5=-0.036... wait
+    ///     Actually: -0.90/5=-0.18
+    ///     rho=-0.18/(0.8602325*1.7204651) ~ -0.1216216
+    ///
+    ///   [1,2]=[2,1] = cross_correlation_z_a(ref=1, lag=1)
+    ///     lag_season=0; lag<n_seasons, lag_season<ref_season => years_crossed=0
+    ///     5 pairs: (a1-mu_a1)*(z0-mu_z0)
+    ///     gamma=[(-1.4)(-2)+0.6(0)+0.1(-1)+1.1(2)+(-0.4)(1)]/5=4.5/5=0.9
+    ///     rho=0.9/(0.8602325*1.4142136) ~ 0.7397954
+    ///
+    /// rhs:
+    ///   rhs[0] = periodic_autocorrelation(season=0, lag=1)
+    ///     lag_season=1; years_crossed=1; 4 pairs: z0[1..5] vs z1[0..4]
+    ///     gamma=[(3-3)(-1.2)+(2-3)(-2.2)+(5-3)(0.8)+(4-3)(-0.2)]/4=3.6/4=0.9
+    ///     rho=0.9/(1.4142136*1.7204651) ~ 0.3698977
+    ///
+    ///   rhs[1] = periodic_autocorrelation(season=0, lag=2)
+    ///     lag_season=0; lag>=n_seasons => years_crossed=1
+    ///     4 pairs: z0[1..5] vs z0[0..4]
+    ///     gamma=[(3-3)(1-3)+(2-3)(3-3)+(5-3)(2-3)+(4-3)(5-3)]/4=0.0
+    ///     rho=0.0
+    ///
+    ///   rhs[2] = cross_correlation_a_z_neg1(ref=1)
+    ///     z_season=0; years_crossed=1; z_start=1; 4 pairs
+    ///     gamma=[(-1.4)(3-3)+0.6(2-3)+0.1(5-3)+1.1(4-3)]/4=0.7/4=0.175
+    ///     rho=0.175/(0.8602325*1.4142136) ~ 0.1438491
+    /// ```
+    #[test]
+    fn build_extended_periodic_yw_matrix_hand_computed_3x3() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let (mat, rhs) =
+            build_extended_periodic_yw_matrix(0, 2, 2, obs, &stats, ann_obs, &ann_stats);
+
+        assert_eq!(mat.len(), 9, "3×3 matrix must have 9 entries");
+        assert_eq!(rhs.len(), 3, "rhs must have 3 entries");
+
+        // Tolerance: 1e-10 as specified.
+        let tol = 1e-10;
+
+        // Diagonal entries.
+        assert!((mat[0] - 1.0).abs() < tol, "mat[0,0]={}", mat[0]);
+        assert!((mat[4] - 1.0).abs() < tol, "mat[1,1]={}", mat[4]);
+        assert!((mat[8] - 1.0).abs() < tol, "mat[2,2]={}", mat[8]);
+
+        // Off-diagonal classical block: R[0][1] = R[1][0] ≈ 0.3287979746
+        let expected_r01 = 0.328_797_974_610_715;
+        assert!(
+            (mat[1] - expected_r01).abs() < tol,
+            "mat[0,1]={} expected≈{expected_r01}",
+            mat[1]
+        );
+        assert!(
+            (mat[3] - expected_r01).abs() < tol,
+            "mat[1,0]={} expected≈{expected_r01}",
+            mat[3]
+        );
+
+        // Annual column / row.
+        let expected_za0 = -0.121_621_621_621_622; // [0,2] and [2,0]
+        let expected_za1 = 0.739_795_442_874_108; // [1,2] and [2,1]
+        assert!(
+            (mat[2] - expected_za0).abs() < tol,
+            "mat[0,2]={} expected≈{expected_za0}",
+            mat[2]
+        );
+        assert!(
+            (mat[6] - expected_za0).abs() < tol,
+            "mat[2,0]={} expected≈{expected_za0}",
+            mat[6]
+        );
+        assert!(
+            (mat[5] - expected_za1).abs() < tol,
+            "mat[1,2]={} expected≈{expected_za1}",
+            mat[5]
+        );
+        assert!(
+            (mat[7] - expected_za1).abs() < tol,
+            "mat[2,1]={} expected≈{expected_za1}",
+            mat[7]
+        );
+
+        // RHS.
+        let expected_rhs0 = 0.369_897_721_437_054;
+        let expected_rhs1 = 0.0;
+        let expected_rhs2 = 0.143_849_113_892_188;
+        assert!(
+            (rhs[0] - expected_rhs0).abs() < tol,
+            "rhs[0]={} expected≈{expected_rhs0}",
+            rhs[0]
+        );
+        assert!(
+            (rhs[1] - expected_rhs1).abs() < tol,
+            "rhs[1]={} expected≈{expected_rhs1}",
+            rhs[1]
+        );
+        assert!(
+            (rhs[2] - expected_rhs2).abs() < tol,
+            "rhs[2]={} expected≈{expected_rhs2}",
+            rhs[2]
+        );
+    }
+
+    /// [`cross_correlation_z_a`] returns 0.0 when either series has zero std.
+    #[test]
+    fn cross_correlation_z_a_zero_std_returns_zero() {
+        // Constant Z series => std = 0.
+        let z_const: &[f64] = &[5.0, 5.0, 5.0, 5.0];
+        let a_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let obs: &[&[f64]] = &[z_const];
+        let stats = [(5.0_f64, 0.0_f64)]; // std = 0 for Z
+        let ann_obs: &[&[f64]] = &[a_varied];
+        let ann_stats = [pop_mean_std_ann(a_varied)];
+
+        let result = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        assert_eq!(result, 0.0, "zero Z-std must return 0.0, got {result}");
+
+        // Constant A series => std = 0.
+        let z_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let a_const: &[f64] = &[3.0, 3.0, 3.0, 3.0];
+        let obs2: &[&[f64]] = &[z_varied];
+        let stats2 = [pop_mean_std_ann(z_varied)];
+        let ann_obs2: &[&[f64]] = &[a_const];
+        let ann_stats2 = [(3.0_f64, 0.0_f64)]; // std = 0 for A
+
+        let result2 = cross_correlation_z_a(0, 0, 1, obs2, &stats2, ann_obs2, &ann_stats2);
+        assert_eq!(result2, 0.0, "zero A-std must return 0.0, got {result2}");
+    }
+
+    /// [`cross_correlation_a_z_neg1`] returns 0.0 when either series has zero std.
+    #[test]
+    fn cross_correlation_a_z_neg1_zero_std_returns_zero() {
+        // 2 seasons; constant A at season 0.
+        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let z1: &[f64] = &[5.0, 6.0, 7.0, 8.0];
+        let a_const: &[f64] = &[2.0, 2.0, 2.0, 2.0]; // std = 0
+        let a1: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+        let ann_obs: &[&[f64]] = &[a_const, a1];
+        let ann_stats = [(2.0_f64, 0.0_f64), pop_mean_std_ann(a1)];
+
+        // ref_season=0, z_season=(0+1)%2=1; std_a=0 => return 0.0
+        let result = cross_correlation_a_z_neg1(0, 2, obs, &stats, ann_obs, &ann_stats);
+        assert_eq!(result, 0.0, "zero A-std must return 0.0, got {result}");
+
+        // Now constant Z at season 1.
+        let z1_const: &[f64] = &[4.0, 4.0, 4.0, 4.0];
+        let a_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let obs2: &[&[f64]] = &[z0, z1_const];
+        let stats2 = [pop_mean_std_ann(z0), (4.0_f64, 0.0_f64)];
+        let ann_obs2: &[&[f64]] = &[a_varied, a1];
+        let ann_stats2 = [pop_mean_std_ann(a_varied), pop_mean_std_ann(a1)];
+
+        let result2 = cross_correlation_a_z_neg1(0, 2, obs2, &stats2, ann_obs2, &ann_stats2);
+        assert_eq!(result2, 0.0, "zero Z-std must return 0.0, got {result2}");
+    }
+
+    /// [`cross_correlation_z_a`] output must be in `[-1.0, 1.0]` for any input.
+    #[test]
+    fn cross_correlation_z_a_clamped_to_unit_interval() {
+        // Use perfectly correlated data so the raw value would be exactly 1.0,
+        // and verify that the clamp does not push it outside [-1, 1].
+        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0, 5.0];
+        let a0: &[f64] = &[2.0, 4.0, 6.0, 8.0, 10.0]; // perfectly correlated with z0
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        let result = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        assert!(
+            (-1.0..=1.0).contains(&result),
+            "cross_correlation_z_a result {result} is outside [-1, 1]"
+        );
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "perfectly correlated data should give rho≈1.0, got {result}"
+        );
+
+        // Anti-correlated data should give rho≈-1.0.
+        let a0_neg: &[f64] = &[10.0, 8.0, 6.0, 4.0, 2.0];
+        let ann_obs_neg: &[&[f64]] = &[a0_neg];
+        let ann_stats_neg = [pop_mean_std_ann(a0_neg)];
+        let result_neg = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs_neg, &ann_stats_neg);
+        assert!(
+            (-1.0..=1.0).contains(&result_neg),
+            "anti-correlated result {result_neg} outside [-1, 1]"
+        );
+        assert!(
+            (result_neg + 1.0).abs() < 1e-10,
+            "perfectly anti-correlated data should give rho≈-1.0, got {result_neg}"
         );
     }
 }

@@ -35,7 +35,7 @@ use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
     scenario::{
-        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
@@ -292,6 +292,11 @@ pub struct ArCoefficientEstimate {
     pub coefficients: Vec<f64>,
     /// Residual std ratio `σ_m / s_m`, always in (0, 1].
     pub residual_std_ratio: f64,
+    /// Annual-component triple for the PAR(p)-A extension; `None` for
+    /// classical PAR(p). All three sub-fields (`coefficient`, `mean_m3s`,
+    /// `std_m3s`) are present together by construction — they are never
+    /// split into separate optional fields.
+    pub annual: Option<AnnualComponent>,
 }
 
 /// Produce white-noise (order-0) AR estimates for all `(entity, season)` pairs.
@@ -498,6 +503,7 @@ pub fn estimate_ar_coefficients_with_season_map(
                 season_id,
                 coefficients: Vec::new(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
         })
         .collect();
@@ -2459,6 +2465,267 @@ pub fn estimate_periodic_ar_coefficients(
         coefficients: final_coefficients,
         residual_std_ratio,
         sigma2_per_order,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Annual seasonal stats helper (PAR-A eqs. 17, 18)
+// ---------------------------------------------------------------------------
+
+/// Per-season sample statistics of the rolling 12-month average.
+///
+/// One entry per season for one entity. Computed by
+/// [`estimate_annual_seasonal_stats`] from a chronological observation list.
+///
+/// The `mean_m3s` and `std_m3s` fields are in the original m³/s units of the
+/// observation series; they are **not** standardised. The standardisation
+/// happens inside the cross-correlation helpers from
+/// [`build_extended_periodic_yw_matrix`], and the unit conversion to `ψ̂`
+/// happens at `PrecomputedPar::build` time.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnualSeasonalStats {
+    /// Entity (e.g., hydro plant) identifier.
+    pub hydro_id: EntityId,
+    /// Season ID (0-based).
+    pub season_id: usize,
+    /// Sample mean of the rolling 12-month average for this (entity, season) pair, in m³/s.
+    pub mean_m3s: f64,
+    /// Bessel-corrected sample standard deviation (`1/(N-1)` divisor) of the
+    /// rolling 12-month average for this (entity, season) pair, in m³/s.
+    pub std_m3s: f64,
+}
+
+/// Compute `(μ^A_m, σ^A_m)` per (entity, season) from chronological observations.
+///
+/// Implements `rel_parpa.pdf` eqs. 11, 17, 18, with one intentional divergence
+/// from eq. 18: the standard deviation estimator uses the **Bessel-corrected
+/// divisor `1/(N-1)`** to match the convention used workspace-wide by
+/// [`estimate_seasonal_stats`]. The numerical difference is negligible at typical
+/// historical sample sizes (N ≥ 20 years).
+///
+/// ## Algorithm
+///
+/// 1. Group observations by `EntityId` and sort each group chronologically.
+/// 2. For each entity group, build the rolling 12-month average:
+///    `A_{i+12} = (1/12) · Σ_{j=0..11} z[i+j]` for every chronological index `i`
+///    such that `i + 12 < group.len()`. The target date is `group[i+12].date`.
+/// 3. Group `A_{i+12}` values by the season of the target date (using
+///    [`find_season_for_date`] + `season_map` fallback, mirroring
+///    [`estimate_seasonal_stats_with_season_map`]).
+/// 4. Compute per (entity, season) the sample mean and Bessel-corrected sample std.
+///
+/// Returns rows sorted by `(hydro_id, season_id)` ascending.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when any requested `entity_id`
+/// produces zero rolling-window `A_t` values (fewer than 13 observations for
+/// that entity). The error names the entity and its observation count.
+/// Silent fallback to the classical PAR path is not performed.
+pub fn estimate_annual_seasonal_stats(
+    observations: &[(EntityId, NaiveDate, f64)],
+    stages: &[Stage],
+    entity_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<AnnualSeasonalStats>, StochasticError> {
+    // Build stage index for date-to-season mapping.
+    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
+    let entity_set: HashSet<EntityId> = entity_ids.iter().copied().collect();
+
+    // Group observations by entity in chronological order.
+    let mut entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>> = HashMap::new();
+    for &(entity_id, date, value) in observations {
+        if entity_set.contains(&entity_id) {
+            entity_obs.entry(entity_id).or_default().push((date, value));
+        }
+    }
+    for obs_vec in entity_obs.values_mut() {
+        obs_vec.sort_unstable_by_key(|(d, _)| *d);
+    }
+
+    // Per-entity insufficient-data guard: every requested entity must produce
+    // at least one rolling-window A_t value, which requires >= 13 observations.
+    for &entity_id in entity_ids {
+        let n_obs = entity_obs.get(&entity_id).map_or(0, Vec::len);
+        if n_obs < 13 {
+            return Err(StochasticError::InsufficientData {
+                context: format!(
+                    "entity {entity_id} has {n_obs} observation(s); \
+                     at least 13 are required to form one rolling 12-month average"
+                ),
+            });
+        }
+    }
+
+    // Build rolling-window A_t values grouped by (entity_id, season_id).
+    let mut group_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+    for &entity_id in entity_ids {
+        let Some(group) = entity_obs.get(&entity_id) else {
+            continue;
+        };
+
+        // For each index i such that i + 12 < group.len(), the target date is
+        // group[i + 12].date and A = mean(group[i..i+12]).
+        for i in 0..group.len().saturating_sub(12) {
+            let target_date = group[i + 12].0;
+
+            let Some(season_id) = find_season_for_date(&stage_index, target_date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(target_date)))
+            else {
+                // Target date not in any stage and no season_map fallback — skip.
+                continue;
+            };
+
+            // A_{i+12} = (1/12) * sum of z[i..i+12].
+            let mean_a: f64 = group[i..i + 12].iter().map(|(_, v)| v).sum::<f64>() / 12.0;
+            group_map
+                .entry((entity_id, season_id))
+                .or_default()
+                .push(mean_a);
+        }
+    }
+
+    // Compute Bessel-corrected mean and std for each (entity, season) group.
+    let mut result: Vec<AnnualSeasonalStats> = Vec::with_capacity(group_map.len());
+    for ((entity_id, season_id), values) in &group_map {
+        let n = values.len();
+        // Bessel correction requires N >= 2; for N = 1 the std is 0.0 (only one sample).
+        #[allow(clippy::cast_precision_loss)]
+        let mean_m3s = values.iter().copied().sum::<f64>() / n as f64;
+        let std_m3s = if n >= 2 {
+            #[allow(clippy::cast_precision_loss)]
+            let var = values
+                .iter()
+                .map(|&v| (v - mean_m3s) * (v - mean_m3s))
+                .sum::<f64>()
+                / (n - 1) as f64;
+            var.sqrt()
+        } else {
+            0.0
+        };
+
+        result.push(AnnualSeasonalStats {
+            hydro_id: *entity_id,
+            season_id: *season_id,
+            mean_m3s,
+            std_m3s,
+        });
+    }
+
+    // Sort by (hydro_id, season_id) ascending.
+    result.sort_unstable_by_key(|s| (s.hydro_id.0, s.season_id));
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Extended periodic YW coefficient estimation (PAR-A)
+// ---------------------------------------------------------------------------
+
+/// Result of the extended periodic Yule-Walker solve for the PAR-A model.
+///
+/// Returned by [`estimate_periodic_ar_annual_coefficients`]. The three fields
+/// are **standardised** (dimensionless), matching the convention for the classical
+/// `PeriodicYwResult::coefficients`. Unit conversion to runtime coefficients
+/// `(φ̂_j, ψ̂)` happens at `PrecomputedPar::build` time, not here.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct PeriodicYwAnnualResult {
+    /// Standardised AR coefficients `φ_1..φ_p` (dimensionless, direct Yule-Walker
+    /// output). Empty when `selected_order == 0`.
+    pub coefficients: Vec<f64>,
+    /// Standardised annual coefficient `ψ` (dimensionless, direct Yule-Walker
+    /// output).
+    pub annual_coefficient: f64,
+    /// Residual std ratio `σ_residual / σ_seasonal` in `(0, 1]`.
+    pub residual_std_ratio: f64,
+}
+
+/// Estimate PAR-A coefficients `(φ_1..φ_p, ψ)` by solving the extended
+/// periodic Yule-Walker system.
+///
+/// Builds the `(selected_order + 1) × (selected_order + 1)` system via
+/// [`build_extended_periodic_yw_matrix`] and solves it via
+/// [`solve_linear_system`].
+///
+/// ## Singular-system fallback
+///
+/// When the system is singular (the solver returns `None`), the function
+/// returns `PeriodicYwAnnualResult { coefficients: vec![], annual_coefficient:
+/// 0.0, residual_std_ratio: 1.0 }`, matching the classical fallback in
+/// [`estimate_periodic_ar_coefficients`].
+///
+/// ## Order-0 case
+///
+/// When `selected_order == 0`, the function solves the 1×1 system that yields
+/// only `ψ`. The returned `coefficients` is empty.
+///
+/// ## Residual std ratio
+///
+/// `sigma2 = 1 - Σ_i (solution[i] · rhs_orig[i])` over all `selected_order + 1`
+/// solution entries. `residual_std_ratio = sqrt(sigma2).clamp(f64::EPSILON, 1.0)`
+/// when `sigma2 > 0`, else `1.0`.
+pub fn estimate_periodic_ar_annual_coefficients(
+    season: usize,
+    selected_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+) -> PeriodicYwAnnualResult {
+    let zero_result = PeriodicYwAnnualResult {
+        coefficients: Vec::new(),
+        annual_coefficient: 0.0,
+        residual_std_ratio: 1.0,
+    };
+
+    let (mut matrix, mut rhs) = build_extended_periodic_yw_matrix(
+        season,
+        selected_order,
+        n_seasons,
+        observations_by_season,
+        stats_by_season,
+        annual_observations_by_season,
+        annual_stats_by_season,
+    );
+
+    let dim = selected_order + 1;
+    let rhs_orig: Vec<f64> = rhs.clone();
+
+    let Some(solution) = solve_linear_system(&mut matrix, &mut rhs, dim) else {
+        return zero_result;
+    };
+
+    // Split: first `selected_order` entries are AR coefficients; last is ψ.
+    let coefficients: Vec<f64> = solution[..selected_order].to_vec();
+    let annual_coefficient: f64 = solution[selected_order];
+
+    // sigma2 = 1 - sum(solution[i] * rhs_orig[i]) for all i in 0..dim.
+    let sigma2: f64 = 1.0
+        - solution
+            .iter()
+            .zip(rhs_orig.iter())
+            .map(|(s, r)| s * r)
+            .sum::<f64>();
+
+    let residual_std_ratio = if sigma2 > 0.0 {
+        sigma2.sqrt().clamp(f64::EPSILON, 1.0)
+    } else {
+        1.0
+    };
+
+    PeriodicYwAnnualResult {
+        coefficients,
+        annual_coefficient,
+        residual_std_ratio,
     }
 }
 
@@ -5551,5 +5818,276 @@ mod tests {
         assert_eq!(annual.selected_order, classical.selected_order);
         assert_eq!(annual.pacf_values, classical.pacf_values);
         assert_eq!(annual.threshold, classical.threshold);
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_annual_seasonal_stats tests (AC #1, AC #2)
+    // -----------------------------------------------------------------------
+
+    use super::{estimate_annual_seasonal_stats, estimate_periodic_ar_annual_coefficients};
+
+    /// AC #1 — Four-year synthetic monthly series; hand-computed Bessel-corrected
+    /// mean and std.
+    ///
+    /// Series: `z[year*12 + month] = (month+1)*10 + year*5`.
+    ///
+    /// Rolling-window construction (index `i`, target index `i+12`):
+    /// - `A_{i+12} = mean(z[i..i+12])`
+    /// - Target season = `(i+12) % 12`
+    ///
+    /// Each season has exactly 3 A_t values (from years 1, 2, 3).
+    ///
+    /// All stds are 5.0 (Bessel-corrected, `1/(N-1)` with N=3).
+    /// Mean for season `s`: `70.0 + s * (5.0 / 12.0)`.
+    ///
+    /// This test intentionally pins the `1/(N-1)` divisor and the divergence from
+    /// `rel_parpa.pdf` eq. 18 (which uses `1/N`). See ticket documentation.
+    #[test]
+    fn estimate_annual_seasonal_stats_four_year_synthetic_hand_computed() {
+        let hydro_id = EntityId::from(1);
+        let stages = make_monthly_stages(2000, 4);
+
+        // Build 48 observations: z[year*12 + month] = (month+1)*10 + year*5.
+        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
+        for year in 0..4_usize {
+            for month in 0..12_usize {
+                let value = (month + 1) as f64 * 10.0 + year as f64 * 5.0;
+                let date =
+                    NaiveDate::from_ymd_opt(2000 + year as i32, month as u32 + 1, 1).unwrap();
+                observations.push((hydro_id, date, value));
+            }
+        }
+
+        let result =
+            estimate_annual_seasonal_stats(&observations, &stages, &[hydro_id], None).unwrap();
+
+        assert_eq!(result.len(), 12, "must return exactly one entry per season");
+
+        // All stds must be 5.0 (Bessel: sqrt(((5-0)^2 + (0-0)^2 + (-5-0)^2)/2) = 5).
+        // All means follow: season s -> 70.0 + s * (5.0/12.0).
+        for s in &result {
+            assert_eq!(
+                s.hydro_id, hydro_id,
+                "hydro_id must match for season {}",
+                s.season_id
+            );
+            let expected_mean = 70.0 + s.season_id as f64 * (5.0 / 12.0);
+            assert!(
+                (s.mean_m3s - expected_mean).abs() < 1e-10,
+                "season {}: mean_m3s={} expected={}",
+                s.season_id,
+                s.mean_m3s,
+                expected_mean
+            );
+            assert!(
+                (s.std_m3s - 5.0).abs() < 1e-10,
+                "season {}: std_m3s={} expected 5.0 (Bessel 1/(N-1))",
+                s.season_id,
+                s.std_m3s
+            );
+        }
+
+        // Sorted by (hydro_id, season_id) ascending.
+        let season_ids: Vec<usize> = result.iter().map(|s| s.season_id).collect();
+        assert_eq!(
+            season_ids,
+            (0..12).collect::<Vec<_>>(),
+            "result must be sorted by season_id"
+        );
+    }
+
+    /// AC #2 — History too short: 11 observations cannot form any rolling window.
+    ///
+    /// Requires at least 13 observations (indices 0..12 inclusive) for the first
+    /// window to exist. 11 observations is strictly insufficient.
+    #[test]
+    fn estimate_annual_seasonal_stats_too_short_history_errors() {
+        use crate::StochasticError;
+
+        let hydro_id = EntityId::from(42);
+        let stages = make_monthly_stages(2000, 2);
+
+        // 11 observations — not enough for even one rolling window.
+        let observations: Vec<(EntityId, NaiveDate, f64)> = (0..11)
+            .map(|i| {
+                let month = i % 12 + 1;
+                let date = NaiveDate::from_ymd_opt(2000, month as u32, 1).unwrap();
+                (hydro_id, date, i as f64 * 10.0)
+            })
+            .collect();
+
+        let err =
+            estimate_annual_seasonal_stats(&observations, &stages, &[hydro_id], None).unwrap_err();
+
+        assert!(
+            matches!(err, StochasticError::InsufficientData { .. }),
+            "expected InsufficientData, got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_periodic_ar_annual_coefficients tests (AC #3, AC #4, AC #5)
+    // -----------------------------------------------------------------------
+
+    /// AC #3 — `selected_order = 0`: 1×1 system yields only ψ, `coefficients` is empty.
+    ///
+    /// Data reuses the order-zero fixture from `build_extended_periodic_yw_matrix`.
+    /// The 1×1 system has matrix `[[1.0]]` and rhs `[cross_correlation_a_z_neg1(...)]`.
+    /// Solution: ψ = rhs[0].
+    /// sigma2 = 1 − ψ * rhs[0] = 1 − rhs[0]^2.
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_order_zero_returns_one_by_one_solution() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        // The expected annual_coefficient equals the rhs[0] from the 1×1 system,
+        // which is cross_correlation_a_z_neg1(prev_season=1, n_seasons=2, ...).
+        // Hand-computed: ≈ 0.14384911389218766 (from AC#3 derivation).
+        let expected_psi = 0.143_849_113_892_187_66;
+
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            0, // selected_order
+            2, // n_seasons
+            obs, &stats, ann_obs, &ann_stats,
+        );
+
+        assert!(
+            result.coefficients.is_empty(),
+            "order=0 must produce empty coefficients"
+        );
+        assert!(
+            (result.annual_coefficient - expected_psi).abs() < 1e-10,
+            "annual_coefficient={} expected≈{}",
+            result.annual_coefficient,
+            expected_psi
+        );
+        assert!(
+            result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0,
+            "residual_std_ratio must be in (0, 1], got {}",
+            result.residual_std_ratio
+        );
+    }
+
+    /// AC #4 — `selected_order = 2` with the 3×3 hand-computed fixture from ticket-005.
+    ///
+    /// Matrix and RHS come from `build_extended_periodic_yw_matrix_hand_computed_3x3`.
+    /// The system is:
+    /// ```text
+    /// [1.0,   R01,   za0] [φ1]   [rhs0]
+    /// [R01,   1.0,   za1] [φ2] = [rhs1]
+    /// [za0,   za1,   1.0] [ψ ]   [rhs2]
+    /// ```
+    /// where R01 ≈ 0.3287979746, za0 ≈ -0.1216216216, za1 ≈ 0.7397954429,
+    /// rhs = [0.3698977214, 0.0, 0.1438491139].
+    ///
+    /// Numerical solution (verified with numpy):
+    /// - φ1 ≈ 0.81267678
+    /// - φ2 ≈ -0.98684211
+    /// - ψ  ≈ 0.97274947
+    /// - sigma2 ≈ 0.55946356
+    /// - residual_std_ratio ≈ 0.74797297
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_hand_computed_three_season() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            2, // selected_order
+            2, // n_seasons
+            obs, &stats, ann_obs, &ann_stats,
+        );
+
+        assert_eq!(
+            result.coefficients.len(),
+            2,
+            "selected_order=2 must produce 2 AR coefficients"
+        );
+
+        let tol = 1e-8;
+        assert!(
+            (result.coefficients[0] - 0.812_676_78).abs() < tol,
+            "φ1={} expected≈0.81267678",
+            result.coefficients[0]
+        );
+        assert!(
+            (result.coefficients[1] - (-0.986_842_11)).abs() < tol,
+            "φ2={} expected≈-0.98684211",
+            result.coefficients[1]
+        );
+        assert!(
+            (result.annual_coefficient - 0.972_749_47).abs() < tol,
+            "ψ={} expected≈0.97274947",
+            result.annual_coefficient
+        );
+        assert!(
+            (result.residual_std_ratio - 0.747_972_97).abs() < tol,
+            "residual_std_ratio={} expected≈0.74797297",
+            result.residual_std_ratio
+        );
+    }
+
+    /// AC #5 — Singular extended YW system returns the zero fallback.
+    ///
+    /// Uses the alternating series `[-1, 1, -1, 1, -1, 1]` with `n_seasons=1`
+    /// and `selected_order=1`.  Since Z and A are identical, `rho_za = 1.0`
+    /// (exactly, by integer arithmetic).  The resulting 2×2 extended matrix is
+    /// `[[1.0, 1.0], [1.0, 1.0]]` which has determinant 0, so
+    /// `solve_linear_system` returns `None` and the function returns the
+    /// zero-fallback `PeriodicYwAnnualResult`.
+    ///
+    /// Derivation mirrors the precondition asserted in
+    /// `conditional_facp_partitioned_singular_sigma22_breaks_early`.
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_singular_returns_zero_result() {
+        // Alternating series with exact mean=0, std=1 (population).
+        // Z = A (identical) => rho_za = exactly 1.0 in IEEE 754 arithmetic.
+        let z0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        let a0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        // With n_seasons=1, selected_order=1 and Z=A, the 2×2 extended matrix is:
+        //   [[matrix[0,0]=1.0, matrix[0,1]=rho_za(lag=0)=1.0],
+        //    [matrix[1,0]=1.0, matrix[1,1]=1.0             ]]
+        // = [[1, 1], [1, 1]] → determinant 0 → solve_linear_system returns None.
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            1, // selected_order → 2×2 extended system [[1,1],[1,1]] (singular)
+            1, // n_seasons
+            obs, &stats, ann_obs, &ann_stats,
+        );
+
+        assert!(
+            result.coefficients.is_empty(),
+            "singular system must return empty coefficients, got {:?}",
+            result.coefficients
+        );
+        assert_eq!(
+            result.annual_coefficient, 0.0,
+            "singular system must return annual_coefficient=0.0"
+        );
+        assert_eq!(
+            result.residual_std_ratio, 1.0,
+            "singular system must return residual_std_ratio=1.0"
+        );
     }
 }

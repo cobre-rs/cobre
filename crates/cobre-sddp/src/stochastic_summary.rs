@@ -1210,12 +1210,14 @@ mod tests {
                 season_id: 0,
                 coefficients: Vec::new(),
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             cobre_stochastic::par::fitting::ArCoefficientEstimate {
                 hydro_id: EntityId(1),
                 season_id: 1,
                 coefficients: vec![0.4],
                 residual_std_ratio: 0.9,
+                annual: None,
             },
         ];
 

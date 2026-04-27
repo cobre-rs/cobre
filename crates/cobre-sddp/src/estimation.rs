@@ -54,11 +54,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
+use cobre_core::scenario::AnnualComponent;
 use cobre_core::{EntityId, System};
 use cobre_io::{
     Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
     parse_inflow_history,
-    scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, assemble_inflow_models},
+    scenarios::{
+        InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
+        assemble_inflow_models,
+    },
     validate_structure,
 };
 use cobre_stochastic::{
@@ -69,10 +73,11 @@ use cobre_stochastic::{
         has_negative_phi1,
     },
     par::fitting::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf,
+        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
+        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
+        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
     },
 };
 
@@ -497,6 +502,7 @@ fn run_estimation(
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
             season_map,
+            use_annual_component: false,
         },
     )?;
 
@@ -518,8 +524,9 @@ fn run_estimation(
     // ── Step 7: convert results to row types and assemble inflow models ───────
     let stats_rows = seasonal_stats_to_rows(&seasonal_stats, stages);
     let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
+    let annual_rows = ar_estimates_to_annual_rows(&ar_estimates, stages);
 
-    let inflow_models = assemble_inflow_models(stats_rows, coeff_rows, vec![])?;
+    let inflow_models = assemble_inflow_models(stats_rows, coeff_rows, annual_rows)?;
 
     Ok((
         system.with_scenario_models(inflow_models, correlation),
@@ -578,6 +585,7 @@ fn run_partial_estimation(
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
             season_map,
+            use_annual_component: false,
         },
     )?;
 
@@ -604,7 +612,8 @@ fn run_partial_estimation(
     // User stats (mean_m3s, std_m3s from the input system) drive LP assembly.
     let user_stats_rows = user_stats_to_rows(&system);
     let coeff_rows = ar_estimates_to_rows(&ar_estimates, stages);
-    let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows, vec![])?;
+    let annual_rows = ar_estimates_to_annual_rows(&ar_estimates, stages);
+    let inflow_models = assemble_inflow_models(user_stats_rows, coeff_rows, annual_rows)?;
 
     estimation_report.white_noise_fallbacks = white_noise_fallbacks;
     estimation_report.lag_scale_warnings = lag_scale_warnings;
@@ -926,6 +935,7 @@ fn ar_rows_to_estimates(
                 season_id,
                 coefficients,
                 residual_std_ratio,
+                annual: None,
             },
         )
         .collect()
@@ -1080,15 +1090,19 @@ struct ArEstimationConfig<'a> {
     max_order: usize,
     max_coeff_magnitude: Option<f64>,
     season_map: Option<&'a cobre_core::temporal::SeasonMap>,
+    /// When `true`, dispatch to the PAR-A path (conditional FACP + extended YW).
+    /// When `false` (the default), dispatch to the classical PACF path.
+    /// Epic 04 wires this from the public `OrderSelectionMethod` config; this
+    /// ticket only introduces the flag and routes to the new function.
+    use_annual_component: bool,
 }
 
-/// Estimate AR coefficients using the periodic Yule-Walker / PACF method.
+/// Estimate AR coefficients, dispatching to the classical or PAR-A path.
 ///
-/// Delegates to [`estimate_ar_with_pacf`], which selects the AR order via the
-/// periodic PACF significance test (95% confidence, `z_alpha = 1.96`) and then
-/// solves the periodic Yule-Walker system at the selected order. The
-/// `cfg.method` field is accepted for API compatibility; only
-/// `OrderSelectionMethod::Pacf` is supported.
+/// When `cfg.use_annual_component` is `false` (the default), delegates to
+/// [`estimate_ar_with_pacf`] (classical periodic Yule-Walker + PACF).
+/// When `cfg.use_annual_component` is `true`, delegates to
+/// [`estimate_ar_with_pacf_annual`] (extended YW with rolling 12-month average).
 fn estimate_ar_coefficients_with_selection(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -1096,15 +1110,27 @@ fn estimate_ar_coefficients_with_selection(
     hydro_ids: &[EntityId],
     cfg: &ArEstimationConfig<'_>,
 ) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
-    estimate_ar_with_pacf(
-        observations,
-        seasonal_stats,
-        stages,
-        hydro_ids,
-        cfg.max_order,
-        cfg.season_map,
-        cfg.max_coeff_magnitude,
-    )
+    if cfg.use_annual_component {
+        estimate_ar_with_pacf_annual(
+            observations,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            cfg.max_order,
+            cfg.season_map,
+            cfg.max_coeff_magnitude,
+        )
+    } else {
+        estimate_ar_with_pacf(
+            observations,
+            seasonal_stats,
+            stages,
+            hydro_ids,
+            cfg.max_order,
+            cfg.season_map,
+            cfg.max_coeff_magnitude,
+        )
+    }
 }
 
 /// PACF-based AR order selection using periodic Yule-Walker method.
@@ -1170,6 +1196,240 @@ fn estimate_ar_with_pacf(
 
     let report = build_estimation_report(&estimates, n_seasons, &reductions, "PACF");
     Ok((estimates, report))
+}
+
+/// PAR-A path: extended periodic Yule-Walker with rolling 12-month annual component.
+///
+/// Mirrors [`estimate_ar_with_pacf`] with three key differences:
+///
+/// 1. Calls [`estimate_annual_seasonal_stats`] to obtain per-(hydro, season)
+///    `(μ^A_m, σ^A_m)`.
+/// 2. Builds rolling-window `A_t` groupings (same windows Part A consumed),
+///    organised by target season.
+/// 3. Per (hydro, season): calls [`conditional_facp_partitioned`] →
+///    [`select_order_pacf_annual`] → [`estimate_periodic_ar_annual_coefficients`].
+///
+/// Every returned [`ArCoefficientEstimate`] has `annual: Some(AnnualComponent { .. })`.
+/// The estimation report uses `method = "PACF_ANNUAL"`.
+///
+/// # Errors
+///
+/// Propagates `StochasticError::InsufficientData` from
+/// [`estimate_annual_seasonal_stats`] when any hydro has fewer than 13
+/// chronological observations (no rolling window can be formed).
+fn estimate_ar_with_pacf_annual(
+    observations: &[(EntityId, NaiveDate, f64)],
+    seasonal_stats: &[SeasonalStats],
+    stages: &[cobre_core::temporal::Stage],
+    hydro_ids: &[EntityId],
+    max_order: usize,
+    season_map: Option<&cobre_core::temporal::SeasonMap>,
+    max_coeff_magnitude: Option<f64>,
+) -> Result<(Vec<ArCoefficientEstimate>, EstimationReport), StochasticError> {
+    // ── 1. Compute (μ^A_m, σ^A_m) per (hydro, season). ─────────────────────
+    let annual_stats: Vec<AnnualSeasonalStats> =
+        estimate_annual_seasonal_stats(observations, stages, hydro_ids, season_map)?;
+
+    // Build a fast lookup: (hydro_id, season_id) → &AnnualSeasonalStats.
+    let annual_stats_map: HashMap<(EntityId, usize), &AnnualSeasonalStats> = annual_stats
+        .iter()
+        .map(|s| ((s.hydro_id, s.season_id), s))
+        .collect();
+
+    // ── 2. Build stage index for date-to-season mapping. ─────────────────────
+    let (stage_index, stats_map, n_seasons) = build_pacf_stage_lookups(stages, seasonal_stats);
+
+    // ── 3. Group Z observations by (hydro, season). ──────────────────────────
+    let group_obs = group_observations_by_season(observations, hydro_ids, &stage_index, season_map);
+
+    // ── 4. Build rolling-window A_t groups by (hydro, season). ──────────────
+    //
+    // Reproduce the same chronological grouping as `estimate_annual_seasonal_stats`
+    // so that `annual_observations_by_season[s]` aligns with `obs_by_season[s]`.
+    let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
+
+    // Sort observations per entity chronologically.
+    let mut entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>> = HashMap::new();
+    for &(entity_id, date, value) in observations {
+        if entity_set.contains(&entity_id) {
+            entity_obs.entry(entity_id).or_default().push((date, value));
+        }
+    }
+    for obs_vec in entity_obs.values_mut() {
+        obs_vec.sort_unstable_by_key(|(d, _)| *d);
+    }
+
+    // For each entity, build rolling A_t values grouped by target season.
+    let mut annual_group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+    for &entity_id in hydro_ids {
+        let Some(group) = entity_obs.get(&entity_id) else {
+            continue;
+        };
+        for i in 0..group.len().saturating_sub(12) {
+            let target_date = group[i + 12].0;
+            let Some(season_id) = find_season_for_date(&stage_index, target_date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(target_date)))
+            else {
+                continue;
+            };
+            let mean_a: f64 = group[i..i + 12].iter().map(|(_, v)| v).sum::<f64>() / 12.0;
+            annual_group_obs
+                .entry((entity_id, season_id))
+                .or_default()
+                .push(mean_a);
+        }
+    }
+
+    // ── 5. Per (hydro, season): conditional FACP → order → extended YW. ─────
+    let z_alpha = 1.96_f64;
+    let mut estimates: Vec<ArCoefficientEstimate> = Vec::new();
+
+    for &hydro_id in hydro_ids {
+        // Collect Z and A observations + stats indexed by season.
+        let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+        let mut annual_obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+        let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+        let mut annual_stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+
+        for season in 0..n_seasons {
+            if let Some(obs) = group_obs.get(&(hydro_id, season)) {
+                obs_by_season[season].clone_from(obs);
+            }
+            if let Some(ann_obs) = annual_group_obs.get(&(hydro_id, season)) {
+                annual_obs_by_season[season].clone_from(ann_obs);
+            }
+            if let Some(stats) = stats_map.get(&(hydro_id, season)) {
+                stats_by_season[season] = (stats.mean, stats.std);
+            }
+            if let Some(ann_stats) = annual_stats_map.get(&(hydro_id, season)) {
+                annual_stats_by_season[season] = (ann_stats.mean_m3s, ann_stats.std_m3s);
+            }
+        }
+
+        let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
+        let annual_obs_refs: Vec<&[f64]> = annual_obs_by_season.iter().map(Vec::as_slice).collect();
+
+        for season in 0..n_seasons {
+            let n_obs = obs_by_season[season].len();
+            let n_ann_obs = annual_obs_by_season[season].len();
+            let stats_s = stats_by_season[season];
+            let annual_stats_s = annual_stats_by_season[season];
+
+            // White-noise fallback: zero std, too few observations, or no annual obs.
+            if stats_s.1 == 0.0 || n_obs < 2 || n_ann_obs == 0 || annual_stats_s.1 == 0.0 {
+                estimates.push(ArCoefficientEstimate {
+                    hydro_id,
+                    season_id: season,
+                    coefficients: Vec::new(),
+                    residual_std_ratio: 1.0,
+                    annual: annual_stats_map
+                        .get(&(hydro_id, season))
+                        .map(|s| AnnualComponent {
+                            coefficient: 0.0,
+                            mean_m3s: s.mean_m3s,
+                            std_m3s: s.std_m3s,
+                        }),
+                });
+                continue;
+            }
+
+            // Conditional FACP → order selection → extended YW solve.
+            let facp_values = conditional_facp_partitioned(
+                season,
+                max_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+                &annual_obs_refs,
+                &annual_stats_by_season,
+            );
+            let pacf_result = select_order_pacf_annual(&facp_values, n_obs, z_alpha);
+            let yw_result = estimate_periodic_ar_annual_coefficients(
+                season,
+                pacf_result.selected_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+                &annual_obs_refs,
+                &annual_stats_by_season,
+            );
+
+            // Look up per-season annual stats for the AnnualComponent triple.
+            let (ann_mean, ann_std) = annual_stats_by_season[season];
+            estimates.push(ArCoefficientEstimate {
+                hydro_id,
+                season_id: season,
+                coefficients: yw_result.coefficients,
+                residual_std_ratio: yw_result.residual_std_ratio,
+                annual: Some(AnnualComponent {
+                    coefficient: yw_result.annual_coefficient,
+                    mean_m3s: ann_mean,
+                    std_m3s: ann_std,
+                }),
+            });
+        }
+    }
+
+    // Apply magnitude and phi_1 pre-passes (same as classical path).
+    // Note: the annual field is preserved through reductions — only AR
+    // coefficients and residual_std_ratio are reset on reduction.
+    let reductions = apply_annual_prepass_reductions(&mut estimates, max_coeff_magnitude);
+
+    let report = build_estimation_report(&estimates, n_seasons, &reductions, "PACF_ANNUAL");
+    Ok((estimates, report))
+}
+
+/// Apply magnitude-bound and `phi_1` pre-passes for the PAR-A path.
+///
+/// Mirrors [`apply_prepass_reductions`] but operates only on the
+/// per-season magnitude/phi1 guards; the annual field is preserved.
+/// Returns a map of reductions for report building.
+fn apply_annual_prepass_reductions(
+    estimates: &mut [ArCoefficientEstimate],
+    max_coeff_magnitude: Option<f64>,
+) -> HashMap<EntityId, Vec<ContributionReduction>> {
+    let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
+
+    if let Some(threshold) = max_coeff_magnitude {
+        for est in estimates.iter_mut() {
+            let has_explosive = est.coefficients.iter().any(|c| c.abs() > threshold);
+            if has_explosive {
+                let original_order = est.coefficients.len();
+                all_reductions
+                    .entry(est.hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id: est.season_id,
+                        original_order,
+                        reduced_order: 0,
+                        contributions: Vec::new(),
+                        reason: ReductionReason::MagnitudeBound,
+                    });
+                est.coefficients.clear();
+                est.residual_std_ratio = 1.0;
+            }
+        }
+    }
+
+    for est in estimates.iter_mut() {
+        if has_negative_phi1(&est.coefficients) {
+            let original_order = est.coefficients.len();
+            all_reductions
+                .entry(est.hydro_id)
+                .or_default()
+                .push(ContributionReduction {
+                    season_id: est.season_id,
+                    original_order,
+                    reduced_order: 0,
+                    contributions: Vec::new(),
+                    reason: ReductionReason::Phi1Negative,
+                });
+            est.coefficients.clear();
+            est.residual_std_ratio = 1.0;
+        }
+    }
+
+    all_reductions
 }
 
 /// Stage index entry: `(start_date, end_date, stage_id, season_id)`.
@@ -1275,6 +1535,7 @@ fn estimate_all_hydro_ar_coefficients(
                     season_id: season,
                     coefficients: Vec::new(),
                     residual_std_ratio: 1.0,
+                    annual: None,
                 });
                 continue;
             }
@@ -1294,6 +1555,7 @@ fn estimate_all_hydro_ar_coefficients(
                 season_id: season,
                 coefficients: yw_result.coefficients,
                 residual_std_ratio: yw_result.residual_std_ratio,
+                annual: None,
             });
         }
     }
@@ -1851,6 +2113,49 @@ fn ar_estimates_to_rows(
 
     // Sort by (hydro_id, stage_id, lag) ascending — matches parser convention.
     rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id, r.lag));
+
+    rows
+}
+
+/// Convert [`ArCoefficientEstimate`] to [`InflowAnnualComponentRow`], expanding
+/// per-season annual components to every stage that shares the same `season_id`.
+///
+/// Estimates without an `annual` field (`annual.is_none()`) are silently skipped,
+/// so the function is safe to call for classical-PAR estimates (the result will be
+/// an empty `Vec`).
+fn ar_estimates_to_annual_rows(
+    ar_estimates: &[ArCoefficientEstimate],
+    stages: &[cobre_core::temporal::Stage],
+) -> Vec<InflowAnnualComponentRow> {
+    let mut season_to_stages: HashMap<usize, Vec<i32>> = HashMap::new();
+    for stage in stages {
+        if let Some(sid) = stage.season_id {
+            season_to_stages.entry(sid).or_default().push(stage.id);
+        }
+    }
+
+    let mut rows: Vec<InflowAnnualComponentRow> = Vec::new();
+
+    for est in ar_estimates {
+        let Some(ref ann) = est.annual else {
+            continue;
+        };
+        let Some(stage_ids) = season_to_stages.get(&est.season_id) else {
+            continue;
+        };
+        for &stage_id in stage_ids {
+            rows.push(InflowAnnualComponentRow {
+                hydro_id: est.hydro_id,
+                stage_id,
+                annual_coefficient: ann.coefficient,
+                annual_mean_m3s: ann.mean_m3s,
+                annual_std_m3s: ann.std_m3s,
+            });
+        }
+    }
+
+    // Sort by (hydro_id, stage_id) ascending — matches parser convention.
+    rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id));
 
     rows
 }
@@ -2824,6 +3129,7 @@ mod tests {
                     season_id,
                     coefficients: vec![0.5, 0.3],
                     residual_std_ratio: 0.9,
+                    annual: None,
                 });
             }
         }
@@ -2866,6 +3172,7 @@ mod tests {
                 max_order,
                 max_coeff_magnitude: None,
                 season_map: None,
+                use_annual_component: false,
             },
         )
         .unwrap();
@@ -2935,6 +3242,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![0.3, -0.8],
             residual_std_ratio: 0.9,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -2999,6 +3307,7 @@ mod tests {
                     vec![0.1] // benign AR(1)
                 },
                 residual_std_ratio: 0.95,
+                annual: None,
             })
             .collect();
 
@@ -3069,6 +3378,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![-2.0],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3112,12 +3422,14 @@ mod tests {
                 season_id: 0,
                 coefficients: vec![-0.3, 0.5],
                 residual_std_ratio: 0.8,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id,
                 season_id: 1,
                 coefficients: vec![0.4, 0.2],
                 residual_std_ratio: 0.7,
+                annual: None,
             },
         ];
 
@@ -3186,6 +3498,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![-0.01, 0.5],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3222,6 +3535,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![0.0, 0.3],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3258,6 +3572,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![-50.0, 0.3],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3343,6 +3658,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![0.3, -0.8],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3386,6 +3702,7 @@ mod tests {
                 // phi = [0.3, -0.8]: contribution at lag 2 is negative.
                 coefficients: vec![0.3, -0.8],
                 residual_std_ratio: 0.8,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id,
@@ -3393,6 +3710,7 @@ mod tests {
                 // phi = [0.4, 0.2]: all contributions positive.
                 coefficients: vec![0.4, 0.2],
                 residual_std_ratio: 0.7,
+                annual: None,
             },
         ];
 
@@ -3466,6 +3784,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![0.5, 0.2, -5.0], // order 3, lag 3 will fail
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let reductions = iterative_pacf_reduction(
@@ -3514,6 +3833,7 @@ mod tests {
             season_id: 0,
             coefficients: vec![0.5, 0.2, -0.8],
             residual_std_ratio: 0.8,
+            annual: None,
         }];
 
         let stats = vec![SeasonalStats {
@@ -3564,6 +3884,7 @@ mod tests {
                 season_id: 0,
                 coefficients: vec![-0.3, 0.5],
                 residual_std_ratio: 0.8,
+                annual: None,
             },
             // H1 S1: negative contribution at lag 3 -> NegativeContribution
             ArCoefficientEstimate {
@@ -3571,6 +3892,7 @@ mod tests {
                 season_id: 1,
                 coefficients: vec![0.5, 0.2, -0.8],
                 residual_std_ratio: 0.7,
+                annual: None,
             },
             // H2 S0: magnitude bound -> MagnitudeBound
             ArCoefficientEstimate {
@@ -3578,6 +3900,7 @@ mod tests {
                 season_id: 0,
                 coefficients: vec![50.0],
                 residual_std_ratio: 0.9,
+                annual: None,
             },
             // H2 S1: passes -> no reduction
             ArCoefficientEstimate {
@@ -3585,6 +3908,7 @@ mod tests {
                 season_id: 1,
                 coefficients: vec![0.4, 0.2],
                 residual_std_ratio: 0.7,
+                annual: None,
             },
         ];
 
@@ -3789,18 +4113,21 @@ mod tests {
                 season_id: 0,
                 coefficients: vec![0.3],
                 residual_std_ratio: 0.9,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id: h1,
                 season_id: 1,
                 coefficients: vec![0.4],
                 residual_std_ratio: 0.85,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id: h1,
                 season_id: 2,
                 coefficients: vec![0.5],
                 residual_std_ratio: 0.8,
+                annual: None,
             },
         ];
 
@@ -3872,18 +4199,21 @@ mod tests {
                 season_id: 0,
                 coefficients: vec![0.3],
                 residual_std_ratio: 0.9,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id: h1,
                 season_id: 1,
                 coefficients: vec![0.4],
                 residual_std_ratio: 0.85,
+                annual: None,
             },
             ArCoefficientEstimate {
                 hydro_id: h1,
                 season_id: 2,
                 coefficients: vec![0.5],
                 residual_std_ratio: 0.8,
+                annual: None,
             },
         ];
         let coeff_rows = ar_estimates_to_rows(&ar_ests, &stages);
@@ -4121,6 +4451,7 @@ mod tests {
                 season_id: season,
                 coefficients: yw.coefficients,
                 residual_std_ratio: yw.residual_std_ratio,
+                annual: None,
             });
         }
 
@@ -4272,6 +4603,7 @@ mod tests {
                 max_order: 2,
                 max_coeff_magnitude: None,
                 season_map: Some(&season_map),
+                use_annual_component: false,
             },
         )
         .expect("estimation must succeed");
@@ -5312,5 +5644,250 @@ mod tests {
             has_wrap,
             "expected a warning for the wrap-around pair season 2 → season 0"
         );
+    }
+
+    // ── estimate_ar_with_pacf_annual tests (AC #6, AC #7, AC #8) ─────────────
+
+    use chrono::NaiveDate;
+    use cobre_core::temporal::{
+        Block, BlockMode, NoiseMethod, ScenarioSourceConfig, StageRiskConfig, StageStateConfig,
+    };
+
+    /// Build a 12-season monthly stage sequence spanning `n_years` starting from
+    /// year 2000. Stage IDs are 0-based sequential; season IDs cycle 0..12.
+    fn make_monthly_stages_for_annual(n_years: usize) -> Vec<cobre_core::temporal::Stage> {
+        let mut stages = Vec::new();
+        let mut idx = 0usize;
+        for year in 0..n_years {
+            for month in 0..12usize {
+                let y = 2000 + year as i32;
+                let m = month as u32 + 1;
+                let (ey, em) = if m == 12 { (y + 1, 1u32) } else { (y, m + 1) };
+                stages.push(cobre_core::temporal::Stage {
+                    index: idx,
+                    id: idx as i32,
+                    start_date: NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(ey, em, 1).unwrap(),
+                    season_id: Some(month),
+                    blocks: vec![Block {
+                        index: 0,
+                        name: "SINGLE".to_string(),
+                        duration_hours: 744.0,
+                    }],
+                    block_mode: BlockMode::Parallel,
+                    state_config: StageStateConfig {
+                        storage: true,
+                        inflow_lags: false,
+                    },
+                    risk_config: StageRiskConfig::Expectation,
+                    scenario_config: ScenarioSourceConfig {
+                        branching_factor: 1,
+                        noise_method: NoiseMethod::Saa,
+                    },
+                });
+                idx += 1;
+            }
+        }
+        stages
+    }
+
+    /// Build `n_years * 12` synthetic monthly observations for `hydro_id`.
+    ///
+    /// Formula: `z[year*12 + month] = base + (month+1) * scale + year * drift`.
+    fn synthetic_monthly_obs(
+        hydro_id: EntityId,
+        n_years: usize,
+        base: f64,
+        scale: f64,
+        drift: f64,
+    ) -> Vec<(EntityId, NaiveDate, f64)> {
+        let mut obs = Vec::new();
+        for year in 0..n_years {
+            for month in 0..12usize {
+                let value = base
+                    + f64::from(u32::try_from(month + 1).unwrap()) * scale
+                    + f64::from(u32::try_from(year).unwrap()) * drift;
+                let date = NaiveDate::from_ymd_opt(
+                    2000 + i32::try_from(year).unwrap(),
+                    u32::try_from(month + 1).unwrap(),
+                    1,
+                )
+                .unwrap();
+                obs.push((hydro_id, date, value));
+            }
+        }
+        obs
+    }
+
+    /// AC #6 — Two hydros × 12 seasons: every estimate has `annual.is_some()`.
+    ///
+    /// 30 years of synthetic monthly data (360 observations per hydro) gives
+    /// enough rolling-window samples for `estimate_annual_seasonal_stats` to
+    /// succeed and for the extended YW system to be well-conditioned.
+    ///
+    /// Asserts:
+    /// - 24 estimates returned (2 hydros × 12 seasons).
+    /// - Every `estimate.annual.is_some()`.
+    /// - Every `estimate.annual.as_ref().unwrap().std_m3s > 0.0`.
+    #[test]
+    fn estimate_ar_with_pacf_annual_two_hydros_twelve_seasons() {
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let n_years = 30;
+        let stages = make_monthly_stages_for_annual(n_years);
+
+        // Two hydros with different base values so their series are distinct.
+        let mut obs = synthetic_monthly_obs(h1, n_years, 100.0, 5.0, 1.0);
+        obs.extend(synthetic_monthly_obs(h2, n_years, 200.0, 3.0, 0.5));
+
+        // Seasonal stats needed for the YW solve (standard values).
+        let seasonal_stats = {
+            use cobre_stochastic::par::fitting::estimate_seasonal_stats_with_season_map;
+            estimate_seasonal_stats_with_season_map(&obs, &stages, &[h1, h2], None).unwrap()
+        };
+
+        let (estimates, report) = estimate_ar_with_pacf_annual(
+            &obs,
+            &seasonal_stats,
+            &stages,
+            &[h1, h2],
+            3,    // max_order
+            None, // season_map
+            None, // max_coeff_magnitude
+        )
+        .expect("estimate_ar_with_pacf_annual must succeed with 30 years of data");
+
+        assert_eq!(
+            estimates.len(),
+            24,
+            "2 hydros × 12 seasons = 24 estimates, got {}",
+            estimates.len()
+        );
+        assert_eq!(
+            report.method, "PACF_ANNUAL",
+            "method must be PACF_ANNUAL, got {}",
+            report.method
+        );
+
+        for est in &estimates {
+            assert!(
+                est.annual.is_some(),
+                "hydro={} season={}: annual must be Some",
+                est.hydro_id.0,
+                est.season_id
+            );
+            let ann = est.annual.as_ref().unwrap();
+            assert!(
+                ann.std_m3s > 0.0,
+                "hydro={} season={}: annual.std_m3s must be > 0, got {}",
+                est.hydro_id.0,
+                est.season_id,
+                ann.std_m3s
+            );
+        }
+    }
+
+    /// AC #7 — Insufficient observations propagate `InsufficientData` error.
+    ///
+    /// 11 months of data cannot form any rolling 12-month average.
+    /// `estimate_ar_with_pacf_annual` must propagate the error from
+    /// `estimate_annual_seasonal_stats` rather than silently falling back.
+    #[test]
+    fn estimate_ar_with_pacf_annual_insufficient_observations_errors() {
+        let h1 = EntityId(1);
+        // 11 observations — fewer than the 13 required for one rolling window.
+        let obs: Vec<(EntityId, NaiveDate, f64)> = (0u32..11)
+            .map(|i| {
+                let m = i % 12 + 1;
+                (
+                    h1,
+                    NaiveDate::from_ymd_opt(2000, m, 1).unwrap(),
+                    50.0 + f64::from(i),
+                )
+            })
+            .collect();
+
+        let stages = make_monthly_stages_for_annual(2);
+
+        // Provide minimal seasonal stats (actual values don't matter since the
+        // error occurs before the YW solve).
+        let seasonal_stats = vec![SeasonalStats {
+            entity_id: h1,
+            stage_id: 0,
+            mean: 50.0,
+            std: 5.0,
+        }];
+
+        let result = estimate_ar_with_pacf_annual(
+            &obs,
+            &seasonal_stats,
+            &stages,
+            &[h1],
+            2,    // max_order
+            None, // season_map
+            None, // max_coeff_magnitude
+        );
+
+        assert!(
+            result.is_err(),
+            "expected Err for insufficient observations, got Ok"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                StochasticError::InsufficientData { .. }
+            ),
+            "error must be InsufficientData"
+        );
+    }
+
+    /// AC #8 — Classical path unchanged: `use_annual_component = false` returns
+    /// `method = "PACF"` and every `ArCoefficientEstimate.annual.is_none()`.
+    ///
+    /// Uses the same 2-hydro 30-year fixture as AC #6 to ensure the dispatch
+    /// (`estimate_ar_coefficients_with_selection`) routes to the classical path
+    /// when `use_annual_component = false`.
+    #[test]
+    fn estimate_ar_coefficients_with_selection_classical_path_unchanged() {
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let n_years = 30;
+        let stages = make_monthly_stages_for_annual(n_years);
+
+        let mut obs = synthetic_monthly_obs(h1, n_years, 100.0, 5.0, 1.0);
+        obs.extend(synthetic_monthly_obs(h2, n_years, 200.0, 3.0, 0.5));
+
+        let seasonal_stats = {
+            use cobre_stochastic::par::fitting::estimate_seasonal_stats_with_season_map;
+            estimate_seasonal_stats_with_season_map(&obs, &stages, &[h1, h2], None).unwrap()
+        };
+
+        let (estimates, report) = estimate_ar_coefficients_with_selection(
+            &obs,
+            &seasonal_stats,
+            &stages,
+            &[h1, h2],
+            &ArEstimationConfig {
+                max_order: 3,
+                max_coeff_magnitude: None,
+                season_map: None,
+                use_annual_component: false,
+            },
+        )
+        .expect("classical path must succeed");
+
+        assert_eq!(
+            report.method, "PACF",
+            "classical path must produce method=PACF, got {}",
+            report.method
+        );
+        for est in &estimates {
+            assert!(
+                est.annual.is_none(),
+                "classical path: hydro={} season={} must have annual=None",
+                est.hydro_id.0,
+                est.season_id
+            );
+        }
     }
 }

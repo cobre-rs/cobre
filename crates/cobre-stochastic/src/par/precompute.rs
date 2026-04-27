@@ -540,18 +540,14 @@ fn fill_stage_arrays(
                     //
                     // If σ^A == 0.0, the contribution is zero (same guard as
                     // the zero-std lag-stage path for φ̂ coefficients).
-                    let psi_hat = if bufs.max_order >= 12 {
-                        if let Some(ann) = m.annual.as_ref() {
-                            if ann.std_m3s == 0.0 {
-                                0.0
-                            } else {
-                                ann.coefficient * s_m / ann.std_m3s
-                            }
-                        } else {
-                            0.0
-                        }
-                    } else {
+                    let psi_hat = if bufs.max_order < 12 {
                         0.0
+                    } else {
+                        match m.annual.as_ref() {
+                            None => 0.0,
+                            Some(ann) if ann.std_m3s == 0.0 => 0.0,
+                            Some(ann) => ann.coefficient * s_m / ann.std_m3s,
+                        }
                     };
 
                     // Convert ψ* → ψ and compute the deterministic base.
@@ -601,15 +597,10 @@ fn fill_stage_arrays(
                         // undefined. Treat ar_contrib as zero (no AR contribution
                         // from that lag). The caller is responsible for validating
                         // that lag stages with AR order > 0 have positive std.
-                        let ar_contrib = if lag < order {
-                            let psi_star = m.ar_coefficients[lag];
-                            if s_lag == 0.0 {
-                                0.0
-                            } else {
-                                psi_star * s_m / s_lag
-                            }
-                        } else {
+                        let ar_contrib = if lag >= order || s_lag == 0.0 {
                             0.0
+                        } else {
+                            m.ar_coefficients[lag] * s_m / s_lag
                         };
 
                         // Effective psi at this lag: classical AR plus the
@@ -664,16 +655,12 @@ mod tests {
 
     use super::{PrecomputedPar, resolve_season_id};
 
-    fn dummy_date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
-        NaiveDate::from_ymd_opt(year, month, day).unwrap()
-    }
-
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
         Stage {
             index,
             id,
-            start_date: dummy_date(2024, 1, 1),
-            end_date: dummy_date(2024, 2, 1),
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
             season_id,
             blocks: vec![Block {
                 index: 0,

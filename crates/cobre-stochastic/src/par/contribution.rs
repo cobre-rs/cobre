@@ -179,11 +179,8 @@ mod tests {
     const TOL: f64 = 1e-10;
 
     fn assert_close(a: f64, b: f64, label: &str) {
-        assert!(
-            (a - b).abs() < TOL,
-            "{label}: expected {b}, got {a}, diff {}",
-            (a - b).abs()
-        );
+        let diff = (a - b).abs();
+        assert!(diff < TOL, "{label}: expected {b}, got {a}, diff {diff}");
     }
 
     // -----------------------------------------------------------------------

@@ -1294,6 +1294,71 @@ pub fn select_order_pacf(
     }
 }
 
+/// Select the AR order for a PAR(p)-A model using the conditional FACP
+/// significance test.
+///
+/// Applies the same selection rule as [`select_order_pacf`] to the
+/// **conditional** FACP vector produced by
+/// [`conditional_facp_partitioned`]: pick the maximum lag `k` where
+/// `|conditional_facp[k-1]| > z_alpha / sqrt(N)`, defaulting to order 0
+/// when no lag exceeds the threshold.
+///
+/// The semantic difference from [`select_order_pacf`] is the **source** of
+/// the input vector, not the selection rule. `pacf_values[k]` in the
+/// returned struct is the conditional FACP at lag `k+1`, conditioned on
+/// the intermediate standardised annual noise series `Z` and the previous
+/// annual innovation `A_{t-1}`.
+///
+/// # Parameters
+///
+/// - `conditional_facp` -- conditional FACP coefficients from
+///   [`conditional_facp_partitioned`]. `conditional_facp[k]` is the
+///   conditional FACP at lag `k+1`.
+/// - `n_observations` -- number of historical observations for the given
+///   (hydro, season) pair.
+/// - `z_alpha` -- z-score for the desired confidence level (e.g., `1.96`
+///   for 95% two-sided).
+///
+/// # Examples
+///
+/// ```
+/// use cobre_stochastic::par::fitting::select_order_pacf_annual;
+///
+/// // Conditional FACP at lag 1 = 0.5 exceeds 1.96/sqrt(100) = 0.196; lag 2 = 0.1 does not.
+/// let result = select_order_pacf_annual(&[0.5, 0.1], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // No significant conditional FACP values -> order 0.
+/// let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
+/// assert_eq!(result.selected_order, 0);
+/// ```
+pub fn select_order_pacf_annual(
+    conditional_facp: &[f64],
+    n_observations: usize,
+    z_alpha: f64,
+) -> PacfSelectionResult {
+    #[allow(clippy::cast_precision_loss)]
+    let threshold = if n_observations > 0 {
+        z_alpha / (n_observations as f64).sqrt()
+    } else {
+        f64::INFINITY
+    };
+
+    // Find the maximum lag with |conditional FACP| > threshold.
+    let selected_order = conditional_facp
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|&(_, p)| p.abs() > threshold)
+        .map_or(0, |(k, _)| k + 1);
+
+    PacfSelectionResult {
+        selected_order,
+        pacf_values: conditional_facp.to_vec(),
+        threshold,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Periodic autocorrelation
 // ---------------------------------------------------------------------------
@@ -2425,7 +2490,7 @@ mod tests {
     use super::{
         BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
         estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
-        select_order_aic, select_order_pacf, solve_linear_system,
+        select_order_aic, select_order_pacf, select_order_pacf_annual, solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -5420,5 +5485,71 @@ mod tests {
             "zero denominator must yield 0.0, got {}",
             result[0]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // select_order_pacf_annual tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_order_pacf_annual_empty_returns_zero() {
+        let result = select_order_pacf_annual(&[], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+        assert!(result.pacf_values.is_empty());
+    }
+
+    #[test]
+    fn select_order_pacf_annual_first_lag_significant() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // conditional_facp[0] = 0.5 > 0.196 -> significant; lag 2 = 0.1 is not.
+        let result = select_order_pacf_annual(&[0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+        assert!((result.threshold - 0.196).abs() < 1e-10);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_max_lag_significant() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // conditional_facp = [0.05, 0.03, 0.4]
+        // Only lag 3 (0.4) exceeds threshold -> selected_order = 3.
+        let result = select_order_pacf_annual(&[0.05, 0.03, 0.4], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_no_significant_lag() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // All values below threshold -> selected_order = 0.
+        let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_negative_value_uses_abs() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // |-0.5| = 0.5 > 0.196 -> lag 1 significant; lag 2 = 0.1 is not.
+        let result = select_order_pacf_annual(&[-0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_zero_observations_returns_infinity_threshold() {
+        // n_observations = 0 -> threshold = infinity -> nothing exceeds it.
+        let result = select_order_pacf_annual(&[0.5, 0.3], 0, 1.96);
+        assert_eq!(result.threshold, f64::INFINITY);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_matches_select_order_pacf_for_same_input() {
+        // Both functions must be bit-identical for the same input.
+        let facp = &[0.5, 0.1, 0.3_f64];
+        let n = 100_usize;
+        let z = 1.96_f64;
+        let annual = select_order_pacf_annual(facp, n, z);
+        let classical = select_order_pacf(facp, n, z);
+        assert_eq!(annual.selected_order, classical.selected_order);
+        assert_eq!(annual.pacf_values, classical.pacf_values);
+        assert_eq!(annual.threshold, classical.threshold);
     }
 }

@@ -2137,11 +2137,13 @@ pub(crate) fn assemble_partitioned_covariance(
         cross_correlation_a_z_neg1(prev_season, n_seasons, obs_z, stats_z, obs_a, stats_a);
 
     // Row 1 (Z_{t−k}) with Z-block of conditioning set.
-    // The reference season for Z_{t−k} is (season − k) mod n_seasons.
-    let season_minus_k = (season + n_seasons * k - k) % n_seasons;
+    // Position j (0..k−2) of this row is Corr(Z_{t−k}, Z_{t−1−j}).
+    // Z_{t−1−j} is the **newer** of the two (since j ≤ k−2 < k−1 < k), so
+    // ρ_periodic must be anchored at its season with lag = (k−1) − j.
     for (j, entry) in sigma_12[k..k + k.saturating_sub(1)].iter_mut().enumerate() {
+        let ref_season = (season + n_seasons - 1 - j) % n_seasons;
         let lag = k.saturating_sub(1).saturating_sub(j);
-        let rho = periodic_autocorrelation(season_minus_k, lag, n_seasons, obs_z, stats_z);
+        let rho = periodic_autocorrelation(ref_season, lag, n_seasons, obs_z, stats_z);
         *entry = rho;
     }
     // Row 1 (Z_{t−k}) with A_{t−1}.

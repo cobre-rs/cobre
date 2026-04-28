@@ -1639,7 +1639,13 @@ pub fn periodic_autocorrelation(
         return 0.0;
     }
 
-    // Compute cross-covariance with population divisor (1/N).
+    // Cross-covariance with population divisor (1/N) over the year-aligned
+    // valid pairs. NEWAVE uses N = n_pairs here for Z⊗Z autocorrelations
+    // (verified against parpvaz.dat correlacao_series_vazoes_uhe). The
+    // max-bucket-size convention used by cross_correlation_z_a /
+    // cross_correlation_a_z_neg1 only applies to Z⊗A cross-terms because
+    // those buckets have inherently different lengths (A excludes the first
+    // year of Z by construction).
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[i] - mu_lag);
@@ -1928,14 +1934,25 @@ pub fn cross_correlation_z_a(
         return 0.0;
     }
 
-    // Cross-covariance with population divisor (1/N).
+    // Cross-covariance with NEWAVE-style population divisor.
+    //
+    // Sum runs over the year-aligned valid pairs, but the divisor is the
+    // **maximum bucket size** (typically the Z bucket = total study-window
+    // years). This matches NEWAVE's parpvaz.dat convention, which is
+    // equivalent to padding the missing-A years with the sample mean
+    // (their cross-product contribution is zero) while keeping the
+    // observed σ̂_A computed over the genuinely populated entries. Using
+    // n_pairs (the strict-pair count) here would systematically overstate
+    // ρ̂(Z, A) by a factor of `max_len / n_pairs` and tilt downstream
+    // partitioned-covariance FACPs across the threshold boundary.
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
     }
+    let denom_n = a_obs.len().max(z_obs.len());
     #[allow(clippy::cast_precision_loss)]
     {
-        gamma /= n_pairs as f64;
+        gamma /= denom_n as f64;
     }
 
     // Normalise and clamp.
@@ -2026,14 +2043,17 @@ pub fn cross_correlation_a_z_neg1(
         return 0.0;
     }
 
-    // Cross-covariance with population divisor (1/N).
+    // Cross-covariance with NEWAVE-style population divisor — see
+    // [`cross_correlation_z_a`] for the rationale on dividing by the larger
+    // bucket size rather than `n_pairs`.
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
     }
+    let denom_n = a_obs.len().max(z_obs.len());
     #[allow(clippy::cast_precision_loss)]
     {
-        gamma /= n_pairs as f64;
+        gamma /= denom_n as f64;
     }
 
     // Normalise and clamp.
@@ -5694,7 +5714,11 @@ mod tests {
         // RHS.
         let expected_rhs0 = 0.369_897_721_437_054;
         let expected_rhs1 = 0.0;
-        let expected_rhs2 = 0.143_849_113_892_188;
+        // rhs[2] = cross_correlation_a_z_neg1(prev=1) — for n_seasons=2 the
+        // year-forward-shift skips one Z entry, giving n_pairs=4. NEWAVE's
+        // convention divides the cross-product sum by max(a.len, z.len)=5
+        // rather than 4, so the value scales by 4/5 vs the n_pairs divisor.
+        let expected_rhs2 = 0.143_849_113_892_188 * 4.0 / 5.0;
         assert!(
             (rhs[0] - expected_rhs0).abs() < tol,
             "rhs[0]={} expected≈{expected_rhs0}",
@@ -6228,8 +6252,13 @@ mod tests {
     ///   Σ_22 = [[1.0, 0.0, 0.9],                       (rows: Z_{t-1}, Z_{t-2}, A_{t-1})
     ///           [0.0, 1.0, 0.1],
     ///           [0.9, 0.1, 1.0]]
-    ///   Σ_12 = [[0.5, -0.625, 0.125],                  (row 0 = Z_t)
-    ///           [0.3,  0.7,   0.4  ]]                  (row 1 = Z_{t-3})
+    ///   Σ_12 = [[0.5, -0.625, 0.10],                   (row 0 = Z_t)
+    ///           [0.3,  0.7,   0.4 ]]                   (row 1 = Z_{t-3})
+    ///
+    /// Σ_12[0, 2] = ρ(Z_t, A_{t-1}) uses [`cross_correlation_a_z_neg1`], which
+    /// follows NEWAVE's convention of dividing the cross-product sum by the
+    /// LARGER bucket size (here 5) rather than n_pairs (4 after the
+    /// year-forward-shift skips one Z entry).
     ///
     /// The Σ_12[1,*] block is the Bug #1 regression guard — pre-fix, this row
     /// was anchored at season_minus_k and produced unrelated values that
@@ -6292,7 +6321,7 @@ mod tests {
 
         // Σ_12 (2×3, row-major). Row 1 entries (Z_{t-3} cross conditioning Z's)
         // are the Bug #1 regression guard.
-        let exp_12 = [0.5, -0.625, 0.125, 0.3, 0.7, 0.4];
+        let exp_12 = [0.5, -0.625, 0.10, 0.3, 0.7, 0.4];
         for (i, &expected) in exp_12.iter().enumerate() {
             assert!(
                 (cov.sigma_12[i] - expected).abs() < 1e-12,
@@ -6671,8 +6700,11 @@ mod tests {
 
         // The expected annual_coefficient equals the rhs[0] from the 1×1 system,
         // which is cross_correlation_a_z_neg1(prev_season=1, n_seasons=2, ...).
-        // Hand-computed: ≈ 0.14384911389218766 (from AC#3 derivation).
-        let expected_psi = 0.143_849_113_892_187_66;
+        // For n_seasons=2, the year-forward-shift skips one Z entry leaving
+        // n_pairs=4. NEWAVE's max-bucket-size divisor (=5) scales the result
+        // by 4/5 vs the legacy n_pairs convention, so the hand-computed value
+        // is 0.14384911389218766 × 4/5 ≈ 0.1150792911…
+        let expected_psi = 0.143_849_113_892_187_66 * 4.0 / 5.0;
 
         let result = estimate_periodic_ar_annual_coefficients(
             0, // season
@@ -6751,25 +6783,29 @@ mod tests {
             "selected_order=2 must produce 2 AR coefficients"
         );
 
+        // Expected values reflect NEWAVE's max-bucket-size cross-cov divisor
+        // (see [`cross_correlation_z_a`] docs). For the synthetic 5-element
+        // buckets, only the cross-terms with year-forward-shift pick up the
+        // 4/5 scale; the rest of the YW system is unaffected.
         let tol = 1e-8;
         assert!(
-            (result.coefficients[0] - 0.812_676_78).abs() < tol,
-            "φ1={} expected≈0.81267678",
+            (result.coefficients[0] - 0.773_889_929_208_993_9).abs() < tol,
+            "φ1={} expected≈0.7738899292",
             result.coefficients[0]
         );
         assert!(
-            (result.coefficients[1] - (-0.986_842_11)).abs() < tol,
-            "φ2={} expected≈-0.98684211",
+            (result.coefficients[1] - (-0.903_947_368_421_052_3)).abs() < tol,
+            "φ2={} expected≈-0.9039473684",
             result.coefficients[1]
         );
         assert!(
-            (result.annual_coefficient - 0.972_749_47).abs() < tol,
-            "ψ={} expected≈0.97274947",
+            (result.annual_coefficient - 0.877_937_183_016_726_5).abs() < tol,
+            "ψ={} expected≈0.8779371830",
             result.annual_coefficient
         );
         assert!(
-            (result.residual_std_ratio - 0.747_972_97).abs() < tol,
-            "residual_std_ratio={} expected≈0.74797297",
+            (result.residual_std_ratio - 0.782_756_341_321_194_8).abs() < tol,
+            "residual_std_ratio={} expected≈0.7827563413",
             result.residual_std_ratio
         );
     }

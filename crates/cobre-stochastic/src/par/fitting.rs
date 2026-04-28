@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{
         AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -2570,6 +2570,16 @@ pub fn estimate_annual_seasonal_stats(
     }
 
     // Build rolling-window A_t values grouped by (entity_id, season_id).
+    //
+    // Indexing convention: an A value A_{t-1} = mean(z[t-12..t-1]) is stored
+    // under the season of its own PDF time-index (t-1), which is the most
+    // recent observation in the rolling window — `group[i + 11]`. With this
+    // convention, `annual_stats_by_season[s]` contains stats for
+    // `A_{t-1}` whose PDF time-index falls in season `s`, equivalently
+    // `A_{t-1}` for `t` at season `s + 1`. The Yule-Walker callers
+    // (`build_extended_periodic_yw_matrix`, `assemble_partitioned_covariance`)
+    // index this map with `prev_season = (m - 1) mod n_seasons` to retrieve
+    // the stats for the equation at current season `m`.
     let mut group_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
 
     for &entity_id in entity_ids {
@@ -2577,10 +2587,13 @@ pub fn estimate_annual_seasonal_stats(
             continue;
         };
 
-        // For each index i such that i + 12 < group.len(), the target date is
-        // group[i + 12].date and A = mean(group[i..i+12]).
+        // For each index i such that i + 11 < group.len() (we still require
+        // i + 12 <= group.len() to access the full 12-month window), the
+        // rolling-window mean A = (1/12) * sum of z[i..i+12] is stored under
+        // the season of group[i + 11].date — i.e., the PDF time-index of
+        // A_{t-1} when target month t = i + 12.
         for i in 0..group.len().saturating_sub(12) {
-            let target_date = group[i + 12].0;
+            let target_date = group[i + 11].0;
 
             let Some(season_id) = find_season_for_date(&stage_index, target_date)
                 .or_else(|| season_map.and_then(|sm| sm.season_for_date(target_date)))
@@ -2589,7 +2602,8 @@ pub fn estimate_annual_seasonal_stats(
                 continue;
             };
 
-            // A_{i+12} = (1/12) * sum of z[i..i+12].
+            // A_{(i+12)-1} = (1/12) * sum of z[i..i+12]; PDF time of this value
+            // is i + 11, so it is stored under the season of group[i + 11].
             let mean_a: f64 = group[i..i + 12].iter().map(|(_, v)| v).sum::<f64>() / 12.0;
             group_map
                 .entry((entity_id, season_id))
@@ -2761,9 +2775,9 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
-        estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
-        select_order_aic, select_order_pacf, select_order_pacf_annual, solve_linear_system,
+        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, periodic_autocorrelation,
+        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
+        solve_linear_system, BUILD_PERIODIC_YW_MATRIX_CALL_COUNT,
     };
 
     // -----------------------------------------------------------------------
@@ -2772,11 +2786,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -3134,7 +3148,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -4016,8 +4030,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -5838,14 +5852,29 @@ mod tests {
     ///
     /// Series: `z[year*12 + month] = (month+1)*10 + year*5`.
     ///
-    /// Rolling-window construction (index `i`, target index `i+12`):
-    /// - `A_{i+12} = mean(z[i..i+12])`
-    /// - Target season = `(i+12) % 12`
+    /// Rolling-window construction (index `i`, window `z[i..i+12]`, target
+    /// index `i+11`): each value `A = mean(z[i..i+12])` is stored under the
+    /// season of `z[i+11]` — i.e., the PDF time-index of `A_{t-1}` when
+    /// `t = i + 12`.
     ///
-    /// Each season has exactly 3 A_t values (from years 1, 2, 3).
+    /// Each season has exactly 3 A_t values:
+    /// - For `s ∈ 0..10` the windows cover target years `{1, 2, 3}` (the
+    ///   window crosses into year `y` and `i_min = s + 1 ≥ 1`).
+    /// - For `s == 11` the windows cover target years `{0, 1, 2}` (the
+    ///   window is entirely within year `y`, so `i_min = 0`); the loop bound
+    ///   `i < 36` excludes year 3.
     ///
-    /// All stds are 5.0 (Bessel-corrected, `1/(N-1)` with N=3).
-    /// Mean for season `s`: `70.0 + s * (5.0 / 12.0)`.
+    /// Window mean (`i = y*12 + s - 11` for `s ∈ 0..10`, `i = y*12` for `s == 11`):
+    /// `mean = (780 + 5 * total_year_offset_in_window) / 12`.
+    ///
+    /// Average over the 3 valid years yields:
+    /// - `s ∈ 0..10`: `(845 + 5*s) / 12`
+    /// - `s == 11`:   `70.0`           (note: NOT `(845 + 55)/12 = 75.0` because
+    ///                                  the y-range shifts down by one)
+    ///
+    /// All stds are 5.0 (Bessel-corrected, `1/(N-1)` with N=3) — each year
+    /// shifts every observation by `+5`, so window means differ by `5`
+    /// between consecutive years for every season.
     ///
     /// This test intentionally pins the `1/(N-1)` divisor and the divergence from
     /// `rel_parpa.pdf` eq. 18 (which uses `1/N`). See ticket documentation.
@@ -5870,15 +5899,22 @@ mod tests {
 
         assert_eq!(result.len(), 12, "must return exactly one entry per season");
 
-        // All stds must be 5.0 (Bessel: sqrt(((5-0)^2 + (0-0)^2 + (-5-0)^2)/2) = 5).
-        // All means follow: season s -> 70.0 + s * (5.0/12.0).
         for s in &result {
             assert_eq!(
                 s.hydro_id, hydro_id,
                 "hydro_id must match for season {}",
                 s.season_id
             );
-            let expected_mean = 70.0 + s.season_id as f64 * (5.0 / 12.0);
+            // For seasons 0..10 the window crosses into the target year, so
+            // valid `y ∈ {1, 2, 3}` (y_avg = 2). For season 11 the window
+            // sits entirely within year `y`, so valid `y ∈ {0, 1, 2}`
+            // (y_avg = 1) — producing the discontinuity from `(845+5*11)/12`
+            // to `70.0`.
+            let expected_mean = if s.season_id == 11 {
+                70.0
+            } else {
+                (845.0 + 5.0 * s.season_id as f64) / 12.0
+            };
             assert!(
                 (s.mean_m3s - expected_mean).abs() < 1e-10,
                 "season {}: mean_m3s={} expected={}",

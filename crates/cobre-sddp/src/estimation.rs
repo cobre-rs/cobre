@@ -57,28 +57,28 @@ use chrono::NaiveDate;
 use cobre_core::scenario::AnnualComponent;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
-    parse_inflow_history,
+    parse_inflow_ar_coefficients, parse_inflow_history,
     scenarios::{
-        InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
-        assemble_inflow_models,
+        assemble_inflow_models, InflowAnnualComponentRow, InflowArCoefficientRow,
+        InflowSeasonalStatsRow,
     },
-    validate_structure,
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::aggregate::aggregate_observations_to_season,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
-        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
-        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
-        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
+        conditional_facp_partitioned, estimate_annual_seasonal_stats,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_annual_coefficients, estimate_periodic_ar_coefficients,
+        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
+        select_order_pacf, select_order_pacf_annual, AnnualSeasonalStats, ArCoefficientEstimate,
+        SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Classification of the estimation path taken for a given input file manifest.
@@ -1267,13 +1267,18 @@ fn estimate_ar_with_pacf_annual(
     }
 
     // For each entity, build rolling A_t values grouped by target season.
+    //
+    // Indexing convention (must match `estimate_annual_seasonal_stats`):
+    // A_{t-1} = mean(z[t-12..t-1]) is stored under the season of its own
+    // PDF time-index (t-1), i.e., the season of `group[i + 11]` when t = i + 12.
+    // YW callers retrieve it via `prev_season = (m - 1) mod n_seasons`.
     let mut annual_group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
     for &entity_id in hydro_ids {
         let Some(group) = entity_obs.get(&entity_id) else {
             continue;
         };
         for i in 0..group.len().saturating_sub(12) {
-            let target_date = group[i + 12].0;
+            let target_date = group[i + 11].0;
             let Some(season_id) = find_season_for_date(&stage_index, target_date)
                 .or_else(|| season_map.and_then(|sm| sm.season_for_date(target_date)))
             else {
@@ -1317,10 +1322,16 @@ fn estimate_ar_with_pacf_annual(
         let annual_obs_refs: Vec<&[f64]> = annual_obs_by_season.iter().map(Vec::as_slice).collect();
 
         for season in 0..n_seasons {
+            // The Yule-Walker equation for current month `season` couples
+            // Z_t (at season `season`) with A_{t-1}, whose PDF time-index is
+            // at the previous season. Annual stats and observations for that
+            // A are stored under `prev_season` (see indexing convention in
+            // `estimate_annual_seasonal_stats`).
+            let prev_season = (season + n_seasons - 1) % n_seasons;
             let n_obs = obs_by_season[season].len();
-            let n_ann_obs = annual_obs_by_season[season].len();
+            let n_ann_obs = annual_obs_by_season[prev_season].len();
             let stats_s = stats_by_season[season];
-            let annual_stats_s = annual_stats_by_season[season];
+            let annual_stats_s = annual_stats_by_season[prev_season];
 
             // White-noise fallback: zero std, too few observations, or no annual obs.
             if stats_s.1 == 0.0 || n_obs < 2 || n_ann_obs == 0 || annual_stats_s.1 == 0.0 {
@@ -1329,13 +1340,13 @@ fn estimate_ar_with_pacf_annual(
                     season_id: season,
                     coefficients: Vec::new(),
                     residual_std_ratio: 1.0,
-                    annual: annual_stats_map
-                        .get(&(hydro_id, season))
-                        .map(|s| AnnualComponent {
+                    annual: annual_stats_map.get(&(hydro_id, prev_season)).map(|s| {
+                        AnnualComponent {
                             coefficient: 0.0,
                             mean_m3s: s.mean_m3s,
                             std_m3s: s.std_m3s,
-                        }),
+                        }
+                    }),
                 });
                 continue;
             }
@@ -1361,8 +1372,12 @@ fn estimate_ar_with_pacf_annual(
                 &annual_stats_by_season,
             );
 
-            // Look up per-season annual stats for the AnnualComponent triple.
-            let (ann_mean, ann_std) = annual_stats_by_season[season];
+            // Look up annual stats for the AnnualComponent triple. The YW
+            // solver matches Z_t (season `season`) with A_{t-1} (PDF time at
+            // `prev_season`); precompute applies the standardised ψ via
+            // `psi_hat = ψ · σ_m / σ_a`, where σ_a must be the std of A_{t-1}
+            // — i.e., the entry stored at `prev_season`.
+            let (ann_mean, ann_std) = annual_stats_by_season[prev_season];
             estimates.push(ArCoefficientEstimate {
                 hydro_id,
                 season_id: season,
@@ -2212,8 +2227,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {

@@ -5673,6 +5673,92 @@ mod tests {
         );
     }
 
+    /// Strict per-entry verification of `assemble_partitioned_covariance` at k=3
+    /// with n_seasons=3.
+    ///
+    /// The earlier `_two_season_hand_computed` test only pinned down k=1 (closed
+    /// form) and k=2 boundedness — it called the same helpers (`periodic_auto…`,
+    /// `cross_correlation_*`) to derive its expectations, so any indexing bug in
+    /// the assembly would be invisible to it. This test instead computes every
+    /// entry of Σ_11, Σ_22, and Σ_12 from raw scalar arithmetic on the
+    /// observation arrays, with no helper calls in the expected-value path.
+    ///
+    /// Data (5 years × 3 seasons, all means = 0, all pop std = √2):
+    ///   z0 = [ 1,  2, -1,  0, -2]   z1 = [ 0,  1, -1,  2, -2]   z2 = [ 1, 0,  2, -1, -2]
+    ///   a2 = [ 0,  1,  2, -1, -2]   (only a2 is accessed for season=0, k=3)
+    ///   a0 = a1 = [0; 5] (zero-std; not accessed for season=0)
+    ///
+    /// Hand-computed entries (population 1/N divisor throughout):
+    ///   Σ_11 = [[1.0, 0.0], [0.0, 1.0]]               (ρ^0(3) = 0)
+    ///   Σ_22 = [[1.0, 0.0, 0.9],                       (rows: Z_{t-1}, Z_{t-2}, A_{t-1})
+    ///           [0.0, 1.0, 0.1],
+    ///           [0.9, 0.1, 1.0]]
+    ///   Σ_12 = [[0.5, -0.625, 0.125],                  (row 0 = Z_t)
+    ///           [0.3,  0.7,   0.4  ]]                  (row 1 = Z_{t-3})
+    ///
+    /// The Σ_12[1,*] block is the Bug #1 regression guard — pre-fix, this row
+    /// was anchored at season_minus_k and produced unrelated values that
+    /// happily passed the looser legacy test.
+    #[test]
+    fn assemble_partitioned_covariance_three_season_k3_hand_computed() {
+        let z0: &[f64] = &[1.0, 2.0, -1.0, 0.0, -2.0];
+        let z1: &[f64] = &[0.0, 1.0, -1.0, 2.0, -2.0];
+        let z2: &[f64] = &[1.0, 0.0, 2.0, -1.0, -2.0];
+        let a0: &[f64] = &[0.0; 5];
+        let a1: &[f64] = &[0.0; 5];
+        let a2: &[f64] = &[0.0, 1.0, 2.0, -1.0, -2.0];
+
+        let obs: &[&[f64]] = &[z0, z1, z2];
+        let stats = [
+            pop_mean_std_ann(z0),
+            pop_mean_std_ann(z1),
+            pop_mean_std_ann(z2),
+        ];
+        let ann_obs: &[&[f64]] = &[a0, a1, a2];
+        let ann_stats = [
+            pop_mean_std_ann(a0),
+            pop_mean_std_ann(a1),
+            pop_mean_std_ann(a2),
+        ];
+
+        let cov = assemble_partitioned_covariance(0, 3, 3, obs, &stats, ann_obs, &ann_stats);
+
+        // Σ_11.
+        let exp_11 = [1.0, 0.0, 0.0, 1.0];
+        for (i, &expected) in exp_11.iter().enumerate() {
+            assert!(
+                (cov.sigma_11[i] - expected).abs() < 1e-12,
+                "sigma_11[{i}] = {} expected {expected}",
+                cov.sigma_11[i]
+            );
+        }
+
+        // Σ_22 (3×3, row-major).
+        let exp_22 = [1.0, 0.0, 0.9, 0.0, 1.0, 0.1, 0.9, 0.1, 1.0];
+        for (i, &expected) in exp_22.iter().enumerate() {
+            assert!(
+                (cov.sigma_22[i] - expected).abs() < 1e-12,
+                "sigma_22[{}, {}] = {} expected {expected}",
+                i / 3,
+                i % 3,
+                cov.sigma_22[i]
+            );
+        }
+
+        // Σ_12 (2×3, row-major). Row 1 entries (Z_{t-3} cross conditioning Z's)
+        // are the Bug #1 regression guard.
+        let exp_12 = [0.5, -0.625, 0.125, 0.3, 0.7, 0.4];
+        for (i, &expected) in exp_12.iter().enumerate() {
+            assert!(
+                (cov.sigma_12[i] - expected).abs() < 1e-12,
+                "sigma_12[{}, {}] = {} expected {expected}",
+                i / 3,
+                i % 3,
+                cov.sigma_12[i]
+            );
+        }
+    }
+
     /// AC#5: when Σ_22 becomes singular at k=2, the loop breaks early and returns
     /// a Vec with length ≤ 1 (no entry for lag 2).
     #[test]

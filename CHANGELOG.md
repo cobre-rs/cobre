@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hydro_id`, `stage_id`, `annual_coefficient`, `annual_mean_m3s`,
   `annual_std_m3s`) by both the CLI and the Python bindings.
 
+### Changed
+
+- HiGHS default options retuned for warm-started master LPs dominated by
+  many slack rows: Devex dual-edge weight pricing, dual-simplex cost
+  perturbation disabled, initial-condition check disabled, row-wise PRICE
+  strategy, and a loosened rebuild-refactor solution-error tolerance
+  (`1e-6`). These changes alter the simplex trajectory and may yield a
+  different optimal basis representation at the same objective value;
+  the deterministic-suite parity hashes for D03, D06, and D07 were
+  refreshed accordingly. Numerical answers are unchanged within solver
+  tolerances.
+
+- JSON Schemas under `book/src/schemas/` regenerated from the current
+  Rust structs via `cobre schema export`. The previously committed
+  schemas had drifted from the source of truth (most visibly,
+  `CutSelectionConfig` was renamed to `RowSelectionConfig` and
+  `ExportsConfig` was trimmed to its two active flags). No
+  config-file shape change for users on the supported variants.
+
 ## [0.5.0] - 2026-04-25
 
 Major refactor. Consumers must update `config.json`, any code calling

@@ -562,9 +562,16 @@ impl Default for SimulationConfig {
 /// Order selection criterion for autoregressive model fitting.
 ///
 /// Controls how the lag order is chosen when fitting a time series model.
+/// Two variants are accepted:
 ///
-/// The `"fixed"` JSON value is deprecated; it is accepted for backwards
-/// compatibility but mapped to `Pacf` at parse time with a warning.
+/// - `"pacf"` — classical periodic Yule-Walker with PACF-based order
+///   selection. Default.
+/// - `"pacf_annual"` — extends `"pacf"` with an annual component (PAR(p)-A),
+///   adding one extra coefficient ψ per (entity, season) that multiplies
+///   the rolling 12-month average of past observations.
+///
+/// The legacy `"fixed"` JSON value is deprecated; it is accepted for
+/// backwards compatibility but mapped to `Pacf` at parse time with a warning.
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -647,7 +654,8 @@ pub struct EstimationConfig {
     /// Maximum lag order considered during autoregressive model fitting.
     pub max_order: u32,
 
-    /// Order selection criterion: fixed maximum or information-criterion-based.
+    /// Order selection criterion. Accepts `"pacf"` (classical PACF, default)
+    /// or `"pacf_annual"` (PACF augmented with an annual component, PAR(p)-A).
     pub order_selection: OrderSelectionMethod,
 
     /// Minimum number of observations required per (entity, season) group

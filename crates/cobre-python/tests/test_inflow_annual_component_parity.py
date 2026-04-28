@@ -31,7 +31,7 @@ import subprocess
 
 import pytest
 
-D24_CASE = "examples/deterministic/d24-par-annual"
+D12_CASE = "examples/deterministic/d12-par-annual"
 
 
 def _cli_binary() -> pathlib.Path:
@@ -86,7 +86,7 @@ def test_inflow_annual_component_byte_identical(tmp_path: pathlib.Path) -> None:
     )
 
     repo_root = pathlib.Path(__file__).parents[3]
-    case_dir = repo_root / D24_CASE
+    case_dir = repo_root / D12_CASE
 
     cli_out = tmp_path / "cli_out"
     py_out = tmp_path / "py_out"

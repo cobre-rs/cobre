@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate synthetic inflow history for the d24-par-annual deterministic test fixture.
+"""Generate synthetic inflow history for the d12-par-annual deterministic test fixture.
 
 Produces ``scenarios/inflow_history.parquet`` containing 360 monthly inflow
 observations for two hydros (hydro_id 0 and 1), spanning 1979-01-01 through
@@ -25,7 +25,7 @@ numpy version.
 
 Usage::
 
-    python examples/deterministic/d24-par-annual/build_history.py
+    python examples/deterministic/d12-par-annual/build_history.py
 
 The parquet file is committed to the repository; regeneration is only needed
 if the fixture specification changes.

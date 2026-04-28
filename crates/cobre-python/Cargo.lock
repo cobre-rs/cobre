@@ -384,6 +384,7 @@ dependencies = [
  "rayon",
  "serde",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@
 //! other callers without pulling in CLI-specific display dependencies. Display/formatting
 //! methods that use `console::style` remain in `cobre-cli`.
 
-use cobre_core::{scenario::SamplingScheme, System};
+use cobre_core::{System, scenario::SamplingScheme};
 use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
 use cobre_io::scenarios::{
     InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
@@ -433,22 +433,22 @@ mod tests {
 
     use chrono::NaiveDate;
     use cobre_core::{
+        Bus, DeficitSegment, EntityId, SystemBuilder,
         entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties},
         scenario::{CorrelationModel, InflowModel, SamplingScheme},
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        Bus, DeficitSegment, EntityId, SystemBuilder,
     };
-    use cobre_stochastic::{build_stochastic_context, ClassSchemes, OpeningTreeInputs};
+    use cobre_stochastic::{ClassSchemes, OpeningTreeInputs, build_stochastic_context};
 
     use super::{
-        build_stochastic_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
-        inflow_models_to_stats_rows, StochasticSource,
+        StochasticSource, build_stochastic_summary, estimation_report_to_fitting_report,
+        inflow_models_to_ar_rows, inflow_models_to_stats_rows,
     };
-    use crate::estimation::HydroEstimationEntry;
     use crate::EstimationReport;
+    use crate::estimation::HydroEstimationEntry;
 
     // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -1234,7 +1234,7 @@ mod tests {
 
     #[test]
     fn estimation_report_tracks_all_reductions() {
-        use crate::estimation::{build_estimation_report, ContributionReduction, ReductionReason};
+        use crate::estimation::{ContributionReduction, ReductionReason, build_estimation_report};
         use std::collections::HashMap;
 
         let estimates = vec![

@@ -57,28 +57,28 @@ use chrono::NaiveDate;
 use cobre_core::scenario::AnnualComponent;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
-    parse_inflow_history,
+    parse_inflow_ar_coefficients, parse_inflow_history,
     scenarios::{
-        InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
-        assemble_inflow_models,
+        assemble_inflow_models, InflowAnnualComponentRow, InflowArCoefficientRow,
+        InflowSeasonalStatsRow,
     },
-    validate_structure,
+    validate_structure, Config, FileManifest, LoadError, ValidationContext,
 };
 use cobre_stochastic::{
-    StochasticError,
     par::aggregate::aggregate_observations_to_season,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
-        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
-        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
-        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
+        conditional_facp_partitioned, estimate_annual_seasonal_stats,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_annual_coefficients, estimate_periodic_ar_coefficients,
+        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
+        select_order_pacf, select_order_pacf_annual, AnnualSeasonalStats, ArCoefficientEstimate,
+        SeasonalStats,
     },
+    StochasticError,
 };
 
 /// Classification of the estimation path taken for a given input file manifest.
@@ -1391,6 +1391,16 @@ fn estimate_ar_with_pacf_annual(
 /// Mirrors [`apply_prepass_reductions`] but operates only on the
 /// per-season magnitude/phi1 guards; the annual field is preserved.
 /// Returns a map of reductions for report building.
+///
+/// The cross-season contribution-based reduction loop
+/// (`validate_order_contributions`) is intentionally omitted from this
+/// path. The PAR-A effective polynomial has stride 12 with the annual
+/// term `ψ̂/12` distributed across every lag slot; running the classical
+/// contribution recursion on this mixed polynomial conflates AR and
+/// annual contributions and produces incorrect order reductions.
+/// Explosive behavior is instead bounded upstream — the conditional
+/// FACP significance threshold and the `max_coefficient_magnitude` guard
+/// here prevent pathologically large coefficients from reaching the LP.
 fn apply_annual_prepass_reductions(
     estimates: &mut [ArCoefficientEstimate],
     max_coeff_magnitude: Option<f64>,
@@ -2202,8 +2212,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            Bus, DeficitSegment,
             scenario::{CorrelationModel, InflowModel},
+            Bus, DeficitSegment,
         };
 
         let bus = Bus {

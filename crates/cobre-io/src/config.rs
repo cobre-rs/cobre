@@ -1808,8 +1808,8 @@ mod tests {
     mod test_subscriber {
         use std::sync::{Arc, Mutex};
         use tracing::{
-            span::{Attributes, Id, Record},
             Event, Level, Metadata, Subscriber,
+            span::{Attributes, Id, Record},
         };
 
         pub(super) struct WarnRecorder {

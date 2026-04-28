@@ -1392,32 +1392,57 @@ fn estimate_ar_with_pacf_annual(
         }
     }
 
-    // Apply magnitude and phi_1 pre-passes (same as classical path).
-    // Note: the annual field is preserved through reductions — only AR
-    // coefficients and residual_std_ratio are reset on reduction.
-    let reductions = apply_annual_prepass_reductions(&mut estimates, max_coeff_magnitude);
+    // Magnitude, φ_1, and iterative contribution pre-passes. Mirrors
+    // `iterative_pacf_reduction` for the PAR-A path. The contribution
+    // recursion runs on the φ vector only; ψ is preserved through reductions
+    // and refreshed via re-solves of the extended Yule-Walker system at the
+    // new ceiling.
+    let reductions = apply_annual_prepass_reductions(
+        &mut estimates,
+        n_seasons,
+        hydro_ids,
+        &group_obs,
+        &annual_group_obs,
+        &stats_map,
+        &annual_stats_map,
+        max_order,
+        z_alpha,
+        max_coeff_magnitude,
+    );
 
     let report = build_estimation_report(&estimates, n_seasons, &reductions, "PACF_ANNUAL");
     Ok((estimates, report))
 }
 
-/// Apply magnitude-bound and `phi_1` pre-passes for the PAR-A path.
+/// Apply magnitude-bound, `phi_1`, and contribution pre-passes for the PAR-A path.
 ///
-/// Mirrors [`apply_prepass_reductions`] but operates only on the
-/// per-season magnitude/phi1 guards; the annual field is preserved.
+/// Mirrors [`iterative_pacf_reduction`] for the PAR-A flow:
+///
+/// 1. Per-coefficient magnitude bound (drops the season's AR coefficients when
+///    any |φ| > threshold; ψ is preserved).
+/// 2. `φ_1 ≥ 0` guard (drops AR coefficients when φ_1 < 0; ψ preserved).
+/// 3. Iterative contribution-based reduction via [`reduce_entity_orders_annual`].
+///
+/// **Contribution check scope.** Per `rel_parpa.pdf` §3.3, the order `pm`
+/// refers to the autoregressive components alone (the φ vector); the annual
+/// term ψ is a separate parameter that NEWAVE keeps in place irrespective of
+/// AR-order reductions. The contribution recursion here operates on the φ
+/// coefficients (length p), exactly as in the classical PAR(p) path.
+/// When a season's contributions go negative, the AR ceiling is reduced and
+/// the extended Yule-Walker system is re-solved at the new order — both φ
+/// and ψ are updated, but the AR portion is what shrinks.
+///
 /// Returns a map of reductions for report building.
-///
-/// The cross-season contribution-based reduction loop
-/// (`validate_order_contributions`) is intentionally omitted from this
-/// path. The PAR-A effective polynomial has stride 12 with the annual
-/// term `ψ̂/12` distributed across every lag slot; running the classical
-/// contribution recursion on this mixed polynomial conflates AR and
-/// annual contributions and produces incorrect order reductions.
-/// Explosive behavior is instead bounded upstream — the conditional
-/// FACP significance threshold and the `max_coefficient_magnitude` guard
-/// here prevent pathologically large coefficients from reaching the LP.
 fn apply_annual_prepass_reductions(
     estimates: &mut [ArCoefficientEstimate],
+    n_seasons: usize,
+    hydro_ids: &[EntityId],
+    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    annual_group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    annual_stats_map: &HashMap<(EntityId, usize), &AnnualSeasonalStats>,
+    initial_max_order: usize,
+    z_alpha: f64,
     max_coeff_magnitude: Option<f64>,
 ) -> HashMap<EntityId, Vec<ContributionReduction>> {
     let mut all_reductions: HashMap<EntityId, Vec<ContributionReduction>> = HashMap::new();
@@ -1461,7 +1486,260 @@ fn apply_annual_prepass_reductions(
         }
     }
 
+    let mut hydro_indices: BTreeMap<EntityId, Vec<usize>> = BTreeMap::new();
+    for (idx, est) in estimates.iter().enumerate() {
+        hydro_indices.entry(est.hydro_id).or_default().push(idx);
+    }
+
+    for &hydro_id in hydro_ids {
+        let Some(indices) = hydro_indices.get(&hydro_id) else {
+            continue;
+        };
+        reduce_entity_orders_annual(
+            estimates,
+            n_seasons,
+            hydro_id,
+            indices,
+            group_obs,
+            annual_group_obs,
+            stats_map,
+            annual_stats_map,
+            initial_max_order,
+            z_alpha,
+            &mut all_reductions,
+        );
+    }
+
     all_reductions
+}
+
+/// Run the iterative contribution-based order reduction for one entity in the
+/// PAR-A path.
+///
+/// Mirrors [`reduce_entity_orders`] for the classical path: maintains
+/// per-season `max_orders` ceilings, checks the recursively-composed AR
+/// contributions (φ-only, length p) at each season, and reduces the ceiling
+/// by 1 whenever any contribution turns negative. After each reduction, the
+/// extended Yule-Walker system is re-solved (`conditional_facp_partitioned` →
+/// `select_order_pacf_annual` → `estimate_periodic_ar_annual_coefficients`)
+/// at the new ceiling so both φ and ψ are refreshed; the recorded
+/// `AnnualComponent` triple is updated to match.
+///
+/// When the ceiling reaches 0 the AR coefficients are dropped (ψ retained
+/// via a final order-0 YW solve so the constant term remains consistent
+/// with the per-season annual stats).
+#[allow(clippy::too_many_arguments)]
+fn reduce_entity_orders_annual(
+    estimates: &mut [ArCoefficientEstimate],
+    n_seasons: usize,
+    hydro_id: EntityId,
+    indices: &[usize],
+    group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    annual_group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
+    annual_stats_map: &HashMap<(EntityId, usize), &AnnualSeasonalStats>,
+    initial_max_order: usize,
+    z_alpha: f64,
+    all_reductions: &mut HashMap<EntityId, Vec<ContributionReduction>>,
+) {
+    let mut obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    let mut annual_obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+    let mut annual_stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+    for season in 0..n_seasons {
+        if let Some(obs) = group_obs.get(&(hydro_id, season)) {
+            obs_by_season[season].clone_from(obs);
+        }
+        if let Some(ann_obs) = annual_group_obs.get(&(hydro_id, season)) {
+            annual_obs_by_season[season].clone_from(ann_obs);
+        }
+        if let Some(s) = stats_map.get(&(hydro_id, season)) {
+            stats_by_season[season] = (s.mean, s.std);
+        }
+        if let Some(s) = annual_stats_map.get(&(hydro_id, season)) {
+            annual_stats_by_season[season] = (s.mean_m3s, s.std_m3s);
+        }
+    }
+    let std_by_season: Vec<f64> = stats_by_season.iter().map(|&(_, s)| s).collect();
+
+    let mut max_orders: Vec<usize> = vec![initial_max_order; n_seasons];
+    let mut all_coeffs: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    for &idx in indices {
+        let est = &estimates[idx];
+        if est.season_id < n_seasons {
+            all_coeffs[est.season_id].clone_from(&est.coefficients);
+        }
+    }
+
+    // A season is "frozen" when its AR component has been driven to zero.
+    // ψ is still permitted to update via order-0 re-fits.
+    let mut frozen: Vec<bool> = vec![false; n_seasons];
+    for &idx in indices {
+        let sid = estimates[idx].season_id;
+        if estimates[idx].coefficients.is_empty() {
+            frozen[sid] = true;
+        }
+    }
+
+    let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
+    let annual_obs_refs: Vec<&[f64]> = annual_obs_by_season.iter().map(Vec::as_slice).collect();
+
+    loop {
+        // Detect failing seasons (negative contribution among the φ entries).
+        let mut failing_seasons: Vec<usize> = Vec::new();
+        for &idx in indices {
+            let season_id = estimates[idx].season_id;
+            if frozen[season_id] || estimates[idx].coefficients.is_empty() {
+                continue;
+            }
+            let current_order = estimates[idx].coefficients.len();
+            let result = validate_order_contributions(
+                season_id,
+                n_seasons,
+                current_order,
+                &all_coeffs,
+                &std_by_season,
+            );
+            if !result.valid {
+                all_reductions
+                    .entry(hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id,
+                        original_order: estimates[idx].coefficients.len(),
+                        reduced_order: result.max_valid_order,
+                        contributions: result.contributions,
+                        reason: ReductionReason::NegativeContribution,
+                    });
+                failing_seasons.push(season_id);
+            }
+        }
+        if failing_seasons.is_empty() {
+            break;
+        }
+
+        let mut any_reselected = false;
+        for &season_id in &failing_seasons {
+            if max_orders[season_id] == 0 {
+                continue;
+            }
+            max_orders[season_id] -= 1;
+
+            // Re-solve at the (possibly reduced) ceiling. When the ceiling has
+            // dropped to 0 we still solve the 1×1 extended YW so ψ is refreshed
+            // for the new (AR-empty) configuration.
+            let stats_s = stats_by_season[season_id];
+            if stats_s.1 == 0.0
+                || obs_by_season[season_id].len() < 2
+                || annual_obs_by_season[season_id].is_empty()
+                || annual_stats_by_season[season_id].1 == 0.0
+            {
+                // No data to refit — drop AR entirely and freeze.
+                for &idx in indices {
+                    if estimates[idx].season_id == season_id {
+                        estimates[idx].coefficients.clear();
+                        estimates[idx].residual_std_ratio = 1.0;
+                        all_coeffs[season_id].clear();
+                        frozen[season_id] = true;
+                    }
+                }
+                continue;
+            }
+
+            let n_obs = obs_by_season[season_id].len();
+            let selected_order = if max_orders[season_id] == 0 {
+                0
+            } else {
+                let facp = conditional_facp_partitioned(
+                    season_id,
+                    max_orders[season_id],
+                    n_seasons,
+                    &obs_refs,
+                    &stats_by_season,
+                    &annual_obs_refs,
+                    &annual_stats_by_season,
+                );
+                select_order_pacf_annual(&facp, n_obs, z_alpha).selected_order
+            };
+            let yw_result = estimate_periodic_ar_annual_coefficients(
+                season_id,
+                selected_order,
+                n_seasons,
+                &obs_refs,
+                &stats_by_season,
+                &annual_obs_refs,
+                &annual_stats_by_season,
+            );
+
+            // Annual stats live at prev_season under the storage convention
+            // (PDF time-index of A_{t-1}).
+            let prev_season = (season_id + n_seasons - 1) % n_seasons;
+            let (ann_mean, ann_std) = annual_stats_by_season[prev_season];
+            for &idx in indices {
+                if estimates[idx].season_id == season_id {
+                    estimates[idx]
+                        .coefficients
+                        .clone_from(&yw_result.coefficients);
+                    estimates[idx].residual_std_ratio = yw_result.residual_std_ratio;
+                    estimates[idx].annual = Some(cobre_core::scenario::AnnualComponent {
+                        coefficient: yw_result.annual_coefficient,
+                        mean_m3s: ann_mean,
+                        std_m3s: ann_std,
+                    });
+                    all_coeffs[season_id].clone_from(&yw_result.coefficients);
+                }
+            }
+
+            if max_orders[season_id] == 0 || yw_result.coefficients.is_empty() {
+                frozen[season_id] = true;
+                continue;
+            }
+
+            // Re-check φ_1 after the new YW solve. φ_1 < 0 is treated the same
+            // as in the initial prepass: drop AR (ψ retained from the order-0
+            // refit below).
+            if has_negative_phi1(&all_coeffs[season_id]) {
+                let original_order = all_coeffs[season_id].len();
+                all_reductions
+                    .entry(hydro_id)
+                    .or_default()
+                    .push(ContributionReduction {
+                        season_id,
+                        original_order,
+                        reduced_order: 0,
+                        contributions: Vec::new(),
+                        reason: ReductionReason::Phi1Negative,
+                    });
+                let yw0 = estimate_periodic_ar_annual_coefficients(
+                    season_id,
+                    0,
+                    n_seasons,
+                    &obs_refs,
+                    &stats_by_season,
+                    &annual_obs_refs,
+                    &annual_stats_by_season,
+                );
+                for &idx in indices {
+                    if estimates[idx].season_id == season_id {
+                        estimates[idx].coefficients.clear();
+                        estimates[idx].residual_std_ratio = yw0.residual_std_ratio;
+                        estimates[idx].annual = Some(cobre_core::scenario::AnnualComponent {
+                            coefficient: yw0.annual_coefficient,
+                            mean_m3s: ann_mean,
+                            std_m3s: ann_std,
+                        });
+                        all_coeffs[season_id].clear();
+                        frozen[season_id] = true;
+                    }
+                }
+            } else {
+                any_reselected = true;
+            }
+        }
+        if !any_reselected {
+            break;
+        }
+    }
 }
 
 /// Stage index entry: `(start_date, end_date, stage_id, season_id)`.

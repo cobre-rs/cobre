@@ -502,7 +502,10 @@ fn run_estimation(
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
             season_map,
-            use_annual_component: false,
+            use_annual_component: matches!(
+                config.estimation.order_selection,
+                cobre_io::config::OrderSelectionMethod::PacfAnnual
+            ),
         },
     )?;
 
@@ -585,7 +588,10 @@ fn run_partial_estimation(
             max_order,
             max_coeff_magnitude: config.estimation.max_coefficient_magnitude,
             season_map,
-            use_annual_component: false,
+            use_annual_component: matches!(
+                config.estimation.order_selection,
+                cobre_io::config::OrderSelectionMethod::PacfAnnual
+            ),
         },
     )?;
 
@@ -5839,6 +5845,187 @@ mod tests {
                 StochasticError::InsufficientData { .. }
             ),
             "error must be InsufficientData"
+        );
+    }
+
+    /// Build a `System` with two hydros on a 12-season (monthly) grid spanning
+    /// `n_years` study years, with no pre-loaded inflow models.
+    ///
+    /// This represents the state before estimation: only hydros and stages are
+    /// present, so `estimate_from_history` will follow the `FullEstimation` path.
+    #[allow(clippy::cast_possible_wrap)]
+    fn build_two_hydro_monthly_system(n_years: usize) -> System {
+        use cobre_core::{Bus, DeficitSegment, SystemBuilder};
+        let bus_id = EntityId(10);
+        let bus = Bus {
+            id: bus_id,
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: Some(f64::INFINITY),
+                cost_per_mwh: 3000.0,
+            }],
+            excess_cost: 0.0,
+        };
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let stages = make_monthly_stages_for_annual(n_years);
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![make_hydro(h1, bus_id), make_hydro(h2, bus_id)])
+            .stages(stages)
+            .build()
+            .expect("valid two-hydro monthly system")
+    }
+
+    /// Write `inflow_history.parquet` with synthetic monthly data for two hydros.
+    ///
+    /// Uses `synthetic_monthly_obs` to generate observations for hydros 1 and 2
+    /// with different base values so the series are distinct. Observations are
+    /// dated starting from 2000-01-01 and cover `n_years * 12` months per hydro.
+    fn write_monthly_inflow_history_two_hydros(path: &std::path::Path, n_years: usize) {
+        use arrow::array::{Date32Array, Float64Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let h1 = EntityId(1);
+        let h2 = EntityId(2);
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let date_to_days = |d: NaiveDate| -> i32 { i32::try_from((d - epoch).num_days()).unwrap() };
+
+        let obs_h1 = synthetic_monthly_obs(h1, n_years, 100.0, 5.0, 1.0);
+        let obs_h2 = synthetic_monthly_obs(h2, n_years, 200.0, 3.0, 0.5);
+
+        let mut ids: Vec<i32> = Vec::new();
+        let mut dates: Vec<i32> = Vec::new();
+        let mut values: Vec<f64> = Vec::new();
+
+        for &(eid, date, value) in obs_h1.iter().chain(obs_h2.iter()) {
+            ids.push(eid.0);
+            dates.push(date_to_days(date));
+            values.push(value);
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("hydro_id", DataType::Int32, false),
+            Field::new("date", DataType::Date32, false),
+            Field::new("value_m3s", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Date32Array::from(dates)),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )
+        .expect("valid batch");
+
+        let file = std::fs::File::create(path).expect("create parquet file");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("ArrowWriter");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+    }
+
+    /// `estimate_from_history` with `PacfAnnual` populates `InflowModel.annual`.
+    ///
+    /// Fixture: 2-hydro × 60-month (12 seasons × 5 years) synthetic monthly
+    /// history. Config has `order_selection = PacfAnnual`. Asserts that at
+    /// least one returned inflow model has `annual = Some(_)`.
+    #[test]
+    fn estimate_from_history_pacf_annual_populates_annual_field() {
+        use cobre_io::config::{EstimationConfig, OrderSelectionMethod};
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 5;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        // FullEstimation: only inflow_history.parquet, no stats or AR files.
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+        write_monthly_inflow_history_two_hydros(&scenarios.join("inflow_history.parquet"), N_YEARS);
+
+        let system = build_two_hydro_monthly_system(N_YEARS);
+
+        let mut config: Config = serde_json::from_str(MINIMAL_CONFIG_JSON).unwrap();
+        config.estimation = EstimationConfig {
+            max_order: 2,
+            order_selection: OrderSelectionMethod::PacfAnnual,
+            min_observations_per_season: 2,
+            max_coefficient_magnitude: None,
+        };
+
+        let (updated, report, path) = estimate_from_history(system, case_dir, &config)
+            .expect("full estimation with PacfAnnual must succeed");
+
+        assert_eq!(
+            path,
+            EstimationPath::FullEstimation,
+            "expected FullEstimation path"
+        );
+        assert!(report.is_some(), "FullEstimation must return Some(report)");
+
+        let models = updated.inflow_models();
+        assert!(
+            !models.is_empty(),
+            "estimation must produce at least one inflow model"
+        );
+        assert!(
+            models.iter().any(|m| m.annual.is_some()),
+            "PacfAnnual path must set annual=Some on at least one model"
+        );
+    }
+
+    /// `estimate_from_history` with classical `Pacf` keeps `InflowModel.annual = None`.
+    ///
+    /// Same fixture as `estimate_from_history_pacf_annual_populates_annual_field`
+    /// but with `order_selection = Pacf`. Asserts that every returned inflow
+    /// model has `annual = None` (regression: classical path unchanged).
+    #[test]
+    fn estimate_from_history_pacf_classical_keeps_annual_none() {
+        use cobre_io::config::{EstimationConfig, OrderSelectionMethod};
+        use tempfile::TempDir;
+
+        const N_YEARS: usize = 5;
+        let dir = TempDir::new().unwrap();
+        let case_dir = dir.path();
+
+        create_required_files(case_dir);
+        let scenarios = case_dir.join("scenarios");
+        std::fs::create_dir_all(&scenarios).unwrap();
+        write_monthly_inflow_history_two_hydros(&scenarios.join("inflow_history.parquet"), N_YEARS);
+
+        let system = build_two_hydro_monthly_system(N_YEARS);
+
+        let mut config: Config = serde_json::from_str(MINIMAL_CONFIG_JSON).unwrap();
+        config.estimation = EstimationConfig {
+            max_order: 2,
+            order_selection: OrderSelectionMethod::Pacf,
+            min_observations_per_season: 2,
+            max_coefficient_magnitude: None,
+        };
+
+        let (updated, report, path) = estimate_from_history(system, case_dir, &config)
+            .expect("full estimation with Pacf must succeed");
+
+        assert_eq!(
+            path,
+            EstimationPath::FullEstimation,
+            "expected FullEstimation path"
+        );
+        assert!(report.is_some(), "FullEstimation must return Some(report)");
+
+        let models = updated.inflow_models();
+        assert!(
+            !models.is_empty(),
+            "estimation must produce at least one inflow model"
+        );
+        assert!(
+            models.iter().all(|m| m.annual.is_none()),
+            "classical Pacf path must keep annual=None for every model"
         );
     }
 

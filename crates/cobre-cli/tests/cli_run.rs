@@ -279,3 +279,66 @@ fn test_run_quiet_suppresses_banner_and_summary() {
         .stderr(predicate::str::contains("COBRE v").not())
         .stderr(predicate::str::contains("Training complete in").not());
 }
+
+/// Config with `exports.stochastic = true` and `estimation.order_selection = "pacf_annual"`.
+const CONFIG_STOCHASTIC_PAR_A_JSON: &str = r#"{
+    "training": {
+        "forward_passes": 1,
+        "stopping_rules": [
+            { "type": "iteration_limit", "limit": 2 }
+        ],
+        "scenario_source": { "inflow": { "scheme": "in_sample" }, "seed": 42 }
+    },
+    "exports": { "stochastic": true },
+    "estimation": { "order_selection": "pacf_annual" }
+}"#;
+
+/// CLI run with `exports.stochastic = true` and `pacf_annual` order selection writes
+/// `output/stochastic/inflow_annual_component.parquet`. On a case with no hydros the
+/// file is written with zero data rows but a valid Arrow schema.
+#[test]
+fn cli_run_writes_inflow_annual_component_when_par_a_active() {
+    let dir = TempDir::new().unwrap();
+    // Reuse the existing fixture helpers; only swap in the stochastic config.
+    write_file(dir.path(), "config.json", CONFIG_STOCHASTIC_PAR_A_JSON);
+    write_file(dir.path(), "penalties.json", PENALTIES_JSON);
+    write_file(dir.path(), "stages.json", STAGES_JSON);
+    write_file(
+        dir.path(),
+        "initial_conditions.json",
+        INITIAL_CONDITIONS_JSON,
+    );
+    write_file(dir.path(), "system/buses.json", BUSES_JSON);
+    write_file(dir.path(), "system/lines.json", LINES_JSON);
+    write_file(dir.path(), "system/hydros.json", HYDROS_JSON);
+    write_file(dir.path(), "system/thermals.json", THERMALS_JSON);
+
+    let out = TempDir::new().unwrap();
+
+    cobre()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--output",
+            out.path().to_str().unwrap(),
+            "--quiet",
+        ])
+        .assert()
+        .success();
+
+    let parquet_path = out
+        .path()
+        .join("stochastic/inflow_annual_component.parquet");
+    assert!(
+        parquet_path.is_file(),
+        "stochastic/inflow_annual_component.parquet must exist"
+    );
+
+    // Round-trip through the parser: zero rows expected (no hydros in fixture).
+    let rows = cobre_io::scenarios::parse_inflow_annual_component(&parquet_path).unwrap();
+    assert_eq!(
+        rows.len(),
+        0,
+        "expected zero annual component rows for a case with no hydros"
+    );
+}

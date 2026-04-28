@@ -53,7 +53,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobre_core::{scenario::InflowModel, temporal::Stage, EntityId};
+use cobre_core::{EntityId, scenario::InflowModel, temporal::Stage};
 
 use crate::StochasticError;
 
@@ -646,15 +646,15 @@ fn fill_stage_arrays(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
+        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
 
-    use super::{resolve_season_id, PrecomputedPar};
+    use super::{PrecomputedPar, resolve_season_id};
 
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
         Stage {

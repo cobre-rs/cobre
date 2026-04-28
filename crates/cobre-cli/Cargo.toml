@@ -43,6 +43,7 @@ slow-tests = []
 [dev-dependencies]
 assert_cmd = "2"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+cobre-io = { version = "0.5.0", path = "../cobre-io" }
 predicates = "3"
 tempfile = "3"
 

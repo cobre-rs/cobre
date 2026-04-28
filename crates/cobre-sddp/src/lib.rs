@@ -99,7 +99,8 @@ pub use solver_stats::{
 // ── stochastic_summary ────────────────────────────────────────────────────────
 pub use stochastic_summary::{
     ArOrderSummary, StochasticSource, StochasticSummary, build_stochastic_summary,
-    estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    estimation_report_to_fitting_report, inflow_models_to_annual_component_rows,
+    inflow_models_to_ar_rows, inflow_models_to_stats_rows,
 };
 // ── stopping_rule ─────────────────────────────────────────────────────────────
 pub use stopping_rule::{StoppingMode, StoppingRule, StoppingRuleSet};

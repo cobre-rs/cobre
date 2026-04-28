@@ -37,6 +37,7 @@ WRITE_CALL_RE = re.compile(
             | write_noise_openings
             | write_inflow_seasonal_stats
             | write_inflow_ar_coefficients
+            | write_inflow_annual_component
             | write_correlation_json
             | write_load_seasonal_stats
             | write_fitting_report

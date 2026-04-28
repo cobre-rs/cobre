@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Annual component extension to the periodic AR inflow model. Selecting
+  `"order_selection": "pacf_annual"` in the estimation config activates the
+  PAR(p)-A path: the fitting pipeline emits a new `AnnualComponent` triple
+  (`coefficient`, `mean_m3s`, `std_m3s`) per (hydro, season) on top of the
+  classical AR coefficients, allowing the model to capture multi-year
+  hydrological persistence. The triple is exposed on `InflowModel.annual` and
+  is also written to a new output file
+  `output/stochastic/inflow_annual_component.parquet` (5 columns:
+  `hydro_id`, `stage_id`, `annual_coefficient`, `annual_mean_m3s`,
+  `annual_std_m3s`) by both the CLI and the Python bindings.
+
 ## [0.5.0] - 2026-04-25
 
 Major refactor. Consumers must update `config.json`, any code calling

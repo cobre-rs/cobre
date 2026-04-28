@@ -148,6 +148,7 @@ fn write_policy_checkpoint(
 /// - `noise_openings.parquet` — always
 /// - `inflow_seasonal_stats.parquet` — always
 /// - `inflow_ar_coefficients.parquet` — always
+/// - `inflow_annual_component.parquet` — always
 /// - `correlation.json` — always
 /// - `load_seasonal_stats.parquet` — only when any load model has `std_mw > 0`
 /// - `fitting_report.json` — only when `estimation_report` is `Some`
@@ -159,12 +160,14 @@ fn export_stochastic_artifacts_py(
 ) {
     use cobre_core::scenario::LoadModel;
     use cobre_io::output::{
-        write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
-        write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
+        write_correlation_json, write_fitting_report, write_inflow_annual_component,
+        write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
+        write_noise_openings,
     };
     use cobre_io::scenarios::LoadSeasonalStatsRow;
     use cobre_sddp::{
-        estimation_report_to_fitting_report, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+        estimation_report_to_fitting_report, inflow_models_to_annual_component_rows,
+        inflow_models_to_ar_rows, inflow_models_to_stats_rows,
     };
 
     let stochastic_dir = output_dir.join("stochastic");
@@ -192,10 +195,13 @@ fn export_stochastic_artifacts_py(
         eprintln!("cobre-python: stochastic export warning: inflow_ar_coefficients: {e}");
     }
 
-    // Annual component (PAR(p)-A) is wired via `write_inflow_annual_component`
-    // once estimation produces fitted annual rows; the writer exists in
-    // `cobre-io` and the CLI export site mirrors this gap. Both are wired
-    // together when the fitting pipeline populates `InflowModel.annual`.
+    let annual_rows = inflow_models_to_annual_component_rows(system.inflow_models());
+    if let Err(e) = write_inflow_annual_component(
+        &stochastic_dir.join("inflow_annual_component.parquet"),
+        &annual_rows,
+    ) {
+        eprintln!("cobre-python: stochastic export warning: inflow_annual_component: {e}");
+    }
 
     if let Err(e) = write_correlation_json(
         &stochastic_dir.join("correlation.json"),

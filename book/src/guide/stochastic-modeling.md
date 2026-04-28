@@ -196,6 +196,35 @@ in the methodology reference.
 
 ---
 
+### Annual component (PAR(p)-A)
+
+Some hydro systems show persistence that spans more than one or two months — the kind of
+year-long memory that a standard PAR(p) model cannot capture with a few short lags. The
+annual component extension (PAR(p)-A) addresses this by adding one extra term to the
+autoregressive equation: the rolling 12-month average of the inflow series, which acts
+as a slow-moving background signal.
+
+**When to use it.** Enable the annual component when your historical inflow series
+displays multi-year persistence or when a standard PAR model leaves significant residual
+autocorrelation at annual lags. It is most useful for systems with large upstream
+catchments where wet or dry conditions accumulate over an entire hydrological year.
+
+**How to enable it.** Set `"order_selection": "pacf_annual"` in the `estimation` block
+of `config.json`. No other configuration change is required; Cobre detects the setting
+and extends the estimation pipeline automatically.
+
+**What it produces.** In addition to the standard estimation outputs, Cobre writes
+`inflow_annual_component.parquet` to the output directory. This file contains five
+columns — `hydro_id`, `stage_id`, `annual_coefficient`, `annual_mean_m3s`, and
+`annual_std_m3s` — one row per (hydro, stage) pair. The `AnnualComponent` type on
+`InflowModel` carries the same three values at runtime.
+
+For the mathematical derivation of the PAR(p)-A model, see
+[PAR(p) Autoregressive Models](https://cobre-rs.github.io/cobre-docs/theory/par-model.html)
+in the methodology reference.
+
+---
+
 ## Estimation from History
 
 Instead of supplying pre-computed seasonal statistics in

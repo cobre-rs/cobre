@@ -2497,13 +2497,18 @@ pub struct AnnualSeasonalStats {
     pub std_m3s: f64,
 }
 
-/// Compute `(μ^A_m, σ^A_m)` per (entity, season) from chronological observations.
+/// Estimate the per-season sample statistics `(μ^A_m, σ^A_m)` of the rolling
+/// 12-month average from chronological observations.
 ///
-/// Implements `rel_parpa.pdf` eqs. 11, 17, 18, with one intentional divergence
-/// from eq. 18: the standard deviation estimator uses the **Bessel-corrected
-/// divisor `1/(N-1)`** to match the convention used workspace-wide by
-/// [`estimate_seasonal_stats`]. The numerical difference is negligible at typical
-/// historical sample sizes (N ≥ 20 years).
+/// For each (entity, season) pair, `μ^A_m` is the sample mean of the rolling
+/// 12-month average `A_t = (1/12) · Σ_{j=0..11} z[t-j]` values whose target
+/// date falls in season `m`. `σ^A_m` is the **Bessel-corrected sample standard
+/// deviation** using divisor `1/(N-1)`, matching the convention used
+/// workspace-wide by [`estimate_seasonal_stats`]. This diverges from the
+/// population formula `1/N`; the numerical difference is negligible at typical
+/// historical sample sizes (N ≥ 20 years). The PAR(p)-A runtime coefficient is
+/// then `ψ̂ = ψ · σ_m / σ^A_m`, which requires `σ^A_m > 0` (enforced by
+/// the output validator in `cobre-io`).
 ///
 /// ## Algorithm
 ///

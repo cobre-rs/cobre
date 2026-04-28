@@ -25,14 +25,16 @@ use cobre_comm::{
 };
 use cobre_core::{System, TrainingEvent};
 use cobre_io::output::{
-    write_correlation_json, write_fitting_report, write_inflow_ar_coefficients,
-    write_inflow_seasonal_stats, write_load_seasonal_stats, write_noise_openings,
+    write_correlation_json, write_fitting_report, write_inflow_annual_component,
+    write_inflow_ar_coefficients, write_inflow_seasonal_stats, write_load_seasonal_stats,
+    write_noise_openings,
 };
 use cobre_io::scenarios::LoadSeasonalStatsRow;
 use cobre_sddp::{
     EstimationReport, PrepareHydroModelsResult, PrepareStochasticResult, StudySetup,
-    build_hydro_model_summary, estimation_report_to_fitting_report, inflow_models_to_ar_rows,
-    inflow_models_to_stats_rows, prepare_hydro_models, prepare_stochastic,
+    build_hydro_model_summary, estimation_report_to_fitting_report,
+    inflow_models_to_annual_component_rows, inflow_models_to_ar_rows, inflow_models_to_stats_rows,
+    prepare_hydro_models, prepare_stochastic,
     setup::{ConstructionConfig, build_ncs_factor_entries, load_load_factors_for_stochastic},
 };
 use cobre_solver::HighsSolver;
@@ -1838,10 +1840,17 @@ fn export_stochastic_artifacts(
         }
     }
 
-    // Annual component (PAR(p)-A) is wired via `write_inflow_annual_component`
-    // once estimation produces fitted annual rows; the writer exists in
-    // `cobre-io` and Python parity will be wired when the fitting pipeline
-    // populates `InflowModel.annual`.
+    let annual_rows = inflow_models_to_annual_component_rows(system.inflow_models());
+    if let Err(e) = write_inflow_annual_component(
+        &stochastic_dir.join("inflow_annual_component.parquet"),
+        &annual_rows,
+    ) {
+        if !quiet {
+            let _ = stderr.write_line(&format!(
+                "warning: stochastic export failed (inflow_annual_component): {e}"
+            ));
+        }
+    }
 
     if let Err(e) = write_correlation_json(
         &stochastic_dir.join("correlation.json"),

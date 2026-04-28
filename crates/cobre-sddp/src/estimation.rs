@@ -53,32 +53,32 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use cobre_core::scenario::AnnualComponent;
 use cobre_core::{EntityId, System};
 use cobre_io::{
-    parse_inflow_ar_coefficients, parse_inflow_history,
+    Config, FileManifest, LoadError, ValidationContext, parse_inflow_ar_coefficients,
+    parse_inflow_history,
     scenarios::{
-        assemble_inflow_models, InflowAnnualComponentRow, InflowArCoefficientRow,
-        InflowSeasonalStatsRow,
+        InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
+        assemble_inflow_models,
     },
-    validate_structure, Config, FileManifest, LoadError, ValidationContext,
+    validate_structure,
 };
 use cobre_stochastic::{
+    StochasticError,
     par::aggregate::aggregate_observations_to_season,
     par::contribution::{
         check_negative_contributions, compute_contributions, find_max_valid_order,
         has_negative_phi1,
     },
     par::fitting::{
-        conditional_facp_partitioned, estimate_annual_seasonal_stats,
-        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
-        estimate_periodic_ar_annual_coefficients, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf, select_order_pacf_annual, AnnualSeasonalStats, ArCoefficientEstimate,
-        SeasonalStats,
+        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
+        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
+        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
     },
-    StochasticError,
 };
 
 /// Classification of the estimation path taken for a given input file manifest.
@@ -1246,10 +1246,34 @@ fn estimate_ar_with_pacf_annual(
     // ── 2. Build stage index for date-to-season mapping. ─────────────────────
     let (stage_index, stats_map, n_seasons) = build_pacf_stage_lookups(stages, seasonal_stats);
 
-    // ── 3. Group Z observations by (hydro, season). ──────────────────────────
+    // ── 3. Group Z observations by (hydro, season) + per-bucket year start. ──
     let group_obs = group_observations_by_season(observations, hydro_ids, &stage_index, season_map);
+    let group_z_year_starts: HashMap<(EntityId, usize), i32> = {
+        let entity_set: HashSet<EntityId> = hydro_ids.iter().copied().collect();
+        let mut starts: HashMap<(EntityId, usize), i32> = HashMap::new();
+        for &(entity_id, date, _value) in observations {
+            if !entity_set.contains(&entity_id) {
+                continue;
+            }
+            let Some(season_id) = find_season_for_date(&stage_index, date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(date)))
+            else {
+                continue;
+            };
+            let y = date.year();
+            starts
+                .entry((entity_id, season_id))
+                .and_modify(|cur| {
+                    if y < *cur {
+                        *cur = y;
+                    }
+                })
+                .or_insert(y);
+        }
+        starts
+    };
 
-    // ── 4. Build rolling-window A_t groups by (hydro, season). ──────────────
+    // ── 4. Build rolling-window A_t groups by (hydro, season) + year start. ──
     //
     // Reproduce the same chronological grouping as `estimate_annual_seasonal_stats`
     // so that `annual_observations_by_season[s]` aligns with `obs_by_season[s]`.
@@ -1272,7 +1296,13 @@ fn estimate_ar_with_pacf_annual(
     // A_{t-1} = mean(z[t-12..t-1]) is stored under the season of its own
     // PDF time-index (t-1), i.e., the season of `group[i + 11]` when t = i + 12.
     // YW callers retrieve it via `prev_season = (m - 1) mod n_seasons`.
+    //
+    // The year of target_date is the PDF year of A_{t-1} for that bucket.
+    // Tracking the minimum across all entries gives the bucket's first PDF
+    // year — needed by `cross_correlation_z_a` to align A and Z by absolute
+    // year rather than by bucket index.
     let mut annual_group_obs: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+    let mut annual_group_year_starts: HashMap<(EntityId, usize), i32> = HashMap::new();
     for &entity_id in hydro_ids {
         let Some(group) = entity_obs.get(&entity_id) else {
             continue;
@@ -1289,6 +1319,15 @@ fn estimate_ar_with_pacf_annual(
                 .entry((entity_id, season_id))
                 .or_default()
                 .push(mean_a);
+            let y = target_date.year();
+            annual_group_year_starts
+                .entry((entity_id, season_id))
+                .and_modify(|cur| {
+                    if y < *cur {
+                        *cur = y;
+                    }
+                })
+                .or_insert(y);
         }
     }
 
@@ -1302,6 +1341,8 @@ fn estimate_ar_with_pacf_annual(
         let mut annual_obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
         let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
         let mut annual_stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+        let mut z_year_starts: Vec<i32> = vec![0; n_seasons];
+        let mut a_year_starts: Vec<i32> = vec![0; n_seasons];
 
         for season in 0..n_seasons {
             if let Some(obs) = group_obs.get(&(hydro_id, season)) {
@@ -1315,6 +1356,12 @@ fn estimate_ar_with_pacf_annual(
             }
             if let Some(ann_stats) = annual_stats_map.get(&(hydro_id, season)) {
                 annual_stats_by_season[season] = (ann_stats.mean_m3s, ann_stats.std_m3s);
+            }
+            if let Some(&y) = group_z_year_starts.get(&(hydro_id, season)) {
+                z_year_starts[season] = y;
+            }
+            if let Some(&y) = annual_group_year_starts.get(&(hydro_id, season)) {
+                a_year_starts[season] = y;
             }
         }
 
@@ -1358,8 +1405,10 @@ fn estimate_ar_with_pacf_annual(
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
+                &z_year_starts,
                 &annual_obs_refs,
                 &annual_stats_by_season,
+                &a_year_starts,
             );
             let pacf_result = select_order_pacf_annual(&facp_values, n_obs, z_alpha);
             let yw_result = estimate_periodic_ar_annual_coefficients(
@@ -1368,8 +1417,10 @@ fn estimate_ar_with_pacf_annual(
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
+                &z_year_starts,
                 &annual_obs_refs,
                 &annual_stats_by_season,
+                &a_year_starts,
             );
 
             // Look up annual stats for the AnnualComponent triple. The YW
@@ -1402,7 +1453,9 @@ fn estimate_ar_with_pacf_annual(
         n_seasons,
         hydro_ids,
         &group_obs,
+        &group_z_year_starts,
         &annual_group_obs,
+        &annual_group_year_starts,
         &stats_map,
         &annual_stats_map,
         max_order,
@@ -1433,12 +1486,15 @@ fn estimate_ar_with_pacf_annual(
 /// and ψ are updated, but the AR portion is what shrinks.
 ///
 /// Returns a map of reductions for report building.
+#[allow(clippy::too_many_arguments)]
 fn apply_annual_prepass_reductions(
     estimates: &mut [ArCoefficientEstimate],
     n_seasons: usize,
     hydro_ids: &[EntityId],
     group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    group_z_year_starts: &HashMap<(EntityId, usize), i32>,
     annual_group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    annual_group_year_starts: &HashMap<(EntityId, usize), i32>,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     annual_stats_map: &HashMap<(EntityId, usize), &AnnualSeasonalStats>,
     initial_max_order: usize,
@@ -1501,7 +1557,9 @@ fn apply_annual_prepass_reductions(
             hydro_id,
             indices,
             group_obs,
+            group_z_year_starts,
             annual_group_obs,
+            annual_group_year_starts,
             stats_map,
             annual_stats_map,
             initial_max_order,
@@ -1535,7 +1593,9 @@ fn reduce_entity_orders_annual(
     hydro_id: EntityId,
     indices: &[usize],
     group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    group_z_year_starts: &HashMap<(EntityId, usize), i32>,
     annual_group_obs: &HashMap<(EntityId, usize), Vec<f64>>,
+    annual_group_year_starts: &HashMap<(EntityId, usize), i32>,
     stats_map: &HashMap<(EntityId, usize), &SeasonalStats>,
     annual_stats_map: &HashMap<(EntityId, usize), &AnnualSeasonalStats>,
     initial_max_order: usize,
@@ -1546,6 +1606,8 @@ fn reduce_entity_orders_annual(
     let mut annual_obs_by_season: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
     let mut stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
     let mut annual_stats_by_season: Vec<(f64, f64)> = vec![(0.0, 0.0); n_seasons];
+    let mut z_year_starts: Vec<i32> = vec![0; n_seasons];
+    let mut a_year_starts: Vec<i32> = vec![0; n_seasons];
     for season in 0..n_seasons {
         if let Some(obs) = group_obs.get(&(hydro_id, season)) {
             obs_by_season[season].clone_from(obs);
@@ -1558,6 +1620,12 @@ fn reduce_entity_orders_annual(
         }
         if let Some(s) = annual_stats_map.get(&(hydro_id, season)) {
             annual_stats_by_season[season] = (s.mean_m3s, s.std_m3s);
+        }
+        if let Some(&y) = group_z_year_starts.get(&(hydro_id, season)) {
+            z_year_starts[season] = y;
+        }
+        if let Some(&y) = annual_group_year_starts.get(&(hydro_id, season)) {
+            a_year_starts[season] = y;
         }
     }
     let std_by_season: Vec<f64> = stats_by_season.iter().map(|&(_, s)| s).collect();
@@ -1656,8 +1724,10 @@ fn reduce_entity_orders_annual(
                     n_seasons,
                     &obs_refs,
                     &stats_by_season,
+                    &z_year_starts,
                     &annual_obs_refs,
                     &annual_stats_by_season,
+                    &a_year_starts,
                 );
                 select_order_pacf_annual(&facp, n_obs, z_alpha).selected_order
             };
@@ -1667,8 +1737,10 @@ fn reduce_entity_orders_annual(
                 n_seasons,
                 &obs_refs,
                 &stats_by_season,
+                &z_year_starts,
                 &annual_obs_refs,
                 &annual_stats_by_season,
+                &a_year_starts,
             );
 
             // Annual stats live at prev_season under the storage convention
@@ -1716,8 +1788,10 @@ fn reduce_entity_orders_annual(
                     n_seasons,
                     &obs_refs,
                     &stats_by_season,
+                    &z_year_starts,
                     &annual_obs_refs,
                     &annual_stats_by_season,
+                    &a_year_starts,
                 );
                 for &idx in indices {
                     if estimates[idx].season_id == season_id {
@@ -2505,8 +2579,8 @@ mod tests {
     #[test]
     fn test_with_scenario_models_replaces_fields() {
         use cobre_core::{
-            scenario::{CorrelationModel, InflowModel},
             Bus, DeficitSegment,
+            scenario::{CorrelationModel, InflowModel},
         };
 
         let bus = Bus {

@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
+    EntityId,
     scenario::{
         AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
 use crate::StochasticError;
@@ -1654,15 +1654,25 @@ pub fn build_periodic_yw_matrix_into(
 ///
 /// # Cross-year alignment
 ///
-/// When `lag > 0`, the `Z` series at the lagged season may belong to an earlier
-/// calendar year than the `A` series. The number of year boundaries crossed
-/// equals `lag / n_seasons` when `lag >= n_seasons`, or 1 when the lagged season
-/// index is **greater than** `ref_season` (wrap-around), otherwise 0.
+/// Two distinct year offsets compose:
+///
+/// 1. **Bucket year offset** (`year_diff`). The `A` and `Z` buckets can have
+///    different starting PDF years per season. For monthly NEWAVE data starting
+///    on January, `Z` starts at year `Y0` for every season but `A` starts at
+///    `Y0 + 1` for seasons 0..10 and `Y0` for season 11 (because the rolling
+///    12-month window needs a full year of look-back). Calling code passes
+///    `z_year_starts` and `a_year_starts` (one entry per season) so that the
+///    pairing aligns by absolute PDF year, not by bucket index.
+///
+/// 2. **Lag year wrap** (`pdf_year_back_shift`). When stepping back `lag` months
+///    from `ref_season`, if the lagged season index wraps (`lag_season >
+///    ref_season` for `lag < n_seasons`, or `lag / n_seasons` for larger lags),
+///    `Z`'s PDF year is one (or more) earlier than `A`'s.
 ///
 /// **Lag-0 special case**: when `lag == 0`, `A` and `Z` refer to the same
-/// season and the same calendar year, so `years_crossed = 0` unconditionally.
-/// Using `usize::from(lag_season >= ref_season)` for `lag_season == ref_season`
-/// would incorrectly cross a year boundary, so lag 0 is handled explicitly.
+/// season and the same regression year, so `pdf_year_back_shift = 0`
+/// unconditionally — without this guard the `lag_season >= ref_season` branch
+/// would falsely cross a year boundary.
 ///
 /// # Parameters
 ///
@@ -1671,8 +1681,11 @@ pub fn build_periodic_yw_matrix_into(
 /// - `n_seasons` — total number of seasons in the periodic cycle.
 /// - `observations_by_season` — `Z` observations grouped by season, chronological.
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   When all entries are equal, the legacy by-index pairing is recovered.
 /// - `annual_observations_by_season` — `A` observations grouped by season.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
 ///
 /// # Returns
 ///
@@ -1686,8 +1699,10 @@ pub fn cross_correlation_z_a(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
     annual_observations_by_season: &[&[f64]],
     annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> f64 {
     let (mu_a, std_a) = annual_stats_by_season[ref_season];
     let lag_season = (ref_season + n_seasons - lag % n_seasons) % n_seasons;
@@ -1701,14 +1716,9 @@ pub fn cross_correlation_z_a(
     let a_obs = annual_observations_by_season[ref_season];
     let z_obs = observations_by_season[lag_season];
 
-    // Cross-year alignment.
-    //
-    // When lag == 0, A and Z refer to the same season and the same year, so
-    // years_crossed = 0 unconditionally. The branch
-    //   usize::from(lag_season >= ref_season)
-    // would return 1 when lag_season == ref_season (same season, lag 0), which
-    // is wrong for a cross-series correlation — it would skip a year.
-    let years_crossed = if lag == 0 {
+    // Lag-direction year wrap: how many year boundaries the lag traverses
+    // backward from ref_season to lag_season.
+    let pdf_year_back_shift = if lag == 0 {
         0
     } else if lag < n_seasons {
         usize::from(lag_season >= ref_season)
@@ -1716,8 +1726,23 @@ pub fn cross_correlation_z_a(
         lag / n_seasons
     };
 
-    let a_start = years_crossed;
-    let n_pairs = a_obs.len().saturating_sub(years_crossed).min(z_obs.len());
+    // Bucket year offset between A's first PDF year and Z's first PDF year.
+    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[lag_season]);
+    let shift = year_diff - pdf_year_back_shift as i64;
+
+    // Pairing is `(a_obs[a_start + k], z_obs[z_start + k])` for k = 0..n_pairs.
+    // shift > 0 ⇒ skip extra Z entries at start (Z starts earlier); shift < 0 ⇒
+    // skip extra A entries at start (A starts earlier).
+    let (a_start, z_start) = if shift >= 0 {
+        (0_usize, shift as usize)
+    } else {
+        ((-shift) as usize, 0_usize)
+    };
+
+    let n_pairs = a_obs
+        .len()
+        .saturating_sub(a_start)
+        .min(z_obs.len().saturating_sub(z_start));
 
     // Insufficient data guard.
     if n_pairs == 0 {
@@ -1727,7 +1752,7 @@ pub fn cross_correlation_z_a(
     // Cross-covariance with population divisor (1/N).
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
-        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[i] - mu_z);
+        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
     }
     #[allow(clippy::cast_precision_loss)]
     {
@@ -1750,10 +1775,15 @@ pub fn cross_correlation_z_a(
 ///
 /// # Cross-year alignment
 ///
-/// `Z` lives at season `(ref_season + 1) % n_seasons`. When that wraps to
-/// season 0, the `Z` observation belongs to the **next** calendar year relative
-/// to `A`, so `years_crossed = 1`. Otherwise, `Z` is in the same year as `A`
-/// and `years_crossed = 0`.
+/// Two distinct year offsets compose:
+///
+/// 1. **Bucket year offset** (`year_diff`). `A` and `Z` buckets can have
+///    different starting PDF years per season (see [`cross_correlation_z_a`]
+///    docs). Pairing aligns by absolute PDF year using `z_year_starts` and
+///    `a_year_starts`.
+///
+/// 2. **Lag year wrap forward**. When `z_season = (ref_season + 1) % n_seasons`
+///    wraps to 0, `Z` belongs to the next regression year relative to `A`.
 ///
 /// # Parameters
 ///
@@ -1761,8 +1791,10 @@ pub fn cross_correlation_z_a(
 /// - `n_seasons` — total number of seasons in the periodic cycle.
 /// - `observations_by_season` — `Z` observations grouped by season, chronological.
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
 /// - `annual_observations_by_season` — `A` observations grouped by season.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
 ///
 /// # Returns
 ///
@@ -1775,8 +1807,10 @@ pub fn cross_correlation_a_z_neg1(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
     annual_observations_by_season: &[&[f64]],
     annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> f64 {
     let (mu_a, std_a) = annual_stats_by_season[ref_season];
     let z_season = (ref_season + 1) % n_seasons;
@@ -1790,15 +1824,23 @@ pub fn cross_correlation_a_z_neg1(
     let a_obs = annual_observations_by_season[ref_season];
     let z_obs = observations_by_season[z_season];
 
-    // Cross-year alignment.
-    //
-    // Z is at season (ref_season + 1) % n_seasons. When that wraps to 0, Z
-    // belongs to the next calendar year, so one year boundary is crossed.
-    let years_crossed = usize::from(z_season == 0);
+    // Z is one PDF month after A. When (ref_season + 1) wraps to 0, the
+    // regression year of Z is one greater than A's.
+    let pdf_year_forward_shift = usize::from(z_season == 0);
 
-    // A starts at the first year; Z starts years_crossed years ahead.
-    let z_start = years_crossed;
-    let n_pairs = z_obs.len().saturating_sub(years_crossed).min(a_obs.len());
+    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[z_season]);
+    let shift = year_diff + pdf_year_forward_shift as i64;
+
+    let (a_start, z_start) = if shift >= 0 {
+        (0_usize, shift as usize)
+    } else {
+        ((-shift) as usize, 0_usize)
+    };
+
+    let n_pairs = a_obs
+        .len()
+        .saturating_sub(a_start)
+        .min(z_obs.len().saturating_sub(z_start));
 
     // Insufficient data guard.
     if n_pairs == 0 {
@@ -1808,7 +1850,7 @@ pub fn cross_correlation_a_z_neg1(
     // Cross-covariance with population divisor (1/N).
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
-        gamma += (a_obs[i] - mu_a) * (z_obs[z_start + i] - mu_z);
+        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
     }
     #[allow(clippy::cast_precision_loss)]
     {
@@ -1854,9 +1896,13 @@ pub fn cross_correlation_a_z_neg1(
 /// - `n_seasons` — total number of seasons in the periodic cycle.
 /// - `observations_by_season` — `Z` observations grouped by season, chronological.
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   Threaded through to the cross-correlation helpers for absolute-year
+///   alignment between `A` and `Z` (see [`cross_correlation_z_a`] docs).
 /// - `annual_observations_by_season` — annual component `A` observations grouped by
-///   season. Entry `[s][y]` corresponds to the same year `y` as `observations_by_season[s][y]`.
+///   season.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
 ///
 /// # Returns
 ///
@@ -1874,8 +1920,10 @@ pub fn build_extended_periodic_yw_matrix(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
     annual_observations_by_season: &[&[f64]],
     annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> (Vec<f64>, Vec<f64>) {
     let dim = order + 1;
     let prev_season = (season + n_seasons - 1) % n_seasons;
@@ -1924,8 +1972,10 @@ pub fn build_extended_periodic_yw_matrix(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            z_year_starts,
             annual_observations_by_season,
             annual_stats_by_season,
+            a_year_starts,
         );
         matrix[i * dim + order] = rho;
         matrix[order * dim + i] = rho; // symmetric
@@ -1940,8 +1990,10 @@ pub fn build_extended_periodic_yw_matrix(
         n_seasons,
         observations_by_season,
         stats_by_season,
+        z_year_starts,
         annual_observations_by_season,
         annual_stats_by_season,
+        a_year_starts,
     );
 
     (matrix, rhs)
@@ -2082,8 +2134,10 @@ pub(crate) fn assemble_partitioned_covariance(
     n_seasons: usize,
     obs_z: &[&[f64]],
     stats_z: &[(f64, f64)],
+    z_year_starts: &[i32],
     obs_a: &[&[f64]],
     stats_a: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> PartitionedCov {
     let prev_season = (season + n_seasons - 1) % n_seasons;
 
@@ -2121,8 +2175,17 @@ pub(crate) fn assemble_partitioned_covariance(
     // loop body is never entered.
     for i in 0..k.saturating_sub(1) {
         let lag = i;
-        let rho =
-            cross_correlation_z_a(prev_season, lag, n_seasons, obs_z, stats_z, obs_a, stats_a);
+        let rho = cross_correlation_z_a(
+            prev_season,
+            lag,
+            n_seasons,
+            obs_z,
+            stats_z,
+            z_year_starts,
+            obs_a,
+            stats_a,
+            a_year_starts,
+        );
         sigma_22[i * k + (k - 1)] = rho;
         sigma_22[(k - 1) * k + i] = rho;
     }
@@ -2141,8 +2204,16 @@ pub(crate) fn assemble_partitioned_covariance(
         *entry = rho;
     }
     // Row 0 (Z_t) with A_{t−1}.
-    sigma_12[k - 1] =
-        cross_correlation_a_z_neg1(prev_season, n_seasons, obs_z, stats_z, obs_a, stats_a);
+    sigma_12[k - 1] = cross_correlation_a_z_neg1(
+        prev_season,
+        n_seasons,
+        obs_z,
+        stats_z,
+        z_year_starts,
+        obs_a,
+        stats_a,
+        a_year_starts,
+    );
 
     // Row 1 (Z_{t−k}) with Z-block of conditioning set.
     // Position j (0..k−2) of this row is Corr(Z_{t−k}, Z_{t−1−j}).
@@ -2161,8 +2232,10 @@ pub(crate) fn assemble_partitioned_covariance(
         n_seasons,
         obs_z,
         stats_z,
+        z_year_starts,
         obs_a,
         stats_a,
+        a_year_starts,
     );
 
     PartitionedCov {
@@ -2194,9 +2267,13 @@ pub(crate) fn assemble_partitioned_covariance(
 /// - `observations_by_season` — periodic inflow series `Z`, grouped by season.
 ///   Entry `[s][y]` is the standardised observation for season `s` in year `y`.
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   Used by the cross-correlation helpers to align `A` and `Z` by absolute
+///   PDF year rather than by bucket index — required for monthly NEWAVE data
+///   where `A` buckets start one year later than `Z` for most seasons.
 /// - `annual_observations_by_season` — annual component `A`, grouped by season.
-///   Entry `[s][y]` aligns with `observations_by_season[s][y]`.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
 ///
 /// # Returns
 ///
@@ -2214,8 +2291,10 @@ pub fn conditional_facp_partitioned(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
     annual_observations_by_season: &[&[f64]],
     annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> Vec<f64> {
     if max_order == 0 {
         return Vec::new();
@@ -2236,8 +2315,10 @@ pub fn conditional_facp_partitioned(
             n_seasons,
             observations_by_season,
             stats_by_season,
+            z_year_starts,
             annual_observations_by_season,
             annual_stats_by_season,
+            a_year_starts,
         );
 
         // ------------------------------------------------------------------
@@ -2712,8 +2793,10 @@ pub fn estimate_periodic_ar_annual_coefficients(
     n_seasons: usize,
     observations_by_season: &[&[f64]],
     stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
     annual_observations_by_season: &[&[f64]],
     annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
 ) -> PeriodicYwAnnualResult {
     let zero_result = PeriodicYwAnnualResult {
         coefficients: Vec::new(),
@@ -2727,8 +2810,10 @@ pub fn estimate_periodic_ar_annual_coefficients(
         n_seasons,
         observations_by_season,
         stats_by_season,
+        z_year_starts,
         annual_observations_by_season,
         annual_stats_by_season,
+        a_year_starts,
     );
 
     let dim = selected_order + 1;
@@ -2789,9 +2874,9 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        build_periodic_yw_matrix, estimate_periodic_ar_coefficients, periodic_autocorrelation,
-        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
-        solve_linear_system, BUILD_PERIODIC_YW_MATRIX_CALL_COUNT,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
+        estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
+        select_order_aic, select_order_pacf, select_order_pacf_annual, solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -2800,11 +2885,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
+        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -3162,7 +3247,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
+        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -4044,8 +4129,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-                                  // We just verify both are valid; they may or may not differ depending
-                                  // on the specific data, but the matrix IS valid.
+        // We just verify both are valid; they may or may not differ depending
+        // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -5020,7 +5105,15 @@ mod tests {
         let season = 0_usize;
 
         let (ext_mat, ext_rhs) = build_extended_periodic_yw_matrix(
-            season, order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+            season,
+            order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
         let (cls_mat, cls_rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, &stats);
 
@@ -5061,7 +5154,15 @@ mod tests {
         let n_seasons = 2_usize;
 
         let (mat, _rhs) = build_extended_periodic_yw_matrix(
-            0, order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+            0,
+            order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
         let dim = order + 1;
         for i in 0..dim {
@@ -5093,7 +5194,15 @@ mod tests {
         let season = 0_usize;
 
         let (mat, rhs) = build_extended_periodic_yw_matrix(
-            season, 0, n_seasons, obs, &stats, ann_obs, &ann_stats,
+            season,
+            0,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         assert_eq!(mat.len(), 1, "1×1 matrix expected");
@@ -5106,8 +5215,16 @@ mod tests {
 
         // rhs[0] must equal cross_correlation_a_z_neg1 for prev_season.
         let prev_season = (season + n_seasons - 1) % n_seasons; // = 1
-        let expected_rhs =
-            cross_correlation_a_z_neg1(prev_season, n_seasons, obs, &stats, ann_obs, &ann_stats);
+        let expected_rhs = cross_correlation_a_z_neg1(
+            prev_season,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert!(
             (rhs[0] - expected_rhs).abs() < 1e-12,
             "rhs[0]={} expected={expected_rhs}",
@@ -5129,8 +5246,17 @@ mod tests {
         let ann_obs: &[&[f64]] = &[a0, a1];
         let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
 
-        let (mat, _rhs) =
-            build_extended_periodic_yw_matrix(0, 1, 2, obs, &stats, ann_obs, &ann_stats);
+        let (mat, _rhs) = build_extended_periodic_yw_matrix(
+            0,
+            1,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
 
         // dim = 2, entries at [0] and [3] are diagonal.
         assert!((mat[0] - 1.0).abs() < 1e-12, "diagonal [0,0] = {}", mat[0]);
@@ -5201,8 +5327,17 @@ mod tests {
         let ann_obs: &[&[f64]] = &[a0, a1];
         let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
 
-        let (mat, rhs) =
-            build_extended_periodic_yw_matrix(0, 2, 2, obs, &stats, ann_obs, &ann_stats);
+        let (mat, rhs) = build_extended_periodic_yw_matrix(
+            0,
+            2,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
 
         assert_eq!(mat.len(), 9, "3×3 matrix must have 9 entries");
         assert_eq!(rhs.len(), 3, "rhs must have 3 entries");
@@ -5284,7 +5419,17 @@ mod tests {
         let ann_obs: &[&[f64]] = &[a_varied];
         let ann_stats = [pop_mean_std_ann(a_varied)];
 
-        let result = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        let result = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert_eq!(result, 0.0, "zero Z-std must return 0.0, got {result}");
 
         // Constant A series => std = 0.
@@ -5295,7 +5440,17 @@ mod tests {
         let ann_obs2: &[&[f64]] = &[a_const];
         let ann_stats2 = [(3.0_f64, 0.0_f64)]; // std = 0 for A
 
-        let result2 = cross_correlation_z_a(0, 0, 1, obs2, &stats2, ann_obs2, &ann_stats2);
+        let result2 = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs2,
+            &stats2,
+            &[0_i32; 32],
+            ann_obs2,
+            &ann_stats2,
+            &[0_i32; 32],
+        );
         assert_eq!(result2, 0.0, "zero A-std must return 0.0, got {result2}");
     }
 
@@ -5314,7 +5469,16 @@ mod tests {
         let ann_stats = [(2.0_f64, 0.0_f64), pop_mean_std_ann(a1)];
 
         // ref_season=0, z_season=(0+1)%2=1; std_a=0 => return 0.0
-        let result = cross_correlation_a_z_neg1(0, 2, obs, &stats, ann_obs, &ann_stats);
+        let result = cross_correlation_a_z_neg1(
+            0,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert_eq!(result, 0.0, "zero A-std must return 0.0, got {result}");
 
         // Now constant Z at season 1.
@@ -5325,7 +5489,16 @@ mod tests {
         let ann_obs2: &[&[f64]] = &[a_varied, a1];
         let ann_stats2 = [pop_mean_std_ann(a_varied), pop_mean_std_ann(a1)];
 
-        let result2 = cross_correlation_a_z_neg1(0, 2, obs2, &stats2, ann_obs2, &ann_stats2);
+        let result2 = cross_correlation_a_z_neg1(
+            0,
+            2,
+            obs2,
+            &stats2,
+            &[0_i32; 32],
+            ann_obs2,
+            &ann_stats2,
+            &[0_i32; 32],
+        );
         assert_eq!(result2, 0.0, "zero Z-std must return 0.0, got {result2}");
     }
 
@@ -5341,7 +5514,17 @@ mod tests {
         let ann_obs: &[&[f64]] = &[a0];
         let ann_stats = [pop_mean_std_ann(a0)];
 
-        let result = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        let result = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert!(
             (-1.0..=1.0).contains(&result),
             "cross_correlation_z_a result {result} is outside [-1, 1]"
@@ -5355,7 +5538,17 @@ mod tests {
         let a0_neg: &[f64] = &[10.0, 8.0, 6.0, 4.0, 2.0];
         let ann_obs_neg: &[&[f64]] = &[a0_neg];
         let ann_stats_neg = [pop_mean_std_ann(a0_neg)];
-        let result_neg = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs_neg, &ann_stats_neg);
+        let result_neg = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs_neg,
+            &ann_stats_neg,
+            &[0_i32; 32],
+        );
         assert!(
             (-1.0..=1.0).contains(&result_neg),
             "anti-correlated result {result_neg} outside [-1, 1]"
@@ -5382,7 +5575,17 @@ mod tests {
         let ann_obs: &[&[f64]] = &[a0];
         let ann_stats = [pop_mean_std_ann(a0)];
 
-        let result = conditional_facp_partitioned(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        let result = conditional_facp_partitioned(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert!(
             result.is_empty(),
             "max_order=0 must return Vec::new(), got {result:?}"
@@ -5421,7 +5624,15 @@ mod tests {
         let max_order = 3;
 
         let cond = conditional_facp_partitioned(
-            season, max_order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+            season,
+            max_order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
         let classical = periodic_pacf(season, max_order, n_seasons, obs, &stats);
 
@@ -5488,7 +5699,15 @@ mod tests {
 
         for season in 0..n_seasons {
             let result = conditional_facp_partitioned(
-                season, 5, n_seasons, &obs_refs, &stats, &ann_refs, &ann_stats,
+                season,
+                5,
+                n_seasons,
+                &obs_refs,
+                &stats,
+                &[0_i32; 32],
+                &ann_refs,
+                &ann_stats,
+                &[0_i32; 32],
             );
             for (k_idx, &v) in result.iter().enumerate() {
                 assert!(
@@ -5589,7 +5808,15 @@ mod tests {
         let max_order = 2;
 
         let result = conditional_facp_partitioned(
-            season, max_order, n_seasons, obs, &stats, ann_obs, &ann_stats,
+            season,
+            max_order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         assert_eq!(
@@ -5626,8 +5853,10 @@ mod tests {
             n_seasons,
             obs,
             &stats,
+            &[0_i32; 32],
             ann_obs,
             &ann_stats,
+            &[0_i32; 32],
         );
         let beta = cross_correlation_z_a(
             (season + n_seasons - 1) % n_seasons,
@@ -5635,8 +5864,10 @@ mod tests {
             n_seasons,
             obs,
             &stats,
+            &[0_i32; 32],
             ann_obs,
             &ann_stats,
+            &[0_i32; 32],
         );
         let denom_sq_k1 = (1.0 - alpha * alpha) * (1.0 - beta * beta);
         let expected_k1 = if denom_sq_k1 <= 0.0 {
@@ -5721,7 +5952,17 @@ mod tests {
             pop_mean_std_ann(a2),
         ];
 
-        let cov = assemble_partitioned_covariance(0, 3, 3, obs, &stats, ann_obs, &ann_stats);
+        let cov = assemble_partitioned_covariance(
+            0,
+            3,
+            3,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
 
         // Σ_11.
         let exp_11 = [1.0, 0.0, 0.0, 1.0];
@@ -5790,7 +6031,17 @@ mod tests {
         let ann_stats = [pop_mean_std_ann(a0)];
 
         // Verify exact-arithmetic precondition: rho_za = 1.0 for lag=0.
-        let rho_za = cross_correlation_z_a(0, 0, 1, obs, &stats, ann_obs, &ann_stats);
+        let rho_za = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
         assert_eq!(
             rho_za, 1.0,
             "rho_za must be exactly 1.0 for identical series"
@@ -5804,7 +6055,17 @@ mod tests {
             "[[1,1],[1,1]] must be detected as singular"
         );
 
-        let result = conditional_facp_partitioned(0, 4, 1, obs, &stats, ann_obs, &ann_stats);
+        let result = conditional_facp_partitioned(
+            0,
+            4,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
 
         // k=1 succeeds (Σ_22=[[1.0]]), k=2 breaks (Σ_22 singular).
         // Result has exactly 1 entry; the assertion allows ≤1 for robustness.
@@ -5865,7 +6126,17 @@ mod tests {
             "std_z0 must be 1.0, got {std_z}"
         );
 
-        let result = conditional_facp_partitioned(0, 1, 1, obs, &stats, ann_obs, &ann_stats);
+        let result = conditional_facp_partitioned(
+            0,
+            1,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
 
         assert_eq!(result.len(), 1, "expected 1 entry for max_order=1");
         assert_eq!(
@@ -6103,7 +6374,12 @@ mod tests {
             0, // season
             0, // selected_order
             2, // n_seasons
-            obs, &stats, ann_obs, &ann_stats,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         assert!(
@@ -6157,7 +6433,12 @@ mod tests {
             0, // season
             2, // selected_order
             2, // n_seasons
-            obs, &stats, ann_obs, &ann_stats,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         assert_eq!(
@@ -6220,7 +6501,12 @@ mod tests {
             0, // season
             1, // selected_order → 2×2 extended system [[1,1],[1,1]] (singular)
             1, // n_seasons
-            obs, &stats, ann_obs, &ann_stats,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         assert!(
@@ -6286,7 +6572,15 @@ mod tests {
         let prev_season = (season + n_seasons - 1) % n_seasons;
 
         let cov = assemble_partitioned_covariance(
-            season, k, n_seasons, &obs_refs, &stats, &ann_refs, &ann_stats,
+            season,
+            k,
+            n_seasons,
+            &obs_refs,
+            &stats,
+            &[0_i32; 32],
+            &ann_refs,
+            &ann_stats,
+            &[0_i32; 32],
         );
 
         // For k=3 the cross-term block covers i in 0..2 (i.e. i=0 and i=1).
@@ -6298,8 +6592,10 @@ mod tests {
                 n_seasons,
                 &obs_refs,
                 &stats,
+                &[0_i32; 32],
                 &ann_refs,
                 &ann_stats,
+                &[0_i32; 32],
             );
             let actual = cov.sigma_22[i * k + (k - 1)];
             assert!(

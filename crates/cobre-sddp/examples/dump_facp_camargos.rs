@@ -128,6 +128,35 @@ fn main() {
     let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
     let annual_obs_refs: Vec<&[f64]> = annual_obs_by_season.iter().map(Vec::as_slice).collect();
 
+    // Per-season first PDF year for Z and A buckets. For continuous monthly
+    // data starting Jan Y0, Z always starts at Y0; A starts at Y0 for season 11
+    // (Dec) and Y0 + 1 for seasons 0..10 because the rolling 12-month window
+    // requires a full year of look-back.
+    let mut z_year_starts: Vec<i32> = vec![i32::MAX; N_SEASONS];
+    for r in &cam_rows {
+        let s = r.date.month0() as usize;
+        let y = r.date.year();
+        if y < z_year_starts[s] {
+            z_year_starts[s] = y;
+        }
+    }
+    let mut a_year_starts: Vec<i32> = vec![i32::MAX; N_SEASONS];
+    {
+        let mut all_obs2: Vec<(chrono::NaiveDate, f64)> =
+            cam_rows.iter().map(|r| (r.date, r.value_m3s)).collect();
+        all_obs2.sort_unstable_by_key(|(d, _)| *d);
+        for i in 0..all_obs2.len().saturating_sub(12) {
+            let target_date = all_obs2[i + 11].0;
+            let s = target_date.month0() as usize;
+            let y = target_date.year();
+            if y < a_year_starts[s] {
+                a_year_starts[s] = y;
+            }
+        }
+    }
+    println!("z_year_starts: {:?}", z_year_starts);
+    println!("a_year_starts: {:?}", a_year_starts);
+
     println!("\n=== Conditional FACP per month (cobre formula, sample stds) ===");
     let nw_pacf: HashMap<usize, [f64; 6]> = HashMap::from([
         (1, [0.3236, -0.0769, -0.0050, -0.1912, 0.0478, 0.0868]),
@@ -149,7 +178,9 @@ fn main() {
     let threshold = Z_ALPHA / (n_obs as f64).sqrt();
     println!("Threshold (z=1.96, n={n_obs}): {threshold:.4}\n");
 
-    println!("month |  k=1 cobre | k=1 NW    |  k=2 cobre | k=2 NW    |  k=3 cobre | k=3 NW    |  k=4 cobre | k=4 NW    |  k=5 cobre | k=5 NW    |  k=6 cobre | k=6 NW    | order_cobre | order_NW_orig");
+    println!(
+        "month |  k=1 cobre | k=1 NW    |  k=2 cobre | k=2 NW    |  k=3 cobre | k=3 NW    |  k=4 cobre | k=4 NW    |  k=5 cobre | k=5 NW    |  k=6 cobre | k=6 NW    | order_cobre | order_NW_orig"
+    );
     let nw_orig_orders = [1, 3, 1, 4, 3, 2, 4, 2, 4, 5, 2, 1];
 
     for season in 0..N_SEASONS {
@@ -160,8 +191,10 @@ fn main() {
             N_SEASONS,
             &obs_refs,
             &stats_sample,
+            &z_year_starts,
             &annual_obs_refs,
             &annual_stats_sample,
+            &a_year_starts,
         );
         let order_sample = select_order_pacf_annual(&facp_sample, n_obs, Z_ALPHA).selected_order;
         let nw = nw_pacf[&m];
@@ -187,8 +220,10 @@ fn main() {
             N_SEASONS,
             &obs_refs,
             &stats_pop,
+            &z_year_starts,
             &annual_obs_refs,
             &annual_stats_pop,
+            &a_year_starts,
         );
         let order_pop = select_order_pacf_annual(&facp_pop, n_obs, Z_ALPHA).selected_order;
         let nw = nw_pacf[&m];

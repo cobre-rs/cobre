@@ -70,6 +70,174 @@ pub struct SeasonalStats {
     pub std: f64,
 }
 
+/// Classification of a per-(entity, season) historical observation series.
+///
+/// Mirrors NEWAVE's `parpvaz.dat` header table (TIPO 0/1/2/4) so the PAR(p)-A
+/// fitter can short-circuit pathological buckets in the same way NEWAVE does:
+///
+/// - **TIPO 0** (`Default`): no specific behaviour; standard fitting applies.
+/// - **TIPO 1** (`Constant`): every observation equals the same value (or every
+///   observation is zero/null). Mean and std are forced to that constant and 0,
+///   respectively; AR order is forced to 0 and the annual coefficient is
+///   suppressed. Common for plants with regulated/transposed flows whose
+///   incremental inflow is structurally constant for a given month.
+/// - **TIPO 2** (`ManyNegative`): more than 10% of observations are strictly
+///   negative — a signal that the upstream incremental construction (the bridge
+///   subtracting upstream postos) has produced unphysical values for this
+///   month. Detected for diagnostics, but **does not override fitting** —
+///   matches NEWAVE's `parpvaz.dat` behaviour, where TIPO 2 plants still get
+///   normal AR fits (the flag is operator information, not a fit instruction).
+/// - **TIPO 4** (`Saturated`): more than 50% of observations equal the modal
+///   value — a flow cap (turbine/reservoir constraint) or a low-flow constant
+///   (transposed flow plants like A.S.OLIVEIRA). Treated like TIPO 1 with the
+///   cap as the constant. The std=0 propagates structural zeros into adjacent
+///   months' PACF rows, mirroring NEWAVE's behaviour on plants like BELO MONTE
+///   / April and JACUI / February-March. No P99 condition: NEWAVE classifies
+///   low-flow constants (cap=1.0, cap=0.0) as TIPO 4 just as readily as high
+///   caps.
+///
+/// TIPO 5 (bimodal history) is not yet detected; such series fall through to
+/// `Default`.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HistoryClass {
+    /// TIPO 0 — no specific behaviour, run the standard fit.
+    Default,
+    /// TIPO 1 — every observation is the same value (or all zero/null).
+    Constant {
+        /// The constant value to use as the seasonal mean.
+        value: f64,
+    },
+    /// TIPO 2 — more than 10% of observations are strictly negative.
+    /// `sample_mean` is the empirical mean over the full series (used as the
+    /// fallback constant; std forced to 0).
+    ManyNegative {
+        /// Empirical mean of the observation series.
+        sample_mean: f64,
+    },
+    /// TIPO 4 — saturating cap (>50% of observations at the modal value, which
+    /// equals or exceeds the 99th percentile).
+    Saturated {
+        /// The cap value (modal value of the series).
+        cap: f64,
+    },
+}
+
+impl HistoryClass {
+    /// Returns the override `(mean, std)` that should replace the empirical
+    /// stats for fitting purposes.
+    ///
+    /// TIPO 1 and TIPO 4 force the seasonal mean to the constant/cap value and
+    /// the std to 0, which makes the downstream PAR(p)-A fitter short-circuit
+    /// to order 0. TIPO 2 is purely diagnostic and returns `None` (NEWAVE
+    /// does not override fitting for it). `Default` also returns `None`.
+    #[must_use]
+    pub fn stats_override(self) -> Option<(f64, f64)> {
+        match self {
+            HistoryClass::Default | HistoryClass::ManyNegative { .. } => None,
+            HistoryClass::Constant { value } => Some((value, 0.0)),
+            HistoryClass::Saturated { cap } => Some((cap, 0.0)),
+        }
+    }
+
+    /// Returns `true` when the classification forces a degenerate fit
+    /// (order 0, no AR/annual coefficients). Currently TIPO 1 and TIPO 4.
+    /// TIPO 2 is diagnostic only, so it returns `false`.
+    #[must_use]
+    pub fn is_degenerate(self) -> bool {
+        matches!(
+            self,
+            HistoryClass::Constant { .. } | HistoryClass::Saturated { .. }
+        )
+    }
+
+    /// Returns the NEWAVE TIPO code (0/1/2/4) for reporting/parity checks.
+    #[must_use]
+    pub fn tipo_code(self) -> u8 {
+        match self {
+            HistoryClass::Default => 0,
+            HistoryClass::Constant { .. } => 1,
+            HistoryClass::ManyNegative { .. } => 2,
+            HistoryClass::Saturated { .. } => 4,
+        }
+    }
+}
+
+/// Classify a single (entity, season) observation series per the
+/// [`HistoryClass`] taxonomy.
+///
+/// The classifier runs in priority order TIPO 1 → TIPO 2 → TIPO 4 → TIPO 0:
+/// constant series take precedence over negative-pathological detection, which
+/// in turn takes precedence over saturation. Observations are rounded to the
+/// nearest integer for mode counting (matching the precision of NEWAVE's
+/// `vazoes.dat` storage). The constancy check uses an absolute tolerance of
+/// `1e-6` to absorb the float round-trip from parquet.
+///
+/// Returns `HistoryClass::Constant { value: 0.0 }` for an empty input — the
+/// degenerate single-observation case is treated the same as a zero-history
+/// series so that downstream fitters short-circuit predictably.
+#[must_use]
+pub fn classify_history(observations: &[f64]) -> HistoryClass {
+    if observations.is_empty() {
+        return HistoryClass::Constant { value: 0.0 };
+    }
+
+    let first = observations[0];
+    let const_tol = 1e-6;
+
+    // TIPO 1 — every observation matches the first within tolerance.
+    if observations.iter().all(|&v| (v - first).abs() < const_tol) {
+        return HistoryClass::Constant { value: first };
+    }
+
+    // TIPO 2 — more than 10% strictly negative.
+    let n = observations.len();
+    let n_neg = observations.iter().filter(|&&v| v < 0.0).count();
+    #[allow(clippy::cast_precision_loss)]
+    if (n_neg as f64) / (n as f64) > 0.10 {
+        #[allow(clippy::cast_precision_loss)]
+        let sample_mean = observations.iter().sum::<f64>() / n as f64;
+        return HistoryClass::ManyNegative { sample_mean };
+    }
+
+    // TIPO 4 — modal value occupies more than 50% of observations.
+    //
+    // Round to integer for mode counting (vazoes.dat is stored to 1 m³/s).
+    // No P99 guard: NEWAVE classifies low-flow constants (cap=0.0, cap=1.0
+    // for plants like A.S.OLIVEIRA / JACUI) as TIPO 4 just as eagerly as it
+    // classifies high caps (BELO MONTE cap=13900). The driving criterion is
+    // structural constancy of the bucket, not magnitude.
+    let mut sorted: Vec<i64> = observations.iter().map(|v| v.round() as i64).collect();
+    sorted.sort_unstable();
+    // Largest run of equal values gives the mode.
+    let mut best_count = 0_usize;
+    let mut best_value: i64 = sorted[0];
+    let mut run = 1_usize;
+    for i in 1..sorted.len() {
+        if sorted[i] == sorted[i - 1] {
+            run += 1;
+        } else {
+            if run > best_count {
+                best_count = run;
+                best_value = sorted[i - 1];
+            }
+            run = 1;
+        }
+    }
+    if run > best_count {
+        best_count = run;
+        best_value = sorted[sorted.len() - 1];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if (best_count as f64) / (n as f64) > 0.50 {
+        return HistoryClass::Saturated {
+            cap: best_value as f64,
+        };
+    }
+
+    HistoryClass::Default
+}
+
 /// Estimate seasonal means and standard deviations from historical observations.
 ///
 /// Groups observations by `(entity_id, season_id)` and computes the sample
@@ -244,11 +412,22 @@ pub fn estimate_seasonal_stats_with_season_map(
         let variance = values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
         let std = variance.sqrt();
 
+        // NEWAVE TIPO override: TIPO 1/2/4 buckets get a forced (constant, 0)
+        // pair so the downstream PAR(p)-A fitter short-circuits to order 0
+        // (matching parpvaz.dat behaviour for plants like BELO MONTE / April
+        // and PIMENTAL ecological-flow months). The classifier returns
+        // `Default` for normal series, in which case we keep the empirical
+        // (mean, std) computed above.
+        let (final_mean, final_std) = match classify_history(&values).stats_override() {
+            Some((override_mean, override_std)) => (override_mean, override_std),
+            None => (mean, std),
+        };
+
         result.push(SeasonalStats {
             entity_id,
             stage_id,
-            mean,
-            std,
+            mean: final_mean,
+            std: final_std,
         });
     }
 
@@ -2874,9 +3053,10 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
-        estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
-        select_order_aic, select_order_pacf, select_order_pacf_annual, solve_linear_system,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, HistoryClass, build_periodic_yw_matrix,
+        classify_history, estimate_periodic_ar_coefficients, periodic_autocorrelation,
+        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
+        solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -2977,6 +3157,130 @@ mod tests {
             NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
             value,
         )
+    }
+
+    // -----------------------------------------------------------------------
+    // HistoryClass / classify_history
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_history_default_for_random_series() {
+        // Strictly increasing series — not constant, no negatives, no mode > 50%.
+        let obs: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_constant_zero() {
+        let obs = [0.0_f64; 30];
+        match classify_history(&obs) {
+            HistoryClass::Constant { value } => assert_eq!(value, 0.0),
+            other => panic!("expected Constant {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_constant_nonzero() {
+        let obs = [1100.0_f64; 30];
+        match classify_history(&obs) {
+            HistoryClass::Constant { value } => assert!((value - 1100.0).abs() < 1e-9),
+            other => panic!("expected Constant {{ 1100.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_empty_falls_back_to_constant_zero() {
+        match classify_history(&[]) {
+            HistoryClass::Constant { value } => assert_eq!(value, 0.0),
+            other => panic!("expected Constant {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_many_negative_above_threshold() {
+        // 3 of 20 strictly negative = 15% > 10% threshold.
+        let mut obs: Vec<f64> = (1..=17).map(|i| i as f64).collect();
+        obs.extend_from_slice(&[-1.0, -2.0, -3.0]);
+        match classify_history(&obs) {
+            HistoryClass::ManyNegative { sample_mean } => {
+                let expected: f64 = obs.iter().sum::<f64>() / obs.len() as f64;
+                assert!((sample_mean - expected).abs() < 1e-9);
+            }
+            other => panic!("expected ManyNegative, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_many_negative_at_threshold_falls_through() {
+        // Exactly 10% (2/20) negative — does NOT trigger TIPO 2 (strict >).
+        // Falls through. With these values neither TIPO 1 nor TIPO 4 either.
+        let mut obs: Vec<f64> = (1..=18).map(|i| i as f64).collect();
+        obs.extend_from_slice(&[-1.0, -2.0]);
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_saturated_cap() {
+        // BELO MONTE-style: most April values at 13900 cap, rest scattered below.
+        // 12 out of 20 (60%) at 13900, rest at 5000-13800.
+        let mut obs = vec![13900.0_f64; 12];
+        obs.extend_from_slice(&[
+            5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 10000.0, 11000.0, 12000.0,
+        ]);
+        match classify_history(&obs) {
+            HistoryClass::Saturated { cap } => assert!((cap - 13900.0).abs() < 1e-9),
+            other => panic!("expected Saturated {{ 13900.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_low_mode_falls_through_to_default() {
+        // Mode at 50.0 with 9/20 occurrences = 45% — below the 50% threshold.
+        let mut obs = vec![50.0_f64; 9];
+        obs.extend_from_slice(&[
+            10.0, 20.0, 30.0, 40.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+        ]);
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_mode_at_zero_with_majority_is_tipo_4() {
+        // 11 zeros + 9 nonzero = 55% at mode 0. NEWAVE flags this as TIPO 4
+        // (saturating cap = 0) — typical of low-flow constant months on plants
+        // like COARACY NUNE / Sep-Oct. cobre matches that classification.
+        let mut obs = vec![0.0_f64; 11];
+        obs.extend_from_slice(&[
+            100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 1000.0,
+        ]);
+        match classify_history(&obs) {
+            HistoryClass::Saturated { cap } => assert!((cap - 0.0).abs() < 1e-9),
+            other => panic!("expected Saturated {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_helpers_round_trip() {
+        let c = HistoryClass::Constant { value: 5.0 };
+        assert_eq!(c.tipo_code(), 1);
+        assert_eq!(c.stats_override(), Some((5.0, 0.0)));
+        assert!(c.is_degenerate());
+
+        let s = HistoryClass::Saturated { cap: 13900.0 };
+        assert_eq!(s.tipo_code(), 4);
+        assert_eq!(s.stats_override(), Some((13900.0, 0.0)));
+        assert!(s.is_degenerate());
+
+        // TIPO 2 is diagnostic only; no fitting override and not "degenerate"
+        // for the purpose of forcing order 0.
+        let n = HistoryClass::ManyNegative { sample_mean: -1.5 };
+        assert_eq!(n.tipo_code(), 2);
+        assert_eq!(n.stats_override(), None);
+        assert!(!n.is_degenerate());
+
+        let d = HistoryClass::Default;
+        assert_eq!(d.tipo_code(), 0);
+        assert_eq!(d.stats_override(), None);
+        assert!(!d.is_degenerate());
     }
 
     // -----------------------------------------------------------------------

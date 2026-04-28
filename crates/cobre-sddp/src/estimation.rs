@@ -73,11 +73,12 @@ use cobre_stochastic::{
         has_negative_phi1,
     },
     par::fitting::{
-        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
-        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
-        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
-        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
-        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
+        AnnualSeasonalStats, ArCoefficientEstimate, HistoryClass, SeasonalStats, classify_history,
+        conditional_facp_partitioned, estimate_annual_seasonal_stats,
+        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
+        estimate_periodic_ar_annual_coefficients, estimate_periodic_ar_coefficients,
+        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
+        select_order_pacf, select_order_pacf_annual,
     },
 };
 

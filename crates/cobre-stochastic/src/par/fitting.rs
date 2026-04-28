@@ -13,8 +13,8 @@
 //! 4. [`estimate_periodic_ar_coefficients`] — solves the periodic YW system
 //!    at the selected order to produce AR coefficients and residual std ratio.
 //! 5. [`estimate_seasonal_stats`] — computes seasonal means and
-//!    Bessel-corrected standard deviations from historical observations,
-//!    grouped by `(entity, season)` pair.
+//!    population-divisor (1/N) standard deviations from historical
+//!    observations, grouped by `(entity, season)` pair.
 //! 6. [`estimate_ar_coefficients`] — produces white-noise (order-0) estimates
 //!    for all `(entity, season)` pairs; used by the PACF path when
 //!    `max_order == 0`.
@@ -65,16 +65,18 @@ pub struct SeasonalStats {
     pub stage_id: i32,
     /// Sample mean of observed values (m³/s or whatever unit the caller uses).
     pub mean: f64,
-    /// Bessel-corrected sample standard deviation (N − 1 divisor).
+    /// Population-divisor standard deviation (1/N divisor), matching
+    /// NEWAVE's `rel_parpa.pdf` eq. 18 convention.
     pub std: f64,
 }
 
 /// Estimate seasonal means and standard deviations from historical observations.
 ///
 /// Groups observations by `(entity_id, season_id)` and computes the sample
-/// mean and Bessel-corrected standard deviation for each group. Only entities
-/// listed in `entity_ids` are processed; observations for other entities are
-/// silently ignored.
+/// mean and population-divisor (1/N) standard deviation for each group, matching
+/// NEWAVE's `rel_parpa.pdf` eq. 18 convention. Only entities listed in
+/// `entity_ids` are processed; observations for other entities are silently
+/// ignored.
 ///
 /// Stages with `season_id = None` are skipped when building the date-to-season
 /// mapping. Observations whose date does not fall within any stage's
@@ -91,7 +93,9 @@ pub struct SeasonalStats {
 /// # Errors
 ///
 /// - [`StochasticError::InsufficientData`] when a `(entity, season)` group has
-///   fewer than 2 observations (Bessel correction requires N ≥ 2).
+///   fewer than 2 observations (a degenerate single-sample bucket has no
+///   meaningful std and would propagate zeros into every downstream
+///   correlation, so it is rejected up front).
 /// - [`StochasticError::InsufficientData`] when an observation date falls
 ///   outside every stage's date range.
 ///
@@ -212,7 +216,13 @@ pub fn estimate_seasonal_stats_with_season_map(
         entry.0.push(value);
     }
 
-    // Compute mean and Bessel-corrected std for each group.
+    // Compute mean and population-divisor std for each group.
+    //
+    // NEWAVE (rel_parpa.pdf eq. 18 and the parpvaz.dat report) computes
+    // sigma^Z_m with divisor 1/N, not the Bessel-corrected 1/(N-1). Matching
+    // that convention is required for parity on the conditional FACP and
+    // selected AR orders — the sample-vs-population scale factor would
+    // otherwise propagate through every cross-correlation.
     let mut result: Vec<SeasonalStats> = Vec::with_capacity(group_map.len());
     for ((entity_id, _season_id), (values, stage_id)) in group_map {
         let n = values.len();
@@ -220,8 +230,7 @@ pub fn estimate_seasonal_stats_with_season_map(
             return Err(StochasticError::InsufficientData {
                 context: format!(
                     "entity {entity_id} season mapped to stage {stage_id} \
-                     has {n} observation(s); need at least 2 for Bessel-corrected \
-                     standard deviation"
+                     has {n} observation(s); need at least 2 for std estimation"
                 ),
             });
         }
@@ -232,8 +241,7 @@ pub fn estimate_seasonal_stats_with_season_map(
         #[allow(clippy::cast_precision_loss)]
         let mean = values.iter().copied().sum::<f64>() / n as f64;
         #[allow(clippy::cast_precision_loss)]
-        let variance =
-            values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1) as f64;
+        let variance = values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
         let std = variance.sqrt();
 
         result.push(SeasonalStats {
@@ -2494,8 +2502,9 @@ pub struct AnnualSeasonalStats {
     pub season_id: usize,
     /// Sample mean of the rolling 12-month average for this (entity, season) pair, in m³/s.
     pub mean_m3s: f64,
-    /// Bessel-corrected sample standard deviation (`1/(N-1)` divisor) of the
-    /// rolling 12-month average for this (entity, season) pair, in m³/s.
+    /// Population-divisor standard deviation (`1/N` divisor) of the rolling
+    /// 12-month average for this (entity, season) pair, in m³/s. Matches
+    /// NEWAVE's `rel_parpa.pdf` eq. 18 convention.
     pub std_m3s: f64,
 }
 
@@ -2504,13 +2513,12 @@ pub struct AnnualSeasonalStats {
 ///
 /// For each (entity, season) pair, `μ^A_m` is the sample mean of the rolling
 /// 12-month average `A_t = (1/12) · Σ_{j=0..11} z[t-j]` values whose target
-/// date falls in season `m`. `σ^A_m` is the **Bessel-corrected sample standard
-/// deviation** using divisor `1/(N-1)`, matching the convention used
-/// workspace-wide by [`estimate_seasonal_stats`]. This diverges from the
-/// population formula `1/N`; the numerical difference is negligible at typical
-/// historical sample sizes (N ≥ 20 years). The PAR(p)-A runtime coefficient is
-/// then `ψ̂ = ψ · σ_m / σ^A_m`, which requires `σ^A_m > 0` (enforced by
-/// the output validator in `cobre-io`).
+/// date falls in season `m`. `σ^A_m` is the **population-divisor standard
+/// deviation** using divisor `1/N`, matching NEWAVE's `rel_parpa.pdf` eq. 18
+/// convention and the workspace-wide convention used by
+/// [`estimate_seasonal_stats`]. The PAR(p)-A runtime coefficient is then
+/// `ψ̂ = ψ · σ_m / σ^A_m`, which requires `σ^A_m > 0` (enforced by the
+/// output validator in `cobre-io`).
 ///
 /// ## Algorithm
 ///
@@ -2521,7 +2529,7 @@ pub struct AnnualSeasonalStats {
 /// 3. Group `A_{i+12}` values by the season of the target date (using
 ///    [`find_season_for_date`] + `season_map` fallback, mirroring
 ///    [`estimate_seasonal_stats_with_season_map`]).
-/// 4. Compute per (entity, season) the sample mean and Bessel-corrected sample std.
+/// 4. Compute per (entity, season) the sample mean and population-divisor std (1/N).
 ///
 /// Returns rows sorted by `(hydro_id, season_id)` ascending.
 ///
@@ -2614,20 +2622,24 @@ pub fn estimate_annual_seasonal_stats(
         }
     }
 
-    // Compute Bessel-corrected mean and std for each (entity, season) group.
+    // Compute mean and population-divisor std for each (entity, season) group.
+    //
+    // NEWAVE (rel_parpa.pdf eq. 18) uses sigma^A_m with divisor 1/N. Matching
+    // that convention is required for parity on the partitioned-covariance
+    // FACP — the sample-vs-population scale factor would otherwise leak
+    // through every Z⊗A cross-correlation.
     let mut result: Vec<AnnualSeasonalStats> = Vec::with_capacity(group_map.len());
     for ((entity_id, season_id), values) in &group_map {
         let n = values.len();
-        // Bessel correction requires N >= 2; for N = 1 the std is 0.0 (only one sample).
         #[allow(clippy::cast_precision_loss)]
         let mean_m3s = values.iter().copied().sum::<f64>() / n as f64;
-        let std_m3s = if n >= 2 {
+        let std_m3s = if n >= 1 {
             #[allow(clippy::cast_precision_loss)]
             let var = values
                 .iter()
                 .map(|&v| (v - mean_m3s) * (v - mean_m3s))
                 .sum::<f64>()
-                / (n - 1) as f64;
+                / n as f64;
             var.sqrt()
         } else {
             0.0
@@ -2924,7 +2936,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Acceptance criterion: known mean and Bessel-corrected std
+    // Acceptance criterion: known mean and population-divisor (1/N) std
     // -----------------------------------------------------------------------
 
     #[test]
@@ -2954,7 +2966,7 @@ mod tests {
             + (30.0 - 30.0_f64).powi(2)
             + (40.0 - 30.0_f64).powi(2)
             + (50.0 - 30.0_f64).powi(2))
-            / 4.0; // N-1 = 4
+            / 5.0; // 1/N (NEWAVE convention)
         let expected_std = expected_variance.sqrt();
 
         assert!(
@@ -2974,8 +2986,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn estimate_seasonal_stats_bessel_correction() {
-        // Two observations: N=2, Bessel std = |x1 - x2| / sqrt(2).
+    fn estimate_seasonal_stats_population_divisor() {
+        // Two observations: N=2, population std = sqrt(((x1-mean)^2 + (x2-mean)^2)/N).
         let stages = vec![make_stage(1, 0, 2000, 1, 2000, 2, Some(0))];
         let entity_ids = vec![EntityId::from(1)];
         let observations = vec![
@@ -2994,9 +3006,9 @@ mod tests {
         let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
         assert_eq!(stats.len(), 1);
 
-        // mean = 15.0, variance(N-1) = ((10-15)^2 + (20-15)^2) / 1 = 50.0
+        // mean = 15.0, variance(1/N) = ((10-15)^2 + (20-15)^2) / 2 = 25.0, std = 5.
         let expected_mean = 15.0_f64;
-        let expected_std = 50.0_f64.sqrt();
+        let expected_std = 25.0_f64.sqrt();
 
         assert!((stats[0].mean - expected_mean).abs() < 1e-10);
         assert!((stats[0].std - expected_std).abs() < 1e-10);
@@ -3130,7 +3142,7 @@ mod tests {
             .iter()
             .map(|&v| (v - expected_mean).powi(2))
             .sum::<f64>()
-            / (n - 1.0);
+            / n;
         let expected_std = expected_variance.sqrt();
 
         assert!(
@@ -5924,11 +5936,15 @@ mod tests {
                 s.mean_m3s,
                 expected_mean
             );
+            // 3 samples with mutual deviations {-5, 0, 5} → sum-of-squares 50.
+            // Population (1/N) variance = 50/3 → std = sqrt(50/3).
+            let expected_std = (50.0_f64 / 3.0).sqrt();
             assert!(
-                (s.std_m3s - 5.0).abs() < 1e-10,
-                "season {}: std_m3s={} expected 5.0 (Bessel 1/(N-1))",
+                (s.std_m3s - expected_std).abs() < 1e-10,
+                "season {}: std_m3s={} expected {} (population 1/N)",
                 s.season_id,
-                s.std_m3s
+                s.std_m3s,
+                expected_std
             );
         }
 

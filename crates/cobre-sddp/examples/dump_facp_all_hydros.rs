@@ -154,5 +154,43 @@ fn main() {
             .collect::<Vec<_>>()
             .join(",");
         println!("{hid}\t{min_year}\t{max_year}\t{n_obs_jan}\t{orders_str}");
+
+        // When CSV-only output is undesirable (debugging path), set
+        // COBRE_DUMP_FACP to a comma-separated list of hydro_ids and we
+        // append a per-month FACP dump on stderr for those ids.
+        if let Ok(ids) = std::env::var("COBRE_DUMP_FACP") {
+            let ids: Vec<i32> = ids
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if ids.contains(&hid) {
+                eprintln!("# hydro_id={hid} FACP per (month, lag):");
+                for season in 0..N_SEASONS {
+                    let m = season + 1;
+                    let prev_season = (season + N_SEASONS - 1) % N_SEASONS;
+                    if stats[season].1 == 0.0
+                        || obs_by_season[season].len() < 2
+                        || annual_by_season[prev_season].is_empty()
+                        || ann_stats[prev_season].1 == 0.0
+                    {
+                        eprintln!("# hid={hid} m={m:2}  WHITE_NOISE_FALLBACK");
+                        continue;
+                    }
+                    let facp = conditional_facp_partitioned(
+                        season,
+                        MAX_ORDER,
+                        N_SEASONS,
+                        &obs_refs,
+                        &stats,
+                        &z_year_starts,
+                        &ann_refs,
+                        &ann_stats,
+                        &a_year_starts,
+                    );
+                    let facp_str: Vec<String> = facp.iter().map(|v| format!("{v:+.4}")).collect();
+                    eprintln!("# hid={hid} m={m:2}  facp=[{}]", facp_str.join(","));
+                }
+            }
+        }
     }
 }

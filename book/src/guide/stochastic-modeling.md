@@ -309,6 +309,126 @@ parameters.
 
 ---
 
+## Inflow Source Resolution
+
+The PAR(p) inflow model is built from up to **five** files in `scenarios/`. Three
+of them — `inflow_history.parquet`, `inflow_seasonal_stats.parquet`, and
+`inflow_ar_coefficients.parquet` — drive **path resolution**: their
+presence/absence selects which of seven estimation paths Cobre executes. The
+remaining two — `correlation.json` and `inflow_annual_component.parquet` — layer
+**orthogonally** on top of that path.
+
+### Path-driver flags
+
+| Symbol | File                                       | Role                                  |
+| :----: | ------------------------------------------ | ------------------------------------- |
+| **H**  | `scenarios/inflow_history.parquet`         | Raw observations for fitting          |
+| **S**  | `scenarios/inflow_seasonal_stats.parquet`  | User-supplied μ, σ per (hydro, stage) |
+| **R**  | `scenarios/inflow_ar_coefficients.parquet` | User-supplied AR coefficients ψ[ℓ]    |
+
+### The seven estimation paths
+
+For each combination of `(H, S, R)`, Cobre selects exactly one path and resolves
+each model output as follows:
+
+| #   | H   | S   | R   | Path                        | Seasonal stats `μ, σ`                                | AR coefficients `ψ[ℓ]`                               | Annual component (PAR-A)                              | Correlation Σ                                                                      |
+| --- | --- | --- | --- | --------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | 0   | 0   | 0   | **`Deterministic`**         | _no PAR model_                                       | _none_                                               | _n/a_                                                 | identity, unless `correlation.json` provided                                       |
+| 2   | 0   | 1   | 0   | **`UserStatsWhiteNoise`**   | user file                                            | order-0 (white noise)                                | user file (if provided), else none                    | identity, unless `correlation.json` provided                                       |
+| 3   | 0   | 1   | 1   | **`UserProvidedNoHistory`** | user file                                            | user file                                            | user file (if provided), else none                    | identity, unless `correlation.json` provided                                       |
+| 4   | 1   | 0   | 0   | **`FullEstimation`**        | fitted from H                                        | fitted from H (PACF + Yule-Walker + Maceira-Damazio) | fitted from H iff `order_selection = "pacf_annual"` ¹ | estimated from H residuals, unless `correlation.json` provided                     |
+| 5   | 1   | 0   | 1   | **`UserArHistoryStats`**    | fitted from H                                        | user file                                            | **always empty** ²                                    | estimated from H residuals using user ψ, unless `correlation.json` provided        |
+| 6   | 1   | 1   | 0   | **`PartialEstimation`**     | user file (fitting stats used only for the YW solve) | fitted from H                                        | fitted from H iff `pacf_annual` ¹                     | estimated from H residuals using fitting stats, unless `correlation.json` provided |
+| 7   | 1   | 1   | 1   | **`UserProvidedAll`**       | user file                                            | user file                                            | user file (if provided), else none                    | identity, unless `correlation.json` provided ³                                     |
+
+¹ When `order_selection ≠ "pacf_annual"`, the fitted annual component is empty
+even on paths 4 and 6.
+² Path 5 explicitly discards any user-supplied
+`inflow_annual_component.parquet`.
+³ History is **not** re-consumed on path 7; correlation falls back to identity
+unless `correlation.json` is supplied.
+
+> **Invalid combinations collapse to `Deterministic`.** Cases with R=1 but H=0
+> and S=0 fall back to row 1 — AR coefficients alone cannot drive estimation.
+
+### The two orthogonal layers
+
+#### `correlation.json` — wins on every path
+
+When `correlation.json` is present, Cobre uses it verbatim regardless of which
+of the seven paths runs. When absent, behavior splits:
+
+- **Estimation paths (4, 5, 6)** — Σ is estimated from PAR residuals on `H`.
+- **Pass-through paths (1, 2, 3, 7)** — Σ defaults to identity (independent
+  noise).
+
+This is the only file in the inflow stack that behaves as a true global
+override.
+
+#### `inflow_annual_component.parquet` — only honored on pass-through paths
+
+The user file is loaded by `cobre-io` and threaded into `assemble_inflow_models`,
+but the estimation paths overwrite it:
+
+| Path                    | User-supplied annual component is …         |
+| ----------------------- | ------------------------------------------- |
+| `Deterministic`         | _n/a_ (no inflow models)                    |
+| `UserStatsWhiteNoise`   | **honored**                                 |
+| `UserProvidedNoHistory` | **honored**                                 |
+| `FullEstimation`        | overwritten by fitted values                |
+| `UserArHistoryStats`    | **silently dropped** (replaced by `vec![]`) |
+| `PartialEstimation`     | overwritten by fitted values                |
+| `UserProvidedAll`       | **honored**                                 |
+
+To ship a hand-crafted PAR-A annual file, supply `S` **and** `R` so the run
+lands on path 7 (`UserProvidedAll`).
+
+### Decision tree
+
+```text
+                       ┌─ inflow_history.parquet present? ─┐
+                       │                                   │
+                      yes                                  no
+                       │                                   │
+        ┌─ seasonal_stats present? ─┐         ┌─ seasonal_stats present? ─┐
+        │                           │         │                           │
+       yes                          no       yes                          no
+        │                           │         │                           │
+ ┌── ar_coeffs? ──┐         ┌── ar_coeffs? ──┐ │                  → Deterministic (1)
+ │                │         │                │ │
+yes               no        yes              no│
+ │                │         │                │ │
+UserProvidedAll   Partial   UserAr           Full
+     (7)         Estimation HistoryStats     Estimation
+                    (6)         (5)              (4)
+                                              ┌── ar_coeffs? ──┐
+                                              │                │
+                                             yes               no
+                                              │                │
+                                       UserProvidedNoHistory  UserStatsWhiteNoise
+                                              (3)                  (2)
+```
+
+### Practical recipes
+
+| Goal                                                     | Files to provide                                                  | Path landed |
+| -------------------------------------------------------- | ----------------------------------------------------------------- | ----------- |
+| Smoke-test the LP without stochasticity                  | _(no scenarios files)_                                            | 1           |
+| Deterministic seasonal levels, no autoregression         | `inflow_seasonal_stats.parquet`                                   | 2           |
+| Fully user-specified PAR(p) without raw observations     | `inflow_seasonal_stats.parquet`, `inflow_ar_coefficients.parquet` | 3           |
+| Hands-off: fit everything from raw observations          | `inflow_history.parquet`                                          | 4           |
+| Fit stats from history, override the AR structure        | `inflow_history.parquet`, `inflow_ar_coefficients.parquet`        | 5           |
+| Override the levels (μ, σ) but let Cobre fit the AR      | `inflow_history.parquet`, `inflow_seasonal_stats.parquet`         | 6           |
+| Provide every parameter, including the PAR-A annual term | All three of `H`, `S`, `R` (and optionally annual file)           | 7           |
+| Pin a custom spatial correlation on any path             | Add `correlation.json`                                            | any         |
+
+The canonical implementation lives in `crates/cobre-sddp/src/estimation.rs` —
+`EstimationPath::resolve` and the dispatch in `estimate_from_history` — with the
+per-path fitting logic in `run_estimation` (path 4), `run_partial_estimation`
+(path 6), and `run_user_ar_estimation` (path 5).
+
+---
+
 ## Multi-Resolution Studies
 
 Cobre supports studies that mix stages at different temporal resolutions — for

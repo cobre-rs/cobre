@@ -561,6 +561,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobre-emt"
+version = "0.5.1"
+
+[[package]]
+name = "cobre-flow"
+version = "0.5.1"
+
+[[package]]
 name = "cobre-io"
 version = "0.5.1"
 dependencies = [
@@ -634,6 +642,10 @@ dependencies = [
 
 [[package]]
 name = "cobre-tui"
+version = "0.5.1"
+
+[[package]]
+name = "cobre-uc"
 version = "0.5.1"
 
 [[package]]

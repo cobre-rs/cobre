@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Reserved three new crate names in the workspace as placeholders for
+  upcoming verticals: `cobre-flow` (power flow algorithms), `cobre-uc`
+  (MILP-based unit commitment for hydrothermal dispatch), and
+  `cobre-emt` (electromagnetic transient analysis). Each ships as an
+  empty library following the existing `cobre-tui` reservation pattern
+  and is not yet implemented.
+
 ### Removed
 
 - `cobre_stochastic::par::fit_par_annual_with_reduction` and its

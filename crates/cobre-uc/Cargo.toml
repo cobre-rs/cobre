@@ -1,0 +1,18 @@
+[package]
+name = "cobre-uc"
+description = "Reserved crate name. The Cobre MILP unit commitment solver for hydrothermal dispatch is not yet implemented."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["cobre", "reserved"]
+categories = ["science"]
+
+[dependencies]
+
+[lints]
+workspace = true

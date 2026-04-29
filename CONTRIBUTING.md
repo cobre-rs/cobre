@@ -137,9 +137,12 @@ cobre/
 │   ├── cobre-comm/         # Communication abstraction (MPI, local)
 │   ├── cobre-sddp/         # SDDP training loop, simulation, cut management
 │   ├── cobre-cli/          # Binary: run/validate/report/init/schema/summary/version
-│   ├── cobre-mcp/          # Binary: MCP server for AI agent integration
+│   ├── cobre-mcp/          # Binary: MCP server for AI agent integration (reserved)
 │   ├── cobre-python/       # cdylib: PyO3 Python bindings
-│   └── cobre-tui/          # Library: ratatui terminal UI
+│   ├── cobre-tui/          # Library: ratatui terminal UI (reserved)
+│   ├── cobre-flow/         # Library: power flow algorithms (reserved)
+│   ├── cobre-uc/           # Library: MILP unit commitment for hydrothermal dispatch (reserved)
+│   └── cobre-emt/          # Library: electromagnetic transient analysis (reserved)
 ├── assets/                  # Logos and diagrams
 └── docs/                    # Internal project documentation
 ```

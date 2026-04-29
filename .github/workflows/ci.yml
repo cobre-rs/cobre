@@ -82,6 +82,8 @@ jobs:
           echo "/opt/mpich/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=/opt/mpich/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=/opt/mpich/lib" >> "$GITHUB_ENV"
+      - name: Install flatc (FlatBuffers compiler)
+        run: sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
@@ -244,6 +246,8 @@ jobs:
           echo "/opt/mpich/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=/opt/mpich/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=/opt/mpich/lib" >> "$GITHUB_ENV"
+      - name: Install flatc (FlatBuffers compiler)
+        run: sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview

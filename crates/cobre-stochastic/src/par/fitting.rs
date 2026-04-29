@@ -72,14 +72,21 @@ pub struct SeasonalStats {
 
 /// Classification of a per-(entity, season) historical observation series.
 ///
-/// Lets the PAR(p)-A fitter short-circuit pathological buckets:
+/// Applied inside [`estimate_seasonal_stats`], so the override propagates
+/// through both the classical PAR(p) and PAR(p)-A paths. On PAR(p)-A the
+/// structural-zero short-circuit at lag 1 of the conditional FACP turns
+/// a degenerate `(value, 0)` bucket into an explicit order-0 fit; on
+/// classical PAR(p) the same `std = 0` zeroes every periodic
+/// autocorrelation, which drives `select_order_pacf` to order 0
+/// implicitly. Either way, the bucket cannot inject spurious
+/// autoregressive structure into adjacent months' PACFs.
 ///
 /// - [`Default`](HistoryClass::Default): no specific behaviour; standard
 ///   fitting applies.
 /// - [`Constant`](HistoryClass::Constant): every observation equals the
 ///   same value (or every observation is zero/null). Mean and std are
 ///   forced to that constant and 0, respectively; AR order is forced to
-///   0 and the annual coefficient is suppressed. Common for plants with
+///   0 and any annual coefficient is suppressed. Common for plants with
 ///   regulated/transposed flows whose incremental inflow is structurally
 ///   constant for a given month.
 /// - [`ManyNegative`](HistoryClass::ManyNegative): more than 10% of
@@ -125,10 +132,12 @@ impl HistoryClass {
     /// stats for fitting purposes.
     ///
     /// `Constant` and `Saturated` force the seasonal mean to the
-    /// constant/cap value and the std to 0, which makes the downstream
-    /// PAR(p)-A fitter short-circuit to order 0. `ManyNegative` is purely
-    /// diagnostic and returns `None` (the classification does not override
-    /// fitting for it). `Default` also returns `None`.
+    /// constant/cap value and the std to 0. The `std = 0` short-circuits
+    /// every downstream fitter — PAR(p)-A explicitly, classical PAR(p)
+    /// implicitly via zeroed periodic autocorrelations — so order 0 is
+    /// the result on either path. `ManyNegative` is purely diagnostic
+    /// and returns `None` (the classification does not override fitting
+    /// for it). `Default` also returns `None`.
     #[must_use]
     pub fn stats_override(self) -> Option<(f64, f64)> {
         match self {
@@ -403,12 +412,13 @@ pub fn estimate_seasonal_stats_with_season_map(
         let std = variance.sqrt();
 
         // History-class override: degenerate buckets (constant series,
-        // saturated caps) get a forced (constant, 0) pair so the
-        // downstream PAR(p)-A fitter short-circuits to order 0. Typical
-        // examples are constant low-flow/high-flow buckets and
-        // ecological-flow months. The classifier returns `Default` for
-        // normal series, in which case we keep the empirical (mean, std)
-        // computed above.
+        // saturated caps) get a forced (constant, 0) pair. The `std = 0`
+        // short-circuits both PAR(p)-A (explicit structural-zero rule)
+        // and classical PAR(p) (zeroed periodic autocorrelations →
+        // order 0). Typical examples are constant low-flow/high-flow
+        // buckets and ecological-flow months. The classifier returns
+        // `Default` for normal series, in which case we keep the
+        // empirical (mean, std) computed above.
         let (final_mean, final_std) = match classify_history(&values).stats_override() {
             Some((override_mean, override_std)) => (override_mean, override_std),
             None => (mean, std),
@@ -1505,7 +1515,8 @@ pub fn select_order_pacf(
 /// The Maceira-Damazio iterative order-reduction step is **not** applied
 /// here; the order returned by this function is the tentative
 /// pre-validation order. The reduction runs across all seasons of the
-/// periodic cycle and lives in [`fit_par_annual_with_reduction`].
+/// periodic cycle and is wired into the PAR(p)-A estimation pipeline
+/// in `cobre-sddp`.
 ///
 /// `pacf_values[k]` in the returned struct is the conditional FACP at lag
 /// `k+1`, conditioned on the intermediate standardised annual noise series
@@ -3080,240 +3091,6 @@ pub fn estimate_periodic_ar_annual_coefficients(
         coefficients,
         annual_coefficient,
         residual_std_ratio,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Maceira-Damazio iterative order reduction (multi-season, periodic chain)
-// ---------------------------------------------------------------------------
-
-/// Outcome of the Maceira-Damazio iterative order reduction across the full
-/// periodic cycle.
-///
-/// Returned by [`fit_par_annual_with_reduction`]. Contains the final fits
-/// for every season after applying the contribution-based reduction loop.
-#[must_use]
-#[derive(Debug, Clone)]
-pub struct ReducedOrderFit {
-    /// Final AR order per season (length `n_seasons`).
-    pub selected_orders: Vec<usize>,
-    /// Standardised AR coefficients `φ_1..φ_p` per season (empty for
-    /// seasons reduced to order 0).
-    pub coefficients: Vec<Vec<f64>>,
-    /// Standardised annual coefficient `ψ` per season.
-    pub annual_coefficients: Vec<f64>,
-    /// Residual std ratio `σ_residual / σ_seasonal` per season.
-    pub residual_std_ratios: Vec<f64>,
-    /// Total number of (season, reduction) events applied (diagnostic).
-    pub n_reductions: usize,
-}
-
-/// Apply Maceira-Damazio iterative order reduction to a full PAR(p)-A
-/// periodic-cycle fit.
-///
-/// 1. Solve the extended periodic Yule-Walker system for the initial
-///    PACF order at every season to obtain `φ^m_1..φ^m_p` and `ψ^m`.
-/// 2. For each season, compute the **recursively-composed contributions**
-///    of each lag through the periodic monthly chain via
-///    [`crate::par::contribution::compute_contributions`]. The recursion
-///    captures both the direct lag-`k` AR effect and the indirect effects
-///    that propagate through the AR coefficients of neighbouring months.
-/// 3. If any contribution is negative, reduce the season's AR ceiling
-///    directly to `find_max_valid_order(contributions)` (potentially a
-///    multi-step jump) and re-fit via PACF + Yule-Walker at the new
-///    ceiling.
-/// 4. Re-validate after every reduction: a season's reduction can change
-///    the contributions of its neighbours through the periodic chain.
-///    Iterate until **all** seasons pass the contribution check.
-///
-/// **Why the recursive composition matters.** A simple per-season check
-/// of the standardised AR coefficient at lag `p` (e.g.
-/// `combined_p = φ_p + ψ / 12`) is *not* equivalent: a positive lag-`p`
-/// coefficient can still produce a negative chain-composed contribution
-/// once the neighbouring months' AR coefficients propagate through, and
-/// vice versa. The relevant signal is the recursively-composed
-/// contribution along the periodic chain, not the lag-`p` coefficient
-/// in isolation.
-///
-/// The check operates on the AR coefficient vector only — the annual
-/// term `ψ^m` is preserved across reductions and refreshed via the
-/// extended Yule-Walker re-solve at the new ceiling.
-///
-/// # Parameters
-///
-/// - `initial_orders` — initial AR ceiling per season (length `n_seasons`),
-///   typically the per-season output of [`select_order_pacf_annual`].
-/// - All other parameters mirror
-///   [`estimate_periodic_ar_annual_coefficients`].
-///
-/// # Returns
-///
-/// A [`ReducedOrderFit`] containing the post-reduction order and
-/// coefficients for every season.
-#[allow(clippy::too_many_arguments)]
-pub fn fit_par_annual_with_reduction(
-    initial_orders: &[usize],
-    n_seasons: usize,
-    observations_by_season: &[&[f64]],
-    stats_by_season: &[(f64, f64)],
-    z_year_starts: &[i32],
-    annual_observations_by_season: &[&[f64]],
-    annual_stats_by_season: &[(f64, f64)],
-    a_year_starts: &[i32],
-    z_alpha: f64,
-) -> ReducedOrderFit {
-    let mut max_orders: Vec<usize> = initial_orders.to_vec();
-    let mut coefficients: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
-    let mut annual_coefficients: Vec<f64> = vec![0.0; n_seasons];
-    let mut residual_std_ratios: Vec<f64> = vec![1.0; n_seasons];
-    let mut n_reductions: usize = 0;
-
-    // Initial fit at the supplied ceilings.
-    for season in 0..n_seasons {
-        let fit = estimate_periodic_ar_annual_coefficients(
-            season,
-            max_orders[season],
-            n_seasons,
-            observations_by_season,
-            stats_by_season,
-            z_year_starts,
-            annual_observations_by_season,
-            annual_stats_by_season,
-            a_year_starts,
-        );
-        coefficients[season] = fit.coefficients;
-        annual_coefficients[season] = fit.annual_coefficient;
-        residual_std_ratios[season] = fit.residual_std_ratio;
-        // Singular-system fallback: drop AR if the solver could not produce
-        // a coefficient vector of the requested length.
-        if coefficients[season].len() != max_orders[season] {
-            coefficients[season].clear();
-            annual_coefficients[season] = 0.0;
-            residual_std_ratios[season] = 1.0;
-            max_orders[season] = 0;
-        }
-    }
-
-    let std_by_season: Vec<f64> = stats_by_season.iter().map(|&(_, s)| s).collect();
-
-    // Iterative reduction. A season is "frozen" once its AR ceiling has
-    // been driven to 0; ψ is refreshed via the order-0 re-solve.
-    let mut frozen: Vec<bool> = (0..n_seasons).map(|s| coefficients[s].is_empty()).collect();
-
-    // Build effective coefficient vectors by adding the annual ψ̂/12
-    // contribution to every lag slot. Per the cobre-docs PAR-A spec, the
-    // contribution recursion operates on this effective vector so that
-    // negative annual contributions can be detected at any lag.
-    //
-    // The effective vector length is `max(p_m, n_seasons)`: at least
-    // `p_m` to retain all AR coefficients, and at least `n_seasons` so
-    // that the annual contribution covers a full periodic cycle.
-    let build_effective = |coefficients: &[Vec<f64>], annuals: &[f64]| -> Vec<Vec<f64>> {
-        let psi_per_lag: Vec<f64> = annuals.iter().map(|&p| p / 12.0).collect();
-        (0..n_seasons)
-            .map(|season| {
-                let p = coefficients[season].len();
-                if p == 0 && annuals[season] == 0.0 {
-                    Vec::new()
-                } else {
-                    let len = p.max(n_seasons);
-                    let mut effective = vec![psi_per_lag[season]; len];
-                    for (i, &phi) in coefficients[season].iter().enumerate() {
-                        effective[i] = phi + psi_per_lag[season];
-                    }
-                    effective
-                }
-            })
-            .collect()
-    };
-
-    loop {
-        let effective = build_effective(&coefficients, &annual_coefficients);
-        let mut failing: Vec<(usize, usize)> = Vec::new(); // (season, max_valid_order)
-        for season in 0..n_seasons {
-            if frozen[season] || coefficients[season].is_empty() {
-                continue;
-            }
-            let coeff_refs: Vec<&[f64]> = effective.iter().map(Vec::as_slice).collect();
-            let contributions = crate::par::contribution::compute_contributions(
-                season,
-                n_seasons,
-                coefficients[season].len(),
-                &coeff_refs,
-                &std_by_season,
-            );
-            if crate::par::contribution::check_negative_contributions(&contributions) {
-                let max_valid = crate::par::contribution::find_max_valid_order(&contributions);
-                failing.push((season, max_valid));
-            }
-        }
-        if failing.is_empty() {
-            break;
-        }
-
-        for (season, max_valid) in failing {
-            // Step the ceiling down by 1; subsequent loop iterations will
-            // continue dropping until contributions pass.
-            let _ = max_valid;
-            if max_orders[season] == 0 {
-                continue;
-            }
-            max_orders[season] -= 1;
-            n_reductions += 1;
-
-            // Re-fit at the new ceiling. When the ceiling has dropped to 0
-            // we still solve the 1×1 extended YW so ψ is refreshed.
-            let new_order = if max_orders[season] == 0 {
-                0
-            } else {
-                let facp = conditional_facp_partitioned(
-                    season,
-                    max_orders[season],
-                    n_seasons,
-                    observations_by_season,
-                    stats_by_season,
-                    z_year_starts,
-                    annual_observations_by_season,
-                    annual_stats_by_season,
-                    a_year_starts,
-                );
-                let n_obs = observations_by_season[season].len();
-                select_order_pacf_annual(&facp, n_obs, z_alpha).selected_order
-            };
-
-            let fit = estimate_periodic_ar_annual_coefficients(
-                season,
-                new_order,
-                n_seasons,
-                observations_by_season,
-                stats_by_season,
-                z_year_starts,
-                annual_observations_by_season,
-                annual_stats_by_season,
-                a_year_starts,
-            );
-            coefficients[season] = fit.coefficients;
-            annual_coefficients[season] = fit.annual_coefficient;
-            residual_std_ratios[season] = fit.residual_std_ratio;
-            if coefficients[season].len() != new_order {
-                coefficients[season].clear();
-                annual_coefficients[season] = 0.0;
-                residual_std_ratios[season] = 1.0;
-                max_orders[season] = 0;
-                frozen[season] = true;
-            } else if max_orders[season] == 0 || coefficients[season].is_empty() {
-                frozen[season] = true;
-            }
-        }
-    }
-
-    let selected_orders: Vec<usize> = coefficients.iter().map(Vec::len).collect();
-    ReducedOrderFit {
-        selected_orders,
-        coefficients,
-        annual_coefficients,
-        residual_std_ratios,
-        n_reductions,
     }
 }
 
@@ -7168,156 +6945,6 @@ mod tests {
             result.residual_std_ratio, 1.0,
             "singular system must return residual_std_ratio=1.0"
         );
-    }
-
-    // -----------------------------------------------------------------------
-    // fit_par_annual_with_reduction tests (Maceira-Damazio iterative reduction
-    // across the full periodic cycle, using contribution-based validation).
-    // -----------------------------------------------------------------------
-
-    use super::{ReducedOrderFit, fit_par_annual_with_reduction};
-
-    /// All-positive single-season AR(1) data: contribution check is trivially
-    /// non-negative, no reduction needed.
-    #[test]
-    fn fit_par_annual_with_reduction_no_reduction_for_positive_ar1() {
-        let n_years = 80;
-        let mut z = vec![1.0_f64];
-        for y in 1..n_years {
-            let noise = (y as f64 * 0.17).sin() * 0.25;
-            z.push(0.6 * z[y - 1] + noise);
-        }
-        let a: Vec<f64> = (0..n_years)
-            .map(|y| (y as f64 * 0.43).cos() * 0.5)
-            .collect();
-
-        let obs: &[&[f64]] = &[&z];
-        let ann_obs: &[&[f64]] = &[&a];
-        let stats = [pop_mean_std_ann(&z)];
-        let ann_stats = [pop_mean_std_ann(&a)];
-
-        let result = fit_par_annual_with_reduction(
-            &[1],
-            1,
-            obs,
-            &stats,
-            &[0; 32],
-            ann_obs,
-            &ann_stats,
-            &[0; 32],
-            1.96,
-        );
-
-        assert_eq!(result.selected_orders, vec![1]);
-        assert_eq!(result.n_reductions, 0);
-        assert_eq!(result.coefficients[0].len(), 1);
-    }
-
-    /// All-zero initial orders return a pure-annual fit per season.
-    #[test]
-    fn fit_par_annual_with_reduction_zero_initial_orders_pass_through() {
-        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let a0: &[f64] = &[1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
-
-        let obs: &[&[f64]] = &[z0];
-        let ann_obs: &[&[f64]] = &[a0];
-        let stats = [pop_mean_std_ann(z0)];
-        let ann_stats = [pop_mean_std_ann(a0)];
-
-        let result = fit_par_annual_with_reduction(
-            &[0],
-            1,
-            obs,
-            &stats,
-            &[0; 32],
-            ann_obs,
-            &ann_stats,
-            &[0; 32],
-            1.96,
-        );
-
-        assert_eq!(result.selected_orders, vec![0]);
-        assert_eq!(result.n_reductions, 0);
-        assert!(result.coefficients[0].is_empty());
-    }
-
-    /// Singular Yule-Walker system at the initial order falls back to order 0.
-    #[test]
-    fn fit_par_annual_with_reduction_singular_falls_back_to_order_zero() {
-        let z0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
-        let a0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
-
-        let obs: &[&[f64]] = &[z0];
-        let ann_obs: &[&[f64]] = &[a0];
-        let stats = [pop_mean_std_ann(z0)];
-        let ann_stats = [pop_mean_std_ann(a0)];
-
-        let result = fit_par_annual_with_reduction(
-            &[1],
-            1,
-            obs,
-            &stats,
-            &[0; 32],
-            ann_obs,
-            &ann_stats,
-            &[0; 32],
-            1.96,
-        );
-
-        assert_eq!(result.selected_orders, vec![0]);
-        assert!(result.coefficients[0].is_empty());
-        assert_eq!(result.annual_coefficients[0], 0.0);
-    }
-
-    /// Strongly oscillating AR(2) data with ψ ≈ 0 keeps the lag-2
-    /// contribution negative even after the ψ/12 boost, triggering
-    /// reduction.
-    #[test]
-    fn fit_par_annual_with_reduction_reduces_negative_contribution() {
-        let n_years = 100;
-        let alpha: f64 = 0.4;
-        let beta: f64 = -0.85;
-        let mut z = vec![0.0_f64, 1.0_f64];
-        for y in 2..n_years {
-            let noise = (y as f64 * 0.31).sin() * 0.02;
-            z.push(alpha * z[y - 1] + beta * z[y - 2] + noise);
-        }
-        // A uncorrelated with Z so that ψ stays near 0.
-        let a: Vec<f64> = (0..n_years).map(|y| (y as f64 * 1.7).cos() * 0.5).collect();
-
-        let obs: &[&[f64]] = &[&z];
-        let ann_obs: &[&[f64]] = &[&a];
-        let stats = [pop_mean_std_ann(&z)];
-        let ann_stats = [pop_mean_std_ann(&a)];
-
-        let result = fit_par_annual_with_reduction(
-            &[2],
-            1,
-            obs,
-            &stats,
-            &[0; 32],
-            ann_obs,
-            &ann_stats,
-            &[0; 32],
-            1.96,
-        );
-
-        assert!(
-            result.selected_orders[0] < 2,
-            "expected reduction; got selected_orders={:?}",
-            result.selected_orders
-        );
-        assert!(result.n_reductions >= 1);
-    }
-
-    fn _types_inhabited() -> ReducedOrderFit {
-        ReducedOrderFit {
-            selected_orders: vec![],
-            coefficients: vec![],
-            annual_coefficients: vec![],
-            residual_std_ratios: vec![],
-            n_reductions: 0,
-        }
     }
 
     /// Regression test: `assemble_partitioned_covariance` sigma_22 cross-term

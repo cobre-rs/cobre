@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `cobre_stochastic::par::fit_par_annual_with_reduction` and its
+  `ReducedOrderFit` return type. The function had been exposed alongside
+  the wired PAR(p)-A reduction loop in `cobre-sddp` but was never called
+  from production code, and its `φ + ψ̂/12` "effective coefficient"
+  contribution check disagreed with the φ-only check used by the actual
+  estimation pipeline. The wired path
+  (`apply_annual_prepass_reductions` → `reduce_entity_orders_annual`)
+  remains the single source of truth.
+
 ## [0.5.1] - 2026-04-28
 
 ### Added
@@ -24,15 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hydro_id`, `stage_id`, `annual_coefficient`, `annual_mean_m3s`,
   `annual_std_m3s`) by both the CLI and the Python bindings.
 
-- `HistoryClass` taxonomy on PAR(p)-A historical buckets. Each
-  (hydro plant, stage) observation series is classified before fitting:
-  constant series (`Constant`), saturating caps such as turbine flow
-  ceilings or low-flow constants (`Saturated`), and series dominated by
-  more than 10% strictly negative observations (`ManyNegative`) are now
-  detected automatically. `Constant` and `Saturated` buckets force a
-  degenerate fit (order 0, no AR/annual coefficients) so structurally
-  uninformative buckets do not propagate spurious autoregressive
-  structure into adjacent months' PACFs. `ManyNegative` is purely
+- `HistoryClass` taxonomy on per-(hydro, stage) historical buckets. Each
+  observation series is classified inside the shared
+  `estimate_seasonal_stats` routine, so the override applies on **both**
+  the classical PAR(p) and PAR(p)-A paths: constant series (`Constant`),
+  saturating caps such as turbine flow ceilings or low-flow constants
+  (`Saturated`), and series dominated by more than 10% strictly negative
+  observations (`ManyNegative`) are now detected automatically.
+  `Constant` and `Saturated` buckets force the seasonal `(mean, std)` to
+  `(value, 0)`, which yields a degenerate fit (order 0, no AR/annual
+  coefficients) on either path — explicitly via the structural-zero
+  short-circuit on PAR(p)-A, and implicitly via zeroed periodic
+  autocorrelation on classical PAR(p). `ManyNegative` is purely
   diagnostic and does not override the fit.
 
 - Two extensions to the PACF order-selection rule for the PAR(p)-A path:
@@ -42,23 +56,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FACP is well defined but no lag exceeds the 95% significance threshold.
 
 - Maceira-Damazio iterative order reduction across the full periodic
-  cycle. After the initial PACF + Yule-Walker fit, the
-  recursively-composed contributions of each lag through the periodic
-  monthly chain are computed; if any contribution is negative, the
-  offending season's AR ceiling is reduced and the fit is re-run at the
-  new ceiling. The reduction iterates across all seasons until every
+  cycle for the PAR(p)-A path. After the initial PACF + Yule-Walker fit,
+  the recursively-composed contributions of each lag through the
+  periodic monthly chain are computed; if any contribution is negative,
+  the offending season's AR ceiling is reduced and the fit is re-run at
+  the new ceiling. The reduction iterates across all seasons until every
   season's contribution recursion yields non-negative entries. This
   prevents negative chain-composed contributions from propagating as
-  unstable Benders cuts in downstream SDDP recursions. Exposed as
-  `cobre_stochastic::par::fit_par_annual_with_reduction` and wired into
-  the `pacf_annual` estimation path.
+  unstable Benders cuts in downstream SDDP recursions.
 
 ### Changed
 
-- PAR(p)-A seasonal stats (`σ^Z_m`) and Z⊗A cross-covariance now use the
-  population (`1/N`) divisor and a max-bucket-size cross-cov divisor,
-  matching the Maceira-Damazio PAR(p)-A standard-deviation convention.
-  The classical PAR(p) path (without annual component) is unchanged.
+- Seasonal stats (`σ^Z_m`) now use the population (`1/N`) divisor on
+  **both** the classical PAR(p) and PAR(p)-A paths, matching the
+  Maceira-Damazio standard-deviation convention. Previously
+  `estimate_seasonal_stats` used the Bessel-corrected (`1/(N-1)`)
+  divisor; the function is shared between paths, so any consumer of
+  `inflow_seasonal_stats.parquet` will see std values about 0.5–1.1%
+  smaller than before (proportional to `sqrt((N-1)/N)`). The change
+  propagates through `periodic_autocorrelation` (used by both paths) and
+  affects the classical PACF order selection too.
+
+- PAR(p)-A Z⊗A cross-covariance (`cross_correlation_z_a` /
+  `cross_correlation_a_z_neg1`) now uses the max-bucket-size population
+  divisor (`max(|A|, |Z|)`) instead of the strict-pair count. This
+  change is PAR(p)-A specific — classical PAR(p) does not use Z⊗A
+  cross-correlations.
 
 - HiGHS default options retuned for warm-started master LPs dominated by
   many slack rows: Devex dual-edge weight pricing, dual-simplex cost

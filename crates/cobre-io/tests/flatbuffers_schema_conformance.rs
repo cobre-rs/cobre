@@ -75,6 +75,13 @@ fn schema_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/policy.fbs")
 }
 
+/// Schema namespace prefix. flatc 23.x strictly resolves `--root-type`
+/// against the schema's namespace; passing the unqualified short name
+/// (e.g. `StageCuts`) fails with `unknown root type`.
+fn qualified(root_type: &str) -> String {
+    format!("Cobre.IO.Policy.{root_type}")
+}
+
 /// Run `flatc -t --strict-json --raw-binary --root-type T` and return the
 /// decoded JSON value.
 fn flatc_decode(buf: &[u8], root_type: &str) -> Value {
@@ -87,7 +94,7 @@ fn flatc_decode(buf: &[u8], root_type: &str) -> Value {
         .arg("--strict-json")
         .arg("--raw-binary")
         .arg("--root-type")
-        .arg(root_type)
+        .arg(qualified(root_type))
         .arg("-o")
         .arg(dir.path())
         .arg(schema_path())
@@ -116,7 +123,7 @@ fn flatc_encode(json: &Value, root_type: &str) -> Vec<u8> {
     let status = flatc_command()
         .arg("-b")
         .arg("--root-type")
-        .arg(root_type)
+        .arg(qualified(root_type))
         .arg("-o")
         .arg(dir.path())
         .arg(schema_path())
@@ -422,7 +429,7 @@ table StageCuts {
     let status = flatc_command()
         .arg("-b")
         .arg("--root-type")
-        .arg("StageCuts")
+        .arg(qualified("StageCuts"))
         .arg("-o")
         .arg(dir.path())
         .arg(&legacy_schema)

@@ -30,7 +30,7 @@ license = "Apache-2.0"
 repository = "https://github.com/cobre-rs/cobre"
 homepage = "https://cobre-rs.github.io/cobre-docs/"
 documentation = "https://docs.rs/cobre"
-authors = ["Rogerio J. M. Alves <rogerio.alves@cobre.dev>"]
+authors = ["Rogerio J. M. Alves <rogerio.alves@cobre-rs.dev>"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

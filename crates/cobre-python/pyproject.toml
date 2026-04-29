@@ -9,7 +9,7 @@ description = "High-performance SDDP solver for hydrothermal dispatch — Python
 requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [
-    { name = "Rogerio J. M. Alves", email = "rogerio.alves@cobre.dev" },
+    { name = "Rogerio J. M. Alves", email = "rogerio.alves@cobre-rs.dev" },
 ]
 readme = "README.md"
 keywords = ["sddp", "optimization", "power-systems", "energy", "hydrothermal"]

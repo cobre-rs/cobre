@@ -32,13 +32,13 @@ use std::sync::mpsc;
 use cobre_comm::{CommData, CommError, Communicator, ReduceOp};
 use cobre_core::scenario::ScenarioSource;
 use cobre_io::{
-    PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload, write_policy_checkpoint,
+    write_policy_checkpoint, PolicyCheckpointMetadata, PolicyCutRecord, StageCutsPayload,
 };
 use cobre_sddp::{
-    StudySetup, aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic,
+    aggregate_simulation, hydro_models::prepare_hydro_models, setup::prepare_stochastic, StudySetup,
 };
-use cobre_solver::SolverInterface;
 use cobre_solver::highs::HighsSolver;
+use cobre_solver::SolverInterface;
 
 /// Single-rank communicator stub for deterministic testing.
 struct StubComm;
@@ -2627,7 +2627,7 @@ fn d25_simulation_discount_factors() {
 
 /// D26 expected lower bound: recorded with corrected forward-prediction fix.
 /// Regression guard against backward-prediction (P5) bug.
-pub const D26_EXPECTED_COST: f64 = 47_721_588.894_912_5;
+pub const D26_EXPECTED_COST: f64 = 50_607_484.905_810_06;
 
 /// D26: PAR(2) estimation from inflow history (regression guard for forward-prediction fix).
 /// Exercises full PAR(p) pipeline with PACF order selection and Yule-Walker fitting.

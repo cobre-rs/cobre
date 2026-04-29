@@ -562,9 +562,16 @@ impl Default for SimulationConfig {
 /// Order selection criterion for autoregressive model fitting.
 ///
 /// Controls how the lag order is chosen when fitting a time series model.
+/// Two variants are accepted:
 ///
-/// The `"fixed"` JSON value is deprecated; it is accepted for backwards
-/// compatibility but mapped to `Pacf` at parse time with a warning.
+/// - `"pacf"` — classical periodic Yule-Walker with PACF-based order
+///   selection. Default.
+/// - `"pacf_annual"` — extends `"pacf"` with an annual component (PAR(p)-A),
+///   adding one extra coefficient ψ per (entity, season) that multiplies
+///   the rolling 12-month average of past observations.
+///
+/// The legacy `"fixed"` JSON value is deprecated; it is accepted for
+/// backwards compatibility but mapped to `Pacf` at parse time with a warning.
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -572,6 +579,23 @@ pub enum OrderSelectionMethod {
     /// Periodic Yule-Walker partial autocorrelation method (PACF).
     #[default]
     Pacf,
+    /// Periodic Yule-Walker order selection augmented with an annual component.
+    ///
+    /// When selected, the estimation pipeline performs four steps beyond the
+    /// classical [`Self::Pacf`] path:
+    ///
+    /// 1. **Extended Yule-Walker fitting** — the system is augmented with a
+    ///    cross-correlation term between the current-season inflow and the
+    ///    rolling 12-month average, yielding the annual coefficient ψ
+    ///    alongside the classical AR coefficients.
+    /// 2. **Annual-stats computation** — per-season sample mean μ^A and
+    ///    Bessel-corrected standard deviation σ^A of the rolling 12-month
+    ///    average are computed for each hydro plant.
+    /// 3. **Parquet emission** — the triple (ψ, μ^A, σ^A) is written to
+    ///    `inflow_annual_component.parquet` in the output directory.
+    /// 4. **Widened LP lag stride** — the noise-column layout in the LP is
+    ///    extended to accommodate the annual term alongside the classical lags.
+    PacfAnnual,
 }
 
 impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
@@ -579,6 +603,7 @@ impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
             "pacf" => Ok(Self::Pacf),
+            "pacf_annual" => Ok(Self::PacfAnnual),
             "fixed" => {
                 tracing::warn!(
                     "OrderSelectionMethod::Fixed is deprecated and will be removed \
@@ -587,7 +612,10 @@ impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {
                 );
                 Ok(Self::Pacf)
             }
-            other => Err(serde::de::Error::unknown_variant(other, &["pacf", "fixed"])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["pacf", "pacf_annual", "fixed"],
+            )),
         }
     }
 }
@@ -626,7 +654,8 @@ pub struct EstimationConfig {
     /// Maximum lag order considered during autoregressive model fitting.
     pub max_order: u32,
 
-    /// Order selection criterion: fixed maximum or information-criterion-based.
+    /// Order selection criterion. Accepts `"pacf"` (classical PACF, default)
+    /// or `"pacf_annual"` (PACF augmented with an annual component, PAR(p)-A).
     pub order_selection: OrderSelectionMethod,
 
     /// Minimum number of observations required per (entity, season) group
@@ -1921,5 +1950,56 @@ mod tests {
         // does not specify them.
         assert!(!cfg.exports.states);
         assert!(!cfg.exports.stochastic);
+    }
+
+    // ── OrderSelectionMethod::PacfAnnual tests ────────────────────────────────
+
+    /// `"pacf_annual"` round-trips through serde_json.
+    ///
+    /// Deserialization must produce `PacfAnnual`; serialization must produce
+    /// the `"pacf_annual"` string.
+    #[test]
+    fn order_selection_pacf_annual_round_trip() {
+        let parsed: OrderSelectionMethod = serde_json::from_str("\"pacf_annual\"").unwrap();
+        assert!(
+            matches!(parsed, OrderSelectionMethod::PacfAnnual),
+            "\"pacf_annual\" must deserialize to PacfAnnual, got: {parsed:?}"
+        );
+        let serialized = serde_json::to_string(&OrderSelectionMethod::PacfAnnual).unwrap();
+        assert_eq!(
+            serialized, "\"pacf_annual\"",
+            "PacfAnnual must serialize to \"pacf_annual\", got: {serialized}"
+        );
+    }
+
+    /// An unknown variant error must mention `"pacf_annual"` as an expected
+    /// variant so users know the option exists.
+    #[test]
+    fn order_selection_unknown_variant_lists_pacf_annual() {
+        let err = serde_json::from_str::<OrderSelectionMethod>("\"pacf_seasonal\"").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("pacf_annual"),
+            "error message must contain \"pacf_annual\", got: {msg}"
+        );
+    }
+
+    /// The default variant must remain `Pacf`; `PacfAnnual` is opt-in.
+    #[test]
+    fn order_selection_default_is_pacf() {
+        assert!(
+            matches!(OrderSelectionMethod::default(), OrderSelectionMethod::Pacf),
+            "default must be Pacf, not PacfAnnual"
+        );
+    }
+
+    /// The deprecated `"fixed"` string still resolves to `Pacf`.
+    #[test]
+    fn order_selection_fixed_still_maps_to_pacf() {
+        let parsed: OrderSelectionMethod = serde_json::from_str("\"fixed\"").unwrap();
+        assert!(
+            matches!(parsed, OrderSelectionMethod::Pacf),
+            "deprecated \"fixed\" must still resolve to Pacf, got: {parsed:?}"
+        );
     }
 }

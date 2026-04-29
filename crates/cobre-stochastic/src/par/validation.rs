@@ -47,6 +47,7 @@ use crate::StochasticError;
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 ///
 /// let report = validate_par_parameters(&[model]).unwrap();
@@ -140,6 +141,7 @@ pub enum ParWarning {
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 /// let report = validate_par_parameters(&[valid]).unwrap();
 /// assert!(report.warnings.is_empty());
@@ -152,6 +154,7 @@ pub enum ParWarning {
 ///     std_m3s: 0.0,
 ///     ar_coefficients: vec![0.3],
 ///     residual_std_ratio: 0.954,
+///     annual: None,
 /// };
 /// let result = validate_par_parameters(&[bad]);
 /// assert!(result.is_err());
@@ -212,6 +215,30 @@ mod tests {
             std_m3s,
             ar_coefficients,
             residual_std_ratio,
+            annual: None,
+        }
+    }
+
+    fn make_model_with_annual(
+        hydro_id: i32,
+        stage_id: i32,
+        std_m3s: f64,
+        ar_coefficients: Vec<f64>,
+        residual_std_ratio: f64,
+    ) -> InflowModel {
+        use cobre_core::scenario::AnnualComponent;
+        InflowModel {
+            hydro_id: EntityId(hydro_id),
+            stage_id,
+            mean_m3s: 100.0,
+            std_m3s,
+            ar_coefficients,
+            residual_std_ratio,
+            annual: Some(AnnualComponent {
+                coefficient: 0.15,
+                mean_m3s: 90.0,
+                std_m3s: 12.0,
+            }),
         }
     }
 
@@ -331,6 +358,76 @@ mod tests {
             other @ ParWarning::NearUnitCircleRoot { .. } => {
                 panic!("expected LowResidualVariance, got {other:?}")
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for models with annual: Some(_) (PAR(p)-A extension)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_with_annual_some_no_warnings() {
+        // AR(1) model with an annual component and a healthy residual ratio.
+        // The annual field must not affect the residual-variance warning.
+        let model = make_model_with_annual(1, 0, 30.0, vec![0.3], 0.954);
+        let report = validate_par_parameters(&[model]).unwrap();
+        assert!(
+            report.warnings.is_empty(),
+            "annual: Some(_) must not trigger spurious warnings"
+        );
+    }
+
+    #[test]
+    fn validate_with_annual_some_low_residual_warns() {
+        // The low residual-variance warning is driven by residual_std_ratio,
+        // not by whether annual is Some or None.
+        let model = make_model_with_annual(2, 3, 30.0, vec![0.4], 0.05);
+        let report = validate_par_parameters(&[model]).unwrap();
+        assert_eq!(
+            report.warnings.len(),
+            1,
+            "exactly one LowResidualVariance warning expected"
+        );
+        match &report.warnings[0] {
+            ParWarning::LowResidualVariance {
+                hydro_id,
+                stage_id,
+                ratio,
+            } => {
+                assert_eq!(*hydro_id, 2);
+                assert_eq!(*stage_id, 3);
+                assert!(
+                    (ratio - 0.05_f64 * 0.05_f64).abs() < f64::EPSILON,
+                    "ratio must be residual_std_ratio^2"
+                );
+            }
+            other @ ParWarning::NearUnitCircleRoot { .. } => {
+                panic!("expected LowResidualVariance, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn validate_with_annual_some_zero_std_errors() {
+        // std_m3s == 0.0 with ar_order > 0 is always fatal, regardless of
+        // whether an annual component is present.
+        let model = make_model_with_annual(5, 7, 0.0, vec![0.3], 0.954);
+        let result = validate_par_parameters(&[model]);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StochasticError::InvalidParParameters {
+                hydro_id,
+                stage_id,
+                reason,
+            } => {
+                assert_eq!(hydro_id, 5);
+                assert_eq!(stage_id, 7);
+                assert!(
+                    reason.contains("zero standard deviation"),
+                    "reason must mention zero standard deviation, got: {reason}"
+                );
+            }
+            other => panic!("expected InvalidParParameters, got {other:?}"),
         }
     }
 }

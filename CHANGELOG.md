@@ -9,6 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-28
+
+### Added
+
+- Annual component extension to the periodic AR inflow model. Selecting
+  `"order_selection": "pacf_annual"` in the estimation config activates the
+  PAR(p)-A path: the fitting pipeline emits a new `AnnualComponent` triple
+  (`coefficient`, `mean_m3s`, `std_m3s`) per (hydro, season) on top of the
+  classical AR coefficients, allowing the model to capture multi-year
+  hydrological persistence. The triple is exposed on `InflowModel.annual` and
+  is also written to a new output file
+  `output/stochastic/inflow_annual_component.parquet` (5 columns:
+  `hydro_id`, `stage_id`, `annual_coefficient`, `annual_mean_m3s`,
+  `annual_std_m3s`) by both the CLI and the Python bindings.
+
+- `HistoryClass` taxonomy on PAR(p)-A historical buckets. Each
+  (hydro plant, stage) observation series is classified before fitting:
+  constant series (`Constant`), saturating caps such as turbine flow
+  ceilings or low-flow constants (`Saturated`), and series dominated by
+  more than 10% strictly negative observations (`ManyNegative`) are now
+  detected automatically. `Constant` and `Saturated` buckets force a
+  degenerate fit (order 0, no AR/annual coefficients) so structurally
+  uninformative buckets do not propagate spurious autoregressive
+  structure into adjacent months' PACFs. `ManyNegative` is purely
+  diagnostic and does not override the fit.
+
+- Two extensions to the PACF order-selection rule for the PAR(p)-A path:
+  a structural-zero short-circuit forces the model to order 0 when the
+  lag-1 conditional FACP is exactly zero (degenerate Schur complement),
+  and a minimum-order-1 default keeps an AR(1) base whenever the lag-1
+  FACP is well defined but no lag exceeds the 95% significance threshold.
+
+- Maceira-Damazio iterative order reduction across the full periodic
+  cycle. After the initial PACF + Yule-Walker fit, the
+  recursively-composed contributions of each lag through the periodic
+  monthly chain are computed; if any contribution is negative, the
+  offending season's AR ceiling is reduced and the fit is re-run at the
+  new ceiling. The reduction iterates across all seasons until every
+  season's contribution recursion yields non-negative entries. This
+  prevents negative chain-composed contributions from propagating as
+  unstable Benders cuts in downstream SDDP recursions. Exposed as
+  `cobre_stochastic::par::fit_par_annual_with_reduction` and wired into
+  the `pacf_annual` estimation path.
+
+### Changed
+
+- PAR(p)-A seasonal stats (`σ^Z_m`) and Z⊗A cross-covariance now use the
+  population (`1/N`) divisor and a max-bucket-size cross-cov divisor,
+  matching the Maceira-Damazio PAR(p)-A standard-deviation convention.
+  The classical PAR(p) path (without annual component) is unchanged.
+
+- HiGHS default options retuned for warm-started master LPs dominated by
+  many slack rows: Devex dual-edge weight pricing, dual-simplex cost
+  perturbation disabled, initial-condition check disabled, row-wise PRICE
+  strategy, and a loosened rebuild-refactor solution-error tolerance
+  (`1e-6`). These changes alter the simplex trajectory and may yield a
+  different optimal basis representation at the same objective value;
+  the deterministic-suite parity hashes for D03, D06, and D07 were
+  refreshed accordingly. Numerical answers are unchanged within solver
+  tolerances.
+
+- JSON Schemas under `book/src/schemas/` regenerated from the current
+  Rust structs via `cobre schema export`. The previously committed
+  schemas had drifted from the source of truth (most visibly,
+  `CutSelectionConfig` was renamed to `RowSelectionConfig` and
+  `ExportsConfig` was trimmed to its two active flags). No
+  config-file shape change for users on the supported variants.
+
 ## [0.5.0] - 2026-04-25
 
 Major refactor. Consumers must update `config.json`, any code calling

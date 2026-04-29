@@ -2627,7 +2627,7 @@ fn d25_simulation_discount_factors() {
 
 /// D26 expected lower bound: recorded with corrected forward-prediction fix.
 /// Regression guard against backward-prediction (P5) bug.
-pub const D26_EXPECTED_COST: f64 = 47_721_588.894_912_5;
+pub const D26_EXPECTED_COST: f64 = 50_607_484.905_810_06;
 
 /// D26: PAR(2) estimation from inflow history (regression guard for forward-prediction fix).
 /// Exercises full PAR(p) pipeline with PACF order selection and Yule-Walker fitting.

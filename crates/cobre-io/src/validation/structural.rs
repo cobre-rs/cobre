@@ -6,7 +6,7 @@
 //!
 //! Call [`validate_structure`] with a path to the case root and a mutable
 //! [`ValidationContext`].  It returns a [`FileManifest`] that records which of
-//! the 39 input files are present.  Missing required files produce
+//! the 40 input files are present.  Missing required files produce
 //! [`ErrorKind::FileNotFound`] entries in the context.  Missing optional files
 //! leave the corresponding manifest field `false` without adding any error.
 //!
@@ -28,12 +28,12 @@ use super::{ErrorKind, ValidationContext};
 
 // ── FileManifest ─────────────────────────────────────────────────────────────
 
-/// Records whether each of the 39 input files is present in the case directory.
+/// Records whether each of the 40 input files is present in the case directory.
 ///
 /// All fields default to `false`.  After calling [`validate_structure`], each field
 /// is `true` if the corresponding file was found on disk.
 ///
-/// The 39 files are organised by subdirectory following the input directory structure spec.
+/// The 40 files are organised by subdirectory following the input directory structure spec.
 /// Each bool is an independent "present/absent" flag for a distinct file.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
@@ -74,6 +74,8 @@ pub struct FileManifest {
     pub scenarios_inflow_seasonal_stats_parquet: bool,
     /// `scenarios/inflow_ar_coefficients.parquet` — optional
     pub scenarios_inflow_ar_coefficients_parquet: bool,
+    /// `scenarios/inflow_annual_component.parquet` — optional
+    pub scenarios_inflow_annual_component_parquet: bool,
     /// `scenarios/external_inflow_scenarios.parquet` — optional
     pub scenarios_external_inflow_scenarios_parquet: bool,
     /// `scenarios/external_load_scenarios.parquet` — optional
@@ -131,7 +133,7 @@ struct FileEntry {
     required: bool,
 }
 
-/// All 39 input files in canonical order.
+/// All 40 input files in canonical order.
 const FILE_ENTRIES: &[FileEntry] = &[
     // Root-level — required
     FileEntry {
@@ -203,6 +205,10 @@ const FILE_ENTRIES: &[FileEntry] = &[
     },
     FileEntry {
         relative: "scenarios/inflow_ar_coefficients.parquet",
+        required: false,
+    },
+    FileEntry {
+        relative: "scenarios/inflow_annual_component.parquet",
         required: false,
     },
     FileEntry {
@@ -298,7 +304,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 
 /// Performs Layer 1 structural validation on the case directory at `case_root`.
 ///
-/// For each of the 39 known input files:
+/// For each of the 40 known input files:
 ///
 /// - If the file is present, the corresponding [`FileManifest`] field is set to `true`.
 /// - If the file is absent **and required**, an [`ErrorKind::FileNotFound`] error is
@@ -315,7 +321,7 @@ const FILE_ENTRIES: &[FileEntry] = &[
 ///
 /// # Returns
 ///
-/// A [`FileManifest`] recording presence/absence of all 39 files.
+/// A [`FileManifest`] recording presence/absence of all 40 files.
 #[must_use]
 pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> FileManifest {
     let mut manifest = FileManifest::default();
@@ -345,7 +351,7 @@ pub fn validate_structure(case_root: &Path, ctx: &mut ValidationContext) -> File
 ///
 /// This keeps the mapping between entries and manifest fields explicit and avoids
 /// fragile positional indexing elsewhere.
-fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 39] {
+fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 40] {
     [
         // Root (4)
         &mut m.config_json,
@@ -364,10 +370,11 @@ fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 39] {
         &mut m.system_hydro_geometry_parquet,
         &mut m.system_hydro_production_models_json,
         &mut m.system_fpha_hyperplanes_parquet,
-        // scenarios/ (8)
+        // scenarios/ (9)
         &mut m.scenarios_inflow_history_parquet,
         &mut m.scenarios_inflow_seasonal_stats_parquet,
         &mut m.scenarios_inflow_ar_coefficients_parquet,
+        &mut m.scenarios_inflow_annual_component_parquet,
         &mut m.scenarios_external_inflow_scenarios_parquet,
         &mut m.scenarios_external_load_scenarios_parquet,
         &mut m.scenarios_external_ncs_scenarios_parquet,
@@ -565,19 +572,19 @@ mod tests {
 
     #[test]
     fn test_structural_manifest_fields_count() {
-        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (39 entries)
+        // Verify the FILE_ENTRIES array and manifest_fields_mut are consistent (40 entries)
         assert_eq!(
             FILE_ENTRIES.len(),
-            39,
-            "FILE_ENTRIES should have exactly 39 entries"
+            40,
+            "FILE_ENTRIES should have exactly 40 entries"
         );
 
         let mut manifest = FileManifest::default();
         let fields = manifest_fields_mut(&mut manifest);
         assert_eq!(
             fields.len(),
-            39,
-            "manifest_fields_mut should return exactly 39 fields"
+            40,
+            "manifest_fields_mut should return exactly 40 fields"
         );
     }
 
@@ -619,6 +626,48 @@ mod tests {
         assert!(
             manifest.scenarios_noise_openings_parquet,
             "scenarios_noise_openings_parquet should be true when file is present"
+        );
+    }
+
+    /// AC #5: `scenarios/inflow_annual_component.parquet` present → manifest flag `true`.
+    #[test]
+    fn test_manifest_detects_inflow_annual_component_present() {
+        let dir = TempDir::new().unwrap();
+        make_case_with_required(&dir);
+        let scenarios_dir = dir.path().join("scenarios");
+        fs::create_dir_all(&scenarios_dir).unwrap();
+        fs::write(scenarios_dir.join("inflow_annual_component.parquet"), b"").unwrap();
+
+        let mut ctx = ValidationContext::new();
+        let manifest = validate_structure(dir.path(), &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "present optional file should not produce errors"
+        );
+        assert!(
+            manifest.scenarios_inflow_annual_component_parquet,
+            "scenarios_inflow_annual_component_parquet should be true when file is present"
+        );
+    }
+
+    /// AC #6: `scenarios/inflow_annual_component.parquet` absent → manifest flag `false`, no error.
+    #[test]
+    fn test_manifest_inflow_annual_component_absent() {
+        let dir = TempDir::new().unwrap();
+        make_case_with_required(&dir);
+        // Do not create the optional annual component file.
+
+        let mut ctx = ValidationContext::new();
+        let manifest = validate_structure(dir.path(), &mut ctx);
+
+        assert!(
+            !ctx.has_errors(),
+            "absent optional file should not produce errors"
+        );
+        assert!(
+            !manifest.scenarios_inflow_annual_component_parquet,
+            "scenarios_inflow_annual_component_parquet should be false when file is absent"
         );
     }
 }

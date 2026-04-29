@@ -574,6 +574,7 @@ mod tests {
             inflow_history: vec![],
             inflow_seasonal_stats: vec![],
             inflow_ar_coefficients: vec![],
+            inflow_annual_components: vec![],
             external_scenarios: vec![],
             external_load_scenarios: vec![],
             external_ncs_scenarios: vec![],

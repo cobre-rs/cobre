@@ -1547,6 +1547,7 @@ mod tests {
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let mut profiles = BTreeMap::new();
         profiles.insert(
@@ -3203,6 +3204,7 @@ mod tests {
             std_m3s,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let mut profiles = BTreeMap::new();
         profiles.insert(
@@ -3679,6 +3681,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let load_model = LoadModel {
             bus_id: EntityId(1),

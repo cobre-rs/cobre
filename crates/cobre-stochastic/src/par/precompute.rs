@@ -29,6 +29,27 @@
 //!
 //! where `s_m` is `std_m3s` for the current stage's season and `s_{m-ℓ}` is
 //! `std_m3s` for the season `ℓ` stages prior.
+//!
+//! ## PAR(p)-A annual component
+//!
+//! When any [`InflowModel`] in the input set has `annual: Some(_)`, the
+//! materialized `psi` stride is widened to 12 (one slot per month of the annual
+//! lag polynomial) regardless of the classical AR order. The effective
+//! length-12 polynomial is:
+//!
+//! ```text
+//! ψ̂ = ψ · σ_m / σ^A          (annual unit conversion)
+//! φ̂_j = φ_j · σ_m / σ_{m-j}  (classical AR lag conversion)
+//!
+//! psi[stage,h,j] = φ̂_{j+1} + ψ̂/12   for j ∈ [0, ar_order)
+//! psi[stage,h,j] =           ψ̂/12   for j ∈ [ar_order, 12)
+//!
+//! deterministic_base = μ_m − Σ_{j=0..11} psi[stage,h,j] · μ_{m-j-1}
+//! ```
+//!
+//! Hydros with `annual: None` inside a study where some hydro has `Some` use
+//! `ψ̂ = 0`, preserving classical-PAR behavior on the wider stride. When every
+//! model has `annual: None`, the classical materialization is preserved bit-for-bit.
 
 use std::collections::{HashMap, HashSet};
 
@@ -113,6 +134,7 @@ fn resolve_season_id(stage_id: i32, n_seasons: usize, season_offset: usize) -> u
 ///     std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 ///
 /// let lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
@@ -198,13 +220,25 @@ impl PrecomputedPar {
             .collect();
 
         // Determine max AR order across all inflow models.
-        let max_order = inflow_models
+        let classical_max_order = inflow_models
             .iter()
             .map(InflowModel::ar_order)
             .max()
             .unwrap_or(0);
 
+        // When any model carries an annual component, widen the psi stride to
+        // 12 so that the ψ̂/12 term fills all 12 monthly lag positions. The
+        // classical AR order may already exceed 12 in unusual configurations;
+        // take the larger of the two.
+        let any_annual = inflow_models.iter().any(|m| m.annual.is_some());
+        let max_order = if any_annual {
+            12_usize.max(classical_max_order)
+        } else {
+            classical_max_order
+        };
+
         // Per-hydro AR order (maximum across all stages for that hydro).
+        // This reports the original AR order p, not the widened stride.
         let mut orders = vec![0usize; n_hydros];
         for model in inflow_models {
             if let Some(&h_idx) = hydro_index.get(&model.hydro_id) {
@@ -412,7 +446,7 @@ struct StageArrayBuffers<'a> {
 /// # Errors
 ///
 /// Returns [`StochasticError::InvalidParParameters`] when a study stage has
-/// AR order > 0 but no `season_id`.
+/// AR order > 0 or an annual component but no `season_id`.
 fn fill_stage_arrays(
     stages: &[Stage],
     hydro_ids: &[EntityId],
@@ -497,14 +531,38 @@ fn fill_stage_arrays(
                     // sigma = s_m * residual_std_ratio
                     bufs.sigma[flat2] = s_m * m.residual_std_ratio;
 
+                    // Compute the annual unit-converted coefficient ψ̂ for this
+                    // (stage, hydro). When PAR-A is off for this hydro (annual is
+                    // None) or the psi stride is classical (max_order < 12),
+                    // ψ̂ = 0 so the formula degenerates to the classical path.
+                    //
+                    // ψ̂ = ψ · σ_m / σ^A
+                    //
+                    // If σ^A == 0.0, the contribution is zero (same guard as
+                    // the zero-std lag-stage path for φ̂ coefficients).
+                    let psi_hat = if bufs.max_order < 12 {
+                        0.0
+                    } else {
+                        match m.annual.as_ref() {
+                            None => 0.0,
+                            Some(ann) if ann.std_m3s == 0.0 => 0.0,
+                            Some(ann) => ann.coefficient * s_m / ann.std_m3s,
+                        }
+                    };
+
                     // Convert ψ* → ψ and compute the deterministic base.
                     //
-                    // ψ_{m,ℓ} = ψ*_{m,ℓ} · s_m / s_{m-ℓ}
+                    // Classical:    ψ_{m,ℓ} = ψ*_{m,ℓ} · s_m / s_{m-ℓ}
+                    // PAR-A:        psi[j]  = φ̂_{j+1} + ψ̂/12  for j < order
+                    //                         ψ̂/12              for j ∈ [order, 12)
                     //
-                    // deterministic_base = μ_m - Σ_ℓ ψ_{m,ℓ} · μ_{m-ℓ}
+                    // deterministic_base = μ_m - Σ_ℓ psi[ℓ] · μ_{m-ℓ-1}
+                    //
+                    // When PAR-A is off (psi_hat == 0), the formula is identical
+                    // to the classical one.
                     let mut base = mu_m;
 
-                    for lag in 0..order {
+                    for lag in 0..max_order {
                         // lag is 0-based: coefficient index 0 corresponds to lag ℓ=1.
                         let lag_stage_id = stage_id - i32::try_from(lag + 1).unwrap_or(i32::MAX);
 
@@ -532,16 +590,22 @@ fn fill_stage_arrays(
                                 (0.0, 0.0)
                             };
 
+                        // φ̂_j: classical AR contribution for lags within the AR
+                        // order. For lags beyond the AR order, φ̂ = 0.
+                        //
                         // Avoid divide-by-zero: if s_lag == 0.0, the ratio is
-                        // undefined. Treat psi as zero (no AR contribution from
-                        // that lag). The caller is responsible for validating that
-                        // lag stages with AR order > 0 have positive std.
-                        let psi_star = m.ar_coefficients[lag];
-                        let psi_val = if s_lag == 0.0 {
+                        // undefined. Treat ar_contrib as zero (no AR contribution
+                        // from that lag). The caller is responsible for validating
+                        // that lag stages with AR order > 0 have positive std.
+                        let ar_contrib = if lag >= order || s_lag == 0.0 {
                             0.0
                         } else {
-                            psi_star * s_m / s_lag
+                            m.ar_coefficients[lag] * s_m / s_lag
                         };
+
+                        // Effective psi at this lag: classical AR plus the
+                        // annual ψ̂ spread evenly over all 12 positions.
+                        let psi_val = ar_contrib + psi_hat / 12.0;
 
                         // Store in flat 3-D array.
                         let flat3 = s_idx * n_hydros * max_order + h_idx * max_order + lag;
@@ -550,15 +614,17 @@ fn fill_stage_arrays(
                         base -= psi_val * mu_lag;
                     }
 
-                    // Verify that we have a valid season_id when AR order > 0.
-                    // (Season is needed for upstream validation; here we confirm
-                    //  the stage is properly configured.)
-                    if order > 0 && stage.season_id.is_none() {
+                    // Verify that we have a valid season_id when AR order > 0
+                    // or when the annual component is present. Season is required
+                    // for the lag-stage statistics lookup (both classical and
+                    // PAR-A paths rely on the season fallback).
+                    if (order > 0 || m.annual.is_some()) && stage.season_id.is_none() {
                         return Err(StochasticError::InvalidParParameters {
                             hydro_id: hydro_id.0,
                             stage_id,
-                            reason: "stage has AR order > 0 but no season_id; \
-                                     cannot perform coefficient unit conversion"
+                            reason: "stage has AR order > 0 or an annual component \
+                                     but no season_id; cannot perform lag-stage \
+                                     statistics lookup"
                                 .to_string(),
                         });
                     }
@@ -590,16 +656,12 @@ mod tests {
 
     use super::{PrecomputedPar, resolve_season_id};
 
-    fn dummy_date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
-        NaiveDate::from_ymd_opt(year, month, day).unwrap()
-    }
-
     fn make_stage(index: usize, id: i32, season_id: Option<usize>) -> Stage {
         Stage {
             index,
             id,
-            start_date: dummy_date(2024, 1, 1),
-            end_date: dummy_date(2024, 2, 1),
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
             season_id,
             blocks: vec![Block {
                 index: 0,
@@ -634,6 +696,7 @@ mod tests {
             std_m3s: std,
             ar_coefficients: coeffs,
             residual_std_ratio: residual_ratio,
+            annual: None,
         }
     }
 
@@ -1470,6 +1533,431 @@ mod tests {
             "September base should match: march={}, jan={}",
             lp_mar.deterministic_base(6, 0),
             lp_jan.deterministic_base(8, 0)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PAR(p)-A annual component tests
+    // -----------------------------------------------------------------------
+
+    use cobre_core::scenario::AnnualComponent;
+
+    /// Build an `InflowModel` carrying a `Some(AnnualComponent)`.
+    fn make_model_with_annual(
+        hydro_id: i32,
+        stage_id: i32,
+        mean: f64,
+        std: f64,
+        coeffs: Vec<f64>,
+        residual_ratio: f64,
+        annual: AnnualComponent,
+    ) -> InflowModel {
+        InflowModel {
+            hydro_id: EntityId(hydro_id),
+            stage_id,
+            mean_m3s: mean,
+            std_m3s: std,
+            ar_coefficients: coeffs,
+            residual_std_ratio: residual_ratio,
+            annual: Some(annual),
+        }
+    }
+
+    #[test]
+    fn par_a_off_preserves_classical_max_order() {
+        // Single hydro AR(2), all annual: None. Verifies that the classical
+        // path is preserved bit-for-bit when no annual component is present.
+        let stages = vec![make_stage(0, 0, Some(0))];
+        let pre_models = vec![
+            make_model(1, -2, 100.0, 30.0, vec![], 1.0),
+            make_model(1, -1, 100.0, 30.0, vec![], 1.0),
+        ];
+        let study_model = make_model(1, 0, 100.0, 30.0, vec![0.3, 0.2], 0.9);
+        let mut all_models = pre_models;
+        all_models.push(study_model);
+
+        let lp = PrecomputedPar::build(&all_models, &stages, &[EntityId(1)]).unwrap();
+
+        assert_eq!(lp.max_order(), 2, "classical max_order should be 2");
+        assert_eq!(
+            lp.psi_slice(0, 0).len(),
+            2,
+            "psi_slice length should equal max_order"
+        );
+    }
+
+    #[test]
+    fn par_a_on_widens_max_order_to_12() {
+        // Same fixture but with one hydro having annual: Some(_).
+        // max_order must widen to 12 and every (s, h) psi_slice has len 12.
+        let stages = vec![make_stage(0, 0, Some(0))];
+        let pre_models = vec![
+            make_model(1, -2, 100.0, 30.0, vec![], 1.0),
+            make_model(1, -1, 100.0, 30.0, vec![], 1.0),
+        ];
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+        };
+        let study_model = make_model_with_annual(1, 0, 100.0, 30.0, vec![0.3, 0.2], 0.9, ann);
+        let mut all_models = pre_models;
+        all_models.push(study_model);
+
+        let lp = PrecomputedPar::build(&all_models, &stages, &[EntityId(1)]).unwrap();
+
+        assert_eq!(
+            lp.max_order(),
+            12,
+            "annual component must widen max_order to 12"
+        );
+        assert_eq!(lp.psi_slice(0, 0).len(), 12);
+    }
+
+    #[test]
+    fn par_a_on_hand_computed_uniform_seasons() {
+        // Single stage, single hydro. All seasonal stats are equal:
+        //   μ_m = σ_m = σ^A = 30, ψ = 0.6, φ_1 = 0.3.
+        //
+        // Expected:
+        //   ψ̂ = 0.6 * 30 / 30 = 0.6
+        //   psi[0] = 0.3 * 30/30 + 0.6/12 = 0.3 + 0.05 = 0.35
+        //   psi[1..12] = 0.6/12 = 0.05
+        //   base = 100 - Σ_{j=0..11} psi[j] * 100
+        //        = 100 - 100 * (0.35 + 11*0.05)
+        //        = 100 - 100 * 0.9 = 10
+        let study_stage = make_stage(0, 0, Some(0));
+        let pre_study = make_model(1, -1, 100.0, 30.0, vec![], 1.0);
+        let ann = AnnualComponent {
+            coefficient: 0.6,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+        };
+        let study_model = make_model_with_annual(1, 0, 100.0, 30.0, vec![0.3], 0.954, ann);
+
+        let lp = PrecomputedPar::build(&[pre_study, study_model], &[study_stage], &[EntityId(1)])
+            .unwrap();
+
+        let psi = lp.psi_slice(0, 0);
+        assert_eq!(psi.len(), 12);
+        assert!(
+            (psi[0] - 0.35).abs() < 1e-10,
+            "psi[0]: expected 0.35, got {}",
+            psi[0]
+        );
+        for (j, &v) in psi[1..].iter().enumerate() {
+            assert!(
+                (v - 0.05).abs() < 1e-10,
+                "psi[{}]: expected 0.05, got {}",
+                j + 1,
+                v
+            );
+        }
+        let expected_base = 10.0_f64;
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "deterministic_base: expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
+        );
+    }
+
+    #[test]
+    fn par_a_on_12_seasons_with_season_fallback() {
+        // 12 monthly stages, AR(1) at stage 0 with annual: Some.
+        // Stage 0 has σ_0 = 20, σ^A = 18, ψ = 0.4, φ_1 = 0.5.
+        // Lag-1 resolves to season 11 via fallback: σ_{11} = 42.
+        //
+        // psi[0] = 0.5 * 20/42 + (0.4 * 20/18) / 12
+        // psi[1..12] = (0.4 * 20/18) / 12
+        let stages = make_monthly_stages();
+
+        let ann = AnnualComponent {
+            coefficient: 0.4,
+            mean_m3s: 100.0,
+            std_m3s: 18.0,
+        };
+
+        // Build monthly models with the special stage 0 carrying annual.
+        let models: Vec<InflowModel> = (0..12_i32)
+            .map(|i| {
+                let fi = f64::from(i);
+                let mean = 100.0 + fi * 10.0;
+                let std = 20.0 + fi * 2.0;
+                if i == 0 {
+                    make_model_with_annual(1, i, mean, std, vec![0.5], 0.9, ann.clone())
+                } else {
+                    make_model(1, i, mean, std, vec![], 1.0)
+                }
+            })
+            .collect();
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        let s_0 = 20.0_f64;
+        let s_11 = 42.0_f64;
+        let psi_hat = 0.4 * s_0 / 18.0;
+        let phi_hat_0 = 0.5 * s_0 / s_11;
+        let expected_psi_0 = phi_hat_0 + psi_hat / 12.0;
+        let expected_psi_rest = psi_hat / 12.0;
+
+        let psi = lp.psi_slice(0, 0);
+        assert_eq!(psi.len(), 12);
+        assert!(
+            (psi[0] - expected_psi_0).abs() < 1e-10,
+            "psi[0]: expected {expected_psi_0}, got {}",
+            psi[0]
+        );
+        for (j, &v) in psi[1..].iter().enumerate() {
+            assert!(
+                (v - expected_psi_rest).abs() < 1e-10,
+                "psi[{}]: expected {expected_psi_rest}, got {}",
+                j + 1,
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn par_a_mixed_some_and_none_hydros() {
+        // Two hydros: hydro 1 has annual: Some, hydro 2 has annual: None.
+        // Stride 12 applies to both. For hydro 2: psi[0..ar_order] are
+        // classical φ̂ values; psi[ar_order..12] are 0.0.
+        let stages = vec![make_stage(0, 0, Some(0))];
+        let pre_models = vec![
+            make_model(1, -1, 100.0, 30.0, vec![], 1.0),
+            make_model(2, -1, 80.0, 20.0, vec![], 1.0),
+        ];
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+        };
+        // hydro 1: AR(1) + annual
+        let model_h1 = make_model_with_annual(1, 0, 100.0, 30.0, vec![0.3], 0.9, ann);
+        // hydro 2: AR(1), no annual
+        let model_h2 = make_model(2, 0, 80.0, 20.0, vec![0.4], 0.9);
+        let mut all_models = pre_models;
+        all_models.push(model_h1);
+        all_models.push(model_h2);
+
+        let hydro_ids = [EntityId(1), EntityId(2)];
+        let lp = PrecomputedPar::build(&all_models, &stages, &hydro_ids).unwrap();
+
+        assert_eq!(lp.max_order(), 12);
+
+        // Hydro 1 (h_idx=0): psi[0] = φ̂_1 + ψ̂/12, psi[1..12] = ψ̂/12.
+        let psi_h1 = lp.psi_slice(0, 0);
+        assert_eq!(psi_h1.len(), 12);
+        // ψ̂ = ψ · σ_m / σ^A = 0.5 * 30/30 = 0.5
+        let annual_coeff_h1 = 0.5_f64 * 30.0 / 30.0;
+        // φ̂_1 = φ_1 · σ_m / σ_{m-1} = 0.3 * 30/30 = 0.3
+        let ar_coeff_h1 = 0.3_f64 * 30.0 / 30.0;
+        assert!(
+            (psi_h1[0] - (ar_coeff_h1 + annual_coeff_h1 / 12.0)).abs() < 1e-10,
+            "h1 psi[0]: expected {}, got {}",
+            ar_coeff_h1 + annual_coeff_h1 / 12.0,
+            psi_h1[0]
+        );
+        for (j, &v) in psi_h1[1..].iter().enumerate() {
+            assert!(
+                (v - annual_coeff_h1 / 12.0).abs() < 1e-10,
+                "h1 psi[{}]: expected {}, got {}",
+                j + 1,
+                annual_coeff_h1 / 12.0,
+                v
+            );
+        }
+
+        // Hydro 2 (h_idx=1): no annual, classical φ̂ at lag 0, zeros at [1..12].
+        let psi_h2 = lp.psi_slice(0, 1);
+        assert_eq!(psi_h2.len(), 12);
+        // φ̂_1 = φ_1 · σ_m / σ_{m-1} = 0.4 * 20/20 = 0.4
+        let ar_coeff_h2 = 0.4_f64 * 20.0 / 20.0;
+        assert!(
+            (psi_h2[0] - ar_coeff_h2).abs() < 1e-10,
+            "h2 psi[0]: expected {ar_coeff_h2}, got {}",
+            psi_h2[0]
+        );
+        for (j, &v) in psi_h2[1..].iter().enumerate() {
+            assert!(
+                v.abs() < 1e-12,
+                "h2 psi[{}]: expected 0.0, got {}",
+                j + 1,
+                v
+            );
+        }
+
+        // deterministic_base for hydro 2 must equal the classical formula
+        // summed over the same wider psi_slice (trailing zeros contribute zero).
+        let expected_base_h2 = 80.0 - ar_coeff_h2 * 80.0;
+        assert!(
+            (lp.deterministic_base(0, 1) - expected_base_h2).abs() < 1e-10,
+            "h2 base: expected {expected_base_h2}, got {}",
+            lp.deterministic_base(0, 1)
+        );
+    }
+
+    #[test]
+    fn par_a_zero_annual_std_yields_zero_contribution() {
+        // annual.std_m3s == 0.0: ψ̂ contribution must be 0.0 for all 12 lags.
+        // No error should be raised.
+        let study_stage = make_stage(0, 0, Some(0));
+        let pre_study = make_model(1, -1, 100.0, 30.0, vec![], 1.0);
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 100.0,
+            std_m3s: 0.0, // zero std: ψ̂ contribution is zero
+        };
+        let study_model = make_model_with_annual(1, 0, 100.0, 30.0, vec![0.3], 0.9, ann);
+
+        let lp = PrecomputedPar::build(&[pre_study, study_model], &[study_stage], &[EntityId(1)])
+            .unwrap();
+
+        // psi[0] = φ̂_1 + 0/12 = 0.3 * 30/30 = 0.3 (no annual contribution).
+        // psi[1..12] = 0/12 = 0.0.
+        let psi = lp.psi_slice(0, 0);
+        assert_eq!(psi.len(), 12);
+        assert!(
+            (psi[0] - 0.3).abs() < 1e-12,
+            "psi[0]: expected 0.3, got {}",
+            psi[0]
+        );
+        for (j, &v) in psi[1..].iter().enumerate() {
+            assert!(
+                v.abs() < 1e-12,
+                "psi[{}]: annual contribution with zero std must be 0.0, got {}",
+                j + 1,
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn par_a_declaration_order_invariance() {
+        // Two hydros with PAR-A active. Result must be identical regardless
+        // of the order in which inflow models appear in the input slice.
+        let stage = make_stage(0, 0, Some(0));
+        let ann1 = AnnualComponent {
+            coefficient: 0.4,
+            mean_m3s: 100.0,
+            std_m3s: 25.0,
+        };
+        let ann2 = AnnualComponent {
+            coefficient: 0.6,
+            mean_m3s: 200.0,
+            std_m3s: 40.0,
+        };
+
+        let model_h3 = make_model_with_annual(3, 0, 100.0, 30.0, vec![], 1.0, ann1);
+        let model_h5 = make_model_with_annual(5, 0, 200.0, 40.0, vec![], 1.0, ann2);
+
+        let hydro_ids = [EntityId(3), EntityId(5)];
+        let stages = [stage];
+
+        // Forward order.
+        let lp_fwd =
+            PrecomputedPar::build(&[model_h3.clone(), model_h5.clone()], &stages, &hydro_ids)
+                .unwrap();
+        // Reversed order.
+        let lp_rev = PrecomputedPar::build(&[model_h5, model_h3], &stages, &hydro_ids).unwrap();
+
+        assert_eq!(lp_fwd.max_order(), 12);
+        assert_eq!(lp_rev.max_order(), 12);
+
+        for h in 0..2 {
+            let psi_fwd = lp_fwd.psi_slice(0, h);
+            let psi_rev = lp_rev.psi_slice(0, h);
+            for (j, (&vf, &vr)) in psi_fwd.iter().zip(psi_rev).enumerate() {
+                assert!(
+                    (vf - vr).abs() < 1e-12,
+                    "h={h} psi[{j}] differs: fwd={vf}, rev={vr}"
+                );
+            }
+            assert!(
+                (lp_fwd.deterministic_base(0, h) - lp_rev.deterministic_base(0, h)).abs() < 1e-12,
+                "h={h} base differs"
+            );
+        }
+    }
+
+    #[test]
+    fn par_a_cross_year_mean_fallback_for_lags_past_p() {
+        // 12 monthly stages, AR(2) at stage 0 with annual: Some.
+        // Lags j ∈ [2, 12) must use season-fallback statistics for μ_{m-j-1}
+        // and σ_{m-j-1}. The deterministic_base must correctly subtract
+        // psi[j] * μ_{m-j-1} for all 12 lags.
+        let stages = make_monthly_stages();
+
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 100.0,
+            std_m3s: 30.0,
+        };
+        // Stage 0: AR(2) + annual. All other stages: AR(0).
+        let models: Vec<InflowModel> = (0..12_i32)
+            .map(|i| {
+                let fi = f64::from(i);
+                let mean = 100.0 + fi * 10.0;
+                let std = 20.0 + fi * 2.0;
+                if i == 0 {
+                    make_model_with_annual(1, i, mean, std, vec![0.4, 0.25], 0.9, ann.clone())
+                } else {
+                    make_model(1, i, mean, std, vec![], 1.0)
+                }
+            })
+            .collect();
+
+        let lp = PrecomputedPar::build(&models, &stages, &[EntityId(1)]).unwrap();
+
+        let s_0 = season_std(0); // 20.0
+        let annual_coeff = 0.5 * s_0 / 30.0;
+
+        // j=0: lag-1 → season 11 (fallback)
+        let ar_contrib_0 = 0.4 * s_0 / season_std(11);
+        let expected_psi_0 = ar_contrib_0 + annual_coeff / 12.0;
+
+        // j=1: lag-2 → season 10 (fallback)
+        let ar_contrib_1 = 0.25 * s_0 / season_std(10);
+        let expected_psi_1 = ar_contrib_1 + annual_coeff / 12.0;
+
+        let psi = lp.psi_slice(0, 0);
+        assert_eq!(psi.len(), 12);
+        assert!(
+            (psi[0] - expected_psi_0).abs() < 1e-10,
+            "psi[0]: expected {expected_psi_0}, got {}",
+            psi[0]
+        );
+        assert!(
+            (psi[1] - expected_psi_1).abs() < 1e-10,
+            "psi[1]: expected {expected_psi_1}, got {}",
+            psi[1]
+        );
+
+        // j ∈ [2, 12): only ψ̂/12, season-fallback lag stats.
+        for (j, &v) in psi[2..].iter().enumerate() {
+            let expected = annual_coeff / 12.0;
+            assert!(
+                (v - expected).abs() < 1e-10,
+                "psi[{}]: expected {expected}, got {}",
+                j + 2,
+                v
+            );
+        }
+
+        // Verify deterministic_base accounts for all 12 lags correctly.
+        let mu_0 = season_mean(0);
+        let mut expected_base = mu_0;
+        for (j, &psi_j) in psi.iter().enumerate() {
+            // Lag j+1 corresponds to stage_id = -1 - j, which resolves
+            // to season 11 - j (wrapping) via the fallback path.
+            let lag_stage_id = -(i32::try_from(j).unwrap() + 1);
+            let lag_season = resolve_season_id(lag_stage_id, 12, 0);
+            expected_base -= psi_j * season_mean(lag_season);
+        }
+        assert!(
+            (lp.deterministic_base(0, 0) - expected_base).abs() < 1e-10,
+            "base: expected {expected_base}, got {}",
+            lp.deterministic_base(0, 0)
         );
     }
 }

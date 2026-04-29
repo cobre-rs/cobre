@@ -685,6 +685,7 @@ mod tests {
                 std_m3s: 1.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -836,6 +837,7 @@ mod tests {
                 std_m3s: 1.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 

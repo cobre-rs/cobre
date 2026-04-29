@@ -176,6 +176,7 @@ pub use crate::tree::opening_tree::OpeningTree;
 /// #         std_m3s: 30.0,
 /// #         ar_coefficients: vec![],
 /// #         residual_std_ratio: 1.0,
+/// #         annual: None,
 /// #     }
 /// # }
 /// # fn identity_correlation(entity_ids: &[i32]) -> CorrelationModel {
@@ -675,6 +676,7 @@ mod tests {
             std_m3s: std,
             ar_coefficients: coeffs,
             residual_std_ratio: 1.0,
+            annual: None,
         }
     }
 

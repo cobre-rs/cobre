@@ -1021,6 +1021,7 @@ mod tests {
             std_m3s: std,
             ar_coefficients: ar,
             residual_std_ratio: 1.0,
+            annual: None,
         }
     }
 

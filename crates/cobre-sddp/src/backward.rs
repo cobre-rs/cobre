@@ -1154,6 +1154,7 @@ mod tests {
             std_m3s: 30.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
 
         let inflow_models: Vec<InflowModel> = (0..n_stages).map(inflow).collect();
@@ -3096,6 +3097,7 @@ mod tests {
                 std_m3s: 30.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 

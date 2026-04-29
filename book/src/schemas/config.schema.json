@@ -70,96 +70,6 @@
       },
       "type": "object"
     },
-    "CutSelectionConfig": {
-      "description": "Row-selection settings (`config.json → training.row_selection`).",
-      "properties": {
-        "basis_activity_window": {
-          "default": null,
-          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `activity_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "check_frequency": {
-          "default": null,
-          "description": "Iterations between pruning checks.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "cut_activity_tolerance": {
-          "default": null,
-          "description": "Minimum dual multiplier for a row to count as binding.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "domination_epsilon": {
-          "default": null,
-          "description": "Epsilon for the `\"domination\"` method.\n\nOverrides `threshold` when the method is `\"domination\"`. Accepts\nfractional values (e.g., `1e-6`) unlike the integer-limited `threshold`.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "enabled": {
-          "default": null,
-          "description": "Enable row pruning.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "max_active_per_stage": {
-          "default": null,
-          "description": "Maximum number of active rows per stage (stage 2 of the row-selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active rows\nper stage after strategy selection has completed. Rows are evicted in\norder of staleness (`last_active_iter` ascending), tie-broken by usage\nfrequency (`active_count` ascending). Rows generated in the current\niteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "memory_window": {
-          "default": null,
-          "description": "Memory window size for the `\"lml1\"` method (iterations).\n\nOverrides `threshold` when the method is `\"lml1\"`. Ignored for other methods.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "method": {
-          "default": null,
-          "description": "Method: `\"level1\"`, `\"lml1\"`, or `\"domination\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threshold": {
-          "default": null,
-          "description": "Generic threshold (deprecated — prefer method-specific fields below).\n\nInterpretation depends on the method:\n- `\"level1\"`: minimum iterations before first pruning pass\n- `\"lml1\"`: memory window size (iterations)\n- `\"domination\"`: epsilon for domination test (integer-limited)\n\nUse `memory_window` for lml1 and `domination_epsilon` for domination\nto avoid the integer limitation. This field is retained for backwards\ncompatibility.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "EstimationConfig": {
       "description": "Time series estimation settings (`config.json → estimation`).\n\nControls automatic parameter estimation when historical inflow data is\nprovided without explicit model statistics or coefficients.",
       "properties": {
@@ -189,42 +99,14 @@
         "order_selection": {
           "$ref": "#/$defs/OrderSelectionMethod",
           "default": "pacf",
-          "description": "Order selection criterion: fixed maximum or information-criterion-based."
+          "description": "Order selection criterion. Accepts `\"pacf\"` (classical PACF, default)\nor `\"pacf_annual\"` (PACF augmented with an annual component, PAR(p)-A)."
         }
       },
       "type": "object"
     },
     "ExportsConfig": {
-      "description": "Export flags controlling which outputs are written to disk\n(`config.json → exports`).\n\nThe struct uses multiple `bool` fields because each flag maps directly to a\nJSON field name in the `exports` section of `config.json`. A state machine\nwould not improve clarity for a flat set of independent output toggles.",
+      "description": "Export flags controlling which outputs are written to disk\n(`config.json → exports`).\n\nOnly the two flags with active consumers are retained. Keys for removed\nfields (`training`, `cuts`, `vertices`, `simulation`, `forward_detail`,\n`backward_detail`, `compression`) are silently ignored when present in\nlegacy `config.json` files.",
       "properties": {
-        "backward_detail": {
-          "default": false,
-          "description": "Export per-scenario backward-pass detail.",
-          "type": "boolean"
-        },
-        "compression": {
-          "default": null,
-          "description": "Compression algorithm for output files: `\"zstd\"`, `\"lz4\"`, or `\"none\"`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cuts": {
-          "default": true,
-          "description": "Export row pool (piecewise-linear envelope).",
-          "type": "boolean"
-        },
-        "forward_detail": {
-          "default": false,
-          "description": "Export per-scenario forward-pass detail.",
-          "type": "boolean"
-        },
-        "simulation": {
-          "default": true,
-          "description": "Export simulation results.",
-          "type": "boolean"
-        },
         "states": {
           "default": false,
           "description": "Export visited forward-pass trial points to the policy checkpoint.",
@@ -233,16 +115,6 @@
         "stochastic": {
           "default": false,
           "description": "Export stochastic preprocessing artifacts to `output/stochastic/`.",
-          "type": "boolean"
-        },
-        "training": {
-          "default": true,
-          "description": "Export training summary metrics.",
-          "type": "boolean"
-        },
-        "vertices": {
-          "default": true,
-          "description": "Export inner approximation vertices.",
           "type": "boolean"
         }
       },
@@ -325,11 +197,16 @@
       "type": "object"
     },
     "OrderSelectionMethod": {
-      "description": "Order selection criterion for autoregressive model fitting.\n\nControls how the lag order is chosen when fitting a time series model.\n\nThe `\"fixed\"` JSON value is deprecated; it is accepted for backwards\ncompatibility but mapped to `Pacf` at parse time with a warning.",
+      "description": "Order selection criterion for autoregressive model fitting.\n\nControls how the lag order is chosen when fitting a time series model.\nTwo variants are accepted:\n\n- `\"pacf\"` — classical periodic Yule-Walker with PACF-based order\n  selection. Default.\n- `\"pacf_annual\"` — extends `\"pacf\"` with an annual component (PAR(p)-A),\n  adding one extra coefficient ψ per (entity, season) that multiplies\n  the rolling 12-month average of past observations.\n\nThe legacy `\"fixed\"` JSON value is deprecated; it is accepted for\nbackwards compatibility but mapped to `Pacf` at parse time with a warning.",
       "oneOf": [
         {
           "const": "pacf",
           "description": "Periodic Yule-Walker partial autocorrelation method (PACF).",
+          "type": "string"
+        },
+        {
+          "const": "pacf_annual",
+          "description": "Periodic Yule-Walker order selection augmented with an annual component.\n\nWhen selected, the estimation pipeline performs four steps beyond the\nclassical [`Self::Pacf`] path:\n\n1. **Extended Yule-Walker fitting** — the system is augmented with a\n   cross-correlation term between the current-season inflow and the\n   rolling 12-month average, yielding the annual coefficient ψ\n   alongside the classical AR coefficients.\n2. **Annual-stats computation** — per-season sample mean μ^A and\n   Bessel-corrected standard deviation σ^A of the rolling 12-month\n   average are computed for each hydro plant.\n3. **Parquet emission** — the triple (ψ, μ^A, σ^A) is written to\n   `inflow_annual_component.parquet` in the output directory.\n4. **Widened LP lag stride** — the noise-column layout in the LP is\n   extended to accommodate the annual term alongside the classical lags.",
           "type": "string"
         }
       ]
@@ -500,6 +377,96 @@
           "default": null,
           "description": "Optional random seed for reproducible scenario generation.",
           "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RowSelectionConfig": {
+      "description": "Row-selection settings (`config.json → training.cut_selection`).",
+      "properties": {
+        "basis_activity_window": {
+          "default": null,
+          "description": "Activity-window size for the basis-reconstruction classifier and\nScheme 1 sort popcount. Bit `i` of `activity_window` counts toward the\nclassifier and popcount mask when `i < basis_activity_window`.\n\nValidated range: 1..=31. Default when absent: 5.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "check_frequency": {
+          "default": null,
+          "description": "Iterations between pruning checks.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cut_activity_tolerance": {
+          "default": null,
+          "description": "Minimum dual multiplier for a row to count as binding.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "domination_epsilon": {
+          "default": null,
+          "description": "Epsilon for the `\"domination\"` method.\n\nOverrides `threshold` when the method is `\"domination\"`. Accepts\nfractional values (e.g., `1e-6`) unlike the integer-limited `threshold`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": null,
+          "description": "Enable row pruning.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_active_per_stage": {
+          "default": null,
+          "description": "Maximum number of active rows per stage (stage 2 of the row-selection\npipeline — hard cap on LP size).\n\nWhen `Some(n)`, the training loop enforces a hard cap of `n` active rows\nper stage after strategy selection has completed. Rows are evicted in\norder of staleness (`last_active_iter` ascending), tie-broken by usage\nfrequency (`active_count` ascending). Rows generated in the current\niteration are never evicted.\n\nWhen `None` (the default), no hard cap is enforced.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory_window": {
+          "default": null,
+          "description": "Memory window size for the `\"lml1\"` method (iterations).\n\nOverrides `threshold` when the method is `\"lml1\"`. Ignored for other methods.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method": {
+          "default": null,
+          "description": "Method: `\"level1\"`, `\"lml1\"`, or `\"domination\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threshold": {
+          "default": null,
+          "description": "Generic threshold (deprecated — prefer method-specific fields below).\n\nInterpretation depends on the method:\n- `\"level1\"`: minimum iterations before first pruning pass\n- `\"lml1\"`: memory window size (iterations)\n- `\"domination\"`: epsilon for domination test (integer-limited)\n\nUse `memory_window` for lml1 and `domination_epsilon` for domination\nto avoid the integer limitation. This field is retained for backwards\ncompatibility.",
+          "format": "uint32",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
@@ -694,7 +661,7 @@
           ]
         },
         "cut_selection": {
-          "$ref": "#/$defs/CutSelectionConfig",
+          "$ref": "#/$defs/RowSelectionConfig",
           "default": {
             "basis_activity_window": null,
             "check_frequency": null,
@@ -867,15 +834,8 @@
     "exports": {
       "$ref": "#/$defs/ExportsConfig",
       "default": {
-        "backward_detail": false,
-        "compression": null,
-        "cuts": true,
-        "forward_detail": false,
-        "simulation": true,
         "states": false,
-        "stochastic": false,
-        "training": true,
-        "vertices": true
+        "stochastic": false
       },
       "description": "Export flags controlling which outputs are written to disk."
     },

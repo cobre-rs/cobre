@@ -337,7 +337,7 @@ instead of requiring pre-computed `inflow_ar_coefficients.parquet`.
 | Field                         | Type    | Default  | Description                                                                      |
 | ----------------------------- | ------- | -------- | -------------------------------------------------------------------------------- |
 | `max_order`                   | integer | `6`      | Maximum lag order considered during autoregressive model fitting.                |
-| `order_selection`             | string  | `"pacf"` | Order selection criterion: `"pacf"` (PACF-based) or `"fixed"` (use `max_order`). |
+| `order_selection`             | string  | `"pacf"` | Order selection criterion: `"pacf"` (PACF-based), `"pacf_annual"` (PACF with annual component), or `"fixed"` (deprecated; mapped to `"pacf"`). |
 | `min_observations_per_season` | integer | `30`     | Minimum observations per (entity, season) group to proceed with estimation.      |
 | `max_coefficient_magnitude`   | float   | `null`   | Safety net: reduce to order 0 if any coefficient exceeds this magnitude.         |
 
@@ -352,6 +352,17 @@ Example:
   }
 }
 ```
+
+Setting `"order_selection": "pacf_annual"` activates the annual component extension. When
+enabled, the estimation pipeline performs four additional steps beyond the classical PAR
+path: (1) the Yule-Walker system is extended to include a cross-correlation term between
+the current-season inflow and the rolling 12-month average; (2) per-season sample
+statistics (mean and standard deviation) of that rolling average are computed for each
+hydro plant; (3) the coefficient, mean, and standard deviation are written to
+`inflow_annual_component.parquet` in the output directory; and (4) the lag stride used
+when building the LP noise columns is widened to accommodate the extra annual term. Use
+this option when your inflow series shows persistence that extends beyond the
+standard seasonal lag window.
 
 ---
 

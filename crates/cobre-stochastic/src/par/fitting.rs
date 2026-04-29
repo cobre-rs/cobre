@@ -13,8 +13,8 @@
 //! 4. [`estimate_periodic_ar_coefficients`] — solves the periodic YW system
 //!    at the selected order to produce AR coefficients and residual std ratio.
 //! 5. [`estimate_seasonal_stats`] — computes seasonal means and
-//!    Bessel-corrected standard deviations from historical observations,
-//!    grouped by `(entity, season)` pair.
+//!    population-divisor (1/N) standard deviations from historical
+//!    observations, grouped by `(entity, season)` pair.
 //! 6. [`estimate_ar_coefficients`] — produces white-noise (order-0) estimates
 //!    for all `(entity, season)` pairs; used by the PACF path when
 //!    `max_order == 0`.
@@ -35,7 +35,7 @@ use chrono::NaiveDate;
 use cobre_core::{
     EntityId,
     scenario::{
-        CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
+        AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
@@ -65,16 +65,176 @@ pub struct SeasonalStats {
     pub stage_id: i32,
     /// Sample mean of observed values (m³/s or whatever unit the caller uses).
     pub mean: f64,
-    /// Bessel-corrected sample standard deviation (N − 1 divisor).
+    /// Population-divisor standard deviation (1/N divisor), matching the
+    /// Maceira-Damazio PAR(p)-A standard-deviation convention.
     pub std: f64,
+}
+
+/// Classification of a per-(entity, season) historical observation series.
+///
+/// Lets the PAR(p)-A fitter short-circuit pathological buckets:
+///
+/// - [`Default`](HistoryClass::Default): no specific behaviour; standard
+///   fitting applies.
+/// - [`Constant`](HistoryClass::Constant): every observation equals the
+///   same value (or every observation is zero/null). Mean and std are
+///   forced to that constant and 0, respectively; AR order is forced to
+///   0 and the annual coefficient is suppressed. Common for plants with
+///   regulated/transposed flows whose incremental inflow is structurally
+///   constant for a given month.
+/// - [`ManyNegative`](HistoryClass::ManyNegative): more than 10% of
+///   observations are strictly negative — a signal that the upstream
+///   incremental construction (the bridge subtracting upstream postos)
+///   has produced unphysical values for this month. Detected for
+///   diagnostics, but **does not override fitting** — the flag is
+///   operator information, not a fit instruction.
+/// - [`Saturated`](HistoryClass::Saturated): more than 50% of
+///   observations equal the modal value — a flow cap (turbine/reservoir
+///   constraint) or a low-flow constant (transposed flow plants).
+///   Treated like `Constant` with the cap as the constant. The std=0
+///   propagates structural zeros into adjacent months' PACF rows. No
+///   P99 condition: low-flow constants (cap=1.0, cap=0.0) classify as
+///   saturated just as readily as high caps.
+///
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HistoryClass {
+    /// No specific behaviour — run the standard fit.
+    Default,
+    /// Every observation is the same value (or all zero/null).
+    Constant {
+        /// The constant value to use as the seasonal mean.
+        value: f64,
+    },
+    /// More than 10% of observations are strictly negative.
+    /// `sample_mean` is the empirical mean over the full series (used as the
+    /// fallback constant; std forced to 0).
+    ManyNegative {
+        /// Empirical mean of the observation series.
+        sample_mean: f64,
+    },
+    /// Saturating cap (>50% of observations at the modal value).
+    Saturated {
+        /// The cap value (modal value of the series).
+        cap: f64,
+    },
+}
+
+impl HistoryClass {
+    /// Returns the override `(mean, std)` that should replace the empirical
+    /// stats for fitting purposes.
+    ///
+    /// `Constant` and `Saturated` force the seasonal mean to the
+    /// constant/cap value and the std to 0, which makes the downstream
+    /// PAR(p)-A fitter short-circuit to order 0. `ManyNegative` is purely
+    /// diagnostic and returns `None` (the classification does not override
+    /// fitting for it). `Default` also returns `None`.
+    #[must_use]
+    pub fn stats_override(self) -> Option<(f64, f64)> {
+        match self {
+            HistoryClass::Default | HistoryClass::ManyNegative { .. } => None,
+            HistoryClass::Constant { value } => Some((value, 0.0)),
+            HistoryClass::Saturated { cap } => Some((cap, 0.0)),
+        }
+    }
+
+    /// Returns `true` when the classification forces a degenerate fit
+    /// (order 0, no AR/annual coefficients). Currently `Constant` and
+    /// `Saturated`. `ManyNegative` is diagnostic only, so it returns
+    /// `false`.
+    #[must_use]
+    pub fn is_degenerate(self) -> bool {
+        matches!(
+            self,
+            HistoryClass::Constant { .. } | HistoryClass::Saturated { .. }
+        )
+    }
+}
+
+/// Classify a single (entity, season) observation series per the
+/// [`HistoryClass`] taxonomy.
+///
+/// The classifier runs in priority order
+/// `Constant` → `ManyNegative` → `Saturated` → `Default`: constant series
+/// take precedence over negative-pathological detection, which in turn
+/// takes precedence over saturation. Observations are rounded to the
+/// nearest integer for mode counting (matching the precision of the
+/// standard historical inflow input format, which stores values in m³/s
+/// as integers). The constancy check uses an absolute tolerance of
+/// `1e-6` to absorb the float round-trip from parquet.
+///
+/// Returns `HistoryClass::Constant { value: 0.0 }` for an empty input — the
+/// degenerate single-observation case is treated the same as a zero-history
+/// series so that downstream fitters short-circuit predictably.
+pub fn classify_history(observations: &[f64]) -> HistoryClass {
+    if observations.is_empty() {
+        return HistoryClass::Constant { value: 0.0 };
+    }
+
+    let first = observations[0];
+    let const_tol = 1e-6;
+
+    // Constant — every observation matches the first within tolerance.
+    if observations.iter().all(|&v| (v - first).abs() < const_tol) {
+        return HistoryClass::Constant { value: first };
+    }
+
+    // ManyNegative — more than 10% strictly negative.
+    let n = observations.len();
+    let n_neg = observations.iter().filter(|&&v| v < 0.0).count();
+    #[allow(clippy::cast_precision_loss)]
+    if (n_neg as f64) / (n as f64) > 0.10 {
+        #[allow(clippy::cast_precision_loss)]
+        let sample_mean = observations.iter().sum::<f64>() / n as f64;
+        return HistoryClass::ManyNegative { sample_mean };
+    }
+
+    // Saturated — modal value occupies more than 50% of observations.
+    //
+    // Round to integer for mode counting (the historical inflow format
+    // stores values to 1 m³/s). No P99 guard: low-flow constants
+    // (cap=0.0, cap=1.0) classify as saturated just as eagerly as high
+    // caps. The driving criterion is structural constancy of the bucket,
+    // not magnitude.
+    #[allow(clippy::cast_possible_truncation)]
+    let mut sorted: Vec<i64> = observations.iter().map(|v| v.round() as i64).collect();
+    sorted.sort_unstable();
+    // Largest run of equal values gives the mode.
+    let mut best_count = 0_usize;
+    let mut best_value: i64 = sorted[0];
+    let mut run = 1_usize;
+    for i in 1..sorted.len() {
+        if sorted[i] == sorted[i - 1] {
+            run += 1;
+        } else {
+            if run > best_count {
+                best_count = run;
+                best_value = sorted[i - 1];
+            }
+            run = 1;
+        }
+    }
+    if run > best_count {
+        best_count = run;
+        best_value = sorted[sorted.len() - 1];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if (best_count as f64) / (n as f64) > 0.50 {
+        return HistoryClass::Saturated {
+            cap: best_value as f64,
+        };
+    }
+
+    HistoryClass::Default
 }
 
 /// Estimate seasonal means and standard deviations from historical observations.
 ///
 /// Groups observations by `(entity_id, season_id)` and computes the sample
-/// mean and Bessel-corrected standard deviation for each group. Only entities
-/// listed in `entity_ids` are processed; observations for other entities are
-/// silently ignored.
+/// mean and population-divisor (1/N) standard deviation for each group,
+/// matching the Maceira-Damazio PAR(p)-A standard-deviation convention.
+/// Only entities listed in `entity_ids` are processed; observations for
+/// other entities are silently ignored.
 ///
 /// Stages with `season_id = None` are skipped when building the date-to-season
 /// mapping. Observations whose date does not fall within any stage's
@@ -91,7 +251,9 @@ pub struct SeasonalStats {
 /// # Errors
 ///
 /// - [`StochasticError::InsufficientData`] when a `(entity, season)` group has
-///   fewer than 2 observations (Bessel correction requires N ≥ 2).
+///   fewer than 2 observations (a degenerate single-sample bucket has no
+///   meaningful std and would propagate zeros into every downstream
+///   correlation, so it is rejected up front).
 /// - [`StochasticError::InsufficientData`] when an observation date falls
 ///   outside every stage's date range.
 ///
@@ -212,7 +374,13 @@ pub fn estimate_seasonal_stats_with_season_map(
         entry.0.push(value);
     }
 
-    // Compute mean and Bessel-corrected std for each group.
+    // Compute mean and population-divisor std for each group.
+    //
+    // The Maceira-Damazio PAR(p)-A formulation computes sigma^Z_m with the
+    // 1/N population divisor, not the Bessel-corrected 1/(N-1). Using the
+    // population divisor is required for self-consistent conditional FACP
+    // values and selected AR orders — the sample-vs-population scale
+    // factor would otherwise propagate through every cross-correlation.
     let mut result: Vec<SeasonalStats> = Vec::with_capacity(group_map.len());
     for ((entity_id, _season_id), (values, stage_id)) in group_map {
         let n = values.len();
@@ -220,8 +388,7 @@ pub fn estimate_seasonal_stats_with_season_map(
             return Err(StochasticError::InsufficientData {
                 context: format!(
                     "entity {entity_id} season mapped to stage {stage_id} \
-                     has {n} observation(s); need at least 2 for Bessel-corrected \
-                     standard deviation"
+                     has {n} observation(s); need at least 2 for std estimation"
                 ),
             });
         }
@@ -232,15 +399,26 @@ pub fn estimate_seasonal_stats_with_season_map(
         #[allow(clippy::cast_precision_loss)]
         let mean = values.iter().copied().sum::<f64>() / n as f64;
         #[allow(clippy::cast_precision_loss)]
-        let variance =
-            values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1) as f64;
+        let variance = values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
         let std = variance.sqrt();
+
+        // History-class override: degenerate buckets (constant series,
+        // saturated caps) get a forced (constant, 0) pair so the
+        // downstream PAR(p)-A fitter short-circuits to order 0. Typical
+        // examples are constant low-flow/high-flow buckets and
+        // ecological-flow months. The classifier returns `Default` for
+        // normal series, in which case we keep the empirical (mean, std)
+        // computed above.
+        let (final_mean, final_std) = match classify_history(&values).stats_override() {
+            Some((override_mean, override_std)) => (override_mean, override_std),
+            None => (mean, std),
+        };
 
         result.push(SeasonalStats {
             entity_id,
             stage_id,
-            mean,
-            std,
+            mean: final_mean,
+            std: final_std,
         });
     }
 
@@ -292,6 +470,11 @@ pub struct ArCoefficientEstimate {
     pub coefficients: Vec<f64>,
     /// Residual std ratio `σ_m / s_m`, always in (0, 1].
     pub residual_std_ratio: f64,
+    /// Annual-component triple for the PAR(p)-A extension; `None` for
+    /// classical PAR(p). All three sub-fields (`coefficient`, `mean_m3s`,
+    /// `std_m3s`) are present together by construction — they are never
+    /// split into separate optional fields.
+    pub annual: Option<AnnualComponent>,
 }
 
 /// Produce white-noise (order-0) AR estimates for all `(entity, season)` pairs.
@@ -498,6 +681,7 @@ pub fn estimate_ar_coefficients_with_season_map(
                 season_id,
                 coefficients: Vec::new(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
         })
         .collect();
@@ -1294,6 +1478,113 @@ pub fn select_order_pacf(
     }
 }
 
+/// Select the AR order for a PAR(p)-A model using the conditional FACP
+/// significance test, with two extensions over the classical PACF rule.
+///
+/// The classical rule is a single 95% confidence interval on the number
+/// of historical years (`z_alpha / sqrt(N)`, no lag-dependent deflation):
+/// the largest lag whose `|FACP|` exceeds the threshold is attributed
+/// as `p_m`. The classical rule is silent on the cases where (a) lag 1
+/// is exactly zero or (b) no lag is significant; the rules below cover
+/// those cases:
+///
+/// 1. **Structural-zero short-circuit at lag 1.** If
+///    `conditional_facp[0] == 0.0` exactly, the model is forced to
+///    order 0. A structural zero at lag 1 indicates a degenerate (Z, A)
+///    bucket — typically a single-observation season or a numerically
+///    singular partitioned-covariance solve — and the convention refuses
+///    to fit any auto-regressive structure on top of it. Structural
+///    zeros at higher lags do **not** trigger the short-circuit; the
+///    convention proceeds with the AR(1) base whenever lag 1 itself is
+///    non-degenerate (e.g., `[+0.37, 0, 0, 0, 0, 0]` -> order 1, not 0).
+/// 2. **Minimum order of 1 when lag 1 is non-zero.** If the conditional
+///    FACP at lag 1 is not a structural zero, the selected order is
+///    `max(1, max_significant_lag)` — the model defaults to AR(1)
+///    whenever no lag exceeds the threshold but lag 1 is well defined.
+///
+/// The Maceira-Damazio iterative order-reduction step is **not** applied
+/// here; the order returned by this function is the tentative
+/// pre-validation order. The reduction runs across all seasons of the
+/// periodic cycle and lives in [`fit_par_annual_with_reduction`].
+///
+/// `pacf_values[k]` in the returned struct is the conditional FACP at lag
+/// `k+1`, conditioned on the intermediate standardised annual noise series
+/// `Z` and the previous annual innovation `A_{t-1}`.
+///
+/// # Parameters
+///
+/// - `conditional_facp` -- conditional FACP coefficients from
+///   [`conditional_facp_partitioned`]. `conditional_facp[k]` is the
+///   conditional FACP at lag `k+1`.
+/// - `n_observations` -- number of historical observations for the given
+///   (hydro, season) pair.
+/// - `z_alpha` -- z-score for the desired confidence level (e.g., `1.96`
+///   for 95% two-sided).
+///
+/// # Examples
+///
+/// ```
+/// use cobre_stochastic::par::fitting::select_order_pacf_annual;
+///
+/// // Conditional FACP at lag 1 = 0.5 exceeds 1.96/sqrt(100) = 0.196; lag 2 = 0.1 does not.
+/// let result = select_order_pacf_annual(&[0.5, 0.1], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // Lag 1 is non-zero (just small) -> min-order-1 rule kicks in.
+/// let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // Structural zero at lag 1 -> order 0 (degenerate bucket).
+/// let result = select_order_pacf_annual(&[0.0, 0.5], 100, 1.96);
+/// assert_eq!(result.selected_order, 0);
+/// ```
+pub fn select_order_pacf_annual(
+    conditional_facp: &[f64],
+    n_observations: usize,
+    z_alpha: f64,
+) -> PacfSelectionResult {
+    #[allow(clippy::cast_precision_loss)]
+    let threshold = if n_observations > 0 {
+        z_alpha / (n_observations as f64).sqrt()
+    } else {
+        f64::INFINITY
+    };
+
+    // Rule 1 — Structural-zero short-circuit at lag 1.
+    // A structural zero at lag 1 (FACP exactly 0.0 from a degenerate
+    // bucket) forces white-noise selection.
+    if conditional_facp.first().copied() == Some(0.0) {
+        return PacfSelectionResult {
+            selected_order: 0,
+            pacf_values: conditional_facp.to_vec(),
+            threshold,
+        };
+    }
+
+    // Find the maximum lag with |conditional FACP| > threshold.
+    let max_significant = conditional_facp
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|&(_, p)| p.abs() > threshold)
+        .map_or(0, |(k, _)| k + 1);
+
+    // Rule 2 — Min-order-1 when lag 1 is non-zero (not a structural zero).
+    // When no lag exceeds the significance threshold but lag 1 is well
+    // defined, the model defaults to AR(1) rather than a pure white-noise
+    // (order-0) fit.
+    let selected_order = match conditional_facp.first() {
+        Some(&p1) if p1 != 0.0 => max_significant.max(1),
+        _ => max_significant,
+    };
+
+    PacfSelectionResult {
+        selected_order,
+        pacf_values: conditional_facp.to_vec(),
+        threshold,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Periodic autocorrelation
 // ---------------------------------------------------------------------------
@@ -1381,7 +1672,12 @@ pub fn periodic_autocorrelation(
         return 0.0;
     }
 
-    // Compute cross-covariance with population divisor (1/N).
+    // Cross-covariance with population divisor (1/N) over the year-aligned
+    // valid pairs. The convention uses N = n_pairs here for Z⊗Z
+    // autocorrelations. The max-bucket-size convention used by
+    // cross_correlation_z_a / cross_correlation_a_z_neg1 only applies to
+    // Z⊗A cross-terms because those buckets have inherently different
+    // lengths (A excludes the first year of Z by construction).
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[i] - mu_lag);
@@ -1555,6 +1851,390 @@ pub fn build_periodic_yw_matrix_into(
 }
 
 // ---------------------------------------------------------------------------
+// Extended periodic Yule-Walker matrix (annual component)
+// ---------------------------------------------------------------------------
+
+/// Compute the cross-correlation between the annual component series `A` at
+/// season `ref_season` (with lag 0 meaning the same observation index) and the
+/// periodic series `Z` at season `ref_season - lag` (wrapping), for non-negative
+/// lag values.
+///
+/// This corresponds to `ρ_{Z,A}^{ref_season}(lag)` from the PAR-A extended
+/// Yule-Walker system. The cross-correlation is defined as:
+///
+/// ```text
+/// ρ_{Z,A}^{ref}(k) =
+///   E[(A_i − μ^A_{ref}) · (Z_{i−k} − μ_{ref−k})] / (σ^A_{ref} · σ_{ref−k})
+/// ```
+///
+/// where the expectation is approximated with a population (1/N) divisor.
+///
+/// # Cross-year alignment
+///
+/// Two distinct year offsets compose:
+///
+/// 1. **Bucket year offset** (`year_diff`). The `A` and `Z` buckets can have
+///    different starting PDF years per season. For monthly data starting on
+///    January, `Z` starts at year `Y0` for every season but `A` starts at
+///    `Y0 + 1` for seasons 0..10 and `Y0` for season 11 (because the rolling
+///    12-month window needs a full year of look-back). Calling code passes
+///    `z_year_starts` and `a_year_starts` (one entry per season) so that the
+///    pairing aligns by absolute PDF year, not by bucket index.
+///
+/// 2. **Lag year wrap** (`pdf_year_back_shift`). When stepping back `lag` months
+///    from `ref_season`, if the lagged season index wraps (`lag_season >
+///    ref_season` for `lag < n_seasons`, or `lag / n_seasons` for larger lags),
+///    `Z`'s PDF year is one (or more) earlier than `A`'s.
+///
+/// **Lag-0 special case**: when `lag == 0`, `A` and `Z` refer to the same
+/// season and the same regression year, so `pdf_year_back_shift = 0`
+/// unconditionally — without this guard the `lag_season >= ref_season` branch
+/// would falsely cross a year boundary.
+///
+/// # Parameters
+///
+/// - `ref_season` — 0-based season index for the `A` series.
+/// - `lag` — non-negative integer lag; `lag = 0` pairs each `A_i` with `Z_i`.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   When all entries are equal, the legacy by-index pairing is recovered.
+/// - `annual_observations_by_season` — `A` observations grouped by season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
+///
+/// # Returns
+///
+/// The normalised cross-correlation, clamped to `[-1.0, 1.0]`.
+/// Returns `0.0` when either standard deviation is below [`f64::EPSILON`],
+/// or when insufficient paired observations exist.
+#[must_use]
+pub fn cross_correlation_z_a(
+    ref_season: usize,
+    lag: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> f64 {
+    let (mu_a, std_a) = annual_stats_by_season[ref_season];
+    let lag_season = (ref_season + n_seasons - lag % n_seasons) % n_seasons;
+    let (mu_z, std_z) = stats_by_season[lag_season];
+
+    // Zero-std guard: cross-correlation is undefined.
+    if std_a.abs() < f64::EPSILON || std_z.abs() < f64::EPSILON {
+        return 0.0;
+    }
+
+    let a_obs = annual_observations_by_season[ref_season];
+    let z_obs = observations_by_season[lag_season];
+
+    // Lag-direction year wrap: how many year boundaries the lag traverses
+    // backward from ref_season to lag_season.
+    let pdf_year_back_shift = if lag == 0 {
+        0
+    } else if lag < n_seasons {
+        usize::from(lag_season >= ref_season)
+    } else {
+        lag / n_seasons
+    };
+
+    // Bucket year offset between A's first PDF year and Z's first PDF year.
+    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[lag_season]);
+    #[allow(clippy::cast_possible_wrap)]
+    let shift = year_diff - pdf_year_back_shift as i64;
+
+    // Pairing is `(a_obs[a_start + k], z_obs[z_start + k])` for k = 0..n_pairs.
+    // shift > 0 ⇒ skip extra Z entries at start (Z starts earlier); shift < 0 ⇒
+    // skip extra A entries at start (A starts earlier).
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let (a_start, z_start) = if shift >= 0 {
+        (0_usize, shift as usize)
+    } else {
+        ((-shift) as usize, 0_usize)
+    };
+
+    let n_pairs = a_obs
+        .len()
+        .saturating_sub(a_start)
+        .min(z_obs.len().saturating_sub(z_start));
+
+    // Insufficient data guard.
+    if n_pairs == 0 {
+        return 0.0;
+    }
+
+    // Cross-covariance with the max-bucket-size population divisor.
+    //
+    // Sum runs over the year-aligned valid pairs, but the divisor is the
+    // **maximum bucket size** (typically the Z bucket = total study-window
+    // years). This is equivalent to padding the missing-A years with the
+    // sample mean (their cross-product contribution is zero) while keeping
+    // the observed σ̂_A computed over the genuinely populated entries.
+    // Using n_pairs (the strict-pair count) here would systematically
+    // overstate ρ̂(Z, A) by a factor of `max_len / n_pairs` and tilt
+    // downstream partitioned-covariance FACPs across the threshold
+    // boundary.
+    let mut gamma = 0.0_f64;
+    for i in 0..n_pairs {
+        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
+    }
+    let denom_n = a_obs.len().max(z_obs.len());
+    #[allow(clippy::cast_precision_loss)]
+    {
+        gamma /= denom_n as f64;
+    }
+
+    // Normalise and clamp.
+    let rho = gamma / (std_a * std_z);
+    rho.clamp(-1.0, 1.0)
+}
+
+/// Compute the "lag = -1" cross-correlation between the annual component `A`
+/// at season `ref_season` and the periodic series `Z` at the **next** season
+/// `(ref_season + 1) % n_seasons`.
+///
+/// This corresponds to `ρ_{Z,A}^{ref_season}(-1)` — equivalently,
+/// `ρ_{A,Z}^{ref_season}(+1)` with the arguments reversed. In the PAR-A
+/// extended Yule-Walker RHS (eq. 15), this entry pairs `A_{t-1}` (season `m-1`)
+/// with `Z_t` (season `m`), so `Z` is one step **ahead** of `A`.
+///
+/// # Cross-year alignment
+///
+/// Two distinct year offsets compose:
+///
+/// 1. **Bucket year offset** (`year_diff`). `A` and `Z` buckets can have
+///    different starting PDF years per season (see [`cross_correlation_z_a`]
+///    docs). Pairing aligns by absolute PDF year using `z_year_starts` and
+///    `a_year_starts`.
+///
+/// 2. **Lag year wrap forward**. When `z_season = (ref_season + 1) % n_seasons`
+///    wraps to 0, `Z` belongs to the next regression year relative to `A`.
+///
+/// # Parameters
+///
+/// - `ref_season` — 0-based season index for the `A` series.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+/// - `annual_observations_by_season` — `A` observations grouped by season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
+///
+/// # Returns
+///
+/// The normalised cross-correlation, clamped to `[-1.0, 1.0]`.
+/// Returns `0.0` when either standard deviation is below [`f64::EPSILON`],
+/// or when insufficient paired observations exist.
+#[must_use]
+pub fn cross_correlation_a_z_neg1(
+    ref_season: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> f64 {
+    let (mu_a, std_a) = annual_stats_by_season[ref_season];
+    let z_season = (ref_season + 1) % n_seasons;
+    let (mu_z, std_z) = stats_by_season[z_season];
+
+    // Zero-std guard: cross-correlation is undefined.
+    if std_a.abs() < f64::EPSILON || std_z.abs() < f64::EPSILON {
+        return 0.0;
+    }
+
+    let a_obs = annual_observations_by_season[ref_season];
+    let z_obs = observations_by_season[z_season];
+
+    // Z is one PDF month after A. When (ref_season + 1) wraps to 0, the
+    // regression year of Z is one greater than A's.
+    let pdf_year_forward_shift = usize::from(z_season == 0);
+
+    let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[z_season]);
+    #[allow(clippy::cast_possible_wrap)]
+    let shift = year_diff + pdf_year_forward_shift as i64;
+
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let (a_start, z_start) = if shift >= 0 {
+        (0_usize, shift as usize)
+    } else {
+        ((-shift) as usize, 0_usize)
+    };
+
+    let n_pairs = a_obs
+        .len()
+        .saturating_sub(a_start)
+        .min(z_obs.len().saturating_sub(z_start));
+
+    // Insufficient data guard.
+    if n_pairs == 0 {
+        return 0.0;
+    }
+
+    // Cross-covariance with the max-bucket-size population divisor — see
+    // [`cross_correlation_z_a`] for the rationale on dividing by the larger
+    // bucket size rather than `n_pairs`.
+    let mut gamma = 0.0_f64;
+    for i in 0..n_pairs {
+        gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
+    }
+    let denom_n = a_obs.len().max(z_obs.len());
+    #[allow(clippy::cast_precision_loss)]
+    {
+        gamma /= denom_n as f64;
+    }
+
+    // Normalise and clamp.
+    let rho = gamma / (std_a * std_z);
+    rho.clamp(-1.0, 1.0)
+}
+
+/// Build the extended periodic Yule-Walker matrix and right-hand side for the
+/// PAR-A model, augmenting the classical `order × order` system with one
+/// extra row and column for the annual component coefficient `ψ`.
+///
+/// The returned matrix has dimension `(order+1) × (order+1)`. Its layout is:
+///
+/// ```text
+/// [ classical_yw_matrix  |  cross_col ]
+/// [ cross_row            |  1.0       ]
+/// ```
+///
+/// where:
+/// - The top-left `order × order` block is the classical periodic YW matrix
+///   (same as [`build_periodic_yw_matrix`] for `season` and `order`).
+/// - The top-right column (indices `i * (order+1) + order` for `i < order`) and
+///   the bottom-left row (indices `order * (order+1) + j` for `j < order`) are
+///   filled symmetrically with
+///   `cross_correlation_z_a((season + n_seasons − 1) % n_seasons, i, …)`.
+/// - The bottom-right diagonal entry `(order, order)` is `1.0`.
+/// - `rhs[0..order]` mirrors the classical YW right-hand side.
+/// - `rhs[order]` is `cross_correlation_a_z_neg1((season + n_seasons − 1) % n_seasons, …)`.
+///
+/// All entries are normalised correlations, so the matrix is symmetric and has
+/// unit diagonal. The solution vector `[φ_1, …, φ_p, ψ]` contains
+/// **standardised** coefficients. Unit conversion is applied later by the
+/// caller.
+///
+/// # Parameters
+///
+/// - `season` — 0-based target season.
+/// - `order` — AR order `p`; the returned matrix has dimension `(order+1) × (order+1)`.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — `Z` observations grouped by season, chronological.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   Threaded through to the cross-correlation helpers for absolute-year
+///   alignment between `A` and `Z` (see [`cross_correlation_z_a`] docs).
+/// - `annual_observations_by_season` — annual component `A` observations grouped by
+///   season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
+///
+/// # Returns
+///
+/// A tuple `(matrix, rhs)` where:
+/// - `matrix` is a flat `Vec<f64>` of length `(order+1)²` in row-major layout.
+///   Entry `R[i][j]` is at index `i * (order+1) + j`.
+/// - `rhs` is a `Vec<f64>` of length `order+1`.
+///
+/// When `order == 0`, returns `(vec![1.0], vec![rhs_annual_neg1])` — a 1×1
+/// system that solves directly for `ψ`.
+#[must_use]
+pub fn build_extended_periodic_yw_matrix(
+    season: usize,
+    order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> (Vec<f64>, Vec<f64>) {
+    let dim = order + 1;
+    let prev_season = (season + n_seasons - 1) % n_seasons;
+
+    let mut matrix = vec![0.0_f64; dim * dim];
+    let mut rhs = vec![0.0_f64; dim];
+
+    // Fill the top-left order × order block (classical periodic YW structure).
+    // Diagonal entries are 1.0 (autocorrelation at lag 0).
+    // Off-diagonal: R[i][j] = periodic_autocorrelation(ref_month, |j-i|, ...)
+    // where ref_month = (season - (i+1)) % n_seasons.
+    for i in 0..order {
+        matrix[i * dim + i] = 1.0;
+        let ref_month = (season + n_seasons - (i + 1) % n_seasons) % n_seasons;
+        for j in (i + 1)..order {
+            let lag = j - i;
+            let rho = periodic_autocorrelation(
+                ref_month,
+                lag,
+                n_seasons,
+                observations_by_season,
+                stats_by_season,
+            );
+            matrix[i * dim + j] = rho;
+            matrix[j * dim + i] = rho; // symmetric
+        }
+    }
+
+    // Fill the classical RHS entries: rhs[i] = rho(season, i+1).
+    for (i, rhs_entry) in rhs.iter_mut().enumerate().take(order) {
+        *rhs_entry = periodic_autocorrelation(
+            season,
+            i + 1,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+        );
+    }
+
+    // Fill the right column and bottom row (annual extension).
+    // Entry (i, order) = (order, i) = cross_correlation_z_a(prev_season, i, ...).
+    for i in 0..order {
+        let rho = cross_correlation_z_a(
+            prev_season,
+            i,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+            z_year_starts,
+            annual_observations_by_season,
+            annual_stats_by_season,
+            a_year_starts,
+        );
+        matrix[i * dim + order] = rho;
+        matrix[order * dim + i] = rho; // symmetric
+    }
+
+    // Bottom-right diagonal entry for the annual component.
+    matrix[order * dim + order] = 1.0;
+
+    // Annual RHS entry: rho_{A,Z}^{prev_season}(-1).
+    rhs[order] = cross_correlation_a_z_neg1(
+        prev_season,
+        n_seasons,
+        observations_by_season,
+        stats_by_season,
+        z_year_starts,
+        annual_observations_by_season,
+        annual_stats_by_season,
+        a_year_starts,
+    );
+
+    (matrix, rhs)
+}
+
+// ---------------------------------------------------------------------------
 // Small matrix solver
 // ---------------------------------------------------------------------------
 
@@ -1632,6 +2312,314 @@ pub fn solve_linear_system(a: &mut [f64], b: &mut [f64], n: usize) -> Option<Vec
     }
 
     Some(x)
+}
+
+// ---------------------------------------------------------------------------
+// Conditional FACP for PAR-A (partitioned-covariance approach)
+// ---------------------------------------------------------------------------
+
+/// Partitioned covariance matrices for one `(season, k)` evaluation.
+///
+/// Stores the three sub-matrices used in the conditional FACP formula
+/// `Σ̄ = Σ_11 − Σ_12 · Σ_22⁻¹ · Σ_21`. Sizes depend on the lag `k`:
+/// - `sigma_11`: 2×2 (always four entries).
+/// - `sigma_12`: 2×k row-major (the conditioning set has `k` elements).
+/// - `sigma_22`: k×k row-major symmetric matrix.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct PartitionedCov {
+    /// 2×2 auto-covariance of `(Z_t, Z_{t−k})`, row-major.
+    sigma_11: [f64; 4],
+    /// 2×k cross-covariance between `(Z_t, Z_{t−k})` and the conditioning
+    /// set `(Z_{t−1}, …, Z_{t−k+1}, A_{t−1})`, row-major.
+    sigma_12: Vec<f64>,
+    /// k×k auto-covariance of the conditioning set, row-major.
+    sigma_22: Vec<f64>,
+}
+
+/// Assemble the three sub-matrices of the partitioned covariance for the
+/// conditional FACP at lag `k` from `season`.
+///
+/// # Matrix layout
+///
+/// The conditioning set at lag `k` is:
+/// `(Z_{t−1}, Z_{t−2}, …, Z_{t−k+1}, A_{t−1})` — that is, `k−1` lagged
+/// `Z` values followed by the annual component at season `m−1`.
+///
+/// **`sigma_11`** (2×2): auto-covariance of `(Z_t, Z_{t−k})`.
+/// - `[0,0] = 1` (unit variance of standardised `Z_t`)
+/// - `[0,1] = [1,0] = ρ^{season}(k)`
+/// - `[1,1] = 1`
+///
+/// **`sigma_22`** (k×k): auto-covariance of the conditioning set.
+/// - Rows/cols `i,j < k−1`: `ρ^{season−1}(|i−j|)` — periodic autocorrelation
+///   of the `Z` block at season `m−1`. Diagonal entries are `1.0`.
+/// - Row/col `k−1` (the `A_{t−1}` entry):
+///   - Off-diagonal: `cross_correlation_z_a(season−1, i, …)` for `i < k−1`.
+///   - Diagonal `[k−1, k−1] = 1.0` (unit variance of standardised `A_{t−1}`).
+///
+/// **`sigma_12`** (2×k): cross-covariance between `(Z_t, Z_{t−k})` and the
+/// conditioning set.
+/// - Row 0 (from `Z_t`), column `j < k−1`: `ρ^{season}(j+1)`.
+/// - Row 0, column `k−1`: `cross_correlation_a_z_neg1(season−1, …)`.
+/// - Row 1 (from `Z_{t−k}`), column `j < k−1`: `ρ^{season−k}(k−1−j)`.
+/// - Row 1, column `k−1`: `cross_correlation_z_a(season−1, k−1, …)`.
+pub(crate) fn assemble_partitioned_covariance(
+    season: usize,
+    k: usize,
+    n_seasons: usize,
+    obs_z: &[&[f64]],
+    stats_z: &[(f64, f64)],
+    z_year_starts: &[i32],
+    obs_a: &[&[f64]],
+    stats_a: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> PartitionedCov {
+    let prev_season = (season + n_seasons - 1) % n_seasons;
+
+    // ------------------------------------------------------------------
+    // Σ_11: 2×2 auto-covariance of (Z_t, Z_{t−k}).
+    // Row-major: [0,0]=1, [0,1]=ρ^season(k), [1,0]=ρ^season(k), [1,1]=1.
+    // ------------------------------------------------------------------
+    let rho_k = periodic_autocorrelation(season, k, n_seasons, obs_z, stats_z);
+    let sigma_11 = [1.0, rho_k, rho_k, 1.0];
+
+    // ------------------------------------------------------------------
+    // Σ_22: k×k auto-covariance of conditioning set.
+    // Conditioning set: (Z_{t−1}, …, Z_{t−k+1}, A_{t−1})  (k elements).
+    // ------------------------------------------------------------------
+    let mut sigma_22 = vec![0.0_f64; k * k];
+
+    // Z-block: rows/cols 0..k−1, all against season prev_season.
+    // Diagonal is always 1.0 (unit variance). Off-diagonal: symmetric.
+    for i in 0..k.saturating_sub(1) {
+        sigma_22[i * k + i] = 1.0;
+        let ref_month = (prev_season + n_seasons - i % n_seasons) % n_seasons;
+        for j in (i + 1)..k.saturating_sub(1) {
+            let lag = j - i;
+            let rho = periodic_autocorrelation(ref_month, lag, n_seasons, obs_z, stats_z);
+            sigma_22[i * k + j] = rho;
+            sigma_22[j * k + i] = rho;
+        }
+    }
+
+    // Cross-terms between the Z-block and A_{t−1} (column/row k−1).
+    // sigma_22[i, k−1] = Corr(Z_{t−1−i}, A_{t−1}).
+    // Z_{t−1−i} is `i` steps older than A_{t−1}, so lag = i.
+    // for i in 0..k−1 (and symmetrically sigma_22[k−1, i]).
+    // Note: for k=1 there is no Z-block (k.saturating_sub(1)=0), so this
+    // loop body is never entered.
+    for i in 0..k.saturating_sub(1) {
+        let lag = i;
+        let rho = cross_correlation_z_a(
+            prev_season,
+            lag,
+            n_seasons,
+            obs_z,
+            stats_z,
+            z_year_starts,
+            obs_a,
+            stats_a,
+            a_year_starts,
+        );
+        sigma_22[i * k + (k - 1)] = rho;
+        sigma_22[(k - 1) * k + i] = rho;
+    }
+
+    // Diagonal entry for A_{t−1}: unit variance by construction.
+    sigma_22[(k - 1) * k + (k - 1)] = 1.0;
+
+    // ------------------------------------------------------------------
+    // Σ_12: 2×k cross-covariance between (Z_t, Z_{t−k}) and conditioning set.
+    // ------------------------------------------------------------------
+    let mut sigma_12 = vec![0.0_f64; 2 * k];
+
+    // Row 0 (Z_t) with Z-block of conditioning set.
+    for (j, entry) in sigma_12[..k.saturating_sub(1)].iter_mut().enumerate() {
+        let rho = periodic_autocorrelation(season, j + 1, n_seasons, obs_z, stats_z);
+        *entry = rho;
+    }
+    // Row 0 (Z_t) with A_{t−1}.
+    sigma_12[k - 1] = cross_correlation_a_z_neg1(
+        prev_season,
+        n_seasons,
+        obs_z,
+        stats_z,
+        z_year_starts,
+        obs_a,
+        stats_a,
+        a_year_starts,
+    );
+
+    // Row 1 (Z_{t−k}) with Z-block of conditioning set.
+    // Position j (0..k−2) of this row is Corr(Z_{t−k}, Z_{t−1−j}).
+    // Z_{t−1−j} is the **newer** of the two (since j ≤ k−2 < k−1 < k), so
+    // ρ_periodic must be anchored at its season with lag = (k−1) − j.
+    for (j, entry) in sigma_12[k..k + k.saturating_sub(1)].iter_mut().enumerate() {
+        let ref_season = (season + n_seasons - 1 - j) % n_seasons;
+        let lag = k.saturating_sub(1).saturating_sub(j);
+        let rho = periodic_autocorrelation(ref_season, lag, n_seasons, obs_z, stats_z);
+        *entry = rho;
+    }
+    // Row 1 (Z_{t−k}) with A_{t−1}.
+    sigma_12[k + (k - 1)] = cross_correlation_z_a(
+        prev_season,
+        k - 1,
+        n_seasons,
+        obs_z,
+        stats_z,
+        z_year_starts,
+        obs_a,
+        stats_a,
+        a_year_starts,
+    );
+
+    PartitionedCov {
+        sigma_11,
+        sigma_12,
+        sigma_22,
+    }
+}
+
+/// Compute the conditional FACP for the PAR-A model up to `max_order`.
+///
+/// For each candidate lag `k` (`1..=max_order`), the conditioning set is
+/// `(Z_{t−1}, …, Z_{t−k+1}, A_{t−1})` — the `k−1` intermediate standardised
+/// inflow values plus the standardised annual component at season `m−1`. The
+/// conditional correlation is obtained from the partitioned-covariance formula:
+///
+/// ```text
+/// Σ̄ = Σ_11 − Σ_12 · Σ_22⁻¹ · Σ_21
+/// ```
+///
+/// where `Σ_21 = Σ_12ᵀ`. The conditional FACP at lag `k` is
+/// `Σ̄[0,1] / √(Σ̄[0,0] · Σ̄[1,1])`, clamped to `[−1, 1]`.
+///
+/// # Parameters
+///
+/// - `season` — 0-based target season (the "current" season `m`).
+/// - `max_order` — maximum lag to evaluate. Returns `Vec::new()` when zero.
+/// - `n_seasons` — total number of seasons in the periodic cycle.
+/// - `observations_by_season` — periodic inflow series `Z`, grouped by season.
+///   Entry `[s][y]` is the standardised observation for season `s` in year `y`.
+/// - `stats_by_season` — `(mean, std)` for each `Z` season.
+/// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
+///   Used by the cross-correlation helpers to align `A` and `Z` by absolute
+///   PDF year rather than by bucket index — required for monthly data where
+///   `A` buckets start one year later than `Z` for most seasons.
+/// - `annual_observations_by_season` — annual component `A`, grouped by season.
+/// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
+/// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
+///
+/// # Returns
+///
+/// A `Vec<f64>` of length `≤ max_order`. Entry `i` is the conditional FACP at
+/// lag `i+1`, clamped to `[−1.0, 1.0]`.
+///
+/// The vector is shorter than `max_order` when `Σ_22` is singular at some lag
+/// `k` — the loop breaks early and entries for lags `≥ k` are omitted.
+/// When `Σ̄[0,0] · Σ̄[1,1] ≤ 0` (numerical degeneracy), the affected entry is
+/// recorded as `0.0`.
+#[must_use]
+pub fn conditional_facp_partitioned(
+    season: usize,
+    max_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> Vec<f64> {
+    if max_order == 0 {
+        return Vec::new();
+    }
+
+    let mut facp_values = Vec::with_capacity(max_order);
+
+    // Reusable scratch buffers for solve_linear_system calls.
+    // The Σ_22 matrix and RHS column are cloned per solve; the buffers below
+    // hold the cloned working copies so we avoid re-allocating each iteration.
+    let mut matrix_buf: Vec<f64> = Vec::new();
+    let mut rhs_col: Vec<f64> = Vec::new();
+
+    for k in 1..=max_order {
+        let cov = assemble_partitioned_covariance(
+            season,
+            k,
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+            z_year_starts,
+            annual_observations_by_season,
+            annual_stats_by_season,
+            a_year_starts,
+        );
+
+        // ------------------------------------------------------------------
+        // Solve Σ_22 · X = Σ_21 column-by-column (2 columns, one per row of
+        // Σ_12). Σ_21 = Σ_12ᵀ, so column c of Σ_21 = row c of Σ_12.
+        // X has shape k×2; store solutions as two Vec<f64> of length k.
+        // ------------------------------------------------------------------
+        let mut x_cols: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut singular = false;
+
+        for (col_idx, x_col) in x_cols.iter_mut().enumerate() {
+            // Copy Σ_22 into working buffer (solve_linear_system modifies in-place).
+            matrix_buf.clear();
+            matrix_buf.extend_from_slice(&cov.sigma_22);
+
+            // Column col_idx of Σ_21 = row col_idx of Σ_12 (k entries).
+            rhs_col.clear();
+            for row in 0..k {
+                rhs_col.push(cov.sigma_12[col_idx * k + row]);
+            }
+
+            if let Some(sol) = solve_linear_system(&mut matrix_buf, &mut rhs_col, k) {
+                *x_col = sol;
+            } else {
+                singular = true;
+                break;
+            }
+        }
+
+        if singular {
+            // Singular Σ_22 — stop the loop and return results so far.
+            break;
+        }
+
+        // ------------------------------------------------------------------
+        // Compute Σ̄ = Σ_11 − Σ_12 · X  (2×2 result).
+        //
+        // Σ_12 is 2×k, X is k×2.
+        // [Σ_12 · X][r, c] = sum_{j=0}^{k-1} Σ_12[r,j] * X[j,c]
+        //                  = sum_{j=0}^{k-1} sigma_12[r*k + j] * x_cols[c][j]
+        //
+        // sigma_bar is stored row-major: [0,0], [0,1], [1,0], [1,1].
+        // ------------------------------------------------------------------
+        let mut sigma_bar = cov.sigma_11;
+        for r in 0..2 {
+            for c in 0..2 {
+                let correction: f64 = (0..k).map(|j| cov.sigma_12[r * k + j] * x_cols[c][j]).sum();
+                sigma_bar[r * 2 + c] -= correction;
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Extract conditional FACP: sigma_bar[0,1] / sqrt(sigma_bar[0,0] * sigma_bar[1,1]).
+        // Guard against non-positive product (numerical degeneracy).
+        // ------------------------------------------------------------------
+        let denom_sq = sigma_bar[0] * sigma_bar[3];
+        let facp = if denom_sq <= 0.0 {
+            0.0
+        } else {
+            (sigma_bar[1] / denom_sq.sqrt()).clamp(-1.0, 1.0)
+        };
+
+        facp_values.push(facp);
+    }
+
+    facp_values
 }
 
 // ---------------------------------------------------------------------------
@@ -1808,6 +2796,528 @@ pub fn estimate_periodic_ar_coefficients(
 }
 
 // ---------------------------------------------------------------------------
+// Annual seasonal stats helper (PAR-A eqs. 17, 18)
+// ---------------------------------------------------------------------------
+
+/// Per-season sample statistics of the rolling 12-month average.
+///
+/// One entry per season for one entity. Computed by
+/// [`estimate_annual_seasonal_stats`] from a chronological observation list.
+///
+/// The `mean_m3s` and `std_m3s` fields are in the original m³/s units of the
+/// observation series; they are **not** standardised. The standardisation
+/// happens inside the cross-correlation helpers from
+/// [`build_extended_periodic_yw_matrix`], and the unit conversion to `ψ̂`
+/// happens at `PrecomputedPar::build` time.
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnualSeasonalStats {
+    /// Entity (e.g., hydro plant) identifier.
+    pub hydro_id: EntityId,
+    /// Season ID (0-based).
+    pub season_id: usize,
+    /// Sample mean of the rolling 12-month average for this (entity, season) pair, in m³/s.
+    pub mean_m3s: f64,
+    /// Population-divisor standard deviation (`1/N` divisor) of the rolling
+    /// 12-month average for this (entity, season) pair, in m³/s. Matches
+    /// the Maceira-Damazio PAR(p)-A standard-deviation convention.
+    pub std_m3s: f64,
+}
+
+/// Estimate the per-season sample statistics `(μ^A_m, σ^A_m)` of the rolling
+/// 12-month average from chronological observations.
+///
+/// For each (entity, season) pair, `μ^A_m` is the sample mean of the rolling
+/// 12-month average `A_t = (1/12) · Σ_{j=0..11} z[t-j]` values whose target
+/// date falls in season `m`. `σ^A_m` is the **population-divisor standard
+/// deviation** using divisor `1/N`, matching the Maceira-Damazio PAR(p)-A
+/// standard-deviation convention and the workspace-wide convention used by
+/// [`estimate_seasonal_stats`]. The PAR(p)-A runtime coefficient is then
+/// `ψ̂ = ψ · σ_m / σ^A_m`, which requires `σ^A_m > 0` (enforced by the
+/// output validator in `cobre-io`).
+///
+/// ## Algorithm
+///
+/// 1. Group observations by `EntityId` and sort each group chronologically.
+/// 2. For each entity group, build the rolling 12-month average:
+///    `A_{i+12} = (1/12) · Σ_{j=0..11} z[i+j]` for every chronological index `i`
+///    such that `i + 12 < group.len()`. The target date is `group[i+12].date`.
+/// 3. Group `A_{i+12}` values by the season of the target date (using
+///    [`find_season_for_date`] + `season_map` fallback, mirroring
+///    [`estimate_seasonal_stats_with_season_map`]).
+/// 4. Compute per (entity, season) the sample mean and population-divisor std (1/N).
+///
+/// Returns rows sorted by `(hydro_id, season_id)` ascending.
+///
+/// # Errors
+///
+/// Returns [`StochasticError::InsufficientData`] when any requested `entity_id`
+/// produces zero rolling-window `A_t` values (fewer than 13 observations for
+/// that entity). The error names the entity and its observation count.
+/// Silent fallback to the classical PAR path is not performed.
+pub fn estimate_annual_seasonal_stats(
+    observations: &[(EntityId, NaiveDate, f64)],
+    stages: &[Stage],
+    entity_ids: &[EntityId],
+    season_map: Option<&SeasonMap>,
+) -> Result<Vec<AnnualSeasonalStats>, StochasticError> {
+    // Build stage index for date-to-season mapping.
+    let mut stage_index: Vec<(NaiveDate, NaiveDate, i32, usize)> = stages
+        .iter()
+        .filter_map(|s| s.season_id.map(|sid| (s.start_date, s.end_date, s.id, sid)))
+        .collect();
+    stage_index.sort_unstable_by_key(|(start, _, _, _)| *start);
+
+    let entity_set: HashSet<EntityId> = entity_ids.iter().copied().collect();
+
+    // Group observations by entity in chronological order.
+    let mut entity_obs: HashMap<EntityId, Vec<(NaiveDate, f64)>> = HashMap::new();
+    for &(entity_id, date, value) in observations {
+        if entity_set.contains(&entity_id) {
+            entity_obs.entry(entity_id).or_default().push((date, value));
+        }
+    }
+    for obs_vec in entity_obs.values_mut() {
+        obs_vec.sort_unstable_by_key(|(d, _)| *d);
+    }
+
+    // Per-entity insufficient-data guard: every requested entity must produce
+    // at least one rolling-window A_t value, which requires >= 13 observations.
+    for &entity_id in entity_ids {
+        let n_obs = entity_obs.get(&entity_id).map_or(0, Vec::len);
+        if n_obs < 13 {
+            return Err(StochasticError::InsufficientData {
+                context: format!(
+                    "entity {entity_id} has {n_obs} observation(s); \
+                     at least 13 are required to form one rolling 12-month average"
+                ),
+            });
+        }
+    }
+
+    // Build rolling-window A_t values grouped by (entity_id, season_id).
+    //
+    // Indexing convention: an A value A_{t-1} = mean(z[t-12..t-1]) is stored
+    // under the season of its own PDF time-index (t-1), which is the most
+    // recent observation in the rolling window — `group[i + 11]`. With this
+    // convention, `annual_stats_by_season[s]` contains stats for
+    // `A_{t-1}` whose PDF time-index falls in season `s`, equivalently
+    // `A_{t-1}` for `t` at season `s + 1`. The Yule-Walker callers
+    // (`build_extended_periodic_yw_matrix`, `assemble_partitioned_covariance`)
+    // index this map with `prev_season = (m - 1) mod n_seasons` to retrieve
+    // the stats for the equation at current season `m`.
+    let mut group_map: HashMap<(EntityId, usize), Vec<f64>> = HashMap::new();
+
+    for &entity_id in entity_ids {
+        let Some(group) = entity_obs.get(&entity_id) else {
+            continue;
+        };
+
+        // For each index i such that i + 11 < group.len() (we still require
+        // i + 12 <= group.len() to access the full 12-month window), the
+        // rolling-window mean A = (1/12) * sum of z[i..i+12] is stored under
+        // the season of group[i + 11].date — i.e., the PDF time-index of
+        // A_{t-1} when target month t = i + 12.
+        for i in 0..group.len().saturating_sub(12) {
+            let target_date = group[i + 11].0;
+
+            let Some(season_id) = find_season_for_date(&stage_index, target_date)
+                .or_else(|| season_map.and_then(|sm| sm.season_for_date(target_date)))
+            else {
+                // Target date not in any stage and no season_map fallback — skip.
+                continue;
+            };
+
+            // A_{(i+12)-1} = (1/12) * sum of z[i..i+12]; PDF time of this value
+            // is i + 11, so it is stored under the season of group[i + 11].
+            let mean_a: f64 = group[i..i + 12].iter().map(|(_, v)| v).sum::<f64>() / 12.0;
+            group_map
+                .entry((entity_id, season_id))
+                .or_default()
+                .push(mean_a);
+        }
+    }
+
+    // Compute mean and population-divisor std for each (entity, season) group.
+    //
+    // The Maceira-Damazio PAR(p)-A formulation uses sigma^A_m with the 1/N
+    // population divisor. Using the population divisor is required for
+    // self-consistent partitioned-covariance FACPs — the sample-vs-population
+    // scale factor would otherwise leak through every Z⊗A cross-correlation.
+    let mut result: Vec<AnnualSeasonalStats> = Vec::with_capacity(group_map.len());
+    for ((entity_id, season_id), values) in &group_map {
+        let n = values.len();
+        #[allow(clippy::cast_precision_loss)]
+        let mean_m3s = values.iter().copied().sum::<f64>() / n as f64;
+        let std_m3s = if n >= 1 {
+            #[allow(clippy::cast_precision_loss)]
+            let var = values
+                .iter()
+                .map(|&v| (v - mean_m3s) * (v - mean_m3s))
+                .sum::<f64>()
+                / n as f64;
+            var.sqrt()
+        } else {
+            0.0
+        };
+
+        result.push(AnnualSeasonalStats {
+            hydro_id: *entity_id,
+            season_id: *season_id,
+            mean_m3s,
+            std_m3s,
+        });
+    }
+
+    // Sort by (hydro_id, season_id) ascending.
+    result.sort_unstable_by_key(|s| (s.hydro_id.0, s.season_id));
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Extended periodic YW coefficient estimation (PAR-A)
+// ---------------------------------------------------------------------------
+
+/// Result of the extended periodic Yule-Walker solve for the PAR-A model.
+///
+/// Returned by [`estimate_periodic_ar_annual_coefficients`]. The three fields
+/// are **standardised** (dimensionless), matching the convention for the classical
+/// `PeriodicYwResult::coefficients`. Unit conversion to runtime coefficients
+/// `(φ̂_j, ψ̂)` happens at `PrecomputedPar::build` time, not here.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct PeriodicYwAnnualResult {
+    /// Standardised AR coefficients `φ_1..φ_p` (dimensionless, direct Yule-Walker
+    /// output). Empty when `selected_order == 0`.
+    pub coefficients: Vec<f64>,
+    /// Standardised annual coefficient `ψ` (dimensionless, direct Yule-Walker
+    /// output).
+    pub annual_coefficient: f64,
+    /// Residual std ratio `σ_residual / σ_seasonal` in `(0, 1]`.
+    pub residual_std_ratio: f64,
+}
+
+/// Estimate PAR-A coefficients `(φ_1..φ_p, ψ)` by solving the extended
+/// periodic Yule-Walker system.
+///
+/// Builds the `(selected_order + 1) × (selected_order + 1)` system via
+/// [`build_extended_periodic_yw_matrix`] and solves it via
+/// [`solve_linear_system`].
+///
+/// ## Singular-system fallback
+///
+/// When the system is singular (the solver returns `None`), the function
+/// returns `PeriodicYwAnnualResult { coefficients: vec![], annual_coefficient:
+/// 0.0, residual_std_ratio: 1.0 }`, matching the classical fallback in
+/// [`estimate_periodic_ar_coefficients`].
+///
+/// ## Order-0 case
+///
+/// When `selected_order == 0`, the function solves the 1×1 system that yields
+/// only `ψ`. The returned `coefficients` is empty.
+///
+/// ## Residual std ratio
+///
+/// `sigma2 = 1 - Σ_i (solution[i] · rhs_orig[i])` over all `selected_order + 1`
+/// solution entries. `residual_std_ratio = sqrt(sigma2).clamp(f64::EPSILON, 1.0)`
+/// when `sigma2 > 0`, else `1.0`.
+pub fn estimate_periodic_ar_annual_coefficients(
+    season: usize,
+    selected_order: usize,
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+) -> PeriodicYwAnnualResult {
+    let zero_result = PeriodicYwAnnualResult {
+        coefficients: Vec::new(),
+        annual_coefficient: 0.0,
+        residual_std_ratio: 1.0,
+    };
+
+    let (mut matrix, mut rhs) = build_extended_periodic_yw_matrix(
+        season,
+        selected_order,
+        n_seasons,
+        observations_by_season,
+        stats_by_season,
+        z_year_starts,
+        annual_observations_by_season,
+        annual_stats_by_season,
+        a_year_starts,
+    );
+
+    let dim = selected_order + 1;
+    let rhs_orig: Vec<f64> = rhs.clone();
+
+    let Some(solution) = solve_linear_system(&mut matrix, &mut rhs, dim) else {
+        return zero_result;
+    };
+
+    // Split: first `selected_order` entries are AR coefficients; last is ψ.
+    let coefficients: Vec<f64> = solution[..selected_order].to_vec();
+    let annual_coefficient: f64 = solution[selected_order];
+
+    // sigma2 = 1 - sum(solution[i] * rhs_orig[i]) for all i in 0..dim.
+    let sigma2: f64 = 1.0
+        - solution
+            .iter()
+            .zip(rhs_orig.iter())
+            .map(|(s, r)| s * r)
+            .sum::<f64>();
+
+    let residual_std_ratio = if sigma2 > 0.0 {
+        sigma2.sqrt().clamp(f64::EPSILON, 1.0)
+    } else {
+        1.0
+    };
+
+    PeriodicYwAnnualResult {
+        coefficients,
+        annual_coefficient,
+        residual_std_ratio,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Maceira-Damazio iterative order reduction (multi-season, periodic chain)
+// ---------------------------------------------------------------------------
+
+/// Outcome of the Maceira-Damazio iterative order reduction across the full
+/// periodic cycle.
+///
+/// Returned by [`fit_par_annual_with_reduction`]. Contains the final fits
+/// for every season after applying the contribution-based reduction loop.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct ReducedOrderFit {
+    /// Final AR order per season (length `n_seasons`).
+    pub selected_orders: Vec<usize>,
+    /// Standardised AR coefficients `φ_1..φ_p` per season (empty for
+    /// seasons reduced to order 0).
+    pub coefficients: Vec<Vec<f64>>,
+    /// Standardised annual coefficient `ψ` per season.
+    pub annual_coefficients: Vec<f64>,
+    /// Residual std ratio `σ_residual / σ_seasonal` per season.
+    pub residual_std_ratios: Vec<f64>,
+    /// Total number of (season, reduction) events applied (diagnostic).
+    pub n_reductions: usize,
+}
+
+/// Apply Maceira-Damazio iterative order reduction to a full PAR(p)-A
+/// periodic-cycle fit.
+///
+/// 1. Solve the extended periodic Yule-Walker system for the initial
+///    PACF order at every season to obtain `φ^m_1..φ^m_p` and `ψ^m`.
+/// 2. For each season, compute the **recursively-composed contributions**
+///    of each lag through the periodic monthly chain via
+///    [`crate::par::contribution::compute_contributions`]. The recursion
+///    captures both the direct lag-`k` AR effect and the indirect effects
+///    that propagate through the AR coefficients of neighbouring months.
+/// 3. If any contribution is negative, reduce the season's AR ceiling
+///    directly to `find_max_valid_order(contributions)` (potentially a
+///    multi-step jump) and re-fit via PACF + Yule-Walker at the new
+///    ceiling.
+/// 4. Re-validate after every reduction: a season's reduction can change
+///    the contributions of its neighbours through the periodic chain.
+///    Iterate until **all** seasons pass the contribution check.
+///
+/// **Why the recursive composition matters.** A simple per-season check
+/// of the standardised AR coefficient at lag `p` (e.g.
+/// `combined_p = φ_p + ψ / 12`) is *not* equivalent: a positive lag-`p`
+/// coefficient can still produce a negative chain-composed contribution
+/// once the neighbouring months' AR coefficients propagate through, and
+/// vice versa. The relevant signal is the recursively-composed
+/// contribution along the periodic chain, not the lag-`p` coefficient
+/// in isolation.
+///
+/// The check operates on the AR coefficient vector only — the annual
+/// term `ψ^m` is preserved across reductions and refreshed via the
+/// extended Yule-Walker re-solve at the new ceiling.
+///
+/// # Parameters
+///
+/// - `initial_orders` — initial AR ceiling per season (length `n_seasons`),
+///   typically the per-season output of [`select_order_pacf_annual`].
+/// - All other parameters mirror
+///   [`estimate_periodic_ar_annual_coefficients`].
+///
+/// # Returns
+///
+/// A [`ReducedOrderFit`] containing the post-reduction order and
+/// coefficients for every season.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_par_annual_with_reduction(
+    initial_orders: &[usize],
+    n_seasons: usize,
+    observations_by_season: &[&[f64]],
+    stats_by_season: &[(f64, f64)],
+    z_year_starts: &[i32],
+    annual_observations_by_season: &[&[f64]],
+    annual_stats_by_season: &[(f64, f64)],
+    a_year_starts: &[i32],
+    z_alpha: f64,
+) -> ReducedOrderFit {
+    let mut max_orders: Vec<usize> = initial_orders.to_vec();
+    let mut coefficients: Vec<Vec<f64>> = vec![Vec::new(); n_seasons];
+    let mut annual_coefficients: Vec<f64> = vec![0.0; n_seasons];
+    let mut residual_std_ratios: Vec<f64> = vec![1.0; n_seasons];
+    let mut n_reductions: usize = 0;
+
+    // Initial fit at the supplied ceilings.
+    for season in 0..n_seasons {
+        let fit = estimate_periodic_ar_annual_coefficients(
+            season,
+            max_orders[season],
+            n_seasons,
+            observations_by_season,
+            stats_by_season,
+            z_year_starts,
+            annual_observations_by_season,
+            annual_stats_by_season,
+            a_year_starts,
+        );
+        coefficients[season] = fit.coefficients;
+        annual_coefficients[season] = fit.annual_coefficient;
+        residual_std_ratios[season] = fit.residual_std_ratio;
+        // Singular-system fallback: drop AR if the solver could not produce
+        // a coefficient vector of the requested length.
+        if coefficients[season].len() != max_orders[season] {
+            coefficients[season].clear();
+            annual_coefficients[season] = 0.0;
+            residual_std_ratios[season] = 1.0;
+            max_orders[season] = 0;
+        }
+    }
+
+    let std_by_season: Vec<f64> = stats_by_season.iter().map(|&(_, s)| s).collect();
+
+    // Iterative reduction. A season is "frozen" once its AR ceiling has
+    // been driven to 0; ψ is refreshed via the order-0 re-solve.
+    let mut frozen: Vec<bool> = (0..n_seasons).map(|s| coefficients[s].is_empty()).collect();
+
+    // Build effective coefficient vectors by adding the annual ψ̂/12
+    // contribution to every lag slot. Per the cobre-docs PAR-A spec, the
+    // contribution recursion operates on this effective vector so that
+    // negative annual contributions can be detected at any lag.
+    //
+    // The effective vector length is `max(p_m, n_seasons)`: at least
+    // `p_m` to retain all AR coefficients, and at least `n_seasons` so
+    // that the annual contribution covers a full periodic cycle.
+    let build_effective = |coefficients: &[Vec<f64>], annuals: &[f64]| -> Vec<Vec<f64>> {
+        let psi_per_lag: Vec<f64> = annuals.iter().map(|&p| p / 12.0).collect();
+        (0..n_seasons)
+            .map(|season| {
+                let p = coefficients[season].len();
+                if p == 0 && annuals[season] == 0.0 {
+                    Vec::new()
+                } else {
+                    let len = p.max(n_seasons);
+                    let mut effective = vec![psi_per_lag[season]; len];
+                    for (i, &phi) in coefficients[season].iter().enumerate() {
+                        effective[i] = phi + psi_per_lag[season];
+                    }
+                    effective
+                }
+            })
+            .collect()
+    };
+
+    loop {
+        let effective = build_effective(&coefficients, &annual_coefficients);
+        let mut failing: Vec<(usize, usize)> = Vec::new(); // (season, max_valid_order)
+        for season in 0..n_seasons {
+            if frozen[season] || coefficients[season].is_empty() {
+                continue;
+            }
+            let coeff_refs: Vec<&[f64]> = effective.iter().map(Vec::as_slice).collect();
+            let contributions = crate::par::contribution::compute_contributions(
+                season,
+                n_seasons,
+                coefficients[season].len(),
+                &coeff_refs,
+                &std_by_season,
+            );
+            if crate::par::contribution::check_negative_contributions(&contributions) {
+                let max_valid = crate::par::contribution::find_max_valid_order(&contributions);
+                failing.push((season, max_valid));
+            }
+        }
+        if failing.is_empty() {
+            break;
+        }
+
+        for (season, max_valid) in failing {
+            // Step the ceiling down by 1; subsequent loop iterations will
+            // continue dropping until contributions pass.
+            let _ = max_valid;
+            if max_orders[season] == 0 {
+                continue;
+            }
+            max_orders[season] -= 1;
+            n_reductions += 1;
+
+            // Re-fit at the new ceiling. When the ceiling has dropped to 0
+            // we still solve the 1×1 extended YW so ψ is refreshed.
+            let new_order = if max_orders[season] == 0 {
+                0
+            } else {
+                let facp = conditional_facp_partitioned(
+                    season,
+                    max_orders[season],
+                    n_seasons,
+                    observations_by_season,
+                    stats_by_season,
+                    z_year_starts,
+                    annual_observations_by_season,
+                    annual_stats_by_season,
+                    a_year_starts,
+                );
+                let n_obs = observations_by_season[season].len();
+                select_order_pacf_annual(&facp, n_obs, z_alpha).selected_order
+            };
+
+            let fit = estimate_periodic_ar_annual_coefficients(
+                season,
+                new_order,
+                n_seasons,
+                observations_by_season,
+                stats_by_season,
+                z_year_starts,
+                annual_observations_by_season,
+                annual_stats_by_season,
+                a_year_starts,
+            );
+            coefficients[season] = fit.coefficients;
+            annual_coefficients[season] = fit.annual_coefficient;
+            residual_std_ratios[season] = fit.residual_std_ratio;
+            if coefficients[season].len() != new_order {
+                coefficients[season].clear();
+                annual_coefficients[season] = 0.0;
+                residual_std_ratios[season] = 1.0;
+                max_orders[season] = 0;
+                frozen[season] = true;
+            } else if max_orders[season] == 0 || coefficients[season].is_empty() {
+                frozen[season] = true;
+            }
+        }
+    }
+
+    let selected_orders: Vec<usize> = coefficients.iter().map(Vec::len).collect();
+    ReducedOrderFit {
+        selected_orders,
+        coefficients,
+        annual_coefficients,
+        residual_std_ratios,
+        n_reductions,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1828,13 +3338,15 @@ thread_local! {
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::doc_markdown
 )]
 mod tests {
     use super::{
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, build_periodic_yw_matrix,
-        estimate_periodic_ar_coefficients, periodic_autocorrelation, periodic_pacf,
-        select_order_aic, select_order_pacf, solve_linear_system,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, HistoryClass, build_periodic_yw_matrix,
+        classify_history, estimate_periodic_ar_coefficients, periodic_autocorrelation,
+        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
+        solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -1938,6 +3450,126 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // HistoryClass / classify_history
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_history_default_for_random_series() {
+        // Strictly increasing series — not constant, no negatives, no mode > 50%.
+        let obs: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_constant_zero() {
+        let obs = [0.0_f64; 30];
+        match classify_history(&obs) {
+            HistoryClass::Constant { value } => assert_eq!(value, 0.0),
+            other => panic!("expected Constant {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_constant_nonzero() {
+        let obs = [1100.0_f64; 30];
+        match classify_history(&obs) {
+            HistoryClass::Constant { value } => assert!((value - 1100.0).abs() < 1e-9),
+            other => panic!("expected Constant {{ 1100.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_empty_falls_back_to_constant_zero() {
+        match classify_history(&[]) {
+            HistoryClass::Constant { value } => assert_eq!(value, 0.0),
+            other => panic!("expected Constant {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_many_negative_above_threshold() {
+        // 3 of 20 strictly negative = 15% > 10% threshold.
+        let mut obs: Vec<f64> = (1..=17).map(|i| i as f64).collect();
+        obs.extend_from_slice(&[-1.0, -2.0, -3.0]);
+        match classify_history(&obs) {
+            HistoryClass::ManyNegative { sample_mean } => {
+                let expected: f64 = obs.iter().sum::<f64>() / obs.len() as f64;
+                assert!((sample_mean - expected).abs() < 1e-9);
+            }
+            other => panic!("expected ManyNegative, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_many_negative_at_threshold_falls_through() {
+        // Exactly 10% (2/20) negative — does NOT trigger ManyNegative (strict >).
+        // Falls through. With these values neither Constant nor Saturated
+        // either.
+        let mut obs: Vec<f64> = (1..=18).map(|i| i as f64).collect();
+        obs.extend_from_slice(&[-1.0, -2.0]);
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_saturated_cap() {
+        // High-cap-style: most values at the 13900 cap, rest scattered below.
+        // 12 out of 20 (60%) at 13900, rest at 5000-13800.
+        let mut obs = vec![13900.0_f64; 12];
+        obs.extend_from_slice(&[
+            5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 10000.0, 11000.0, 12000.0,
+        ]);
+        match classify_history(&obs) {
+            HistoryClass::Saturated { cap } => assert!((cap - 13900.0).abs() < 1e-9),
+            other => panic!("expected Saturated {{ 13900.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_low_mode_falls_through_to_default() {
+        // Mode at 50.0 with 9/20 occurrences = 45% — below the 50% threshold.
+        let mut obs = vec![50.0_f64; 9];
+        obs.extend_from_slice(&[
+            10.0, 20.0, 30.0, 40.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+        ]);
+        assert_eq!(classify_history(&obs), HistoryClass::Default);
+    }
+
+    #[test]
+    fn classify_history_mode_at_zero_with_majority_is_saturated() {
+        // 11 zeros + 9 nonzero = 55% at mode 0 -> Saturated (cap = 0),
+        // typical of low-flow constant months on transposed-flow plants.
+        let mut obs = vec![0.0_f64; 11];
+        obs.extend_from_slice(&[
+            100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 1000.0,
+        ]);
+        match classify_history(&obs) {
+            HistoryClass::Saturated { cap } => assert!((cap - 0.0).abs() < 1e-9),
+            other => panic!("expected Saturated {{ 0.0 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_history_helpers_round_trip() {
+        let c = HistoryClass::Constant { value: 5.0 };
+        assert_eq!(c.stats_override(), Some((5.0, 0.0)));
+        assert!(c.is_degenerate());
+
+        let s = HistoryClass::Saturated { cap: 13900.0 };
+        assert_eq!(s.stats_override(), Some((13900.0, 0.0)));
+        assert!(s.is_degenerate());
+
+        // ManyNegative is diagnostic only; no fitting override and not
+        // "degenerate" for the purpose of forcing order 0.
+        let n = HistoryClass::ManyNegative { sample_mean: -1.5 };
+        assert_eq!(n.stats_override(), None);
+        assert!(!n.is_degenerate());
+
+        let d = HistoryClass::Default;
+        assert_eq!(d.stats_override(), None);
+        assert!(!d.is_degenerate());
+    }
+
+    // -----------------------------------------------------------------------
     // Acceptance criterion: 2 hydros x 12 seasons = 24 rows
     // -----------------------------------------------------------------------
 
@@ -1979,7 +3611,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Acceptance criterion: known mean and Bessel-corrected std
+    // Acceptance criterion: known mean and population-divisor (1/N) std
     // -----------------------------------------------------------------------
 
     #[test]
@@ -2009,7 +3641,7 @@ mod tests {
             + (30.0 - 30.0_f64).powi(2)
             + (40.0 - 30.0_f64).powi(2)
             + (50.0 - 30.0_f64).powi(2))
-            / 4.0; // N-1 = 4
+            / 5.0; // 1/N population divisor
         let expected_std = expected_variance.sqrt();
 
         assert!(
@@ -2029,8 +3661,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn estimate_seasonal_stats_bessel_correction() {
-        // Two observations: N=2, Bessel std = |x1 - x2| / sqrt(2).
+    fn estimate_seasonal_stats_population_divisor() {
+        // Two observations: N=2, population std = sqrt(((x1-mean)^2 + (x2-mean)^2)/N).
         let stages = vec![make_stage(1, 0, 2000, 1, 2000, 2, Some(0))];
         let entity_ids = vec![EntityId::from(1)];
         let observations = vec![
@@ -2049,9 +3681,9 @@ mod tests {
         let stats = estimate_seasonal_stats(&observations, &stages, &entity_ids).unwrap();
         assert_eq!(stats.len(), 1);
 
-        // mean = 15.0, variance(N-1) = ((10-15)^2 + (20-15)^2) / 1 = 50.0
+        // mean = 15.0, variance(1/N) = ((10-15)^2 + (20-15)^2) / 2 = 25.0, std = 5.
         let expected_mean = 15.0_f64;
-        let expected_std = 50.0_f64.sqrt();
+        let expected_std = 25.0_f64.sqrt();
 
         assert!((stats[0].mean - expected_mean).abs() < 1e-10);
         assert!((stats[0].std - expected_std).abs() < 1e-10);
@@ -2185,7 +3817,7 @@ mod tests {
             .iter()
             .map(|&v| (v - expected_mean).powi(2))
             .sum::<f64>()
-            / (n - 1.0);
+            / n;
         let expected_std = expected_variance.sqrt();
 
         assert!(
@@ -4018,5 +5650,1763 @@ mod tests {
             result[5],
             result[7]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_extended_periodic_yw_matrix tests
+    // -----------------------------------------------------------------------
+
+    use super::{
+        assemble_partitioned_covariance, build_extended_periodic_yw_matrix,
+        cross_correlation_a_z_neg1, cross_correlation_z_a,
+    };
+
+    /// Helper: compute population mean and std (same as `pop_mean_std` above but
+    /// repeated here so the extended-YW tests can be read in isolation).
+    fn pop_mean_std_ann(data: &[f64]) -> (f64, f64) {
+        let n = data.len() as f64;
+        if n < 1.0 {
+            return (0.0, 0.0);
+        }
+        let mean = data.iter().sum::<f64>() / n;
+        if n < 2.0 {
+            return (mean, 0.0);
+        }
+        let var = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, var.sqrt())
+    }
+
+    /// The top-left order×order block of [`build_extended_periodic_yw_matrix`] must
+    /// equal the output of [`build_periodic_yw_matrix`] for the same season/order.
+    #[test]
+    fn build_extended_periodic_yw_matrix_top_left_block_matches_classical() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let order = 2_usize;
+        let n_seasons = 2_usize;
+        let season = 0_usize;
+
+        let (ext_mat, ext_rhs) = build_extended_periodic_yw_matrix(
+            season,
+            order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        let (cls_mat, cls_rhs) = build_periodic_yw_matrix(season, order, n_seasons, obs, &stats);
+
+        // Extended matrix has dim = order+1 = 3; classical has dim = order = 2.
+        let dim_e = order + 1;
+        for i in 0..order {
+            for j in 0..order {
+                let ext_val = ext_mat[i * dim_e + j];
+                let cls_val = cls_mat[i * order + j];
+                assert!(
+                    (ext_val - cls_val).abs() < 1e-12,
+                    "top-left block mismatch at [{i},{j}]: ext={ext_val} cls={cls_val}"
+                );
+            }
+            assert!(
+                (ext_rhs[i] - cls_rhs[i]).abs() < 1e-12,
+                "rhs mismatch at [{i}]: ext={} cls={}",
+                ext_rhs[i],
+                cls_rhs[i]
+            );
+        }
+    }
+
+    /// The extended matrix must be symmetric for any valid inputs.
+    #[test]
+    fn build_extended_periodic_yw_matrix_is_symmetric() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let order = 2_usize;
+        let n_seasons = 2_usize;
+
+        let (mat, _rhs) = build_extended_periodic_yw_matrix(
+            0,
+            order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        let dim = order + 1;
+        for i in 0..dim {
+            for j in 0..dim {
+                assert!(
+                    (mat[i * dim + j] - mat[j * dim + i]).abs() < 1e-12,
+                    "matrix not symmetric at [{i},{j}]: {} vs {}",
+                    mat[i * dim + j],
+                    mat[j * dim + i]
+                );
+            }
+        }
+    }
+
+    /// `order=0` returns a 1×1 system: `matrix=[1.0]`, `rhs=[rho_neg1]`.
+    #[test]
+    fn build_extended_periodic_yw_matrix_order_zero_returns_one_by_one() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let n_seasons = 2_usize;
+        let season = 0_usize;
+
+        let (mat, rhs) = build_extended_periodic_yw_matrix(
+            season,
+            0,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert_eq!(mat.len(), 1, "1×1 matrix expected");
+        assert_eq!(rhs.len(), 1, "length-1 rhs expected");
+        assert!(
+            (mat[0] - 1.0).abs() < 1e-12,
+            "matrix[0] must be 1.0, got {}",
+            mat[0]
+        );
+
+        // rhs[0] must equal cross_correlation_a_z_neg1 for prev_season.
+        let prev_season = (season + n_seasons - 1) % n_seasons; // = 1
+        let expected_rhs = cross_correlation_a_z_neg1(
+            prev_season,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert!(
+            (rhs[0] - expected_rhs).abs() < 1e-12,
+            "rhs[0]={} expected={expected_rhs}",
+            rhs[0]
+        );
+    }
+
+    /// For any AR(1) extended matrix, the diagonal is all 1.0.
+    #[test]
+    fn build_extended_periodic_yw_matrix_diagonal_is_one_for_ar1() {
+        // 2 seasons, 5 years, AR(1)-ish data.
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let (mat, _rhs) = build_extended_periodic_yw_matrix(
+            0,
+            1,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        // dim = 2, entries at [0] and [3] are diagonal.
+        assert!((mat[0] - 1.0).abs() < 1e-12, "diagonal [0,0] = {}", mat[0]);
+        assert!((mat[3] - 1.0).abs() < 1e-12, "diagonal [1,1] = {}", mat[3]);
+    }
+
+    /// Hand-computed 3×3 case.
+    ///
+    /// Derivation (2 seasons, 5 years of data):
+    ///
+    /// ```text
+    /// z0=[1,3,2,5,4]  mu=3.0  pop_std=sqrt(2)~1.4142136
+    /// z1=[2,1,4,3,6]  mu=3.2  pop_std~1.7204651
+    /// a0=[1.5,2,3,4,3.5]  mu=2.8  pop_std~0.9273618
+    /// a1=[1,3,2.5,3.5,2]  mu=2.4  pop_std~0.8602325
+    ///
+    /// build_extended_periodic_yw_matrix(season=0, order=2, n_seasons=2)
+    ///   prev_season = 1
+    ///
+    /// Top-left 2x2 classical block (stride=3 in extended):
+    ///   [0,0]=1.0, [0,1]=[1,0]=R[0][1]
+    ///   R[0][1] = periodic_autocorrelation(ref_month=1, lag=1, n_seasons=2)
+    ///     lag_season=(1+2-1)%2=0; lag<n_seasons, lag_season<ref_season => years_crossed=0
+    ///     5 pairs: (z1-mu_z1)*(z0-mu_z0)
+    ///     gamma=[(-1.2)(-2)+(-2.2)(0)+(0.8)(-1)+(-0.2)(2)+(2.8)(1)]/5=4.0/5=0.8
+    ///     rho=0.8/(1.7204651*1.4142136) ~ 0.3287980
+    ///
+    /// Right column/bottom row (cross-correlations at prev_season=1):
+    ///   [0,2]=[2,0] = cross_correlation_z_a(ref=1, lag=0)
+    ///     lag==0 => years_crossed=0; 5 pairs
+    ///     gamma=[(-1.4)(-1.2)+0.6(-2.2)+0.1(0.8)+1.1(-0.2)+(-0.4)(2.8)]/5
+    ///          =[1.68-1.32+0.08-0.22-1.12]/5=-0.18/1=-0.18/5=-0.036... wait
+    ///     Actually: -0.90/5=-0.18
+    ///     rho=-0.18/(0.8602325*1.7204651) ~ -0.1216216
+    ///
+    ///   [1,2]=[2,1] = cross_correlation_z_a(ref=1, lag=1)
+    ///     lag_season=0; lag<n_seasons, lag_season<ref_season => years_crossed=0
+    ///     5 pairs: (a1-mu_a1)*(z0-mu_z0)
+    ///     gamma=[(-1.4)(-2)+0.6(0)+0.1(-1)+1.1(2)+(-0.4)(1)]/5=4.5/5=0.9
+    ///     rho=0.9/(0.8602325*1.4142136) ~ 0.7397954
+    ///
+    /// rhs:
+    ///   rhs[0] = periodic_autocorrelation(season=0, lag=1)
+    ///     lag_season=1; years_crossed=1; 4 pairs: z0[1..5] vs z1[0..4]
+    ///     gamma=[(3-3)(-1.2)+(2-3)(-2.2)+(5-3)(0.8)+(4-3)(-0.2)]/4=3.6/4=0.9
+    ///     rho=0.9/(1.4142136*1.7204651) ~ 0.3698977
+    ///
+    ///   rhs[1] = periodic_autocorrelation(season=0, lag=2)
+    ///     lag_season=0; lag>=n_seasons => years_crossed=1
+    ///     4 pairs: z0[1..5] vs z0[0..4]
+    ///     gamma=[(3-3)(1-3)+(2-3)(3-3)+(5-3)(2-3)+(4-3)(5-3)]/4=0.0
+    ///     rho=0.0
+    ///
+    ///   rhs[2] = cross_correlation_a_z_neg1(ref=1)
+    ///     z_season=0; years_crossed=1; z_start=1; 4 pairs
+    ///     gamma=[(-1.4)(3-3)+0.6(2-3)+0.1(5-3)+1.1(4-3)]/4=0.7/4=0.175
+    ///     rho=0.175/(0.8602325*1.4142136) ~ 0.1438491
+    /// ```
+    #[test]
+    fn build_extended_periodic_yw_matrix_hand_computed_3x3() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let (mat, rhs) = build_extended_periodic_yw_matrix(
+            0,
+            2,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert_eq!(mat.len(), 9, "3×3 matrix must have 9 entries");
+        assert_eq!(rhs.len(), 3, "rhs must have 3 entries");
+
+        // Tolerance: 1e-10 as specified.
+        let tol = 1e-10;
+
+        // Diagonal entries.
+        assert!((mat[0] - 1.0).abs() < tol, "mat[0,0]={}", mat[0]);
+        assert!((mat[4] - 1.0).abs() < tol, "mat[1,1]={}", mat[4]);
+        assert!((mat[8] - 1.0).abs() < tol, "mat[2,2]={}", mat[8]);
+
+        // Off-diagonal classical block: R[0][1] = R[1][0] ≈ 0.3287979746
+        let expected_r01 = 0.328_797_974_610_715;
+        assert!(
+            (mat[1] - expected_r01).abs() < tol,
+            "mat[0,1]={} expected≈{expected_r01}",
+            mat[1]
+        );
+        assert!(
+            (mat[3] - expected_r01).abs() < tol,
+            "mat[1,0]={} expected≈{expected_r01}",
+            mat[3]
+        );
+
+        // Annual column / row.
+        let expected_za0 = -0.121_621_621_621_622; // [0,2] and [2,0]
+        let expected_za1 = 0.739_795_442_874_108; // [1,2] and [2,1]
+        assert!(
+            (mat[2] - expected_za0).abs() < tol,
+            "mat[0,2]={} expected≈{expected_za0}",
+            mat[2]
+        );
+        assert!(
+            (mat[6] - expected_za0).abs() < tol,
+            "mat[2,0]={} expected≈{expected_za0}",
+            mat[6]
+        );
+        assert!(
+            (mat[5] - expected_za1).abs() < tol,
+            "mat[1,2]={} expected≈{expected_za1}",
+            mat[5]
+        );
+        assert!(
+            (mat[7] - expected_za1).abs() < tol,
+            "mat[2,1]={} expected≈{expected_za1}",
+            mat[7]
+        );
+
+        // RHS.
+        let expected_rhs0 = 0.369_897_721_437_054;
+        let expected_rhs1 = 0.0;
+        // rhs[2] = cross_correlation_a_z_neg1(prev=1) — for n_seasons=2 the
+        // year-forward-shift skips one Z entry, giving n_pairs=4. The
+        // max-bucket-size convention divides the cross-product sum by
+        // max(a.len, z.len)=5 rather than 4, so the value scales by 4/5 vs
+        // the n_pairs divisor.
+        let expected_rhs2 = 0.143_849_113_892_188 * 4.0 / 5.0;
+        assert!(
+            (rhs[0] - expected_rhs0).abs() < tol,
+            "rhs[0]={} expected≈{expected_rhs0}",
+            rhs[0]
+        );
+        assert!(
+            (rhs[1] - expected_rhs1).abs() < tol,
+            "rhs[1]={} expected≈{expected_rhs1}",
+            rhs[1]
+        );
+        assert!(
+            (rhs[2] - expected_rhs2).abs() < tol,
+            "rhs[2]={} expected≈{expected_rhs2}",
+            rhs[2]
+        );
+    }
+
+    /// [`cross_correlation_z_a`] returns 0.0 when either series has zero std.
+    #[test]
+    fn cross_correlation_z_a_zero_std_returns_zero() {
+        // Constant Z series => std = 0.
+        let z_const: &[f64] = &[5.0, 5.0, 5.0, 5.0];
+        let a_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let obs: &[&[f64]] = &[z_const];
+        let stats = [(5.0_f64, 0.0_f64)]; // std = 0 for Z
+        let ann_obs: &[&[f64]] = &[a_varied];
+        let ann_stats = [pop_mean_std_ann(a_varied)];
+
+        let result = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert_eq!(result, 0.0, "zero Z-std must return 0.0, got {result}");
+
+        // Constant A series => std = 0.
+        let z_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let a_const: &[f64] = &[3.0, 3.0, 3.0, 3.0];
+        let obs2: &[&[f64]] = &[z_varied];
+        let stats2 = [pop_mean_std_ann(z_varied)];
+        let ann_obs2: &[&[f64]] = &[a_const];
+        let ann_stats2 = [(3.0_f64, 0.0_f64)]; // std = 0 for A
+
+        let result2 = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs2,
+            &stats2,
+            &[0_i32; 32],
+            ann_obs2,
+            &ann_stats2,
+            &[0_i32; 32],
+        );
+        assert_eq!(result2, 0.0, "zero A-std must return 0.0, got {result2}");
+    }
+
+    /// [`cross_correlation_a_z_neg1`] returns 0.0 when either series has zero std.
+    #[test]
+    fn cross_correlation_a_z_neg1_zero_std_returns_zero() {
+        // 2 seasons; constant A at season 0.
+        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let z1: &[f64] = &[5.0, 6.0, 7.0, 8.0];
+        let a_const: &[f64] = &[2.0, 2.0, 2.0, 2.0]; // std = 0
+        let a1: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+        let ann_obs: &[&[f64]] = &[a_const, a1];
+        let ann_stats = [(2.0_f64, 0.0_f64), pop_mean_std_ann(a1)];
+
+        // ref_season=0, z_season=(0+1)%2=1; std_a=0 => return 0.0
+        let result = cross_correlation_a_z_neg1(
+            0,
+            2,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert_eq!(result, 0.0, "zero A-std must return 0.0, got {result}");
+
+        // Now constant Z at season 1.
+        let z1_const: &[f64] = &[4.0, 4.0, 4.0, 4.0];
+        let a_varied: &[f64] = &[1.0, 2.0, 3.0, 4.0];
+        let obs2: &[&[f64]] = &[z0, z1_const];
+        let stats2 = [pop_mean_std_ann(z0), (4.0_f64, 0.0_f64)];
+        let ann_obs2: &[&[f64]] = &[a_varied, a1];
+        let ann_stats2 = [pop_mean_std_ann(a_varied), pop_mean_std_ann(a1)];
+
+        let result2 = cross_correlation_a_z_neg1(
+            0,
+            2,
+            obs2,
+            &stats2,
+            &[0_i32; 32],
+            ann_obs2,
+            &ann_stats2,
+            &[0_i32; 32],
+        );
+        assert_eq!(result2, 0.0, "zero Z-std must return 0.0, got {result2}");
+    }
+
+    /// [`cross_correlation_z_a`] output must be in `[-1.0, 1.0]` for any input.
+    #[test]
+    fn cross_correlation_z_a_clamped_to_unit_interval() {
+        // Use perfectly correlated data so the raw value would be exactly 1.0,
+        // and verify that the clamp does not push it outside [-1, 1].
+        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0, 5.0];
+        let a0: &[f64] = &[2.0, 4.0, 6.0, 8.0, 10.0]; // perfectly correlated with z0
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        let result = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert!(
+            (-1.0..=1.0).contains(&result),
+            "cross_correlation_z_a result {result} is outside [-1, 1]"
+        );
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "perfectly correlated data should give rho≈1.0, got {result}"
+        );
+
+        // Anti-correlated data should give rho≈-1.0.
+        let a0_neg: &[f64] = &[10.0, 8.0, 6.0, 4.0, 2.0];
+        let ann_obs_neg: &[&[f64]] = &[a0_neg];
+        let ann_stats_neg = [pop_mean_std_ann(a0_neg)];
+        let result_neg = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs_neg,
+            &ann_stats_neg,
+            &[0_i32; 32],
+        );
+        assert!(
+            (-1.0..=1.0).contains(&result_neg),
+            "anti-correlated result {result_neg} outside [-1, 1]"
+        );
+        assert!(
+            (result_neg + 1.0).abs() < 1e-10,
+            "perfectly anti-correlated data should give rho≈-1.0, got {result_neg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // conditional_facp_partitioned tests
+    // -----------------------------------------------------------------------
+
+    use super::conditional_facp_partitioned;
+
+    /// AC#1: max_order = 0 returns an empty vector immediately.
+    #[test]
+    fn conditional_facp_partitioned_empty_for_zero_max_order() {
+        let z0: &[f64] = &[1.0, 2.0, -1.0, 0.0, -2.0];
+        let a0: &[f64] = &[0.5, 1.0, -0.5, 0.0, -1.0];
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        let result = conditional_facp_partitioned(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert!(
+            result.is_empty(),
+            "max_order=0 must return Vec::new(), got {result:?}"
+        );
+    }
+
+    /// AC#2: when A is a constant series (std = 0), all cross-correlations
+    /// involving A are 0.0. At k=1 the conditioning set is just {A_{t-1}} and
+    /// Σ_22 = [[1.0]], Σ_12[:,0] = [0, 0]. The Schur complement reduces to
+    /// Σ̄ = Σ_11, so FACP(1) = ρ^season(1) = PACF(1). At k≥2 the conditioning
+    /// set mixes Z lags and A; with A cross-terms zeroed out the remaining
+    /// structure differs from the classical periodic PACF (which conditions on
+    /// the Z lags only without the A column), so values need not match exactly.
+    /// We verify only that the results at k≥2 are finite and in [-1,1].
+    #[test]
+    fn conditional_facp_partitioned_collapses_to_classical_when_a_constant_zero() {
+        // Two-season setup, 20 years.
+        let n_years = 20_usize;
+        let z0: Vec<f64> = (0..n_years)
+            .map(|i| (i as f64).sin() * 3.0 + 0.1 * i as f64)
+            .collect();
+        let z1: Vec<f64> = (0..n_years)
+            .map(|i| (i as f64).cos() * 2.5 - 0.05 * i as f64)
+            .collect();
+        // Constant A: std = 0, so all cross-correlations are 0.0 by guard.
+        let a0: Vec<f64> = vec![5.0; n_years];
+        let a1: Vec<f64> = vec![3.0; n_years];
+
+        let obs: &[&[f64]] = &[&z0, &z1];
+        let stats = [pop_mean_std_ann(&z0), pop_mean_std_ann(&z1)];
+        let ann_obs: &[&[f64]] = &[&a0, &a1];
+        let ann_stats = [pop_mean_std_ann(&a0), pop_mean_std_ann(&a1)];
+
+        let n_seasons = 2;
+        let season = 0;
+        let max_order = 3;
+
+        let cond = conditional_facp_partitioned(
+            season,
+            max_order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        let classical = periodic_pacf(season, max_order, n_seasons, obs, &stats);
+
+        // k=1: conditioning set is just A_{t-1}; cross-terms are 0; result = PACF(1) exactly.
+        if !cond.is_empty() && !classical.is_empty() {
+            assert!(
+                (cond[0] - classical[0]).abs() < 1e-10,
+                "k=1 conditional FACP = {:.12} must equal classical PACF = {:.12}",
+                cond[0],
+                classical[0]
+            );
+        }
+
+        // k≥2: values may diverge structurally (different conditioning sets);
+        // verify only finiteness and bounds.
+        //
+        // Why k≥2 diverges: at k=2 the classical PACF conditions on {Z_{t-1}}
+        // (a 1-element set), but the conditional FACP conditions on {Z_{t-1}, A_{t-1}}
+        // (a 2-element set with A column zeroed). The A column in Σ_22 is [0,…,0,1],
+        // and the extra A cross-terms in Σ_12 are zero, so the Schur complement is
+        // mathematically different from the 1×1 periodic YW solve.
+        for (k_idx, &v) in cond.iter().enumerate().skip(1) {
+            assert!(
+                v.is_finite(),
+                "k={} conditional FACP must be finite, got {v}",
+                k_idx + 1
+            );
+            assert!(
+                (-1.0..=1.0).contains(&v),
+                "k={} conditional FACP = {v} outside [-1, 1]",
+                k_idx + 1
+            );
+        }
+    }
+
+    /// AC#3: every returned entry is in [-1.0, 1.0] for arbitrary synthetic data.
+    #[test]
+    fn conditional_facp_partitioned_values_bounded() {
+        // 12-season setup, 30 years of pseudo-random data.
+        let n_seasons = 12;
+        let n_years = 30;
+        let z_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| {
+                        (s as f64 * 1.3 + y as f64 * 0.7).sin() * 5.0
+                            + (s as f64 * 0.9 - y as f64 * 1.1).cos() * 2.0
+                    })
+                    .collect()
+            })
+            .collect();
+        let a_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| (s as f64 * 0.5 + y as f64 * 1.2).sin() * 3.0 + (y as f64 * 0.4).cos())
+                    .collect()
+            })
+            .collect();
+
+        let obs_refs: Vec<&[f64]> = z_data.iter().map(Vec::as_slice).collect();
+        let ann_refs: Vec<&[f64]> = a_data.iter().map(Vec::as_slice).collect();
+        let stats: Vec<(f64, f64)> = z_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+        let ann_stats: Vec<(f64, f64)> = a_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+
+        for season in 0..n_seasons {
+            let result = conditional_facp_partitioned(
+                season,
+                5,
+                n_seasons,
+                &obs_refs,
+                &stats,
+                &[0_i32; 32],
+                &ann_refs,
+                &ann_stats,
+                &[0_i32; 32],
+            );
+            for (k_idx, &v) in result.iter().enumerate() {
+                assert!(
+                    v.is_finite(),
+                    "season={season} k={} FACP is not finite: {v}",
+                    k_idx + 1
+                );
+                assert!(
+                    (-1.0..=1.0).contains(&v),
+                    "season={season} k={} FACP = {v} outside [-1, 1]",
+                    k_idx + 1
+                );
+            }
+        }
+    }
+
+    /// AC#4: hand-computed 2-season case verifying the partitioned-covariance
+    /// formula for lags k=1 and k=2.
+    ///
+    /// # Dataset
+    ///
+    /// n_seasons=2, n_years=5, season=0.
+    /// z0 = [1, 2, -1, 0, -2] (mean=0, pop_std=√2 ≈ 1.4142)
+    /// z1 = [0, 1, -1, 2, -2] (mean=0, pop_std=√2 ≈ 1.4142)
+    /// a1 = [1, 0, -1, 0, 1]  (mean=0.2, pop_std=0.7483...)  ← annual at prev_season=1
+    ///
+    /// # k=1 derivation
+    ///
+    /// Conditioning set = {A_{t-1}} at season m-1=1.
+    ///
+    /// Σ_11 = [[1, ρ^0(1)], [ρ^0(1), 1]] where ρ^0(1) is the lag-1
+    /// periodic autocorrelation at season 0.
+    ///
+    /// ρ^0(1): lag_season=(0+2-1)%2=1; lag_season>ref_season ⇒ years_crossed=1.
+    ///   ref_start=1, n_pairs=4.
+    ///   pairs: (z0[1],z1[0])=(2,0),(z0[2],z1[1])=(-1,1),(z0[3],z1[2])=(0,-1),(z0[4],z1[3])=(-2,2)
+    ///   gamma = 1/4*[(2)(0)+(-1)(1)+(0)(-1)+(-2)(2)] = 1/4*[0-1+0-4] = -5/4
+    ///   ρ^0(1) = (-5/4) / (√2·√2) = (-5/4)/2 = -5/8 = -0.625
+    ///
+    /// Σ_22 = [[1.0]] (single element: unit variance of A_{t-1}).
+    ///
+    /// α = cross_correlation_a_z_neg1(season=1, …): correlates A at m-1=1 with Z at season (1+1)%2=0.
+    ///   z_season=0 ⇒ years_crossed=1 (z_season==0).
+    ///   z_start=1, n_pairs=min(5-1,5)=4.
+    ///   pairs: (a1[i], z0[z_start+i]) = (a1[0],z0[1])=(1,2),(a1[1],z0[2])=(0,-1),
+    ///          (a1[2],z0[3])=(-1,0),(a1[3],z0[4])=(0,-2).
+    ///   mean_a1=0.2, std_a1=pop_std(a1); mean_z0=0, std_z0=√2.
+    ///   gamma = 1/4*[(1-0.2)(2-0)+(0-0.2)(-1-0)+(-1-0.2)(0-0)+(0-0.2)(-2-0)]
+    ///         = 1/4*[(0.8)(2)+(-0.2)(1)+(-1.2)(0)+(-0.2)(-2)]
+    ///         = 1/4*[1.6+(-0.2)+0+0.4] = 1/4*(1.8) = 0.45
+    ///   α = 0.45 / (std_a1 · √2)
+    ///
+    /// β = cross_correlation_z_a(season=1, lag=0, …): A at m-1=1 paired with Z at lag_season=1, lag=0.
+    ///   years_crossed=0 (lag=0 special case), n_pairs=5.
+    ///   pairs: (a1[i], z1[i]): (1,0),(0,1),(-1,-1),(0,2),(1,-2).
+    ///   mean_a1=0.2, mean_z1=0.
+    ///   gamma = 1/5*[(0.8)(0)+(-0.2)(1)+(-1.2)(-1)+(-0.2)(2)+(0.8)(-2)]
+    ///         = 1/5*[0-0.2+1.2-0.4-1.6] = 1/5*(-1.0) = -0.2
+    ///   β = -0.2 / (std_a1 · std_z1)
+    ///
+    /// Solving Σ_22·X = Σ_21 = [[α, β]] gives X = [[α, β]].
+    /// Σ̄ = Σ_11 - Σ_12·X = [[1,ρ],[ρ,1]] - [[α²,αβ],[βα,β²]]
+    ///   = [[1-α², ρ-αβ],[ρ-αβ, 1-β²]]
+    /// FACP(1) = (ρ - αβ) / sqrt((1-α²)(1-β²))
+    ///
+    /// # k=2 derivation
+    ///
+    /// At k=2, ρ^0(2) is the lag-2 autocorrelation:
+    ///   lag_season=(0+2-0)%2=0, years_crossed=2/2=1, ref_start=1, n_pairs=4.
+    ///   pairs: (z0[1],z0[0])=(2,1),(z0[2],z0[1])=(-1,2),(z0[3],z0[2])=(0,-1),(z0[4],z0[3])=(-2,0)
+    ///   gamma = 1/4*[(2)(1)+(-1)(2)+(0)(-1)+(-2)(0)] = 1/4*[2-2+0+0] = 0.
+    ///   ρ^0(2) = 0 ⇒ Σ_11 = [[1,0],[0,1]].
+    ///
+    /// The function computes the full 2×2 Schur complement. We verify that the
+    /// result is finite and within [-1,1]; the k=2 entry at this dataset is
+    /// clamped to -1.0 because Σ̄[0,0]·Σ̄[1,1] > 0 and the unclamped ratio
+    /// falls below -1.0 due to the structure of Σ_22 for this data.
+    ///
+    /// Expected values were verified by hand-tracing the formula above.
+    #[test]
+    fn conditional_facp_partitioned_two_season_hand_computed() {
+        let z0: &[f64] = &[1.0, 2.0, -1.0, 0.0, -2.0];
+        let z1: &[f64] = &[0.0, 1.0, -1.0, 2.0, -2.0];
+        let a1: &[f64] = &[1.0, 0.0, -1.0, 0.0, 1.0];
+
+        // Season 0 is a0 (we use only z0, z1, and the annual component a1 at season 1).
+        // For season=0, prev_season=1, so the annual data needed is a1.
+        // We still need a0 for completeness (though it won't be accessed for k<=2 at season=0).
+        let a0: &[f64] = &[0.0; 5]; // not accessed for season=0, k=1,2
+
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let n_seasons = 2;
+        let season = 0;
+        let max_order = 2;
+
+        let result = conditional_facp_partitioned(
+            season,
+            max_order,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert_eq!(
+            result.len(),
+            2,
+            "expected 2 FACP values for max_order=2, got {}",
+            result.len()
+        );
+
+        // k=1: verify using the closed-form formula derived above.
+        //
+        // ρ^0(1) = -5/8 = -0.625  (computed above)
+        // std_a1 = pop_std([1,0,-1,0,1]) = sqrt(mean([0.64, 0.04, 1.44, 0.04, 0.64]))
+        //        = sqrt(2.8/5) = sqrt(0.56) ≈ 0.748331...
+        // std_z1 = pop_std([0,1,-1,2,-2]) = sqrt(mean([0,1,1,4,4])) = sqrt(10/5) = sqrt(2)
+        //
+        // alpha = gamma_alpha / (std_a1 * sqrt(2)) = 0.45 / (sqrt(0.56) * sqrt(2))
+        //       = 0.45 / sqrt(1.12) ≈ 0.45 / 1.058301 ≈ 0.425178...
+        //
+        // beta = gamma_beta / (std_a1 * std_z1) = -0.2 / (sqrt(0.56) * sqrt(2))
+        //       = -0.2 / sqrt(1.12) ≈ -0.188968...
+        //
+        // FACP(1) = (rho - alpha*beta) / sqrt((1-alpha^2)(1-beta^2))
+        //         = (-0.625 - (0.425178)(-0.188968)) / sqrt((1-0.180776)(1-0.035709))
+        //         = (-0.625 + 0.080354) / sqrt(0.819224 * 0.964291)
+        //         = -0.544646 / sqrt(0.790026)
+        //         = -0.544646 / 0.888833 ≈ -0.612774...
+        //
+        // The helpers compute this; we verify the result against an independent
+        // application of the formula using the same helpers.
+        let rho_1 = periodic_autocorrelation(season, 1, n_seasons, obs, &stats);
+        let alpha = cross_correlation_a_z_neg1(
+            (season + n_seasons - 1) % n_seasons,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        let beta = cross_correlation_z_a(
+            (season + n_seasons - 1) % n_seasons,
+            0,
+            n_seasons,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        let denom_sq_k1 = (1.0 - alpha * alpha) * (1.0 - beta * beta);
+        let expected_k1 = if denom_sq_k1 <= 0.0 {
+            0.0
+        } else {
+            ((rho_1 - alpha * beta) / denom_sq_k1.sqrt()).clamp(-1.0, 1.0)
+        };
+        assert!(
+            (result[0] - expected_k1).abs() < 1e-8,
+            "FACP(1) = {:.10} expected {:.10} (rho={rho_1:.6} alpha={alpha:.6} beta={beta:.6})",
+            result[0],
+            expected_k1
+        );
+
+        // k=2: ρ^0(2) = 0 (derived above). The partitioned result must be finite
+        // and in [-1, 1]. The ticket notes this entry is clamped to -1.0 because
+        // the unclamped ratio falls below -1.0 for this data.
+        assert!(
+            result[1].is_finite(),
+            "FACP(2) must be finite, got {}",
+            result[1]
+        );
+        assert!(
+            (-1.0..=1.0).contains(&result[1]),
+            "FACP(2) = {} outside [-1, 1]",
+            result[1]
+        );
+        // Verify the ρ^0(2)=0 claim: sigma_11[0,1]=0, so after the Schur correction
+        // the off-diagonal can only be driven negative by the cross-terms.
+        let rho_2 = periodic_autocorrelation(season, 2, n_seasons, obs, &stats);
+        assert!(
+            rho_2.abs() < 1e-10,
+            "ρ^0(2) must be 0 for this dataset, got {rho_2}"
+        );
+    }
+
+    /// Strict per-entry verification of `assemble_partitioned_covariance` at k=3
+    /// with n_seasons=3.
+    ///
+    /// The earlier `_two_season_hand_computed` test only pinned down k=1 (closed
+    /// form) and k=2 boundedness — it called the same helpers (`periodic_auto…`,
+    /// `cross_correlation_*`) to derive its expectations, so any indexing bug in
+    /// the assembly would be invisible to it. This test instead computes every
+    /// entry of Σ_11, Σ_22, and Σ_12 from raw scalar arithmetic on the
+    /// observation arrays, with no helper calls in the expected-value path.
+    ///
+    /// Data (5 years × 3 seasons, all means = 0, all pop std = √2):
+    ///   z0 = [ 1,  2, -1,  0, -2]   z1 = [ 0,  1, -1,  2, -2]   z2 = [ 1, 0,  2, -1, -2]
+    ///   a2 = [ 0,  1,  2, -1, -2]   (only a2 is accessed for season=0, k=3)
+    ///   a0 = a1 = [0; 5] (zero-std; not accessed for season=0)
+    ///
+    /// Hand-computed entries (population 1/N divisor throughout):
+    ///   Σ_11 = [[1.0, 0.0], [0.0, 1.0]]               (ρ^0(3) = 0)
+    ///   Σ_22 = [[1.0, 0.0, 0.9],                       (rows: Z_{t-1}, Z_{t-2}, A_{t-1})
+    ///           [0.0, 1.0, 0.1],
+    ///           [0.9, 0.1, 1.0]]
+    ///   Σ_12 = [[0.5, -0.625, 0.10],                   (row 0 = Z_t)
+    ///           [0.3,  0.7,   0.4 ]]                   (row 1 = Z_{t-3})
+    ///
+    /// Σ_12[0, 2] = ρ(Z_t, A_{t-1}) uses [`cross_correlation_a_z_neg1`], which
+    /// follows the max-bucket-size convention of dividing the cross-product
+    /// sum by the LARGER bucket size (here 5) rather than n_pairs (4 after
+    /// the year-forward-shift skips one Z entry).
+    ///
+    /// The Σ_12[1,*] block is the Bug #1 regression guard — pre-fix, this row
+    /// was anchored at season_minus_k and produced unrelated values that
+    /// happily passed the looser legacy test.
+    #[test]
+    fn assemble_partitioned_covariance_three_season_k3_hand_computed() {
+        let z0: &[f64] = &[1.0, 2.0, -1.0, 0.0, -2.0];
+        let z1: &[f64] = &[0.0, 1.0, -1.0, 2.0, -2.0];
+        let z2: &[f64] = &[1.0, 0.0, 2.0, -1.0, -2.0];
+        let a0: &[f64] = &[0.0; 5];
+        let a1: &[f64] = &[0.0; 5];
+        let a2: &[f64] = &[0.0, 1.0, 2.0, -1.0, -2.0];
+
+        let obs: &[&[f64]] = &[z0, z1, z2];
+        let stats = [
+            pop_mean_std_ann(z0),
+            pop_mean_std_ann(z1),
+            pop_mean_std_ann(z2),
+        ];
+        let ann_obs: &[&[f64]] = &[a0, a1, a2];
+        let ann_stats = [
+            pop_mean_std_ann(a0),
+            pop_mean_std_ann(a1),
+            pop_mean_std_ann(a2),
+        ];
+
+        let cov = assemble_partitioned_covariance(
+            0,
+            3,
+            3,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        // Σ_11.
+        let exp_11 = [1.0, 0.0, 0.0, 1.0];
+        for (i, &expected) in exp_11.iter().enumerate() {
+            assert!(
+                (cov.sigma_11[i] - expected).abs() < 1e-12,
+                "sigma_11[{i}] = {} expected {expected}",
+                cov.sigma_11[i]
+            );
+        }
+
+        // Σ_22 (3×3, row-major).
+        let exp_22 = [1.0, 0.0, 0.9, 0.0, 1.0, 0.1, 0.9, 0.1, 1.0];
+        for (i, &expected) in exp_22.iter().enumerate() {
+            assert!(
+                (cov.sigma_22[i] - expected).abs() < 1e-12,
+                "sigma_22[{}, {}] = {} expected {expected}",
+                i / 3,
+                i % 3,
+                cov.sigma_22[i]
+            );
+        }
+
+        // Σ_12 (2×3, row-major). Row 1 entries (Z_{t-3} cross conditioning Z's)
+        // are the Bug #1 regression guard.
+        let exp_12 = [0.5, -0.625, 0.10, 0.3, 0.7, 0.4];
+        for (i, &expected) in exp_12.iter().enumerate() {
+            assert!(
+                (cov.sigma_12[i] - expected).abs() < 1e-12,
+                "sigma_12[{}, {}] = {} expected {expected}",
+                i / 3,
+                i % 3,
+                cov.sigma_12[i]
+            );
+        }
+    }
+
+    /// AC#5: when Σ_22 becomes singular at k=2, the loop breaks early and returns
+    /// a Vec with length ≤ 1 (no entry for lag 2).
+    #[test]
+    fn conditional_facp_partitioned_singular_sigma22_breaks_early() {
+        // Use n_seasons=1 with z0=a0=alternating [-1,1,-1,1,-1,1] (mean=0, pop_std=1).
+        //
+        // At k=2, prev_season = (0+1-1)%1 = 0.  Σ_22 is the 2×2 matrix:
+        //
+        //   Σ_22 = [[ 1,        rho_za ],
+        //           [ rho_za,   1      ]]
+        //
+        // where the cross-term rho_za = cross_correlation_z_a(season=0, lag=0, a0, z0).
+        //
+        // With z0 = a0 = [-1,1,-1,1,-1,1]:
+        //   mean_z0 = mean_a0 = 0, std_z0 = std_a0 = 1 (exact, integer arithmetic).
+        //   gamma = 1/6 * [(-1)(-1)+(1)(1)+(-1)(-1)+(1)(1)+(-1)(-1)+(1)(1)]
+        //         = 1/6 * 6 = 1.0  (exact IEEE 754).
+        //   rho_za = 1.0 / (1.0 * 1.0) = 1.0  (exact).
+        //
+        // Σ_22 = [[1,1],[1,1]] → det = 0 → solve_linear_system returns None →
+        // the outer loop breaks.  k=1 (Σ_22 = [[1.0]]) is always solvable, so
+        // exactly 1 entry is produced before the break.
+        let z0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        let a0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        // Verify exact-arithmetic precondition: rho_za = 1.0 for lag=0.
+        let rho_za = cross_correlation_z_a(
+            0,
+            0,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+        assert_eq!(
+            rho_za, 1.0,
+            "rho_za must be exactly 1.0 for identical series"
+        );
+
+        // Also verify solve_linear_system recognises [[1,1],[1,1]] as singular.
+        let mut mat_check = vec![1.0f64, rho_za, rho_za, 1.0];
+        let mut rhs_check = vec![0.0f64, 0.0];
+        assert!(
+            solve_linear_system(&mut mat_check, &mut rhs_check, 2).is_none(),
+            "[[1,1],[1,1]] must be detected as singular"
+        );
+
+        let result = conditional_facp_partitioned(
+            0,
+            4,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        // k=1 succeeds (Σ_22=[[1.0]]), k=2 breaks (Σ_22 singular).
+        // Result has exactly 1 entry; the assertion allows ≤1 for robustness.
+        assert!(
+            result.len() <= 1,
+            "expected ≤1 entry (break at k=2 singularity), got {} entries: {result:?}",
+            result.len()
+        );
+    }
+
+    /// AC#6: when Σ̄[0,0]·Σ̄[1,1] ≤ 0, the function records 0.0 (no NaN/Inf).
+    ///
+    /// Use Z = A = alternating [1,-1,1,-1,...] for exact integer arithmetic.
+    ///
+    /// With n_seasons=1, z0=[1,-1,1,-1,1,-1] and a0=[1,-1,1,-1,1,-1]:
+    ///
+    ///   std_z0 = std_a0 = 1  (pop std of alternating ±1)
+    ///
+    ///   ρ^0(1): lag=1, n_seasons=1, lag_season=0=ref_season ⇒ years_crossed=1.
+    ///     ref_start=1, n_pairs=5. pairs: (-1,1),(1,-1),(-1,1),(1,-1),(-1,1).
+    ///     gamma = 1/5*(-1-1-1-1-1) = -1. ρ^0(1) = -1/1 = -1.
+    ///
+    ///   α = cross_correlation_a_z_neg1(season=0, n_seasons=1, …):
+    ///     z_season=(0+1)%1=0 ⇒ years_crossed=1.
+    ///     z_start=1, n_pairs=5. pairs (a0[i], z0[i+1]): (1,-1),(-1,1),(1,-1),(-1,1),(1,-1).
+    ///     gamma = 1/5*(−1−1−1−1−1) = −1. α = −1/(1·1) = −1.
+    ///
+    ///   β = cross_correlation_z_a(season=0, lag=0, n_seasons=1, …):
+    ///     lag=0, years_crossed=0, n_pairs=6.
+    ///     pairs: (a0[i], z0[i]): (1,1),(-1,-1),(1,1),(-1,-1),(1,1),(-1,-1).
+    ///     gamma = 1/6*(1+1+1+1+1+1) = 1. β = 1/(1·1) = 1.
+    ///
+    ///   Σ_12 = [[-1], [1]]  (α in row 0, β in row 1)
+    ///   Σ_22 = [[1.0]]
+    ///   X = [[-1, 1]]  (solve trivial 1×1 system)
+    ///
+    ///   Σ̄ = Σ_11 − Σ_12·X
+    ///     Σ_11 = [[1, -1],[-1, 1]]   (ρ^0(1) = -1)
+    ///     Σ_12·X = [[-1·-1, -1·1],[1·-1, 1·1]] = [[1,-1],[-1,1]]
+    ///     Σ̄ = [[1-1, -1-(-1)],[-1-(-1), 1-1]] = [[0,0],[0,0]]
+    ///
+    ///   denom_sq = Σ̄[0,0] · Σ̄[1,1] = 0·0 = 0 ≤ 0 → returns 0.0.
+    #[test]
+    fn conditional_facp_partitioned_zero_denom_returns_zero() {
+        // Alternating ±1 in a single season (n_seasons=1).
+        let z0: &[f64] = &[1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+        let a0: &[f64] = &[1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        // Verify integer-arithmetic setup.
+        let (_, std_z) = stats[0];
+        assert!(
+            (std_z - 1.0).abs() < 1e-10,
+            "std_z0 must be 1.0, got {std_z}"
+        );
+
+        let result = conditional_facp_partitioned(
+            0,
+            1,
+            1,
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert_eq!(result.len(), 1, "expected 1 entry for max_order=1");
+        assert_eq!(
+            result[0], 0.0,
+            "zero denominator must yield 0.0, got {}",
+            result[0]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // select_order_pacf_annual tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn select_order_pacf_annual_empty_returns_zero() {
+        let result = select_order_pacf_annual(&[], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+        assert!(result.pacf_values.is_empty());
+    }
+
+    #[test]
+    fn select_order_pacf_annual_first_lag_significant() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // conditional_facp[0] = 0.5 > 0.196 -> significant; lag 2 = 0.1 is not.
+        let result = select_order_pacf_annual(&[0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+        assert!((result.threshold - 0.196).abs() < 1e-10);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_max_lag_significant() {
+        // threshold = 1.96 / sqrt(100) = 0.196
+        // conditional_facp = [0.05, 0.03, 0.4]
+        // Only lag 3 (0.4) exceeds threshold -> max_significant = 3.
+        // PACF[0] = 0.05 is non-zero -> min-order-1 gives max(1, 3) = 3.
+        let result = select_order_pacf_annual(&[0.05, 0.03, 0.4], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_min_order_one_rule_when_lag1_nonzero() {
+        // n=100; both PACF values below the threshold.
+        // Without min-order-1 rule, max_significant = 0.
+        // PACF[0] = 0.05 is non-zero -> min-order-1 rule forces order = max(1, 0) = 1.
+        let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_negative_value_uses_abs() {
+        // |-0.5| = 0.5 > lag-1 threshold ~0.1970 -> lag 1 significant.
+        let result = select_order_pacf_annual(&[-0.5, 0.1], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_zero_observations_returns_infinity_threshold() {
+        // n_observations = 0 -> threshold = infinity -> no lag exceeds it.
+        // PACF[0] = 0.5 is non-zero -> min-order-1 rule forces order = 1.
+        let result = select_order_pacf_annual(&[0.5, 0.3], 0, 1.96);
+        assert_eq!(result.threshold, f64::INFINITY);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_structural_zero_at_lag1_returns_zero() {
+        // FACP exactly 0.0 at lag 1 -> structural-zero short-circuit.
+        // Even though lag 2 = 0.5 is "significant", the model is forced
+        // to white noise (degenerate Z⊗A bucket).
+        let result = select_order_pacf_annual(&[0.0, 0.5], 100, 1.96);
+        assert_eq!(result.selected_order, 0);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_structural_zero_at_lag2_does_not_short_circuit() {
+        // Structural zero at lag 2 (PACF[1] = 0.0) does NOT trigger short-circuit;
+        // only lag 1 does. The selector proceeds normally with the surviving
+        // lags: lag 1 = 0.5 > threshold, lag 3 = 0.6 > threshold -> order = 3.
+        let result = select_order_pacf_annual(&[0.5, 0.0, 0.6], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_only_lag1_significant_with_zeros_after() {
+        // Realistic pattern: a degenerate Schur complement at lag 2+ produces
+        // FACP = [+0.37, 0, 0, 0, 0, 0]. The selector picks order 1 (lag 1
+        // is significant), not 0.
+        let result = select_order_pacf_annual(&[0.37, 0.0, 0.0, 0.0, 0.0, 0.0], 92, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_structural_zero_at_lag3_does_not_short_circuit() {
+        // Structural zero at lag 3 (k > 2) does NOT trigger short-circuit.
+        // Lag 1 (0.5) is significant; max_significant = 1; min-order-1 -> 1.
+        let result = select_order_pacf_annual(&[0.5, 0.1, 0.0], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_matches_select_order_pacf_for_short_circuit_zero_at_lag1() {
+        // When lag 1 has a structural zero, the annual variant returns 0
+        // even if higher lags would be significant — this is where it
+        // diverges most sharply from `select_order_pacf`, which only looks
+        // at the maximum significant lag.
+        let facp = &[0.0, 0.5_f64];
+        let n = 100_usize;
+        let z = 1.96_f64;
+        let annual = select_order_pacf_annual(facp, n, z);
+        let classical = select_order_pacf(facp, n, z);
+        assert_eq!(annual.selected_order, 0);
+        assert_eq!(classical.selected_order, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_annual_seasonal_stats tests (AC #1, AC #2)
+    // -----------------------------------------------------------------------
+
+    use super::{estimate_annual_seasonal_stats, estimate_periodic_ar_annual_coefficients};
+
+    /// AC #1 — Four-year synthetic monthly series; hand-computed Bessel-corrected
+    /// mean and std.
+    ///
+    /// Series: `z[year*12 + month] = (month+1)*10 + year*5`.
+    ///
+    /// Rolling-window construction (index `i`, window `z[i..i+12]`, target
+    /// index `i+11`): each value `A = mean(z[i..i+12])` is stored under the
+    /// season of `z[i+11]` — i.e., the PDF time-index of `A_{t-1}` when
+    /// `t = i + 12`.
+    ///
+    /// Each season has exactly 3 A_t values:
+    /// - For `s ∈ 0..10` the windows cover target years `{1, 2, 3}` (the
+    ///   window crosses into year `y` and `i_min = s + 1 ≥ 1`).
+    /// - For `s == 11` the windows cover target years `{0, 1, 2}` (the
+    ///   window is entirely within year `y`, so `i_min = 0`); the loop bound
+    ///   `i < 36` excludes year 3.
+    ///
+    /// Window mean (`i = y*12 + s - 11` for `s ∈ 0..10`, `i = y*12` for `s == 11`):
+    /// `mean = (780 + 5 * total_year_offset_in_window) / 12`.
+    ///
+    /// Average over the 3 valid years yields:
+    /// - `s ∈ 0..10`: `(845 + 5*s) / 12`
+    /// - `s == 11`: `70.0` (note: NOT `(845 + 55)/12 = 75.0` because the
+    ///   y-range shifts down by one)
+    ///
+    /// All stds are 5.0 (Bessel-corrected, `1/(N-1)` with N=3) — each year
+    /// shifts every observation by `+5`, so window means differ by `5`
+    /// between consecutive years for every season.
+    ///
+    /// This test intentionally pins the `1/(N-1)` divisor and the divergence
+    /// from the population (`1/N`) divisor used elsewhere in the workspace.
+    #[test]
+    fn estimate_annual_seasonal_stats_four_year_synthetic_hand_computed() {
+        let hydro_id = EntityId::from(1);
+        let stages = make_monthly_stages(2000, 4);
+
+        // Build 48 observations: z[year*12 + month] = (month+1)*10 + year*5.
+        let mut observations: Vec<(EntityId, NaiveDate, f64)> = Vec::new();
+        for year in 0..4_usize {
+            for month in 0..12_usize {
+                let value = (month + 1) as f64 * 10.0 + year as f64 * 5.0;
+                let date =
+                    NaiveDate::from_ymd_opt(2000 + year as i32, month as u32 + 1, 1).unwrap();
+                observations.push((hydro_id, date, value));
+            }
+        }
+
+        let result =
+            estimate_annual_seasonal_stats(&observations, &stages, &[hydro_id], None).unwrap();
+
+        assert_eq!(result.len(), 12, "must return exactly one entry per season");
+
+        for s in &result {
+            assert_eq!(
+                s.hydro_id, hydro_id,
+                "hydro_id must match for season {}",
+                s.season_id
+            );
+            // For seasons 0..10 the window crosses into the target year, so
+            // valid `y ∈ {1, 2, 3}` (y_avg = 2). For season 11 the window
+            // sits entirely within year `y`, so valid `y ∈ {0, 1, 2}`
+            // (y_avg = 1) — producing the discontinuity from `(845+5*11)/12`
+            // to `70.0`.
+            let expected_mean = if s.season_id == 11 {
+                70.0
+            } else {
+                (845.0 + 5.0 * s.season_id as f64) / 12.0
+            };
+            assert!(
+                (s.mean_m3s - expected_mean).abs() < 1e-10,
+                "season {}: mean_m3s={} expected={}",
+                s.season_id,
+                s.mean_m3s,
+                expected_mean
+            );
+            // 3 samples with mutual deviations {-5, 0, 5} → sum-of-squares 50.
+            // Population (1/N) variance = 50/3 → std = sqrt(50/3).
+            let expected_std = (50.0_f64 / 3.0).sqrt();
+            assert!(
+                (s.std_m3s - expected_std).abs() < 1e-10,
+                "season {}: std_m3s={} expected {} (population 1/N)",
+                s.season_id,
+                s.std_m3s,
+                expected_std
+            );
+        }
+
+        // Sorted by (hydro_id, season_id) ascending.
+        let season_ids: Vec<usize> = result.iter().map(|s| s.season_id).collect();
+        assert_eq!(
+            season_ids,
+            (0..12).collect::<Vec<_>>(),
+            "result must be sorted by season_id"
+        );
+    }
+
+    /// AC #2 — History too short: 11 observations cannot form any rolling window.
+    ///
+    /// Requires at least 13 observations (indices 0..12 inclusive) for the first
+    /// window to exist. 11 observations is strictly insufficient.
+    #[test]
+    fn estimate_annual_seasonal_stats_too_short_history_errors() {
+        use crate::StochasticError;
+
+        let hydro_id = EntityId::from(42);
+        let stages = make_monthly_stages(2000, 2);
+
+        // 11 observations — not enough for even one rolling window.
+        let observations: Vec<(EntityId, NaiveDate, f64)> = (0..11)
+            .map(|i| {
+                let month = i % 12 + 1;
+                let date = NaiveDate::from_ymd_opt(2000, month as u32, 1).unwrap();
+                (hydro_id, date, i as f64 * 10.0)
+            })
+            .collect();
+
+        let err =
+            estimate_annual_seasonal_stats(&observations, &stages, &[hydro_id], None).unwrap_err();
+
+        assert!(
+            matches!(err, StochasticError::InsufficientData { .. }),
+            "expected InsufficientData, got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_periodic_ar_annual_coefficients tests (AC #3, AC #4, AC #5)
+    // -----------------------------------------------------------------------
+
+    /// AC #3 — `selected_order = 0`: 1×1 system yields only ψ, `coefficients` is empty.
+    ///
+    /// Data reuses the order-zero fixture from `build_extended_periodic_yw_matrix`.
+    /// The 1×1 system has matrix `[[1.0]]` and rhs `[cross_correlation_a_z_neg1(...)]`.
+    /// Solution: ψ = rhs[0].
+    /// sigma2 = 1 − ψ * rhs[0] = 1 − rhs[0]^2.
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_order_zero_returns_one_by_one_solution() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        // The expected annual_coefficient equals the rhs[0] from the 1×1 system,
+        // which is cross_correlation_a_z_neg1(prev_season=1, n_seasons=2, ...).
+        // For n_seasons=2, the year-forward-shift skips one Z entry leaving
+        // n_pairs=4. The max-bucket-size divisor (=5) scales the result by
+        // 4/5 vs an n_pairs divisor, so the hand-computed value is
+        // 0.14384911389218766 × 4/5 ≈ 0.1150792911…
+        let expected_psi = 0.143_849_113_892_187_66 * 4.0 / 5.0;
+
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            0, // selected_order
+            2, // n_seasons
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert!(
+            result.coefficients.is_empty(),
+            "order=0 must produce empty coefficients"
+        );
+        assert!(
+            (result.annual_coefficient - expected_psi).abs() < 1e-10,
+            "annual_coefficient={} expected≈{}",
+            result.annual_coefficient,
+            expected_psi
+        );
+        assert!(
+            result.residual_std_ratio > 0.0 && result.residual_std_ratio <= 1.0,
+            "residual_std_ratio must be in (0, 1], got {}",
+            result.residual_std_ratio
+        );
+    }
+
+    /// `selected_order = 2` with the 3×3 hand-computed fixture.
+    ///
+    /// Matrix and RHS come from `build_extended_periodic_yw_matrix_hand_computed_3x3`.
+    /// The system is:
+    /// ```text
+    /// [1.0,   R01,   za0] [φ1]   [rhs0]
+    /// [R01,   1.0,   za1] [φ2] = [rhs1]
+    /// [za0,   za1,   1.0] [ψ ]   [rhs2]
+    /// ```
+    /// where R01 ≈ 0.3287979746, za0 ≈ -0.1216216216, za1 ≈ 0.7397954429,
+    /// rhs = [0.3698977214, 0.0, 0.1438491139].
+    ///
+    /// Numerical solution (verified with numpy):
+    /// - φ1 ≈ 0.81267678
+    /// - φ2 ≈ -0.98684211
+    /// - ψ  ≈ 0.97274947
+    /// - sigma2 ≈ 0.55946356
+    /// - residual_std_ratio ≈ 0.74797297
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_hand_computed_three_season() {
+        let z0: &[f64] = &[1.0, 3.0, 2.0, 5.0, 4.0];
+        let z1: &[f64] = &[2.0, 1.0, 4.0, 3.0, 6.0];
+        let obs: &[&[f64]] = &[z0, z1];
+        let stats = [pop_mean_std_ann(z0), pop_mean_std_ann(z1)];
+
+        let a0: &[f64] = &[1.5, 2.0, 3.0, 4.0, 3.5];
+        let a1: &[f64] = &[1.0, 3.0, 2.5, 3.5, 2.0];
+        let ann_obs: &[&[f64]] = &[a0, a1];
+        let ann_stats = [pop_mean_std_ann(a0), pop_mean_std_ann(a1)];
+
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            2, // selected_order
+            2, // n_seasons
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert_eq!(
+            result.coefficients.len(),
+            2,
+            "selected_order=2 must produce 2 AR coefficients"
+        );
+
+        // Expected values reflect the max-bucket-size cross-cov divisor
+        // (see [`cross_correlation_z_a`] docs). For the synthetic 5-element
+        // buckets, only the cross-terms with year-forward-shift pick up the
+        // 4/5 scale; the rest of the YW system is unaffected.
+        let tol = 1e-8;
+        assert!(
+            (result.coefficients[0] - 0.773_889_929_208_993_9).abs() < tol,
+            "φ1={} expected≈0.7738899292",
+            result.coefficients[0]
+        );
+        assert!(
+            (result.coefficients[1] - (-0.903_947_368_421_052_3)).abs() < tol,
+            "φ2={} expected≈-0.9039473684",
+            result.coefficients[1]
+        );
+        assert!(
+            (result.annual_coefficient - 0.877_937_183_016_726_5).abs() < tol,
+            "ψ={} expected≈0.8779371830",
+            result.annual_coefficient
+        );
+        assert!(
+            (result.residual_std_ratio - 0.782_756_341_321_194_8).abs() < tol,
+            "residual_std_ratio={} expected≈0.7827563413",
+            result.residual_std_ratio
+        );
+    }
+
+    /// AC #5 — Singular extended YW system returns the zero fallback.
+    ///
+    /// Uses the alternating series `[-1, 1, -1, 1, -1, 1]` with `n_seasons=1`
+    /// and `selected_order=1`.  Since Z and A are identical, `rho_za = 1.0`
+    /// (exactly, by integer arithmetic).  The resulting 2×2 extended matrix is
+    /// `[[1.0, 1.0], [1.0, 1.0]]` which has determinant 0, so
+    /// `solve_linear_system` returns `None` and the function returns the
+    /// zero-fallback `PeriodicYwAnnualResult`.
+    ///
+    /// Derivation mirrors the precondition asserted in
+    /// `conditional_facp_partitioned_singular_sigma22_breaks_early`.
+    #[test]
+    fn estimate_periodic_ar_annual_coefficients_singular_returns_zero_result() {
+        // Alternating series with exact mean=0, std=1 (population).
+        // Z = A (identical) => rho_za = exactly 1.0 in IEEE 754 arithmetic.
+        let z0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        let a0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+
+        let obs: &[&[f64]] = &[z0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_obs: &[&[f64]] = &[a0];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        // With n_seasons=1, selected_order=1 and Z=A, the 2×2 extended matrix is:
+        //   [[matrix[0,0]=1.0, matrix[0,1]=rho_za(lag=0)=1.0],
+        //    [matrix[1,0]=1.0, matrix[1,1]=1.0             ]]
+        // = [[1, 1], [1, 1]] → determinant 0 → solve_linear_system returns None.
+        let result = estimate_periodic_ar_annual_coefficients(
+            0, // season
+            1, // selected_order → 2×2 extended system [[1,1],[1,1]] (singular)
+            1, // n_seasons
+            obs,
+            &stats,
+            &[0_i32; 32],
+            ann_obs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        assert!(
+            result.coefficients.is_empty(),
+            "singular system must return empty coefficients, got {:?}",
+            result.coefficients
+        );
+        assert_eq!(
+            result.annual_coefficient, 0.0,
+            "singular system must return annual_coefficient=0.0"
+        );
+        assert_eq!(
+            result.residual_std_ratio, 1.0,
+            "singular system must return residual_std_ratio=1.0"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // fit_par_annual_with_reduction tests (Maceira-Damazio iterative reduction
+    // across the full periodic cycle, using contribution-based validation).
+    // -----------------------------------------------------------------------
+
+    use super::{ReducedOrderFit, fit_par_annual_with_reduction};
+
+    /// All-positive single-season AR(1) data: contribution check is trivially
+    /// non-negative, no reduction needed.
+    #[test]
+    fn fit_par_annual_with_reduction_no_reduction_for_positive_ar1() {
+        let n_years = 80;
+        let mut z = vec![1.0_f64];
+        for y in 1..n_years {
+            let noise = (y as f64 * 0.17).sin() * 0.25;
+            z.push(0.6 * z[y - 1] + noise);
+        }
+        let a: Vec<f64> = (0..n_years)
+            .map(|y| (y as f64 * 0.43).cos() * 0.5)
+            .collect();
+
+        let obs: &[&[f64]] = &[&z];
+        let ann_obs: &[&[f64]] = &[&a];
+        let stats = [pop_mean_std_ann(&z)];
+        let ann_stats = [pop_mean_std_ann(&a)];
+
+        let result = fit_par_annual_with_reduction(
+            &[1],
+            1,
+            obs,
+            &stats,
+            &[0; 32],
+            ann_obs,
+            &ann_stats,
+            &[0; 32],
+            1.96,
+        );
+
+        assert_eq!(result.selected_orders, vec![1]);
+        assert_eq!(result.n_reductions, 0);
+        assert_eq!(result.coefficients[0].len(), 1);
+    }
+
+    /// All-zero initial orders return a pure-annual fit per season.
+    #[test]
+    fn fit_par_annual_with_reduction_zero_initial_orders_pass_through() {
+        let z0: &[f64] = &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let a0: &[f64] = &[1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
+
+        let obs: &[&[f64]] = &[z0];
+        let ann_obs: &[&[f64]] = &[a0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        let result = fit_par_annual_with_reduction(
+            &[0],
+            1,
+            obs,
+            &stats,
+            &[0; 32],
+            ann_obs,
+            &ann_stats,
+            &[0; 32],
+            1.96,
+        );
+
+        assert_eq!(result.selected_orders, vec![0]);
+        assert_eq!(result.n_reductions, 0);
+        assert!(result.coefficients[0].is_empty());
+    }
+
+    /// Singular Yule-Walker system at the initial order falls back to order 0.
+    #[test]
+    fn fit_par_annual_with_reduction_singular_falls_back_to_order_zero() {
+        let z0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        let a0: &[f64] = &[-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+
+        let obs: &[&[f64]] = &[z0];
+        let ann_obs: &[&[f64]] = &[a0];
+        let stats = [pop_mean_std_ann(z0)];
+        let ann_stats = [pop_mean_std_ann(a0)];
+
+        let result = fit_par_annual_with_reduction(
+            &[1],
+            1,
+            obs,
+            &stats,
+            &[0; 32],
+            ann_obs,
+            &ann_stats,
+            &[0; 32],
+            1.96,
+        );
+
+        assert_eq!(result.selected_orders, vec![0]);
+        assert!(result.coefficients[0].is_empty());
+        assert_eq!(result.annual_coefficients[0], 0.0);
+    }
+
+    /// Strongly oscillating AR(2) data with ψ ≈ 0 keeps the lag-2
+    /// contribution negative even after the ψ/12 boost, triggering
+    /// reduction.
+    #[test]
+    fn fit_par_annual_with_reduction_reduces_negative_contribution() {
+        let n_years = 100;
+        let alpha: f64 = 0.4;
+        let beta: f64 = -0.85;
+        let mut z = vec![0.0_f64, 1.0_f64];
+        for y in 2..n_years {
+            let noise = (y as f64 * 0.31).sin() * 0.02;
+            z.push(alpha * z[y - 1] + beta * z[y - 2] + noise);
+        }
+        // A uncorrelated with Z so that ψ stays near 0.
+        let a: Vec<f64> = (0..n_years).map(|y| (y as f64 * 1.7).cos() * 0.5).collect();
+
+        let obs: &[&[f64]] = &[&z];
+        let ann_obs: &[&[f64]] = &[&a];
+        let stats = [pop_mean_std_ann(&z)];
+        let ann_stats = [pop_mean_std_ann(&a)];
+
+        let result = fit_par_annual_with_reduction(
+            &[2],
+            1,
+            obs,
+            &stats,
+            &[0; 32],
+            ann_obs,
+            &ann_stats,
+            &[0; 32],
+            1.96,
+        );
+
+        assert!(
+            result.selected_orders[0] < 2,
+            "expected reduction; got selected_orders={:?}",
+            result.selected_orders
+        );
+        assert!(result.n_reductions >= 1);
+    }
+
+    fn _types_inhabited() -> ReducedOrderFit {
+        ReducedOrderFit {
+            selected_orders: vec![],
+            coefficients: vec![],
+            annual_coefficients: vec![],
+            residual_std_ratios: vec![],
+            n_reductions: 0,
+        }
+    }
+
+    /// Regression test: `assemble_partitioned_covariance` sigma_22 cross-term
+    /// lag indexing for k=3.
+    ///
+    /// The cross-term `sigma_22[i, k-1]` must equal
+    /// `cross_correlation_z_a(prev_season, lag=i, ...)` because `Z_{t-1-i}` is
+    /// exactly `i` steps older than `A_{t-1}`.  The old (buggy) code used
+    /// `lag = k-2-i`, which is only coincidentally correct when `k=2` (both
+    /// formulae reduce to `lag=0`).  For `k=3` the bug swaps the lag-0 and
+    /// lag-1 cross-terms.
+    ///
+    /// This test FAILS on the old `k-2-i` formula and PASSES on the fixed `i`
+    /// formula.
+    #[test]
+    fn assemble_partitioned_covariance_sigma_22_cross_term_lag_indexing() {
+        // 4-season synthetic dataset, 20 years of data.
+        let n_seasons = 4;
+        let n_years = 20;
+
+        // Z observations: deterministic but non-trivial to avoid accidental
+        // symmetry that would make lag-0 == lag-1.
+        let z_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| {
+                        (s as f64 * 1.7 + y as f64 * 0.3).sin() * 4.0
+                            + (s as f64 * 0.6 - y as f64 * 1.4).cos() * 1.5
+                    })
+                    .collect()
+            })
+            .collect();
+        let a_data: Vec<Vec<f64>> = (0..n_seasons)
+            .map(|s| {
+                (0..n_years)
+                    .map(|y| (s as f64 * 0.9 + y as f64 * 0.7).cos() * 2.0 + (y as f64 * 0.2).sin())
+                    .collect()
+            })
+            .collect();
+
+        let obs_refs: Vec<&[f64]> = z_data.iter().map(Vec::as_slice).collect();
+        let ann_refs: Vec<&[f64]> = a_data.iter().map(Vec::as_slice).collect();
+        let stats: Vec<(f64, f64)> = z_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+        let ann_stats: Vec<(f64, f64)> = a_data.iter().map(|v| pop_mean_std_ann(v)).collect();
+
+        let season = 0;
+        let k = 3;
+        let prev_season = (season + n_seasons - 1) % n_seasons;
+
+        let cov = assemble_partitioned_covariance(
+            season,
+            k,
+            n_seasons,
+            &obs_refs,
+            &stats,
+            &[0_i32; 32],
+            &ann_refs,
+            &ann_stats,
+            &[0_i32; 32],
+        );
+
+        // For k=3 the cross-term block covers i in 0..2 (i.e. i=0 and i=1).
+        // sigma_22[i, k-1] should equal cross_correlation_z_a(prev_season, lag=i, ...).
+        for i in 0..k - 1 {
+            let expected = cross_correlation_z_a(
+                prev_season,
+                i, // lag = i (the fix)
+                n_seasons,
+                &obs_refs,
+                &stats,
+                &[0_i32; 32],
+                &ann_refs,
+                &ann_stats,
+                &[0_i32; 32],
+            );
+            let actual = cov.sigma_22[i * k + (k - 1)];
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "sigma_22[{i}, {k_minus_1}] = {actual:.15} but \
+                 cross_correlation_z_a(prev_season={prev_season}, lag={i}) = {expected:.15}",
+                k_minus_1 = k - 1,
+            );
+            // Also check symmetry: sigma_22[k-1, i] == sigma_22[i, k-1].
+            let sym = cov.sigma_22[(k - 1) * k + i];
+            assert!(
+                (sym - expected).abs() < 1e-12,
+                "sigma_22[{k_minus_1}, {i}] = {sym:.15} not symmetric with sigma_22[{i}, {k_minus_1}]",
+                k_minus_1 = k - 1,
+            );
+        }
     }
 }

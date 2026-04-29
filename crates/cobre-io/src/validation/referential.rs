@@ -381,6 +381,20 @@ fn check_scenario_references(
         }
     }
 
+    for (i, row) in data.inflow_annual_components.iter().enumerate() {
+        if !hydro_ids.contains(&row.hydro_id.0) {
+            ctx.add_error(
+                ErrorKind::InvalidReference,
+                "scenarios/inflow_annual_component.parquet",
+                Some(format!("InflowAnnualComponentRow[{i}]")),
+                format!(
+                    "InflowAnnualComponentRow[{i}] references non-existent Hydro {} via field 'hydro_id'",
+                    row.hydro_id.0
+                ),
+            );
+        }
+    }
+
     for (i, row) in data.inflow_history.iter().enumerate() {
         if !hydro_ids.contains(&row.hydro_id.0) {
             ctx.add_error(

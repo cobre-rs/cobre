@@ -42,6 +42,18 @@
 //! `scenarios/correlation.json` so that copying the output file back into
 //! `scenarios/` produces a round-trip-identical model.
 //!
+//! [`write_inflow_annual_component`] exports fitted annual component statistics to
+//! `output/stochastic/inflow_annual_component.parquet` using the 5-column schema
+//! matching the corresponding input file:
+//!
+//! | Column               | Type   | Description                                    |
+//! |----------------------|--------|------------------------------------------------|
+//! | `hydro_id`           | INT32  | Hydro plant ID                                 |
+//! | `stage_id`           | INT32  | Stage ID                                       |
+//! | `annual_coefficient` | DOUBLE | Annual component coefficient ψ (dimensionless) |
+//! | `annual_mean_m3s`    | DOUBLE | Mean of rolling 12-month average (m³/s)        |
+//! | `annual_std_m3s`     | DOUBLE | Std of rolling 12-month average (m³/s)         |
+//!
 //! [`write_load_seasonal_stats`] exports per-bus-per-stage load statistics to
 //! `output/stochastic/load_seasonal_stats.parquet` using the 4-column schema
 //! matching the corresponding input file:
@@ -84,7 +96,9 @@ use serde::Serialize;
 
 use crate::output::error::OutputError;
 use crate::output::parquet_config::ParquetWriterConfig;
-use crate::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow};
+use crate::scenarios::{
+    InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow, LoadSeasonalStatsRow,
+};
 
 /// Write an [`OpeningTree`] to a Parquet file at `path`.
 ///
@@ -225,6 +239,57 @@ pub fn write_inflow_ar_coefficients(
     ensure_parent_dir(path)?;
     let config = ParquetWriterConfig::default();
     let batch = build_inflow_ar_coefficients_batch(rows)?;
+    write_parquet_atomic(path, &batch, &config)
+}
+
+/// Write a slice of [`InflowAnnualComponentRow`] to a Parquet file at `path`.
+///
+/// The output schema is exactly 5 columns — `hydro_id: Int32`, `stage_id: Int32`,
+/// `annual_coefficient: Float64`, `annual_mean_m3s: Float64`, `annual_std_m3s: Float64` —
+/// in that order, matching the schema of `scenarios/inflow_annual_component.parquet`.
+/// Rows are written in the order given; the caller is responsible for sorting by
+/// `(hydro_id, stage_id)` if canonical ordering is required.
+///
+/// The parent directory is created if it does not already exist. The write is
+/// atomic: data goes to `{path}.tmp` first, then the file is renamed to `path`.
+///
+/// # Errors
+///
+/// - [`OutputError::IoError`] — directory creation, file open, or rename fails.
+/// - [`OutputError::SerializationError`] — Arrow/Parquet construction fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// use cobre_io::output::stochastic::write_inflow_annual_component;
+/// use cobre_io::scenarios::InflowAnnualComponentRow;
+/// use cobre_core::EntityId;
+/// use std::path::Path;
+///
+/// # fn main() -> Result<(), cobre_io::OutputError> {
+/// let rows = vec![
+///     InflowAnnualComponentRow {
+///         hydro_id: EntityId::from(1),
+///         stage_id: 0,
+///         annual_coefficient: -0.5,
+///         annual_mean_m3s: 1500.0,
+///         annual_std_m3s: 300.0,
+///     },
+/// ];
+/// write_inflow_annual_component(
+///     Path::new("/tmp/out/stochastic/inflow_annual_component.parquet"),
+///     &rows,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn write_inflow_annual_component(
+    path: &Path,
+    rows: &[InflowAnnualComponentRow],
+) -> Result<(), OutputError> {
+    ensure_parent_dir(path)?;
+    let config = ParquetWriterConfig::default();
+    let batch = build_inflow_annual_component_batch(rows)?;
     write_parquet_atomic(path, &batch, &config)
 }
 
@@ -565,6 +630,48 @@ fn build_inflow_ar_coefficients_batch(
         ],
     )
     .map_err(|e| OutputError::serialization("inflow_ar_coefficients", e.to_string()))
+}
+
+fn inflow_annual_component_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("hydro_id", DataType::Int32, false),
+        Field::new("stage_id", DataType::Int32, false),
+        Field::new("annual_coefficient", DataType::Float64, false),
+        Field::new("annual_mean_m3s", DataType::Float64, false),
+        Field::new("annual_std_m3s", DataType::Float64, false),
+    ])
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+fn build_inflow_annual_component_batch(
+    rows: &[InflowAnnualComponentRow],
+) -> Result<RecordBatch, OutputError> {
+    let n = rows.len();
+    let mut hydro_id_col = Int32Builder::with_capacity(n);
+    let mut stage_id_col = Int32Builder::with_capacity(n);
+    let mut annual_coefficient_col = Float64Builder::with_capacity(n);
+    let mut annual_mean_m3s_col = Float64Builder::with_capacity(n);
+    let mut annual_std_m3s_col = Float64Builder::with_capacity(n);
+
+    for row in rows {
+        hydro_id_col.append_value(row.hydro_id.0);
+        stage_id_col.append_value(row.stage_id);
+        annual_coefficient_col.append_value(row.annual_coefficient);
+        annual_mean_m3s_col.append_value(row.annual_mean_m3s);
+        annual_std_m3s_col.append_value(row.annual_std_m3s);
+    }
+
+    RecordBatch::try_new(
+        Arc::new(inflow_annual_component_schema()),
+        vec![
+            Arc::new(hydro_id_col.finish()),
+            Arc::new(stage_id_col.finish()),
+            Arc::new(annual_coefficient_col.finish()),
+            Arc::new(annual_mean_m3s_col.finish()),
+            Arc::new(annual_std_m3s_col.finish()),
+        ],
+    )
+    .map_err(|e| OutputError::serialization("inflow_annual_component", e.to_string()))
 }
 
 fn load_seasonal_stats_schema() -> Schema {
@@ -1960,5 +2067,180 @@ mod tests {
         let s1_mat = &recovered.profiles["season_1"].groups[0].matrix;
         assert!((s1_mat[0][1] - 0.3).abs() < 1e-10);
         assert!((s1_mat[1][0] - 0.3).abs() < 1e-10);
+    }
+
+    // =========================================================================
+    // write_inflow_annual_component tests
+    // =========================================================================
+
+    fn make_annual_component_rows() -> Vec<InflowAnnualComponentRow> {
+        vec![
+            InflowAnnualComponentRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 0,
+                annual_coefficient: 0.35,
+                annual_mean_m3s: 1500.0,
+                annual_std_m3s: 300.0,
+            },
+            InflowAnnualComponentRow {
+                hydro_id: EntityId::from(1),
+                stage_id: 1,
+                annual_coefficient: -0.12,
+                annual_mean_m3s: 1200.0,
+                annual_std_m3s: 250.0,
+            },
+            InflowAnnualComponentRow {
+                hydro_id: EntityId::from(2),
+                stage_id: 0,
+                annual_coefficient: 0.48,
+                annual_mean_m3s: 800.0,
+                annual_std_m3s: 150.0,
+            },
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // test_write_inflow_annual_component_round_trip_three_rows
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_inflow_annual_component_round_trip_three_rows() {
+        use crate::scenarios::parse_inflow_annual_component;
+
+        let rows = make_annual_component_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_annual_component.parquet");
+
+        write_inflow_annual_component(&path, &rows).expect("write must succeed");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered =
+            parse_inflow_annual_component(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.len(), rows.len(), "row count must match");
+        for (original, parsed) in rows.iter().zip(recovered.iter()) {
+            assert_eq!(parsed.hydro_id, original.hydro_id, "hydro_id must match");
+            assert_eq!(parsed.stage_id, original.stage_id, "stage_id must match");
+            assert_eq!(
+                parsed.annual_coefficient, original.annual_coefficient,
+                "annual_coefficient must be bit-for-bit identical"
+            );
+            assert_eq!(
+                parsed.annual_mean_m3s, original.annual_mean_m3s,
+                "annual_mean_m3s must be bit-for-bit identical"
+            );
+            assert_eq!(
+                parsed.annual_std_m3s, original.annual_std_m3s,
+                "annual_std_m3s must be bit-for-bit identical"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // test_write_inflow_annual_component_empty_round_trip
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_inflow_annual_component_empty_round_trip() {
+        use crate::scenarios::parse_inflow_annual_component;
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_annual_component.parquet");
+
+        write_inflow_annual_component(&path, &[]).expect("write must succeed for empty rows");
+        assert!(path.exists(), "file must exist after write");
+
+        let recovered =
+            parse_inflow_annual_component(&path).expect("parse must succeed after write");
+        assert!(
+            recovered.is_empty(),
+            "empty write must produce an empty parsed result"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // test_write_inflow_annual_component_byte_stable_two_writes
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_inflow_annual_component_byte_stable_two_writes() {
+        let rows = make_annual_component_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_annual_component.parquet");
+
+        write_inflow_annual_component(&path, &rows).expect("first write must succeed");
+        let bytes1 = std::fs::read(&path).expect("first read must succeed");
+
+        write_inflow_annual_component(&path, &rows).expect("second write must succeed");
+        let bytes2 = std::fs::read(&path).expect("second read must succeed");
+
+        assert_eq!(
+            bytes1, bytes2,
+            "two writes of the same data must produce byte-identical files"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // test_write_inflow_annual_component_creates_parent_dir
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_inflow_annual_component_creates_parent_dir() {
+        let rows = make_annual_component_rows();
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("a/b/inflow_annual_component.parquet");
+
+        assert!(
+            !path.parent().unwrap().exists(),
+            "parent must not exist yet"
+        );
+        write_inflow_annual_component(&path, &rows)
+            .expect("write must succeed even with missing parent");
+        assert!(path.exists(), "file must exist");
+        assert!(
+            path.parent().unwrap().is_dir(),
+            "parent directory must have been created"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // test_write_inflow_annual_component_negative_psi_round_trip
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_inflow_annual_component_negative_psi_round_trip() {
+        use crate::scenarios::parse_inflow_annual_component;
+
+        let rows = vec![InflowAnnualComponentRow {
+            hydro_id: EntityId::from(7),
+            stage_id: 3,
+            annual_coefficient: -0.5,
+            annual_mean_m3s: 87.5,
+            annual_std_m3s: 11.25,
+        }];
+
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let path = tmp.path().join("inflow_annual_component.parquet");
+
+        write_inflow_annual_component(&path, &rows).expect("write must succeed");
+        let recovered =
+            parse_inflow_annual_component(&path).expect("parse must succeed after write");
+
+        assert_eq!(recovered.len(), 1, "must have exactly one row");
+        let row = &recovered[0];
+        assert_eq!(row.hydro_id, EntityId::from(7), "hydro_id must match");
+        assert_eq!(row.stage_id, 3, "stage_id must match");
+        assert_eq!(
+            row.annual_coefficient, -0.5,
+            "annual_coefficient must be bit-for-bit identical"
+        );
+        assert_eq!(
+            row.annual_mean_m3s, 87.5,
+            "annual_mean_m3s must be bit-for-bit identical"
+        );
+        assert_eq!(
+            row.annual_std_m3s, 11.25,
+            "annual_std_m3s must be bit-for-bit identical"
+        );
     }
 }

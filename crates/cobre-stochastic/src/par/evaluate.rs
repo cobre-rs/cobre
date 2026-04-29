@@ -177,6 +177,7 @@ pub fn evaluate_par_inflow(
 ///     mean_m3s: 100.0, std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 /// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
@@ -255,6 +256,7 @@ pub fn evaluate_par_batch(
 ///     mean_m3s: 100.0, std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 /// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
@@ -410,6 +412,7 @@ pub fn solve_par_noise(
 ///     mean_m3s: 100.0, std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 /// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
@@ -497,6 +500,7 @@ pub fn solve_par_noise_batch(
 ///     mean_m3s: 100.0, std_m3s: 30.0,
 ///     ar_coefficients: vec![],
 ///     residual_std_ratio: 1.0,
+///     annual: None,
 /// };
 /// let par_lp = PrecomputedPar::build(&[model], &[stage], &[EntityId(1)]).unwrap();
 ///
@@ -586,6 +590,7 @@ mod tests {
             std_m3s: std,
             ar_coefficients: coeffs,
             residual_std_ratio: residual_ratio,
+            annual: None,
         }
     }
 
@@ -975,6 +980,7 @@ mod tests {
             std_m3s: 0.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         };
         let par_lp =
             crate::par::precompute::PrecomputedPar::build(&[model], &[stage], &[EntityId(1)])

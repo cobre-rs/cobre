@@ -286,9 +286,12 @@ fn collect_load_bus_indices(system: &System, bus_pos: &HashMap<EntityId, usize>)
 ///
 /// ## PAR order and `max_par_order`
 ///
-/// `max_par_order` is derived from the maximum AR coefficient count across all
-/// hydro inflow models for the stage.  All hydros use the same uniform lag
-/// stride `max_par_order` to enable SIMD-friendly contiguous access.
+/// `max_par_order` is the maximum of (a) the maximum AR coefficient count
+/// across all hydro inflow models and (b) `par_lp.max_order()`.  The latter
+/// is non-classical only when an annual component is present, in which case
+/// the precompute widens the lag stride to 12 and the LP must allocate
+/// matching column and row slots.  All hydros use the same uniform lag stride
+/// `max_par_order` to enable SIMD-friendly contiguous access.
 ///
 /// ## Objective coefficients
 ///
@@ -517,7 +520,8 @@ fn build_template_build_ctx<'a>(
         .filter(|m| m.stage_id >= 0)
         .map(|m| m.ar_coefficients.len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(par_lp.max_order());
 
     // Precompute diversion upstream map: maps target hydro ID -> list of source
     // hydro indices that divert water to it. O(1) lookup in water balance loop.
@@ -951,6 +955,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: ar_coefficients.clone(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -1504,6 +1509,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -1972,6 +1978,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -2590,6 +2597,7 @@ mod tests {
                     std_m3s: 10.0,
                     ar_coefficients: vec![],
                     residual_std_ratio: 1.0,
+                    annual: None,
                 })
             })
             .collect();
@@ -2893,6 +2901,7 @@ mod tests {
             std_m3s: 20.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models: Vec<LoadModel> = vec![LoadModel {
@@ -3116,6 +3125,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -4654,6 +4664,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
         let load_models = vec![LoadModel {
@@ -4916,6 +4927,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![],
             residual_std_ratio: 1.0,
+            annual: None,
         }];
 
         let load_models = vec![LoadModel {
@@ -5983,6 +5995,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: ar_coefficients.clone(),
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -6429,6 +6442,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(3),
@@ -6437,6 +6451,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
 
@@ -6698,6 +6713,7 @@ mod tests {
                 std_m3s: 10.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -7777,6 +7793,7 @@ mod tests {
                 std_m3s: 0.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 0.0,
+                annual: None,
             },
             InflowModel {
                 hydro_id: h2_id,
@@ -7785,6 +7802,7 @@ mod tests {
                 std_m3s: 0.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 0.0,
+                annual: None,
             },
         ];
 
@@ -8204,6 +8222,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             })
             .collect();
 
@@ -9076,6 +9095,372 @@ mod tests {
             (t.row_upper[max_outflow_row] - 800.0).abs() < 1e-10,
             "max_outflow row_upper = {}, expected 800.0 (rate units m3/s)",
             t.row_upper[max_outflow_row],
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // max_par_order derivation tests (annual component path)
+    // -------------------------------------------------------------------------
+
+    /// Build a 1-stage, 2-hydro system with AR order p for each hydro.
+    ///
+    /// Stage has `season_id: Some(0)` so that `PrecomputedPar::build` can
+    /// resolve lag-stage statistics via the season fallback even when no
+    /// pre-study inflow models are supplied.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    fn two_hydro_par_system(
+        ar_order: usize,
+        inflow_models: Vec<cobre_core::scenario::InflowModel>,
+    ) -> cobre_core::System {
+        use chrono::NaiveDate;
+        use cobre_core::entities::hydro::{Hydro, HydroGenerationModel, HydroPenalties};
+        use cobre_core::scenario::LoadModel;
+        use cobre_core::temporal::{
+            Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
+            StageStateConfig,
+        };
+
+        let bus = Bus {
+            id: EntityId(1),
+            name: "B1".to_string(),
+            deficit_segments: vec![DeficitSegment {
+                depth_mw: None,
+                cost_per_mwh: 500.0,
+            }],
+            excess_cost: 0.0,
+        };
+
+        let make_hydro = |id: i32, name: &str| Hydro {
+            id: EntityId(id),
+            name: name.to_string(),
+            bus_id: EntityId(1),
+            downstream_id: None,
+            entry_stage_id: None,
+            exit_stage_id: None,
+            min_storage_hm3: 0.0,
+            max_storage_hm3: 200.0,
+            min_outflow_m3s: 0.0,
+            max_outflow_m3s: None,
+            generation_model: HydroGenerationModel::ConstantProductivity {
+                productivity_mw_per_m3s: 2.5,
+            },
+            min_turbined_m3s: 0.0,
+            max_turbined_m3s: 100.0,
+            min_generation_mw: 0.0,
+            max_generation_mw: 250.0,
+            tailrace: None,
+            hydraulic_losses: None,
+            efficiency: None,
+            evaporation_coefficients_mm: None,
+            evaporation_reference_volumes_hm3: None,
+            diversion: None,
+            filling: None,
+            penalties: HydroPenalties {
+                spillage_cost: 0.01,
+                diversion_cost: 0.0,
+                fpha_turbined_cost: 0.0,
+                storage_violation_below_cost: 0.0,
+                filling_target_violation_cost: 0.0,
+                turbined_violation_below_cost: 0.0,
+                outflow_violation_below_cost: 0.0,
+                outflow_violation_above_cost: 0.0,
+                generation_violation_below_cost: 0.0,
+                evaporation_violation_cost: 0.0,
+                water_withdrawal_violation_cost: 0.0,
+                water_withdrawal_violation_pos_cost: 0.0,
+                water_withdrawal_violation_neg_cost: 0.0,
+                evaporation_violation_pos_cost: 0.0,
+                evaporation_violation_neg_cost: 0.0,
+                inflow_nonnegativity_cost: 1000.0,
+            },
+        };
+
+        let stages = vec![Stage {
+            index: 0,
+            id: 0,
+            start_date: NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+            end_date: NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+            season_id: Some(0),
+            blocks: vec![Block {
+                index: 0,
+                name: "S".to_string(),
+                duration_hours: 744.0,
+            }],
+            block_mode: BlockMode::Parallel,
+            state_config: StageStateConfig {
+                storage: true,
+                inflow_lags: ar_order > 0,
+            },
+            risk_config: StageRiskConfig::Expectation,
+            scenario_config: ScenarioSourceConfig {
+                branching_factor: 1,
+                noise_method: NoiseMethod::Saa,
+            },
+        }];
+
+        let load_models = vec![LoadModel {
+            bus_id: EntityId(1),
+            stage_id: 0,
+            mean_mw: 100.0,
+            std_mw: 0.0,
+        }];
+
+        let bounds = ResolvedBounds::new(
+            &BoundsCountsSpec {
+                n_hydros: 2,
+                n_thermals: 0,
+                n_lines: 0,
+                n_pumping: 0,
+                n_contracts: 0,
+                n_stages: 1,
+            },
+            &BoundsDefaults {
+                hydro: default_hydro_bounds(),
+                thermal: ThermalStageBounds {
+                    min_generation_mw: 0.0,
+                    max_generation_mw: 0.0,
+                    cost_per_mwh: 0.0,
+                },
+                line: LineStageBounds {
+                    direct_mw: 0.0,
+                    reverse_mw: 0.0,
+                },
+                pumping: PumpingStageBounds {
+                    min_flow_m3s: 0.0,
+                    max_flow_m3s: 0.0,
+                },
+                contract: ContractStageBounds {
+                    min_mw: 0.0,
+                    max_mw: 0.0,
+                    price_per_mwh: 0.0,
+                },
+            },
+        );
+        let penalties = ResolvedPenalties::new(
+            &PenaltiesCountsSpec {
+                n_hydros: 2,
+                n_buses: 1,
+                n_lines: 0,
+                n_ncs: 0,
+                n_stages: 1,
+            },
+            &PenaltiesDefaults {
+                hydro: default_hydro_penalties(),
+                bus: BusStagePenalties { excess_cost: 0.0 },
+                line: LineStagePenalties { exchange_cost: 0.0 },
+                ncs: NcsStagePenalties {
+                    curtailment_cost: 0.0,
+                },
+            },
+        );
+
+        SystemBuilder::new()
+            .buses(vec![bus])
+            .hydros(vec![make_hydro(2, "H1"), make_hydro(3, "H2")])
+            .stages(stages)
+            .inflow_models(inflow_models)
+            .load_models(load_models)
+            .bounds(bounds)
+            .penalties(penalties)
+            .build()
+            .expect("two_hydro_par_system: valid")
+    }
+
+    /// When an annual component is present, `max_par_order` is widened to 12
+    /// regardless of the classical AR order.
+    ///
+    /// System: 1 stage, 2 hydros, AR order p=2, `annual: Some(_)` on hydro 0.
+    #[test]
+    fn max_par_order_uses_par_lp_when_annual_present() {
+        use cobre_core::scenario::{AnnualComponent, InflowModel};
+
+        let ar_coeffs: Vec<f64> = vec![0.3, 0.2];
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+        };
+        let inflow_models = vec![
+            // Hydro 0 (EntityId 2): AR(2) + annual component
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: Some(ann),
+            },
+            // Hydro 1 (EntityId 3): AR(2), no annual component
+            InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: 0,
+                mean_m3s: 60.0,
+                std_m3s: 15.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+
+        let system = two_hydro_par_system(2, inflow_models.clone());
+        let stages = system.stages().to_vec();
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+        let par_lp =
+            PrecomputedPar::build(&inflow_models, &stages, &hydro_ids).expect("par build ok");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &par_lp,
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build_stage_templates ok");
+
+        assert_eq!(
+            result.templates[0].max_par_order, 12,
+            "annual component must widen max_par_order to 12, got {}",
+            result.templates[0].max_par_order
+        );
+    }
+
+    /// Classical PAR systems are unaffected: `max_par_order` equals the AR order.
+    ///
+    /// System: 1 stage, 2 hydros, AR order p=3, no annual component.
+    #[test]
+    fn max_par_order_classical_unchanged() {
+        use cobre_core::scenario::InflowModel;
+
+        let ar_coeffs: Vec<f64> = vec![0.3, 0.2, 0.1];
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+            InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: 0,
+                mean_m3s: 60.0,
+                std_m3s: 15.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+
+        let system = two_hydro_par_system(3, inflow_models.clone());
+        let stages = system.stages().to_vec();
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+        let par_lp =
+            PrecomputedPar::build(&inflow_models, &stages, &hydro_ids).expect("par build ok");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &par_lp,
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build_stage_templates ok");
+
+        assert_eq!(
+            result.templates[0].max_par_order, 3,
+            "classical-PAR max_par_order must remain 3, got {}",
+            result.templates[0].max_par_order
+        );
+    }
+
+    /// When `max_par_order == 12`, the z-inflow definition row for hydro 0
+    /// has exactly 12 nonzero lag-column entries (one per lag in 0..12).
+    ///
+    /// The `+1.0` entry on `col_z_inflow_start + 0` is excluded from the count.
+    #[allow(clippy::cast_sign_loss)]
+    #[test]
+    fn max_par_order_z_inflow_row_has_twelve_lag_entries() {
+        use cobre_core::scenario::{AnnualComponent, InflowModel};
+
+        // Same PAR-A fixture as `max_par_order_uses_par_lp_when_annual_present`.
+        let ar_coeffs: Vec<f64> = vec![0.3, 0.2];
+        let ann = AnnualComponent {
+            coefficient: 0.5,
+            mean_m3s: 80.0,
+            std_m3s: 20.0,
+        };
+        let inflow_models = vec![
+            InflowModel {
+                hydro_id: EntityId(2),
+                stage_id: 0,
+                mean_m3s: 80.0,
+                std_m3s: 20.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: Some(ann),
+            },
+            InflowModel {
+                hydro_id: EntityId(3),
+                stage_id: 0,
+                mean_m3s: 60.0,
+                std_m3s: 15.0,
+                ar_coefficients: ar_coeffs.clone(),
+                residual_std_ratio: 1.0,
+                annual: None,
+            },
+        ];
+
+        let system = two_hydro_par_system(2, inflow_models.clone());
+        let stages = system.stages().to_vec();
+        let hydro_ids: Vec<EntityId> = system.hydros().iter().map(|h| h.id).collect();
+        let par_lp =
+            PrecomputedPar::build(&inflow_models, &stages, &hydro_ids).expect("par build ok");
+
+        let result = build_stage_templates(
+            &system,
+            &no_penalty_config(),
+            &par_lp,
+            &PrecomputedNormal::default(),
+            &default_production(&system),
+            &default_evaporation(&system),
+        )
+        .expect("build_stage_templates ok");
+
+        let t = &result.templates[0];
+        assert_eq!(
+            t.max_par_order, 12,
+            "precondition: max_par_order must be 12"
+        );
+
+        // Row index of the z-inflow definition for hydro 0.
+        // N=2, L=12: z_inflow_row_start = N*(1+L) = 2*13 = 26.
+        let n_h = 2_usize;
+        let l = 12_usize;
+        let row_z_inflow_h0 = n_h * (1 + l); // = 26
+
+        // Count nonzero entries in that row, excluding the z_inflow column itself
+        // (col_z_inflow_start + 0 = N*(1+L) = 26 in CSC column space).
+        let col_z_inflow_h0 = n_h * (1 + l); // = 26
+        let mut lag_entry_count = 0usize;
+        for col in 0..t.num_cols {
+            let start = t.col_starts[col] as usize;
+            let end = t.col_starts[col + 1] as usize;
+            for pos in start..end {
+                if t.row_indices[pos] as usize == row_z_inflow_h0 && col != col_z_inflow_h0 {
+                    lag_entry_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            lag_entry_count, 12,
+            "z-inflow definition row for hydro 0 must have exactly 12 lag-column entries \
+             when max_par_order == 12, got {lag_entry_count}"
         );
     }
 }

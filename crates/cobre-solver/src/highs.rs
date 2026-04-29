@@ -81,13 +81,28 @@ impl DefaultOption {
 
 /// Performance-tuned default options (`HiGHS` Implementation SS4.1).
 ///
-/// These eight options are applied at construction and restored after each retry
-/// escalation. `simplex_scale_strategy` is set to 0 (off) because the calling
-/// algorithm's prescaler already normalizes matrix entries toward 1.0; the
-/// solver's internal equilibration scaling is redundant and can distort cost
-/// ordering for large-RHS rows. Retry escalation levels 5+ override this to
-/// more aggressive strategies as a fallback for hard problems.
-fn default_options() -> [DefaultOption; 8] {
+/// These thirteen options are applied at construction and restored after each
+/// retry escalation. The values are tuned for master LPs dominated by many
+/// slack rows that are warm-started across consecutive solves.
+///
+/// `simplex_scale_strategy` is set to 0 (off) because the calling algorithm's
+/// prescaler already normalizes matrix entries toward 1.0; the solver's
+/// internal equilibration scaling is redundant and can distort cost ordering
+/// for large-RHS rows. Retry escalation levels 5+ override this to more
+/// aggressive strategies as a fallback for hard problems.
+///
+/// The last four entries diverge from `HiGHS` defaults to suit warm-started
+/// solves on master LPs with tens of thousands of mostly-slack rows: Devex
+/// pricing avoids per-pivot edge-weight maintenance scaling with row count;
+/// disabling cost perturbation removes wasted cleanup pivots when the basis
+/// is already near-optimal (Bland's rule guards against cycling, and retry
+/// level 0 restores perturbation as a fallback); skipping the initial
+/// condition check eliminates O(m)–O(m²) work whose guarantees are already
+/// provided by the caller's slot-tracked basis reconstruction; row-wise
+/// PRICE wins on hyper-sparse basis-inverse rows; loosening the
+/// rebuild-refactor tolerance skips conservative refactorizations that
+/// aren't earning their keep in this numerically benign regime.
+fn default_options() -> [DefaultOption; 13] {
     [
         DefaultOption {
             name: c"solver",
@@ -120,6 +135,26 @@ fn default_options() -> [DefaultOption; 8] {
         DefaultOption {
             name: c"dual_feasibility_tolerance",
             value: OptionValue::Double(1e-7),
+        },
+        DefaultOption {
+            name: c"simplex_dual_edge_weight_strategy",
+            value: OptionValue::Int(1), // Devex
+        },
+        DefaultOption {
+            name: c"dual_simplex_cost_perturbation_multiplier",
+            value: OptionValue::Double(0.0), // Off (warm-start regime)
+        },
+        DefaultOption {
+            name: c"simplex_initial_condition_check",
+            value: OptionValue::Bool(0), // Off (caller manages basis quality)
+        },
+        DefaultOption {
+            name: c"simplex_price_strategy",
+            value: OptionValue::Int(1), // Row (hyper-sparse master LPs)
+        },
+        DefaultOption {
+            name: c"rebuild_refactor_solution_error_tolerance",
+            value: OptionValue::Double(1e-6), // Loosened from HiGHS default 1e-8
         },
     ]
 }
@@ -212,18 +247,23 @@ impl HighsSolver {
     /// Creates a new `HiGHS` solver instance with performance-tuned defaults.
     ///
     /// Calls `cobre_highs_create()` to allocate the `HiGHS` handle, then applies
-    /// the eight default options defined in `HiGHS` Implementation SS4.1:
+    /// the thirteen default options defined in `HiGHS` Implementation SS4.1:
     ///
-    /// | Option                         | Value       | Type   |
-    /// |--------------------------------|-------------|--------|
-    /// | `solver`                       | `"simplex"` | string |
-    /// | `simplex_strategy`             | `1`         | int    |
-    /// | `simplex_scale_strategy`       | `0`         | int    |
-    /// | `presolve`                     | `"off"`     | string |
-    /// | `parallel`                     | `"off"`     | string |
-    /// | `output_flag`                  | `0`         | bool   |
-    /// | `primal_feasibility_tolerance` | `1e-7`      | double |
-    /// | `dual_feasibility_tolerance`   | `1e-7`      | double |
+    /// | Option                                      | Value       | Type   |
+    /// |---------------------------------------------|-------------|--------|
+    /// | `solver`                                    | `"simplex"` | string |
+    /// | `simplex_strategy`                          | `1`         | int    |
+    /// | `simplex_scale_strategy`                    | `0`         | int    |
+    /// | `presolve`                                  | `"off"`     | string |
+    /// | `parallel`                                  | `"off"`     | string |
+    /// | `output_flag`                               | `0`         | bool   |
+    /// | `primal_feasibility_tolerance`              | `1e-7`      | double |
+    /// | `dual_feasibility_tolerance`                | `1e-7`      | double |
+    /// | `simplex_dual_edge_weight_strategy`         | `1`         | int    |
+    /// | `dual_simplex_cost_perturbation_multiplier` | `0.0`       | double |
+    /// | `simplex_initial_condition_check`           | `0`         | bool   |
+    /// | `simplex_price_strategy`                    | `1`         | int    |
+    /// | `rebuild_refactor_solution_error_tolerance` | `1e-6`      | double |
     ///
     /// # Errors
     ///
@@ -668,9 +708,22 @@ impl HighsSolver {
         match level {
             // -- Phase 1: Core cumulative sequence (levels 0-4) ---------------
             //
-            // Level 0: cold restart (clear solver state), dual simplex.
+            // Level 0: cold restart (clear solver state) and re-enable the
+            // dual-simplex cost perturbation. The default configuration runs
+            // with perturbation off (see `DUAL_SIMPLEX_COST_PERTURBATION_MULTIPLIER`)
+            // for warm-start performance, which can stall on degenerate vertices;
+            // restoring the `HiGHS` default of `1.0` is the cheapest first-line
+            // intervention against cycling. Persists through levels 1-4 because
+            // Phase 1 is cumulative.
             0 => {
-                unsafe { ffi::cobre_highs_clear_solver(self.handle) };
+                unsafe {
+                    ffi::cobre_highs_clear_solver(self.handle);
+                    ffi::cobre_highs_set_double_option(
+                        self.handle,
+                        c"dual_simplex_cost_perturbation_multiplier".as_ptr(),
+                        1.0,
+                    );
+                }
                 self.set_iteration_limits();
             }
             // Level 1: + presolve.

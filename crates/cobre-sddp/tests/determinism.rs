@@ -293,6 +293,7 @@ fn make_stochastic_context_3h(n_stages: usize) -> StochasticContext {
                 std_m3s: 15.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             });
         }
     }

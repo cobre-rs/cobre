@@ -36,11 +36,14 @@ pub use evaluate::{
     solve_par_noise_batch, solve_par_noises,
 };
 pub use fitting::{
-    AicSelectionResult, ArCoefficientEstimate, PacfSelectionResult, PeriodicYwResult,
-    SeasonalStats, build_periodic_yw_matrix, estimate_ar_coefficients, estimate_correlation,
+    AicSelectionResult, AnnualSeasonalStats, ArCoefficientEstimate, PacfSelectionResult,
+    PeriodicYwAnnualResult, PeriodicYwResult, ReducedOrderFit, SeasonalStats,
+    build_extended_periodic_yw_matrix, build_periodic_yw_matrix, conditional_facp_partitioned,
+    cross_correlation_a_z_neg1, cross_correlation_z_a, estimate_annual_seasonal_stats,
+    estimate_ar_coefficients, estimate_correlation, estimate_periodic_ar_annual_coefficients,
     estimate_periodic_ar_coefficients, estimate_seasonal_stats, find_season_for_date,
-    periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
-    solve_linear_system,
+    fit_par_annual_with_reduction, periodic_autocorrelation, periodic_pacf, select_order_aic,
+    select_order_pacf, select_order_pacf_annual, solve_linear_system,
 };
 pub use precompute::PrecomputedPar;
 pub use validation::{ParValidationReport, ParWarning, validate_par_parameters};

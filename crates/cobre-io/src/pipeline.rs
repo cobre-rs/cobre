@@ -166,8 +166,11 @@ pub(crate) fn run_pipeline_with_report(
 
     // ── Scenario assembly ─────────────────────────────────────────────────────
 
-    let inflow_models =
-        assemble_inflow_models(data.inflow_seasonal_stats, data.inflow_ar_coefficients)?;
+    let inflow_models = assemble_inflow_models(
+        data.inflow_seasonal_stats,
+        data.inflow_ar_coefficients,
+        data.inflow_annual_components,
+    )?;
     let load_models = assemble_load_models(data.load_seasonal_stats);
 
     // ── System construction ───────────────────────────────────────────────────

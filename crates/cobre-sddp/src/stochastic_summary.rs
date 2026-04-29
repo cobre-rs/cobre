@@ -11,7 +11,9 @@
 
 use cobre_core::{System, scenario::SamplingScheme};
 use cobre_io::output::{FittingReductionEntry, FittingReport, HydroFittingEntry};
-use cobre_io::scenarios::{InflowArCoefficientRow, InflowSeasonalStatsRow};
+use cobre_io::scenarios::{
+    InflowAnnualComponentRow, InflowArCoefficientRow, InflowSeasonalStatsRow,
+};
 use cobre_stochastic::{ComponentProvenance, StochasticContext};
 
 use crate::EstimationReport;
@@ -392,6 +394,37 @@ pub fn inflow_models_to_ar_rows(
         .collect()
 }
 
+/// Convert a slice of [`cobre_core::scenario::InflowModel`]s to
+/// [`InflowAnnualComponentRow`]s for output to `inflow_annual_component.parquet`.
+///
+/// Extracts the three annual-component fields (`coefficient`, `mean_m3s`,
+/// `std_m3s`) from each model's [`cobre_core::scenario::AnnualComponent`] and pairs them with the
+/// model's `hydro_id` and `stage_id`. Models with `annual: None` (classical
+/// PAR(p)) are silently skipped; the function returns an empty `Vec` when no
+/// model carries an annual component. Output order mirrors the input slice
+/// order; the caller is responsible for sorting by `(hydro_id, stage_id)` if
+/// canonical ordering is required before writing.
+///
+/// The sibling function [`inflow_models_to_ar_rows`] performs the analogous
+/// projection for the classical AR coefficients.
+#[must_use]
+pub fn inflow_models_to_annual_component_rows(
+    models: &[cobre_core::scenario::InflowModel],
+) -> Vec<InflowAnnualComponentRow> {
+    models
+        .iter()
+        .filter_map(|m| {
+            m.annual.as_ref().map(|a| InflowAnnualComponentRow {
+                hydro_id: m.hydro_id,
+                stage_id: m.stage_id,
+                annual_coefficient: a.coefficient,
+                annual_mean_m3s: a.mean_m3s,
+                annual_std_m3s: a.std_m3s,
+            })
+        })
+        .collect()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -511,6 +544,7 @@ mod tests {
             std_m3s: 10.0,
             ar_coefficients: vec![0.5, 0.3],
             residual_std_ratio: 0.8,
+            annual: None,
         }
     }
 
@@ -617,6 +651,7 @@ mod tests {
                 std_m3s: 30.0,
                 ar_coefficients: vec![0.5],
                 residual_std_ratio: 0.87,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(2),
@@ -625,6 +660,7 @@ mod tests {
                 std_m3s: 40.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let rows = inflow_models_to_stats_rows(&models);
@@ -650,6 +686,7 @@ mod tests {
                 std_m3s: 20.0,
                 ar_coefficients: vec![0.4, -0.1, 0.05],
                 residual_std_ratio: 0.92,
+                annual: None,
             },
             InflowModel {
                 hydro_id: EntityId(2),
@@ -658,6 +695,7 @@ mod tests {
                 std_m3s: 15.0,
                 ar_coefficients: vec![],
                 residual_std_ratio: 1.0,
+                annual: None,
             },
         ];
         let rows = inflow_models_to_ar_rows(&models);
@@ -1205,12 +1243,14 @@ mod tests {
                 season_id: 0,
                 coefficients: Vec::new(),
                 residual_std_ratio: 1.0,
+                annual: None,
             },
             cobre_stochastic::par::fitting::ArCoefficientEstimate {
                 hydro_id: EntityId(1),
                 season_id: 1,
                 coefficients: vec![0.4],
                 residual_std_ratio: 0.9,
+                annual: None,
             },
         ];
 
@@ -1247,5 +1287,111 @@ mod tests {
             entry.contribution_reductions[1].reason,
             ReductionReason::NegativeContribution
         );
+    }
+
+    // ── inflow_models_to_annual_component_rows tests ──────────────────────────
+
+    fn make_annual_model(
+        hydro_id: i32,
+        stage_id: i32,
+        annual: Option<cobre_core::scenario::AnnualComponent>,
+    ) -> InflowModel {
+        InflowModel {
+            hydro_id: EntityId(hydro_id),
+            stage_id,
+            mean_m3s: 100.0,
+            std_m3s: 20.0,
+            ar_coefficients: vec![],
+            residual_std_ratio: 1.0,
+            annual,
+        }
+    }
+
+    #[test]
+    fn inflow_models_to_annual_component_rows_three_models() {
+        use cobre_core::scenario::AnnualComponent;
+
+        use super::inflow_models_to_annual_component_rows;
+
+        let models = vec![
+            make_annual_model(
+                1,
+                0,
+                Some(AnnualComponent {
+                    coefficient: 0.1,
+                    mean_m3s: 1000.0,
+                    std_m3s: 200.0,
+                }),
+            ),
+            make_annual_model(
+                1,
+                1,
+                Some(AnnualComponent {
+                    coefficient: 0.2,
+                    mean_m3s: 1100.0,
+                    std_m3s: 210.0,
+                }),
+            ),
+            make_annual_model(
+                2,
+                0,
+                Some(AnnualComponent {
+                    coefficient: 0.3,
+                    mean_m3s: 500.0,
+                    std_m3s: 80.0,
+                }),
+            ),
+        ];
+
+        let rows = inflow_models_to_annual_component_rows(&models);
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].hydro_id, EntityId(1));
+        assert_eq!(rows[0].stage_id, 0);
+        assert!((rows[0].annual_coefficient - 0.1).abs() < 1e-12);
+        assert!((rows[0].annual_mean_m3s - 1000.0).abs() < 1e-12);
+        assert!((rows[0].annual_std_m3s - 200.0).abs() < 1e-12);
+        assert_eq!(rows[1].hydro_id, EntityId(1));
+        assert_eq!(rows[1].stage_id, 1);
+        assert!((rows[1].annual_coefficient - 0.2).abs() < 1e-12);
+        assert_eq!(rows[2].hydro_id, EntityId(2));
+        assert_eq!(rows[2].stage_id, 0);
+        assert!((rows[2].annual_coefficient - 0.3).abs() < 1e-12);
+    }
+
+    #[test]
+    fn inflow_models_to_annual_component_rows_skips_classical() {
+        use cobre_core::scenario::AnnualComponent;
+
+        use super::inflow_models_to_annual_component_rows;
+
+        let models = vec![
+            make_annual_model(1, 0, None),
+            make_annual_model(
+                1,
+                1,
+                Some(AnnualComponent {
+                    coefficient: -0.25,
+                    mean_m3s: 300.0,
+                    std_m3s: 50.0,
+                }),
+            ),
+            make_annual_model(2, 0, None),
+        ];
+
+        let rows = inflow_models_to_annual_component_rows(&models);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].hydro_id, EntityId(1));
+        assert_eq!(rows[0].stage_id, 1);
+        assert!((rows[0].annual_coefficient - (-0.25)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn inflow_models_to_annual_component_rows_empty_input() {
+        use super::inflow_models_to_annual_component_rows;
+
+        let rows = inflow_models_to_annual_component_rows(&[]);
+        assert!(rows.is_empty());
     }
 }

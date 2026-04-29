@@ -73,12 +73,11 @@ use cobre_stochastic::{
         has_negative_phi1,
     },
     par::fitting::{
-        AnnualSeasonalStats, ArCoefficientEstimate, HistoryClass, SeasonalStats, classify_history,
-        conditional_facp_partitioned, estimate_annual_seasonal_stats,
-        estimate_ar_coefficients_with_season_map, estimate_correlation_with_season_map,
-        estimate_periodic_ar_annual_coefficients, estimate_periodic_ar_coefficients,
-        estimate_seasonal_stats_with_season_map, find_season_for_date, periodic_pacf,
-        select_order_pacf, select_order_pacf_annual,
+        AnnualSeasonalStats, ArCoefficientEstimate, SeasonalStats, conditional_facp_partitioned,
+        estimate_annual_seasonal_stats, estimate_ar_coefficients_with_season_map,
+        estimate_correlation_with_season_map, estimate_periodic_ar_annual_coefficients,
+        estimate_periodic_ar_coefficients, estimate_seasonal_stats_with_season_map,
+        find_season_for_date, periodic_pacf, select_order_pacf, select_order_pacf_annual,
     },
 };
 
@@ -1225,6 +1224,7 @@ fn estimate_ar_with_pacf(
 /// Propagates `StochasticError::InsufficientData` from
 /// [`estimate_annual_seasonal_stats`] when any hydro has fewer than 13
 /// chronological observations (no rolling window can be formed).
+#[allow(clippy::too_many_lines)]
 fn estimate_ar_with_pacf_annual(
     observations: &[(EntityId, NaiveDate, f64)],
     seasonal_stats: &[SeasonalStats],
@@ -1473,8 +1473,8 @@ fn estimate_ar_with_pacf_annual(
 /// Mirrors [`iterative_pacf_reduction`] for the PAR-A flow:
 ///
 /// 1. Per-coefficient magnitude bound (drops the season's AR coefficients when
-///    any |φ| > threshold; ψ is preserved).
-/// 2. `φ_1 ≥ 0` guard (drops AR coefficients when φ_1 < 0; ψ preserved).
+///    any `|φ| > threshold`; ψ is preserved).
+/// 2. `φ_1 ≥ 0` guard (drops AR coefficients when `φ_1 < 0`; ψ preserved).
 /// 3. Iterative contribution-based reduction via [`reduce_entity_orders_annual`].
 ///
 /// **Contribution check scope.** The order `pm` refers to the
@@ -1587,7 +1587,7 @@ fn apply_annual_prepass_reductions(
 /// When the ceiling reaches 0 the AR coefficients are dropped (ψ retained
 /// via a final order-0 YW solve so the constant term remains consistent
 /// with the per-season annual stats).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn reduce_entity_orders_annual(
     estimates: &mut [ArCoefficientEstimate],
     n_seasons: usize,

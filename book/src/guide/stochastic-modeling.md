@@ -250,18 +250,43 @@ estimation steps automatically before building the scenario model:
    replace the values you would otherwise provide in
    `inflow_seasonal_stats.parquet`.
 
-2. **AR order selection** — Cobre evaluates candidate orders and selects
+2. **History classification** — Each (hydro plant, stage) observation
+   series is classified before fitting. Constant or near-constant
+   series, saturating caps, and series dominated by a single modal
+   value are detected automatically and routed to a degenerate fit
+   (order 0) so that downstream stages do not over-fit a structurally
+   uninformative bucket. Series with more than 10% strictly negative
+   observations are flagged for diagnostics but otherwise fitted
+   normally.
+
+3. **AR order selection** — Cobre evaluates candidate orders and selects
    the best fit per (hydro plant, stage) using the periodic partial
    autocorrelation function (PACF) with a 95% significance threshold.
    This avoids overfitting in series with little autocorrelation and
-   captures meaningful persistence where it exists.
+   captures meaningful persistence where it exists. Two extensions
+   over the classical PACF rule cover the corner cases the classical
+   rule leaves implicit: (i) a structural-zero short-circuit forces
+   the model to order 0 when the lag-1 conditional FACP is exactly
+   zero (degenerate covariance), and (ii) a minimum-order-1 default
+   keeps an AR(1) base whenever the lag-1 FACP is well defined but
+   no lag exceeds the threshold.
 
-3. **AR coefficients** — Coefficients for the selected order are estimated
+4. **AR coefficients** — Coefficients for the selected order are estimated
    by solving the periodic Yule-Walker matrix system, which correctly
    accounts for the non-Toeplitz covariance structure of periodic
    autoregressive processes.
 
-4. **Spatial correlation** — The contemporaneous correlation between
+5. **Maceira-Damazio iterative order reduction** — After the initial
+   fit, the recursively-composed contributions of each lag through
+   the periodic monthly chain are computed. If any contribution is
+   negative — a signal that the lag's cumulative influence opposes
+   the expected persistence direction and would propagate as an
+   unstable Benders cut — the offending season's AR ceiling is
+   reduced and the Yule-Walker fit is re-run at the new ceiling.
+   The reduction iterates across all seasons until every season's
+   contribution recursion yields non-negative entries.
+
+6. **Spatial correlation** — The contemporaneous correlation between
    hydro plants is estimated from the historical residuals after AR fitting.
    The resulting correlation matrix is used by the spectral noise
    generator in exactly the same way as a manually specified
@@ -755,14 +780,14 @@ and Halton fill the space with low-discrepancy sequences.
 
 ![Sampling methods — 2D comparison](../images/diagrams/sampling-2d-comparison.svg)
 
-| Method     | Convergence rate  | Dimension limit | Scenario count        | Best for                                  |
-| ---------- | ----------------- | --------------- | --------------------- | ----------------------------------------- |
-| SAA        | O(N^{-1/2})       | None            | Any                   | General use, small branching factors      |
-| LHS        | Better than SAA   | None            | Any (50–200 typical)  | Moderate scenario counts, any dimension   |
-| QMC-Sobol  | O(N^{-1} log^d N) | 21,201          | Powers of 2 preferred | Best convergence, low-to-medium dimension |
-| QMC-Halton | O(N^{-1} log^d N) | None            | Any                   | High-dimension alternative to Sobol       |
-| HistoricalResiduals | N/A (empirical) | None            | Limited by history length | Preserving empirical correlation, short history |
-| Selective           | N/A             | N/A             | N/A                       | Not implemented; reserved for future use        |
+| Method              | Convergence rate  | Dimension limit | Scenario count            | Best for                                        |
+| ------------------- | ----------------- | --------------- | ------------------------- | ----------------------------------------------- |
+| SAA                 | O(N^{-1/2})       | None            | Any                       | General use, small branching factors            |
+| LHS                 | Better than SAA   | None            | Any (50–200 typical)      | Moderate scenario counts, any dimension         |
+| QMC-Sobol           | O(N^{-1} log^d N) | 21,201          | Powers of 2 preferred     | Best convergence, low-to-medium dimension       |
+| QMC-Halton          | O(N^{-1} log^d N) | None            | Any                       | High-dimension alternative to Sobol             |
+| HistoricalResiduals | N/A (empirical)   | None            | Limited by history length | Preserving empirical correlation, short history |
+| Selective           | N/A               | N/A             | N/A                       | Not implemented; reserved for future use        |
 
 ### Per-Stage Method Configuration
 

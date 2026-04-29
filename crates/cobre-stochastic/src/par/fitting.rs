@@ -166,7 +166,6 @@ impl HistoryClass {
 /// Returns `HistoryClass::Constant { value: 0.0 }` for an empty input — the
 /// degenerate single-observation case is treated the same as a zero-history
 /// series so that downstream fitters short-circuit predictably.
-#[must_use]
 pub fn classify_history(observations: &[f64]) -> HistoryClass {
     if observations.is_empty() {
         return HistoryClass::Constant { value: 0.0 };
@@ -197,6 +196,7 @@ pub fn classify_history(observations: &[f64]) -> HistoryClass {
     // (cap=0.0, cap=1.0) classify as saturated just as eagerly as high
     // caps. The driving criterion is structural constancy of the bucket,
     // not magnitude.
+    #[allow(clippy::cast_possible_truncation)]
     let mut sorted: Vec<i64> = observations.iter().map(|v| v.round() as i64).collect();
     sorted.sort_unstable();
     // Largest run of equal values gives the mode.
@@ -1945,11 +1945,13 @@ pub fn cross_correlation_z_a(
 
     // Bucket year offset between A's first PDF year and Z's first PDF year.
     let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[lag_season]);
+    #[allow(clippy::cast_possible_wrap)]
     let shift = year_diff - pdf_year_back_shift as i64;
 
     // Pairing is `(a_obs[a_start + k], z_obs[z_start + k])` for k = 0..n_pairs.
     // shift > 0 ⇒ skip extra Z entries at start (Z starts earlier); shift < 0 ⇒
     // skip extra A entries at start (A starts earlier).
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let (a_start, z_start) = if shift >= 0 {
         (0_usize, shift as usize)
     } else {
@@ -2057,8 +2059,10 @@ pub fn cross_correlation_a_z_neg1(
     let pdf_year_forward_shift = usize::from(z_season == 0);
 
     let year_diff = i64::from(a_year_starts[ref_season]) - i64::from(z_year_starts[z_season]);
+    #[allow(clippy::cast_possible_wrap)]
     let shift = year_diff + pdf_year_forward_shift as i64;
 
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let (a_start, z_start) = if shift >= 0 {
         (0_usize, shift as usize)
     } else {
@@ -6875,8 +6879,8 @@ mod tests {
     ///
     /// Average over the 3 valid years yields:
     /// - `s ∈ 0..10`: `(845 + 5*s) / 12`
-    /// - `s == 11`:   `70.0`           (note: NOT `(845 + 55)/12 = 75.0` because
-    ///                                  the y-range shifts down by one)
+    /// - `s == 11`: `70.0` (note: NOT `(845 + 55)/12 = 75.0` because the
+    ///   y-range shifts down by one)
     ///
     /// All stds are 5.0 (Bessel-corrected, `1/(N-1)` with N=3) — each year
     /// shifts every observation by `+5`, so window means differ by `5`

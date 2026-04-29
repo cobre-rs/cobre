@@ -17,6 +17,12 @@ schema = ["dep:schemars"]
 ## Opt-in to the slow test suite (no slow tests currently in this crate;
 ## declaration reserved for workspace consistency).
 slow-tests = []
+## Opt-in to the FlatBuffers schema-conformance tests in
+## `tests/flatbuffers_schema_conformance.rs`. Requires `flatc` on PATH
+## (or `FLATC` env var) at test run time. Not part of the default test
+## suite because `flatc` is not a build-time dependency of cobre and is
+## not always available in CI.
+flatc-conformance = []
 
 [dependencies]
 cobre-core = { version = "0.5.1", path = "../cobre-core", features = ["serde"] }

@@ -46,6 +46,7 @@
 
 - [Case Directory Format](./reference/case-format.md)
 - [Output Format](./reference/output-format.md)
+- [FlatBuffers Schema (`policy/*.bin`)](./reference/flatbuffers-schema.md)
 - [Error Codes](./reference/error-codes.md)
 - [Schemas](./reference/schemas.md)
 

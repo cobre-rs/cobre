@@ -579,6 +579,12 @@ apply. Useful for interpreting cut coefficient vectors in the policy checkpoint.
 
 ## Policy Checkpoint
 
+> The wire format of the binary files below is described by the
+> canonical schema at `crates/cobre-io/schemas/policy.fbs`. See
+> [FlatBuffers Schema (`policy/*.bin`)](./flatbuffers-schema.md) for
+> recipes on dumping a `.bin` to JSON and on generating typed readers
+> in Python, C++, TypeScript, and other languages with `flatc`.
+
 ### `policy/cuts/stage_NNN.bin`
 
 FlatBuffers binary file encoding all cuts for a single stage. One file per

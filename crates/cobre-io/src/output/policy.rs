@@ -14,17 +14,23 @@
 //!
 //! ## `FlatBuffers` schema
 //!
-//! The binary layout produced by [`serialize_stage_cuts`] and [`serialize_stage_basis`]
-//! corresponds to the `StageCuts` and `StageBasis` tables defined in the policy schema
-//! specification (SS3.1 in `binary-formats.md`). No `.fbs` file or `flatc` code generation
-//! is used; the builder API writes the binary directly.
+//! The canonical wire-format description is `schemas/policy.fbs` in this
+//! crate (namespace `Cobre.IO.Policy`, tables `StageCuts`, `Cut`,
+//! `StageBasis`, `StageStates`). External consumers generate typed readers
+//! in their language of choice via `flatc`; the schema is not consumed by
+//! the cobre Rust build itself, because this module hand-writes both the
+//! builder calls and the safe raw-byte parser. The `*_FIELD_*: u16`
+//! slot constants below mirror the `(id: N)` attributes in the schema
+//! via the formula `slot = (id + 2) * 2`. They MUST stay in sync; the
+//! `flatc-conformance` cargo feature gates a round-trip test in
+//! `tests/flatbuffers_schema_conformance.rs` that fails when they diverge.
 //!
 //! ## Format details
 //!
 //! Buffers are written using the `FlatBuffers` runtime builder API with
 //! [`flatbuffers::FlatBufferBuilder`]. Output is little-endian and deterministic for the
-//! same input — field order is fixed by the builder call sequence, matching the schema
-//! field declaration order in SS3.1.
+//! same input — field order is fixed by the builder call sequence, matching the field
+//! `(id: N)` declarations in `schemas/policy.fbs`.
 //!
 //! ## Reading policy checkpoints
 //!
@@ -68,8 +74,7 @@ use super::error::OutputError;
 /// without copying (coefficient vectors can reach 2,080 `f64` values at production
 /// scale).
 ///
-/// Field names correspond to the cut record table in SS3.1 of the policy schema
-/// specification.
+/// Field names correspond to the `Cut` table in `schemas/policy.fbs`.
 #[derive(Debug, Clone)]
 pub struct PolicyCutRecord<'a> {
     /// Unique identifier for this cut across all iterations.
@@ -93,8 +98,7 @@ pub struct PolicyCutRecord<'a> {
 /// Conversion from solver-specific basis structures is handled by the calling crate.
 /// The lifetime parameter `'a` allows borrowing the status arrays without copying.
 ///
-/// Field names correspond to the `StageBasis` table in SS3.1 of the policy schema
-/// specification.
+/// Field names correspond to the `StageBasis` table in `schemas/policy.fbs`.
 #[derive(Debug, Clone)]
 pub struct PolicyBasisRecord<'a> {
     /// Stage index (0-based).
@@ -214,9 +218,13 @@ pub struct PolicyCheckpointMetadata {
     pub total_visited_states: u64,
 }
 
-// FlatBuffers field offsets. Offsets derived from field declaration order in SS3.1.
-// Formula: slot_offset = (field_index + 2) * 2 (accounts for vtable header fields).
-// Must match schema declaration order exactly for interoperability.
+// FlatBuffers vtable slot offsets. Each constant pairs with one
+// `(id: N)` attribute in `schemas/policy.fbs` via the formula
+// slot = (id + 2) * 2 (the +2 accounts for the two vtable header
+// fields). Editing either side without the other breaks the
+// `flatc-conformance` round-trip; the slot 12 gap on `Cut` is the
+// historical `domination_count` field, marked `deprecated` in the
+// schema and intentionally never reused.
 
 const CUT_FIELD_CUT_ID: u16 = 4;
 const CUT_FIELD_SLOT_INDEX: u16 = 6;
@@ -280,8 +288,7 @@ fn build_cut_table(
 ///
 /// Produces a buffer containing a root `StageCuts` table. The buffer is ready
 /// for writing directly to a `.bin` policy file. Field layout matches the
-/// `StageCuts` table and cut record table declarations in SS3.1 of the policy schema
-/// specification.
+/// `StageCuts` and `Cut` tables in `schemas/policy.fbs`.
 ///
 /// The function is infallible: the `FlatBuffers` builder API only allocates and
 /// writes, never returns errors. Any I/O error is the caller's responsibility.
@@ -368,8 +375,7 @@ pub fn serialize_stage_cuts(
 ///
 /// Produces a buffer containing a root `StageBasis` table. The buffer is ready
 /// for writing directly to a `.bin` policy file under `basis/`. Field layout
-/// matches the `StageBasis` table declaration in SS3.1 of the policy schema
-/// specification.
+/// matches the `StageBasis` table in `schemas/policy.fbs`.
 ///
 /// The `num_columns` and `num_rows` fields are inferred from the status slice
 /// lengths and do not need to be supplied separately.

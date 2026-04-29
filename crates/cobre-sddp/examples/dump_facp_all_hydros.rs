@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use chrono::Datelike;
 use cobre_io::scenarios::parse_inflow_history;
 use cobre_stochastic::par::fitting::{
-    classify_history, conditional_facp_partitioned, select_order_pacf_annual,
+    classify_history, conditional_facp_partitioned, fit_par_annual_with_reduction,
+    select_order_pacf_annual,
 };
 
 const N_SEASONS: usize = 12;
@@ -119,19 +120,18 @@ fn main() {
         let obs_refs: Vec<&[f64]> = obs_by_season.iter().map(Vec::as_slice).collect();
         let ann_refs: Vec<&[f64]> = annual_by_season.iter().map(Vec::as_slice).collect();
 
-        // For each calendar month (cobre season index = month - 1), compute order.
-        let mut orders = [0_usize; 12];
+        // First pass: compute initial PACF orders per calendar month.
+        let mut initial_orders = vec![0_usize; N_SEASONS];
         let n_obs_jan = obs_by_season[0].len();
         for season in 0..N_SEASONS {
             let n_obs = obs_by_season[season].len();
             let prev_season = (season + N_SEASONS - 1) % N_SEASONS;
-            // Mirror cobre's degenerate-bucket guard.
             if stats[season].1 == 0.0
                 || n_obs < 2
                 || annual_by_season[prev_season].is_empty()
                 || ann_stats[prev_season].1 == 0.0
             {
-                orders[season] = 0;
+                initial_orders[season] = 0;
                 continue;
             }
             let facp = conditional_facp_partitioned(
@@ -145,8 +145,25 @@ fn main() {
                 &ann_stats,
                 &a_year_starts,
             );
-            orders[season] = select_order_pacf_annual(&facp, n_obs, Z_ALPHA).selected_order;
+            initial_orders[season] = select_order_pacf_annual(&facp, n_obs, Z_ALPHA).selected_order;
         }
+
+        // Second pass: solve YW for all seasons and apply Maceira-Damazio
+        // contribution-based iterative reduction across the full periodic
+        // cycle. The recursion couples seasons, so reduction must run on
+        // all 12 months together rather than per-season.
+        let reduced = fit_par_annual_with_reduction(
+            &initial_orders,
+            N_SEASONS,
+            &obs_refs,
+            &stats,
+            &z_year_starts,
+            &ann_refs,
+            &ann_stats,
+            &a_year_starts,
+            Z_ALPHA,
+        );
+        let orders: [usize; 12] = std::array::from_fn(|s| reduced.selected_orders[s]);
 
         let orders_str = orders
             .iter()

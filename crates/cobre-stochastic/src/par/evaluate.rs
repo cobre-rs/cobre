@@ -532,12 +532,12 @@ pub fn solve_par_noises(
 mod tests {
     use chrono::NaiveDate;
     use cobre_core::{
-        EntityId,
         scenario::InflowModel,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::{
@@ -970,7 +970,7 @@ mod tests {
     fn test_solve_par_noise_batch_sigma_zero_matching_target() {
         // Build a single-hydro, single-stage PAR with sigma=0 (std_m3s=0 → sigma=0).
         // AR(0) with mean=125.0, std=0.0 → deterministic_value=125.0.
-        use cobre_core::{EntityId, scenario::InflowModel};
+        use cobre_core::{scenario::InflowModel, EntityId};
 
         let stage = make_stage(0, 0, Some(0));
         let model = InflowModel {

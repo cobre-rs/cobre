@@ -1515,8 +1515,8 @@ pub fn select_order_pacf(
 /// The Maceira-Damazio iterative order-reduction step is **not** applied
 /// here; the order returned by this function is the tentative
 /// pre-validation order. The reduction runs across all seasons of the
-/// periodic cycle and is wired into the PAR(p)-A estimation pipeline
-/// in `cobre-sddp`.
+/// periodic cycle and is the caller's responsibility within the
+/// PAR(p)-A estimation pipeline.
 ///
 /// `pacf_values[k]` in the returned struct is the conditional FACP at lag
 /// `k+1`, conditioned on the intermediate standardised annual noise series

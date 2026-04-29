@@ -1477,14 +1477,14 @@ fn estimate_ar_with_pacf_annual(
 /// 2. `φ_1 ≥ 0` guard (drops AR coefficients when φ_1 < 0; ψ preserved).
 /// 3. Iterative contribution-based reduction via [`reduce_entity_orders_annual`].
 ///
-/// **Contribution check scope.** Per `rel_parpa.pdf` §3.3, the order `pm`
-/// refers to the autoregressive components alone (the φ vector); the annual
-/// term ψ is a separate parameter that NEWAVE keeps in place irrespective of
-/// AR-order reductions. The contribution recursion here operates on the φ
-/// coefficients (length p), exactly as in the classical PAR(p) path.
-/// When a season's contributions go negative, the AR ceiling is reduced and
-/// the extended Yule-Walker system is re-solved at the new order — both φ
-/// and ψ are updated, but the AR portion is what shrinks.
+/// **Contribution check scope.** The order `pm` refers to the
+/// autoregressive components alone (the φ vector); the annual term ψ is a
+/// separate parameter that is preserved across AR-order reductions. The
+/// contribution recursion here operates on the φ coefficients (length p),
+/// exactly as in the classical PAR(p) path. When a season's contributions
+/// go negative, the AR ceiling is reduced and the extended Yule-Walker
+/// system is re-solved at the new order — both φ and ψ are updated, but
+/// the AR portion is what shrinks.
 ///
 /// Returns a map of reductions for report building.
 #[allow(clippy::too_many_arguments)]

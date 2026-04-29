@@ -23,12 +23,12 @@ use std::collections::HashMap;
 
 use chrono::{Datelike, Months, NaiveDate};
 use cobre_core::{
-    temporal::{SeasonMap, Stage},
     EntityId,
+    temporal::{SeasonMap, Stage},
 };
 
-use crate::par::fitting::find_season_for_date;
 use crate::StochasticError;
+use crate::par::fitting::find_season_for_date;
 
 /// Aggregate fine-grained observations into one observation per
 /// `(entity, season, year)` group using duration-weighted averaging.
@@ -204,11 +204,11 @@ fn days_in_month(date: NaiveDate) -> u32 {
 mod tests {
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
+        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, SeasonCycleType, SeasonDefinition,
             SeasonMap, Stage, StageRiskConfig, StageStateConfig,
         },
-        EntityId,
     };
 
     use super::aggregate_observations_to_season;

@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
+    EntityId,
     scenario::{
         AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
-    EntityId,
 };
 
 use crate::StochasticError;
@@ -65,58 +65,55 @@ pub struct SeasonalStats {
     pub stage_id: i32,
     /// Sample mean of observed values (m³/s or whatever unit the caller uses).
     pub mean: f64,
-    /// Population-divisor standard deviation (1/N divisor), matching
-    /// NEWAVE's `rel_parpa.pdf` eq. 18 convention.
+    /// Population-divisor standard deviation (1/N divisor), matching the
+    /// Maceira-Damazio PAR(p)-A standard-deviation convention.
     pub std: f64,
 }
 
 /// Classification of a per-(entity, season) historical observation series.
 ///
-/// Mirrors NEWAVE's `parpvaz.dat` header table (TIPO 0/1/2/4) so the PAR(p)-A
-/// fitter can short-circuit pathological buckets in the same way NEWAVE does:
+/// Lets the PAR(p)-A fitter short-circuit pathological buckets:
 ///
-/// - **TIPO 0** (`Default`): no specific behaviour; standard fitting applies.
-/// - **TIPO 1** (`Constant`): every observation equals the same value (or every
-///   observation is zero/null). Mean and std are forced to that constant and 0,
-///   respectively; AR order is forced to 0 and the annual coefficient is
-///   suppressed. Common for plants with regulated/transposed flows whose
-///   incremental inflow is structurally constant for a given month.
-/// - **TIPO 2** (`ManyNegative`): more than 10% of observations are strictly
-///   negative — a signal that the upstream incremental construction (the bridge
-///   subtracting upstream postos) has produced unphysical values for this
-///   month. Detected for diagnostics, but **does not override fitting** —
-///   matches NEWAVE's `parpvaz.dat` behaviour, where TIPO 2 plants still get
-///   normal AR fits (the flag is operator information, not a fit instruction).
-/// - **TIPO 4** (`Saturated`): more than 50% of observations equal the modal
-///   value — a flow cap (turbine/reservoir constraint) or a low-flow constant
-///   (transposed flow plants like A.S.OLIVEIRA). Treated like TIPO 1 with the
-///   cap as the constant. The std=0 propagates structural zeros into adjacent
-///   months' PACF rows, mirroring NEWAVE's behaviour on plants like BELO MONTE
-///   / April and JACUI / February-March. No P99 condition: NEWAVE classifies
-///   low-flow constants (cap=1.0, cap=0.0) as TIPO 4 just as readily as high
-///   caps.
+/// - [`Default`](HistoryClass::Default): no specific behaviour; standard
+///   fitting applies.
+/// - [`Constant`](HistoryClass::Constant): every observation equals the
+///   same value (or every observation is zero/null). Mean and std are
+///   forced to that constant and 0, respectively; AR order is forced to
+///   0 and the annual coefficient is suppressed. Common for plants with
+///   regulated/transposed flows whose incremental inflow is structurally
+///   constant for a given month.
+/// - [`ManyNegative`](HistoryClass::ManyNegative): more than 10% of
+///   observations are strictly negative — a signal that the upstream
+///   incremental construction (the bridge subtracting upstream postos)
+///   has produced unphysical values for this month. Detected for
+///   diagnostics, but **does not override fitting** — the flag is
+///   operator information, not a fit instruction.
+/// - [`Saturated`](HistoryClass::Saturated): more than 50% of
+///   observations equal the modal value — a flow cap (turbine/reservoir
+///   constraint) or a low-flow constant (transposed flow plants).
+///   Treated like `Constant` with the cap as the constant. The std=0
+///   propagates structural zeros into adjacent months' PACF rows. No
+///   P99 condition: low-flow constants (cap=1.0, cap=0.0) classify as
+///   saturated just as readily as high caps.
 ///
-/// TIPO 5 (bimodal history) is not yet detected; such series fall through to
-/// `Default`.
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HistoryClass {
-    /// TIPO 0 — no specific behaviour, run the standard fit.
+    /// No specific behaviour — run the standard fit.
     Default,
-    /// TIPO 1 — every observation is the same value (or all zero/null).
+    /// Every observation is the same value (or all zero/null).
     Constant {
         /// The constant value to use as the seasonal mean.
         value: f64,
     },
-    /// TIPO 2 — more than 10% of observations are strictly negative.
+    /// More than 10% of observations are strictly negative.
     /// `sample_mean` is the empirical mean over the full series (used as the
     /// fallback constant; std forced to 0).
     ManyNegative {
         /// Empirical mean of the observation series.
         sample_mean: f64,
     },
-    /// TIPO 4 — saturating cap (>50% of observations at the modal value, which
-    /// equals or exceeds the 99th percentile).
+    /// Saturating cap (>50% of observations at the modal value).
     Saturated {
         /// The cap value (modal value of the series).
         cap: f64,
@@ -127,10 +124,11 @@ impl HistoryClass {
     /// Returns the override `(mean, std)` that should replace the empirical
     /// stats for fitting purposes.
     ///
-    /// TIPO 1 and TIPO 4 force the seasonal mean to the constant/cap value and
-    /// the std to 0, which makes the downstream PAR(p)-A fitter short-circuit
-    /// to order 0. TIPO 2 is purely diagnostic and returns `None` (NEWAVE
-    /// does not override fitting for it). `Default` also returns `None`.
+    /// `Constant` and `Saturated` force the seasonal mean to the
+    /// constant/cap value and the std to 0, which makes the downstream
+    /// PAR(p)-A fitter short-circuit to order 0. `ManyNegative` is purely
+    /// diagnostic and returns `None` (the classification does not override
+    /// fitting for it). `Default` also returns `None`.
     #[must_use]
     pub fn stats_override(self) -> Option<(f64, f64)> {
         match self {
@@ -141,8 +139,9 @@ impl HistoryClass {
     }
 
     /// Returns `true` when the classification forces a degenerate fit
-    /// (order 0, no AR/annual coefficients). Currently TIPO 1 and TIPO 4.
-    /// TIPO 2 is diagnostic only, so it returns `false`.
+    /// (order 0, no AR/annual coefficients). Currently `Constant` and
+    /// `Saturated`. `ManyNegative` is diagnostic only, so it returns
+    /// `false`.
     #[must_use]
     pub fn is_degenerate(self) -> bool {
         matches!(
@@ -150,27 +149,18 @@ impl HistoryClass {
             HistoryClass::Constant { .. } | HistoryClass::Saturated { .. }
         )
     }
-
-    /// Returns the NEWAVE TIPO code (0/1/2/4) for reporting/parity checks.
-    #[must_use]
-    pub fn tipo_code(self) -> u8 {
-        match self {
-            HistoryClass::Default => 0,
-            HistoryClass::Constant { .. } => 1,
-            HistoryClass::ManyNegative { .. } => 2,
-            HistoryClass::Saturated { .. } => 4,
-        }
-    }
 }
 
 /// Classify a single (entity, season) observation series per the
 /// [`HistoryClass`] taxonomy.
 ///
-/// The classifier runs in priority order TIPO 1 → TIPO 2 → TIPO 4 → TIPO 0:
-/// constant series take precedence over negative-pathological detection, which
-/// in turn takes precedence over saturation. Observations are rounded to the
-/// nearest integer for mode counting (matching the precision of NEWAVE's
-/// `vazoes.dat` storage). The constancy check uses an absolute tolerance of
+/// The classifier runs in priority order
+/// `Constant` → `ManyNegative` → `Saturated` → `Default`: constant series
+/// take precedence over negative-pathological detection, which in turn
+/// takes precedence over saturation. Observations are rounded to the
+/// nearest integer for mode counting (matching the precision of the
+/// standard historical inflow input format, which stores values in m³/s
+/// as integers). The constancy check uses an absolute tolerance of
 /// `1e-6` to absorb the float round-trip from parquet.
 ///
 /// Returns `HistoryClass::Constant { value: 0.0 }` for an empty input — the
@@ -185,12 +175,12 @@ pub fn classify_history(observations: &[f64]) -> HistoryClass {
     let first = observations[0];
     let const_tol = 1e-6;
 
-    // TIPO 1 — every observation matches the first within tolerance.
+    // Constant — every observation matches the first within tolerance.
     if observations.iter().all(|&v| (v - first).abs() < const_tol) {
         return HistoryClass::Constant { value: first };
     }
 
-    // TIPO 2 — more than 10% strictly negative.
+    // ManyNegative — more than 10% strictly negative.
     let n = observations.len();
     let n_neg = observations.iter().filter(|&&v| v < 0.0).count();
     #[allow(clippy::cast_precision_loss)]
@@ -200,13 +190,13 @@ pub fn classify_history(observations: &[f64]) -> HistoryClass {
         return HistoryClass::ManyNegative { sample_mean };
     }
 
-    // TIPO 4 — modal value occupies more than 50% of observations.
+    // Saturated — modal value occupies more than 50% of observations.
     //
-    // Round to integer for mode counting (vazoes.dat is stored to 1 m³/s).
-    // No P99 guard: NEWAVE classifies low-flow constants (cap=0.0, cap=1.0
-    // for plants like A.S.OLIVEIRA / JACUI) as TIPO 4 just as eagerly as it
-    // classifies high caps (BELO MONTE cap=13900). The driving criterion is
-    // structural constancy of the bucket, not magnitude.
+    // Round to integer for mode counting (the historical inflow format
+    // stores values to 1 m³/s). No P99 guard: low-flow constants
+    // (cap=0.0, cap=1.0) classify as saturated just as eagerly as high
+    // caps. The driving criterion is structural constancy of the bucket,
+    // not magnitude.
     let mut sorted: Vec<i64> = observations.iter().map(|v| v.round() as i64).collect();
     sorted.sort_unstable();
     // Largest run of equal values gives the mode.
@@ -241,10 +231,10 @@ pub fn classify_history(observations: &[f64]) -> HistoryClass {
 /// Estimate seasonal means and standard deviations from historical observations.
 ///
 /// Groups observations by `(entity_id, season_id)` and computes the sample
-/// mean and population-divisor (1/N) standard deviation for each group, matching
-/// NEWAVE's `rel_parpa.pdf` eq. 18 convention. Only entities listed in
-/// `entity_ids` are processed; observations for other entities are silently
-/// ignored.
+/// mean and population-divisor (1/N) standard deviation for each group,
+/// matching the Maceira-Damazio PAR(p)-A standard-deviation convention.
+/// Only entities listed in `entity_ids` are processed; observations for
+/// other entities are silently ignored.
 ///
 /// Stages with `season_id = None` are skipped when building the date-to-season
 /// mapping. Observations whose date does not fall within any stage's
@@ -386,11 +376,11 @@ pub fn estimate_seasonal_stats_with_season_map(
 
     // Compute mean and population-divisor std for each group.
     //
-    // NEWAVE (rel_parpa.pdf eq. 18 and the parpvaz.dat report) computes
-    // sigma^Z_m with divisor 1/N, not the Bessel-corrected 1/(N-1). Matching
-    // that convention is required for parity on the conditional FACP and
-    // selected AR orders — the sample-vs-population scale factor would
-    // otherwise propagate through every cross-correlation.
+    // The Maceira-Damazio PAR(p)-A formulation computes sigma^Z_m with the
+    // 1/N population divisor, not the Bessel-corrected 1/(N-1). Using the
+    // population divisor is required for self-consistent conditional FACP
+    // values and selected AR orders — the sample-vs-population scale
+    // factor would otherwise propagate through every cross-correlation.
     let mut result: Vec<SeasonalStats> = Vec::with_capacity(group_map.len());
     for ((entity_id, _season_id), (values, stage_id)) in group_map {
         let n = values.len();
@@ -412,12 +402,13 @@ pub fn estimate_seasonal_stats_with_season_map(
         let variance = values.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
         let std = variance.sqrt();
 
-        // NEWAVE TIPO override: TIPO 1/2/4 buckets get a forced (constant, 0)
-        // pair so the downstream PAR(p)-A fitter short-circuits to order 0
-        // (matching parpvaz.dat behaviour for plants like BELO MONTE / April
-        // and PIMENTAL ecological-flow months). The classifier returns
-        // `Default` for normal series, in which case we keep the empirical
-        // (mean, std) computed above.
+        // History-class override: degenerate buckets (constant series,
+        // saturated caps) get a forced (constant, 0) pair so the
+        // downstream PAR(p)-A fitter short-circuits to order 0. Typical
+        // examples are constant low-flow/high-flow buckets and
+        // ecological-flow months. The classifier returns `Default` for
+        // normal series, in which case we keep the empirical (mean, std)
+        // computed above.
         let (final_mean, final_std) = match classify_history(&values).stats_override() {
             Some((override_mean, override_std)) => (override_mean, override_std),
             None => (mean, std),
@@ -1488,42 +1479,33 @@ pub fn select_order_pacf(
 }
 
 /// Select the AR order for a PAR(p)-A model using the conditional FACP
-/// significance test, with NEWAVE-parity rules.
+/// significance test, with two extensions over the classical PACF rule.
 ///
-/// The CEPEL manual (section *Identificação da Ordem do Modelo* in
-/// <https://see.cepel.br/manual/libs/latest/incerteza_hidrologica/modelo-par-p.html>)
-/// specifies a single 95% confidence interval based on the number of
-/// historical years (`z_alpha / sqrt(N)`, no lag-dependent deflation) and
-/// "the largest significant lag is attributed as `p_m`". The manual is
-/// silent on the cases where (a) lag 1 is exactly zero or (b) no lag is
-/// significant; NEWAVE's reference implementation handles those via the
-/// rules below, which are observed empirically:
+/// The classical rule is a single 95% confidence interval on the number
+/// of historical years (`z_alpha / sqrt(N)`, no lag-dependent deflation):
+/// the largest lag whose `|FACP|` exceeds the threshold is attributed
+/// as `p_m`. The classical rule is silent on the cases where (a) lag 1
+/// is exactly zero or (b) no lag is significant; the rules below cover
+/// those cases:
 ///
 /// 1. **Structural-zero short-circuit at lag 1.** If
 ///    `conditional_facp[0] == 0.0` exactly, the model is forced to
 ///    order 0. A structural zero at lag 1 indicates a degenerate (Z, A)
 ///    bucket — typically a single-observation season or a numerically
-///    singular partitioned-covariance solve — and NEWAVE refuses to fit
-///    any auto-regressive structure on top of it. This corresponds to
-///    the "se o coeficiente de ordem 1 ... é zero ... o modelo é ajustado
-///    a ordem zero" rule from the manual's *Tratamento de coeficientes
-///    negativos* section. Structural zeros at higher lags do **not**
-///    trigger the short-circuit; NEWAVE proceeds with the AR(1) base
-///    whenever lag 1 itself is non-degenerate (e.g.,
-///    `[+0.37, 0, 0, 0, 0, 0]` -> order 1, not 0).
+///    singular partitioned-covariance solve — and the convention refuses
+///    to fit any auto-regressive structure on top of it. Structural
+///    zeros at higher lags do **not** trigger the short-circuit; the
+///    convention proceeds with the AR(1) base whenever lag 1 itself is
+///    non-degenerate (e.g., `[+0.37, 0, 0, 0, 0, 0]` -> order 1, not 0).
 /// 2. **Minimum order of 1 when lag 1 is non-zero.** If the conditional
 ///    FACP at lag 1 is not a structural zero, the selected order is
-///    `max(1, max_significant_lag)`. NEWAVE empirically defaults to
-///    AR(1) whenever no lag exceeds the threshold but lag 1 is well
-///    defined (≈46/1860 observations on the 1931-2022 SIN history).
+///    `max(1, max_significant_lag)` — the model defaults to AR(1)
+///    whenever no lag exceeds the threshold but lag 1 is well defined.
 ///
-/// The Maceira-Damazio iterative order-reduction step (described in the
-/// manual under *Tratamento de coeficientes negativos*) is **not**
-/// applied here; the order returned by this function is the tentative
-/// pre-validation order. Implementing the iterative reduction would
-/// further reduce orders when the combined PAR(p) / PAR(p)-A
-/// coefficient is negative, and is the documented path to closing the
-/// remaining over-selection mismatches against `parpvaz.dat`.
+/// The Maceira-Damazio iterative order-reduction step is **not** applied
+/// here; the order returned by this function is the tentative
+/// pre-validation order. The reduction runs across all seasons of the
+/// periodic cycle and lives in [`fit_par_annual_with_reduction`].
 ///
 /// `pacf_values[k]` in the returned struct is the conditional FACP at lag
 /// `k+1`, conditioned on the intermediate standardised annual noise series
@@ -1588,8 +1570,9 @@ pub fn select_order_pacf_annual(
         .map_or(0, |(k, _)| k + 1);
 
     // Rule 2 — Min-order-1 when lag 1 is non-zero (not a structural zero).
-    // The CEPEL manual is silent on what happens when no lag is significant;
-    // NEWAVE's implementation defaults to AR(1) whenever lag 1 is non-zero.
+    // When no lag exceeds the significance threshold but lag 1 is well
+    // defined, the model defaults to AR(1) rather than a pure white-noise
+    // (order-0) fit.
     let selected_order = match conditional_facp.first() {
         Some(&p1) if p1 != 0.0 => max_significant.max(1),
         _ => max_significant,
@@ -1690,12 +1673,11 @@ pub fn periodic_autocorrelation(
     }
 
     // Cross-covariance with population divisor (1/N) over the year-aligned
-    // valid pairs. NEWAVE uses N = n_pairs here for Z⊗Z autocorrelations
-    // (verified against parpvaz.dat correlacao_series_vazoes_uhe). The
-    // max-bucket-size convention used by cross_correlation_z_a /
-    // cross_correlation_a_z_neg1 only applies to Z⊗A cross-terms because
-    // those buckets have inherently different lengths (A excludes the first
-    // year of Z by construction).
+    // valid pairs. The convention uses N = n_pairs here for Z⊗Z
+    // autocorrelations. The max-bucket-size convention used by
+    // cross_correlation_z_a / cross_correlation_a_z_neg1 only applies to
+    // Z⊗A cross-terms because those buckets have inherently different
+    // lengths (A excludes the first year of Z by construction).
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (ref_obs[ref_start + i] - mu_ref) * (lag_obs[i] - mu_lag);
@@ -1892,8 +1874,8 @@ pub fn build_periodic_yw_matrix_into(
 /// Two distinct year offsets compose:
 ///
 /// 1. **Bucket year offset** (`year_diff`). The `A` and `Z` buckets can have
-///    different starting PDF years per season. For monthly NEWAVE data starting
-///    on January, `Z` starts at year `Y0` for every season but `A` starts at
+///    different starting PDF years per season. For monthly data starting on
+///    January, `Z` starts at year `Y0` for every season but `A` starts at
 ///    `Y0 + 1` for seasons 0..10 and `Y0` for season 11 (because the rolling
 ///    12-month window needs a full year of look-back). Calling code passes
 ///    `z_year_starts` and `a_year_starts` (one entry per season) so that the
@@ -1984,17 +1966,17 @@ pub fn cross_correlation_z_a(
         return 0.0;
     }
 
-    // Cross-covariance with NEWAVE-style population divisor.
+    // Cross-covariance with the max-bucket-size population divisor.
     //
     // Sum runs over the year-aligned valid pairs, but the divisor is the
     // **maximum bucket size** (typically the Z bucket = total study-window
-    // years). This matches NEWAVE's parpvaz.dat convention, which is
-    // equivalent to padding the missing-A years with the sample mean
-    // (their cross-product contribution is zero) while keeping the
-    // observed σ̂_A computed over the genuinely populated entries. Using
-    // n_pairs (the strict-pair count) here would systematically overstate
-    // ρ̂(Z, A) by a factor of `max_len / n_pairs` and tilt downstream
-    // partitioned-covariance FACPs across the threshold boundary.
+    // years). This is equivalent to padding the missing-A years with the
+    // sample mean (their cross-product contribution is zero) while keeping
+    // the observed σ̂_A computed over the genuinely populated entries.
+    // Using n_pairs (the strict-pair count) here would systematically
+    // overstate ρ̂(Z, A) by a factor of `max_len / n_pairs` and tilt
+    // downstream partitioned-covariance FACPs across the threshold
+    // boundary.
     let mut gamma = 0.0_f64;
     for i in 0..n_pairs {
         gamma += (a_obs[a_start + i] - mu_a) * (z_obs[z_start + i] - mu_z);
@@ -2093,7 +2075,7 @@ pub fn cross_correlation_a_z_neg1(
         return 0.0;
     }
 
-    // Cross-covariance with NEWAVE-style population divisor — see
+    // Cross-covariance with the max-bucket-size population divisor — see
     // [`cross_correlation_z_a`] for the rationale on dividing by the larger
     // bucket size rather than `n_pairs`.
     let mut gamma = 0.0_f64;
@@ -2518,8 +2500,8 @@ pub(crate) fn assemble_partitioned_covariance(
 /// - `stats_by_season` — `(mean, std)` for each `Z` season.
 /// - `z_year_starts` — first PDF year of each `Z` bucket, indexed by season.
 ///   Used by the cross-correlation helpers to align `A` and `Z` by absolute
-///   PDF year rather than by bucket index — required for monthly NEWAVE data
-///   where `A` buckets start one year later than `Z` for most seasons.
+///   PDF year rather than by bucket index — required for monthly data where
+///   `A` buckets start one year later than `Z` for most seasons.
 /// - `annual_observations_by_season` — annual component `A`, grouped by season.
 /// - `annual_stats_by_season` — `(mean, std)` for each `A` season.
 /// - `a_year_starts` — first PDF year of each `A` bucket, indexed by season.
@@ -2834,7 +2816,7 @@ pub struct AnnualSeasonalStats {
     pub mean_m3s: f64,
     /// Population-divisor standard deviation (`1/N` divisor) of the rolling
     /// 12-month average for this (entity, season) pair, in m³/s. Matches
-    /// NEWAVE's `rel_parpa.pdf` eq. 18 convention.
+    /// the Maceira-Damazio PAR(p)-A standard-deviation convention.
     pub std_m3s: f64,
 }
 
@@ -2844,8 +2826,8 @@ pub struct AnnualSeasonalStats {
 /// For each (entity, season) pair, `μ^A_m` is the sample mean of the rolling
 /// 12-month average `A_t = (1/12) · Σ_{j=0..11} z[t-j]` values whose target
 /// date falls in season `m`. `σ^A_m` is the **population-divisor standard
-/// deviation** using divisor `1/N`, matching NEWAVE's `rel_parpa.pdf` eq. 18
-/// convention and the workspace-wide convention used by
+/// deviation** using divisor `1/N`, matching the Maceira-Damazio PAR(p)-A
+/// standard-deviation convention and the workspace-wide convention used by
 /// [`estimate_seasonal_stats`]. The PAR(p)-A runtime coefficient is then
 /// `ψ̂ = ψ · σ_m / σ^A_m`, which requires `σ^A_m > 0` (enforced by the
 /// output validator in `cobre-io`).
@@ -2954,10 +2936,10 @@ pub fn estimate_annual_seasonal_stats(
 
     // Compute mean and population-divisor std for each (entity, season) group.
     //
-    // NEWAVE (rel_parpa.pdf eq. 18) uses sigma^A_m with divisor 1/N. Matching
-    // that convention is required for parity on the partitioned-covariance
-    // FACP — the sample-vs-population scale factor would otherwise leak
-    // through every Z⊗A cross-correlation.
+    // The Maceira-Damazio PAR(p)-A formulation uses sigma^A_m with the 1/N
+    // population divisor. Using the population divisor is required for
+    // self-consistent partitioned-covariance FACPs — the sample-vs-population
+    // scale factor would otherwise leak through every Z⊗A cross-correlation.
     let mut result: Vec<AnnualSeasonalStats> = Vec::with_capacity(group_map.len());
     for ((entity_id, season_id), values) in &group_map {
         let n = values.len();
@@ -3105,9 +3087,7 @@ pub fn estimate_periodic_ar_annual_coefficients(
 /// periodic cycle.
 ///
 /// Returned by [`fit_par_annual_with_reduction`]. Contains the final fits
-/// for every season after applying the contribution-based reduction loop
-/// documented in the CEPEL manual section *Tratamento de coeficientes
-/// negativos*.
+/// for every season after applying the contribution-based reduction loop.
 #[must_use]
 #[derive(Debug, Clone)]
 pub struct ReducedOrderFit {
@@ -3127,10 +3107,6 @@ pub struct ReducedOrderFit {
 /// Apply Maceira-Damazio iterative order reduction to a full PAR(p)-A
 /// periodic-cycle fit.
 ///
-/// Implements the procedure described in the CEPEL manual under
-/// *Tratamento de coeficientes negativos*
-/// (<https://see.cepel.br/manual/libs/latest/incerteza_hidrologica/modelo-par-p.html>):
-///
 /// 1. Solve the extended periodic Yule-Walker system for the initial
 ///    PACF order at every season to obtain `φ^m_1..φ^m_p` and `ψ^m`.
 /// 2. For each season, compute the **recursively-composed contributions**
@@ -3140,24 +3116,24 @@ pub struct ReducedOrderFit {
 ///    that propagate through the AR coefficients of neighbouring months.
 /// 3. If any contribution is negative, reduce the season's AR ceiling
 ///    directly to `find_max_valid_order(contributions)` (potentially a
-///    multi-step jump, e.g. BATALHA DEZ goes 6 -> 1 in one move) and
-///    re-fit via PACF + Yule-Walker at the new ceiling.
+///    multi-step jump) and re-fit via PACF + Yule-Walker at the new
+///    ceiling.
 /// 4. Re-validate after every reduction: a season's reduction can change
 ///    the contributions of its neighbours through the periodic chain.
 ///    Iterate until **all** seasons pass the contribution check.
 ///
 /// **Why the recursive composition matters.** A simple per-season check
 /// of the standardised AR coefficient at lag `p` (e.g.
-/// `combined_p = φ_p + ψ / 12`) is *not* equivalent. NEWAVE keeps
-/// BELO MONTE JAN at order 4 even though `φ_3 < 0`, but reduces BATALHA
-/// DEZ from 6 to 1 even though `φ_6 > 0`, because the relevant signal
-/// is the *recursively-composed* contribution along the periodic chain,
-/// not the lag-`p` coefficient in isolation.
+/// `combined_p = φ_p + ψ / 12`) is *not* equivalent: a positive lag-`p`
+/// coefficient can still produce a negative chain-composed contribution
+/// once the neighbouring months' AR coefficients propagate through, and
+/// vice versa. The relevant signal is the recursively-composed
+/// contribution along the periodic chain, not the lag-`p` coefficient
+/// in isolation.
 ///
 /// The check operates on the AR coefficient vector only — the annual
 /// term `ψ^m` is preserved across reductions and refreshed via the
-/// extended Yule-Walker re-solve at the new ceiling, mirroring NEWAVE
-/// behaviour as documented in `rel_parpa.pdf` §3.3.
+/// extended Yule-Walker re-solve at the new ceiling.
 ///
 /// # Parameters
 ///
@@ -3272,9 +3248,8 @@ pub fn fit_par_annual_with_reduction(
         }
 
         for (season, max_valid) in failing {
-            // Step the ceiling down by 1 (consistent with NEWAVE's per-step
-            // reduction; subsequent loop iterations will continue dropping
-            // until contributions pass).
+            // Step the ceiling down by 1; subsequent loop iterations will
+            // continue dropping until contributions pass.
             let _ = max_valid;
             if max_orders[season] == 0 {
                 continue;
@@ -3364,10 +3339,10 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        build_periodic_yw_matrix, classify_history, estimate_periodic_ar_coefficients,
-        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
-        select_order_pacf_annual, solve_linear_system, HistoryClass,
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, HistoryClass, build_periodic_yw_matrix,
+        classify_history, estimate_periodic_ar_coefficients, periodic_autocorrelation,
+        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
+        solve_linear_system,
     };
 
     // -----------------------------------------------------------------------
@@ -3376,11 +3351,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
+        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
-        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -3523,8 +3498,9 @@ mod tests {
 
     #[test]
     fn classify_history_many_negative_at_threshold_falls_through() {
-        // Exactly 10% (2/20) negative — does NOT trigger TIPO 2 (strict >).
-        // Falls through. With these values neither TIPO 1 nor TIPO 4 either.
+        // Exactly 10% (2/20) negative — does NOT trigger ManyNegative (strict >).
+        // Falls through. With these values neither Constant nor Saturated
+        // either.
         let mut obs: Vec<f64> = (1..=18).map(|i| i as f64).collect();
         obs.extend_from_slice(&[-1.0, -2.0]);
         assert_eq!(classify_history(&obs), HistoryClass::Default);
@@ -3532,7 +3508,7 @@ mod tests {
 
     #[test]
     fn classify_history_saturated_cap() {
-        // BELO MONTE-style: most April values at 13900 cap, rest scattered below.
+        // High-cap-style: most values at the 13900 cap, rest scattered below.
         // 12 out of 20 (60%) at 13900, rest at 5000-13800.
         let mut obs = vec![13900.0_f64; 12];
         obs.extend_from_slice(&[
@@ -3555,10 +3531,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_history_mode_at_zero_with_majority_is_tipo_4() {
-        // 11 zeros + 9 nonzero = 55% at mode 0. NEWAVE flags this as TIPO 4
-        // (saturating cap = 0) — typical of low-flow constant months on plants
-        // like COARACY NUNE / Sep-Oct. cobre matches that classification.
+    fn classify_history_mode_at_zero_with_majority_is_saturated() {
+        // 11 zeros + 9 nonzero = 55% at mode 0 -> Saturated (cap = 0),
+        // typical of low-flow constant months on transposed-flow plants.
         let mut obs = vec![0.0_f64; 11];
         obs.extend_from_slice(&[
             100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 1000.0,
@@ -3572,24 +3547,20 @@ mod tests {
     #[test]
     fn classify_history_helpers_round_trip() {
         let c = HistoryClass::Constant { value: 5.0 };
-        assert_eq!(c.tipo_code(), 1);
         assert_eq!(c.stats_override(), Some((5.0, 0.0)));
         assert!(c.is_degenerate());
 
         let s = HistoryClass::Saturated { cap: 13900.0 };
-        assert_eq!(s.tipo_code(), 4);
         assert_eq!(s.stats_override(), Some((13900.0, 0.0)));
         assert!(s.is_degenerate());
 
-        // TIPO 2 is diagnostic only; no fitting override and not "degenerate"
-        // for the purpose of forcing order 0.
+        // ManyNegative is diagnostic only; no fitting override and not
+        // "degenerate" for the purpose of forcing order 0.
         let n = HistoryClass::ManyNegative { sample_mean: -1.5 };
-        assert_eq!(n.tipo_code(), 2);
         assert_eq!(n.stats_override(), None);
         assert!(!n.is_degenerate());
 
         let d = HistoryClass::Default;
-        assert_eq!(d.tipo_code(), 0);
         assert_eq!(d.stats_override(), None);
         assert!(!d.is_degenerate());
     }
@@ -3666,7 +3637,7 @@ mod tests {
             + (30.0 - 30.0_f64).powi(2)
             + (40.0 - 30.0_f64).powi(2)
             + (50.0 - 30.0_f64).powi(2))
-            / 5.0; // 1/N (NEWAVE convention)
+            / 5.0; // 1/N population divisor
         let expected_std = expected_variance.sqrt();
 
         assert!(
@@ -3862,7 +3833,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
+        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -4744,8 +4715,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-                                  // We just verify both are valid; they may or may not differ depending
-                                  // on the specific data, but the matrix IS valid.
+        // We just verify both are valid; they may or may not differ depending
+        // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -6006,9 +5977,10 @@ mod tests {
         let expected_rhs0 = 0.369_897_721_437_054;
         let expected_rhs1 = 0.0;
         // rhs[2] = cross_correlation_a_z_neg1(prev=1) — for n_seasons=2 the
-        // year-forward-shift skips one Z entry, giving n_pairs=4. NEWAVE's
-        // convention divides the cross-product sum by max(a.len, z.len)=5
-        // rather than 4, so the value scales by 4/5 vs the n_pairs divisor.
+        // year-forward-shift skips one Z entry, giving n_pairs=4. The
+        // max-bucket-size convention divides the cross-product sum by
+        // max(a.len, z.len)=5 rather than 4, so the value scales by 4/5 vs
+        // the n_pairs divisor.
         let expected_rhs2 = 0.143_849_113_892_188 * 4.0 / 5.0;
         assert!(
             (rhs[0] - expected_rhs0).abs() < tol,
@@ -6547,9 +6519,9 @@ mod tests {
     ///           [0.3,  0.7,   0.4 ]]                   (row 1 = Z_{t-3})
     ///
     /// Σ_12[0, 2] = ρ(Z_t, A_{t-1}) uses [`cross_correlation_a_z_neg1`], which
-    /// follows NEWAVE's convention of dividing the cross-product sum by the
-    /// LARGER bucket size (here 5) rather than n_pairs (4 after the
-    /// year-forward-shift skips one Z entry).
+    /// follows the max-bucket-size convention of dividing the cross-product
+    /// sum by the LARGER bucket size (here 5) rather than n_pairs (4 after
+    /// the year-forward-shift skips one Z entry).
     ///
     /// The Σ_12[1,*] block is the Bug #1 regression guard — pre-fix, this row
     /// was anchored at season_minus_k and produced unrelated values that
@@ -6802,9 +6774,9 @@ mod tests {
 
     #[test]
     fn select_order_pacf_annual_min_order_one_rule_when_lag1_nonzero() {
-        // n=100; both PACF values below their lag-dependent thresholds.
+        // n=100; both PACF values below the threshold.
         // Without min-order-1 rule, max_significant = 0.
-        // PACF[0] = 0.05 is non-zero -> NEWAVE rule forces order = max(1, 0) = 1.
+        // PACF[0] = 0.05 is non-zero -> min-order-1 rule forces order = max(1, 0) = 1.
         let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
         assert_eq!(result.selected_order, 1);
     }
@@ -6837,17 +6809,17 @@ mod tests {
     #[test]
     fn select_order_pacf_annual_structural_zero_at_lag2_does_not_short_circuit() {
         // Structural zero at lag 2 (PACF[1] = 0.0) does NOT trigger short-circuit;
-        // only lag 1 does. NEWAVE proceeds normally with the surviving lags:
-        // lag 1 = 0.5 > threshold, lag 3 = 0.6 > threshold -> order = 3.
+        // only lag 1 does. The selector proceeds normally with the surviving
+        // lags: lag 1 = 0.5 > threshold, lag 3 = 0.6 > threshold -> order = 3.
         let result = select_order_pacf_annual(&[0.5, 0.0, 0.6], 100, 1.96);
         assert_eq!(result.selected_order, 3);
     }
 
     #[test]
     fn select_order_pacf_annual_only_lag1_significant_with_zeros_after() {
-        // Realistic NEWAVE pattern: degenerate Schur complement at lag 2+
-        // produces FACP = [+0.37, 0, 0, 0, 0, 0]. NEWAVE picks order 1
-        // (lag 1 is significant), not 0.
+        // Realistic pattern: a degenerate Schur complement at lag 2+ produces
+        // FACP = [+0.37, 0, 0, 0, 0, 0]. The selector picks order 1 (lag 1
+        // is significant), not 0.
         let result = select_order_pacf_annual(&[0.37, 0.0, 0.0, 0.0, 0.0, 0.0], 92, 1.96);
         assert_eq!(result.selected_order, 1);
     }
@@ -6910,8 +6882,8 @@ mod tests {
     /// shifts every observation by `+5`, so window means differ by `5`
     /// between consecutive years for every season.
     ///
-    /// This test intentionally pins the `1/(N-1)` divisor and the divergence from
-    /// `rel_parpa.pdf` eq. 18 (which uses `1/N`). See ticket documentation.
+    /// This test intentionally pins the `1/(N-1)` divisor and the divergence
+    /// from the population (`1/N`) divisor used elsewhere in the workspace.
     #[test]
     fn estimate_annual_seasonal_stats_four_year_synthetic_hand_computed() {
         let hydro_id = EntityId::from(1);
@@ -7031,9 +7003,9 @@ mod tests {
         // The expected annual_coefficient equals the rhs[0] from the 1×1 system,
         // which is cross_correlation_a_z_neg1(prev_season=1, n_seasons=2, ...).
         // For n_seasons=2, the year-forward-shift skips one Z entry leaving
-        // n_pairs=4. NEWAVE's max-bucket-size divisor (=5) scales the result
-        // by 4/5 vs the legacy n_pairs convention, so the hand-computed value
-        // is 0.14384911389218766 × 4/5 ≈ 0.1150792911…
+        // n_pairs=4. The max-bucket-size divisor (=5) scales the result by
+        // 4/5 vs an n_pairs divisor, so the hand-computed value is
+        // 0.14384911389218766 × 4/5 ≈ 0.1150792911…
         let expected_psi = 0.143_849_113_892_187_66 * 4.0 / 5.0;
 
         let result = estimate_periodic_ar_annual_coefficients(
@@ -7113,7 +7085,7 @@ mod tests {
             "selected_order=2 must produce 2 AR coefficients"
         );
 
-        // Expected values reflect NEWAVE's max-bucket-size cross-cov divisor
+        // Expected values reflect the max-bucket-size cross-cov divisor
         // (see [`cross_correlation_z_a`] docs). For the synthetic 5-element
         // buckets, only the cross-terms with year-forward-shift pick up the
         // 4/5 scale; the rest of the YW system is unaffected.
@@ -7199,7 +7171,7 @@ mod tests {
     // across the full periodic cycle, using contribution-based validation).
     // -----------------------------------------------------------------------
 
-    use super::{fit_par_annual_with_reduction, ReducedOrderFit};
+    use super::{ReducedOrderFit, fit_par_annual_with_reduction};
 
     /// All-positive single-season AR(1) data: contribution check is trivially
     /// non-negative, no reduction needed.

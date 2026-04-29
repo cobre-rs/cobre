@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{
         AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -3343,10 +3343,10 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, HistoryClass, build_periodic_yw_matrix,
-        classify_history, estimate_periodic_ar_coefficients, periodic_autocorrelation,
-        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
-        solve_linear_system,
+        build_periodic_yw_matrix, classify_history, estimate_periodic_ar_coefficients,
+        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
+        select_order_pacf_annual, solve_linear_system, HistoryClass,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT,
     };
 
     // -----------------------------------------------------------------------
@@ -3355,11 +3355,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -3837,7 +3837,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -4719,8 +4719,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -7041,7 +7041,7 @@ mod tests {
         );
     }
 
-    /// AC #4 — `selected_order = 2` with the 3×3 hand-computed fixture from ticket-005.
+    /// `selected_order = 2` with the 3×3 hand-computed fixture.
     ///
     /// Matrix and RHS come from `build_extended_periodic_yw_matrix_hand_computed_3x3`.
     /// The system is:
@@ -7175,7 +7175,7 @@ mod tests {
     // across the full periodic cycle, using contribution-based validation).
     // -----------------------------------------------------------------------
 
-    use super::{ReducedOrderFit, fit_par_annual_with_reduction};
+    use super::{fit_par_annual_with_reduction, ReducedOrderFit};
 
     /// All-positive single-season AR(1) data: contribution check is trivially
     /// non-negative, no reduction needed.

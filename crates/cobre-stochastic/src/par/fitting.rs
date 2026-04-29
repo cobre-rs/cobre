@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::NaiveDate;
 use cobre_core::{
-    EntityId,
     scenario::{
         AnnualComponent, CorrelationEntity, CorrelationGroup, CorrelationModel, CorrelationProfile,
         CorrelationScheduleEntry,
     },
     temporal::{SeasonMap, Stage},
+    EntityId,
 };
 
 use crate::StochasticError;
@@ -1488,19 +1488,46 @@ pub fn select_order_pacf(
 }
 
 /// Select the AR order for a PAR(p)-A model using the conditional FACP
-/// significance test.
+/// significance test, with NEWAVE-parity rules.
 ///
-/// Applies the same selection rule as [`select_order_pacf`] to the
-/// **conditional** FACP vector produced by
-/// [`conditional_facp_partitioned`]: pick the maximum lag `k` where
-/// `|conditional_facp[k-1]| > z_alpha / sqrt(N)`, defaulting to order 0
-/// when no lag exceeds the threshold.
+/// The CEPEL manual (section *Identificação da Ordem do Modelo* in
+/// <https://see.cepel.br/manual/libs/latest/incerteza_hidrologica/modelo-par-p.html>)
+/// specifies a single 95% confidence interval based on the number of
+/// historical years (`z_alpha / sqrt(N)`, no lag-dependent deflation) and
+/// "the largest significant lag is attributed as `p_m`". The manual is
+/// silent on the cases where (a) lag 1 is exactly zero or (b) no lag is
+/// significant; NEWAVE's reference implementation handles those via the
+/// rules below, which are observed empirically:
 ///
-/// The semantic difference from [`select_order_pacf`] is the **source** of
-/// the input vector, not the selection rule. `pacf_values[k]` in the
-/// returned struct is the conditional FACP at lag `k+1`, conditioned on
-/// the intermediate standardised annual noise series `Z` and the previous
-/// annual innovation `A_{t-1}`.
+/// 1. **Structural-zero short-circuit at lag 1.** If
+///    `conditional_facp[0] == 0.0` exactly, the model is forced to
+///    order 0. A structural zero at lag 1 indicates a degenerate (Z, A)
+///    bucket — typically a single-observation season or a numerically
+///    singular partitioned-covariance solve — and NEWAVE refuses to fit
+///    any auto-regressive structure on top of it. This corresponds to
+///    the "se o coeficiente de ordem 1 ... é zero ... o modelo é ajustado
+///    a ordem zero" rule from the manual's *Tratamento de coeficientes
+///    negativos* section. Structural zeros at higher lags do **not**
+///    trigger the short-circuit; NEWAVE proceeds with the AR(1) base
+///    whenever lag 1 itself is non-degenerate (e.g.,
+///    `[+0.37, 0, 0, 0, 0, 0]` -> order 1, not 0).
+/// 2. **Minimum order of 1 when lag 1 is non-zero.** If the conditional
+///    FACP at lag 1 is not a structural zero, the selected order is
+///    `max(1, max_significant_lag)`. NEWAVE empirically defaults to
+///    AR(1) whenever no lag exceeds the threshold but lag 1 is well
+///    defined (≈46/1860 observations on the 1931-2022 SIN history).
+///
+/// The Maceira-Damazio iterative order-reduction step (described in the
+/// manual under *Tratamento de coeficientes negativos*) is **not**
+/// applied here; the order returned by this function is the tentative
+/// pre-validation order. Implementing the iterative reduction would
+/// further reduce orders when the combined PAR(p) / PAR(p)-A
+/// coefficient is negative, and is the documented path to closing the
+/// remaining over-selection mismatches against `parpvaz.dat`.
+///
+/// `pacf_values[k]` in the returned struct is the conditional FACP at lag
+/// `k+1`, conditioned on the intermediate standardised annual noise series
+/// `Z` and the previous annual innovation `A_{t-1}`.
 ///
 /// # Parameters
 ///
@@ -1521,8 +1548,12 @@ pub fn select_order_pacf(
 /// let result = select_order_pacf_annual(&[0.5, 0.1], 100, 1.96);
 /// assert_eq!(result.selected_order, 1);
 ///
-/// // No significant conditional FACP values -> order 0.
+/// // Lag 1 is non-zero (just small) -> min-order-1 rule kicks in.
 /// let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
+/// assert_eq!(result.selected_order, 1);
+///
+/// // Structural zero at lag 1 -> order 0 (degenerate bucket).
+/// let result = select_order_pacf_annual(&[0.0, 0.5], 100, 1.96);
 /// assert_eq!(result.selected_order, 0);
 /// ```
 pub fn select_order_pacf_annual(
@@ -1537,13 +1568,32 @@ pub fn select_order_pacf_annual(
         f64::INFINITY
     };
 
+    // Rule 1 — Structural-zero short-circuit at lag 1.
+    // A structural zero at lag 1 (FACP exactly 0.0 from a degenerate
+    // bucket) forces white-noise selection.
+    if conditional_facp.first().copied() == Some(0.0) {
+        return PacfSelectionResult {
+            selected_order: 0,
+            pacf_values: conditional_facp.to_vec(),
+            threshold,
+        };
+    }
+
     // Find the maximum lag with |conditional FACP| > threshold.
-    let selected_order = conditional_facp
+    let max_significant = conditional_facp
         .iter()
         .enumerate()
         .rev()
         .find(|&(_, p)| p.abs() > threshold)
         .map_or(0, |(k, _)| k + 1);
+
+    // Rule 2 — Min-order-1 when lag 1 is non-zero (not a structural zero).
+    // The CEPEL manual is silent on what happens when no lag is significant;
+    // NEWAVE's implementation defaults to AR(1) whenever lag 1 is non-zero.
+    let selected_order = match conditional_facp.first() {
+        Some(&p1) if p1 != 0.0 => max_significant.max(1),
+        _ => max_significant,
+    };
 
     PacfSelectionResult {
         selected_order,
@@ -3073,10 +3123,10 @@ thread_local! {
 )]
 mod tests {
     use super::{
-        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT, HistoryClass, build_periodic_yw_matrix,
-        classify_history, estimate_periodic_ar_coefficients, periodic_autocorrelation,
-        periodic_pacf, select_order_aic, select_order_pacf, select_order_pacf_annual,
-        solve_linear_system,
+        build_periodic_yw_matrix, classify_history, estimate_periodic_ar_coefficients,
+        periodic_autocorrelation, periodic_pacf, select_order_aic, select_order_pacf,
+        select_order_pacf_annual, solve_linear_system, HistoryClass,
+        BUILD_PERIODIC_YW_MATRIX_CALL_COUNT,
     };
 
     // -----------------------------------------------------------------------
@@ -3085,11 +3135,11 @@ mod tests {
 
     use chrono::{Datelike, NaiveDate};
     use cobre_core::{
-        EntityId,
         temporal::{
             Block, BlockMode, NoiseMethod, ScenarioSourceConfig, Stage, StageRiskConfig,
             StageStateConfig,
         },
+        EntityId,
     };
 
     use super::estimate_seasonal_stats;
@@ -3571,7 +3621,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use super::{
-        ArCoefficientEstimate, SeasonalStats, estimate_ar_coefficients, estimate_correlation,
+        estimate_ar_coefficients, estimate_correlation, ArCoefficientEstimate, SeasonalStats,
     };
 
     /// Helper: build a single-season study over `n_years` monthly stages.
@@ -4453,8 +4503,8 @@ mod tests {
         // from M[1,2] (rho(0,1)).
         let m01 = mat[1]; // row 0, col 1
         let m12 = mat[order + 2]; // row 1, col 2
-        // We just verify both are valid; they may or may not differ depending
-        // on the specific data, but the matrix IS valid.
+                                  // We just verify both are valid; they may or may not differ depending
+                                  // on the specific data, but the matrix IS valid.
         assert!(m01.abs() <= 1.0);
         assert!(m12.abs() <= 1.0);
     }
@@ -6503,46 +6553,85 @@ mod tests {
     fn select_order_pacf_annual_max_lag_significant() {
         // threshold = 1.96 / sqrt(100) = 0.196
         // conditional_facp = [0.05, 0.03, 0.4]
-        // Only lag 3 (0.4) exceeds threshold -> selected_order = 3.
+        // Only lag 3 (0.4) exceeds threshold -> max_significant = 3.
+        // PACF[0] = 0.05 is non-zero -> min-order-1 gives max(1, 3) = 3.
         let result = select_order_pacf_annual(&[0.05, 0.03, 0.4], 100, 1.96);
         assert_eq!(result.selected_order, 3);
     }
 
     #[test]
-    fn select_order_pacf_annual_no_significant_lag() {
-        // threshold = 1.96 / sqrt(100) = 0.196
-        // All values below threshold -> selected_order = 0.
+    fn select_order_pacf_annual_min_order_one_rule_when_lag1_nonzero() {
+        // n=100; both PACF values below their lag-dependent thresholds.
+        // Without min-order-1 rule, max_significant = 0.
+        // PACF[0] = 0.05 is non-zero -> NEWAVE rule forces order = max(1, 0) = 1.
         let result = select_order_pacf_annual(&[0.05, 0.03], 100, 1.96);
-        assert_eq!(result.selected_order, 0);
+        assert_eq!(result.selected_order, 1);
     }
 
     #[test]
     fn select_order_pacf_annual_negative_value_uses_abs() {
-        // threshold = 1.96 / sqrt(100) = 0.196
-        // |-0.5| = 0.5 > 0.196 -> lag 1 significant; lag 2 = 0.1 is not.
+        // |-0.5| = 0.5 > lag-1 threshold ~0.1970 -> lag 1 significant.
         let result = select_order_pacf_annual(&[-0.5, 0.1], 100, 1.96);
         assert_eq!(result.selected_order, 1);
     }
 
     #[test]
     fn select_order_pacf_annual_zero_observations_returns_infinity_threshold() {
-        // n_observations = 0 -> threshold = infinity -> nothing exceeds it.
+        // n_observations = 0 -> threshold = infinity -> no lag exceeds it.
+        // PACF[0] = 0.5 is non-zero -> min-order-1 rule forces order = 1.
         let result = select_order_pacf_annual(&[0.5, 0.3], 0, 1.96);
         assert_eq!(result.threshold, f64::INFINITY);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_structural_zero_at_lag1_returns_zero() {
+        // FACP exactly 0.0 at lag 1 -> structural-zero short-circuit.
+        // Even though lag 2 = 0.5 is "significant", the model is forced
+        // to white noise (degenerate Z⊗A bucket).
+        let result = select_order_pacf_annual(&[0.0, 0.5], 100, 1.96);
         assert_eq!(result.selected_order, 0);
     }
 
     #[test]
-    fn select_order_pacf_annual_matches_select_order_pacf_for_same_input() {
-        // Both functions must be bit-identical for the same input.
-        let facp = &[0.5, 0.1, 0.3_f64];
+    fn select_order_pacf_annual_structural_zero_at_lag2_does_not_short_circuit() {
+        // Structural zero at lag 2 (PACF[1] = 0.0) does NOT trigger short-circuit;
+        // only lag 1 does. NEWAVE proceeds normally with the surviving lags:
+        // lag 1 = 0.5 > threshold, lag 3 = 0.6 > threshold -> order = 3.
+        let result = select_order_pacf_annual(&[0.5, 0.0, 0.6], 100, 1.96);
+        assert_eq!(result.selected_order, 3);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_only_lag1_significant_with_zeros_after() {
+        // Realistic NEWAVE pattern: degenerate Schur complement at lag 2+
+        // produces FACP = [+0.37, 0, 0, 0, 0, 0]. NEWAVE picks order 1
+        // (lag 1 is significant), not 0.
+        let result = select_order_pacf_annual(&[0.37, 0.0, 0.0, 0.0, 0.0, 0.0], 92, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_structural_zero_at_lag3_does_not_short_circuit() {
+        // Structural zero at lag 3 (k > 2) does NOT trigger short-circuit.
+        // Lag 1 (0.5) is significant; max_significant = 1; min-order-1 -> 1.
+        let result = select_order_pacf_annual(&[0.5, 0.1, 0.0], 100, 1.96);
+        assert_eq!(result.selected_order, 1);
+    }
+
+    #[test]
+    fn select_order_pacf_annual_matches_select_order_pacf_for_short_circuit_zero_at_lag1() {
+        // When lag 1 has a structural zero, the annual variant returns 0
+        // even if higher lags would be significant — this is where it
+        // diverges most sharply from `select_order_pacf`, which only looks
+        // at the maximum significant lag.
+        let facp = &[0.0, 0.5_f64];
         let n = 100_usize;
         let z = 1.96_f64;
         let annual = select_order_pacf_annual(facp, n, z);
         let classical = select_order_pacf(facp, n, z);
-        assert_eq!(annual.selected_order, classical.selected_order);
-        assert_eq!(annual.pacf_values, classical.pacf_values);
-        assert_eq!(annual.threshold, classical.threshold);
+        assert_eq!(annual.selected_order, 0);
+        assert_eq!(classical.selected_order, 2);
     }
 
     // -----------------------------------------------------------------------

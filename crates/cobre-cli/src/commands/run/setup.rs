@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use console::Term;
 
-use cobre_comm::{Communicator, TopologyProvider, create_communicator};
+use cobre_comm::{
+    AffinityReport, Communicator, TopologyProvider, WorkerAffinity, create_communicator,
+};
 use cobre_core::EntityId;
 use cobre_core::ScalarParameter;
 use cobre_core::ScenarioSource;
@@ -21,6 +23,7 @@ use cobre_core::temporal::SeasonMap;
 use cobre_io::BroadcastScalarParameter;
 use cobre_io::Config;
 use cobre_io::PolicyMode;
+use cobre_io::RankAffinity;
 use cobre_io::SetupTimings;
 use cobre_io::load_case_with_artifacts;
 use cobre_io::parse_config;
@@ -79,6 +82,163 @@ pub(super) fn resolve_thread_count(cli_threads: Option<u32>) -> usize {
         Some(n) => n as usize,
         None => 1,
     }
+}
+
+fn rank_affinity_from_report(rank: usize, report: &AffinityReport) -> RankAffinity {
+    RankAffinity {
+        rank: u32::try_from(rank).unwrap_or(u32::MAX),
+        policy: report.policy.as_str().to_string(),
+        online_processing_units: report
+            .online_processing_units
+            .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
+        visible_processing_units: report
+            .visible_processing_units
+            .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
+        physical_cores: report
+            .physical_cores
+            .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
+        numa_nodes: report
+            .numa_nodes
+            .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
+        visible_cpus: report
+            .visible_cpus
+            .iter()
+            .map(|&cpu| u32::try_from(cpu).unwrap_or(u32::MAX))
+            .collect(),
+        memory_policy: report.memory_policy.clone(),
+        memory_policy_nodes: report
+            .memory_policy_nodes
+            .iter()
+            .map(|&node| u32::try_from(node).unwrap_or(u32::MAX))
+            .collect(),
+        allowed_memory_nodes: report
+            .allowed_memory_nodes
+            .iter()
+            .map(|&node| u32::try_from(node).unwrap_or(u32::MAX))
+            .collect(),
+        memory_discovery_error: report.memory_discovery_error.clone(),
+        worker_cpus: report
+            .worker_cpus
+            .iter()
+            .map(|&cpu| u32::try_from(cpu).unwrap_or(u32::MAX))
+            .collect(),
+        discovery_error: report.discovery_error.clone(),
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RankAffinityWire {
+    rank: u32,
+    policy: String,
+    online_processing_units: Option<u32>,
+    visible_processing_units: Option<u32>,
+    physical_cores: Option<u32>,
+    numa_nodes: Option<u32>,
+    visible_cpus: Vec<u32>,
+    memory_policy: Option<String>,
+    memory_policy_nodes: Vec<u32>,
+    allowed_memory_nodes: Vec<u32>,
+    memory_discovery_error: Option<String>,
+    worker_cpus: Vec<u32>,
+    discovery_error: Option<String>,
+}
+
+impl From<&RankAffinity> for RankAffinityWire {
+    fn from(value: &RankAffinity) -> Self {
+        Self {
+            rank: value.rank,
+            policy: value.policy.clone(),
+            online_processing_units: value.online_processing_units,
+            visible_processing_units: value.visible_processing_units,
+            physical_cores: value.physical_cores,
+            numa_nodes: value.numa_nodes,
+            visible_cpus: value.visible_cpus.clone(),
+            memory_policy: value.memory_policy.clone(),
+            memory_policy_nodes: value.memory_policy_nodes.clone(),
+            allowed_memory_nodes: value.allowed_memory_nodes.clone(),
+            memory_discovery_error: value.memory_discovery_error.clone(),
+            worker_cpus: value.worker_cpus.clone(),
+            discovery_error: value.discovery_error.clone(),
+        }
+    }
+}
+
+impl From<RankAffinityWire> for RankAffinity {
+    fn from(value: RankAffinityWire) -> Self {
+        Self {
+            rank: value.rank,
+            policy: value.policy,
+            online_processing_units: value.online_processing_units,
+            visible_processing_units: value.visible_processing_units,
+            physical_cores: value.physical_cores,
+            numa_nodes: value.numa_nodes,
+            visible_cpus: value.visible_cpus,
+            memory_policy: value.memory_policy,
+            memory_policy_nodes: value.memory_policy_nodes,
+            allowed_memory_nodes: value.allowed_memory_nodes,
+            memory_discovery_error: value.memory_discovery_error,
+            worker_cpus: value.worker_cpus,
+            discovery_error: value.discovery_error,
+        }
+    }
+}
+
+fn gather_rank_affinity(
+    comm: &impl Communicator,
+    local: &RankAffinity,
+) -> Result<Vec<RankAffinity>, CliError> {
+    let encoded = postcard::to_allocvec(&RankAffinityWire::from(local)).map_err(|error| {
+        CliError::Internal {
+            message: format!("failed to encode rank CPU affinity metadata: {error}"),
+        }
+    })?;
+    let world_size = comm.size();
+    let scalar_counts = vec![1usize; world_size];
+    let scalar_displacements = (0..world_size).collect::<Vec<_>>();
+    let mut encoded_lengths = vec![0u64; world_size];
+    comm.allgatherv(
+        &[u64::try_from(encoded.len()).unwrap_or(u64::MAX)],
+        &mut encoded_lengths,
+        &scalar_counts,
+        &scalar_displacements,
+    )
+    .map_err(|error| CliError::Internal {
+        message: format!("failed to gather rank CPU affinity lengths: {error}"),
+    })?;
+
+    let counts = encoded_lengths
+        .iter()
+        .map(|&length| {
+            usize::try_from(length).map_err(|_| CliError::Internal {
+                message: format!("rank CPU affinity payload length {length} exceeds usize"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut displacements = Vec::with_capacity(world_size);
+    let mut total = 0usize;
+    for &count in &counts {
+        displacements.push(total);
+        total = total.checked_add(count).ok_or_else(|| CliError::Internal {
+            message: "rank CPU affinity payload size overflow".to_string(),
+        })?;
+    }
+    let mut gathered = vec![0u8; total];
+    comm.allgatherv(&encoded, &mut gathered, &counts, &displacements)
+        .map_err(|error| CliError::Internal {
+            message: format!("failed to gather rank CPU affinity metadata: {error}"),
+        })?;
+
+    let mut result: Vec<RankAffinity> = Vec::with_capacity(world_size);
+    for (rank, (&offset, &count)) in displacements.iter().zip(&counts).enumerate() {
+        let end = offset + count;
+        let entry: RankAffinityWire =
+            postcard::from_bytes(&gathered[offset..end]).map_err(|error| CliError::Internal {
+                message: format!("failed to decode CPU affinity metadata for rank {rank}: {error}"),
+            })?;
+        result.push(entry.into());
+    }
+    result.sort_unstable_by_key(|entry| entry.rank);
+    Ok(result)
 }
 
 /// Values loaded on rank 0 by [`load_case_and_config`]. The trailing
@@ -192,11 +352,33 @@ pub(super) fn setup_communicator(
     let topology = comm.topology().clone();
 
     let configured_threads = resolve_thread_count(args.threads);
+    let affinity =
+        WorkerAffinity::prepare(args.cpu_bind.into(), configured_threads).map_err(|error| {
+            CliError::Internal {
+                message: format!("CPU affinity setup failed: {error}"),
+            }
+        })?;
+    let worker_affinity = affinity.clone();
     let actual_threads = match rayon::ThreadPoolBuilder::new()
         .num_threads(configured_threads)
+        .start_handler(move |worker_index| worker_affinity.bind_worker(worker_index))
         .build_global()
     {
-        Ok(()) => configured_threads,
+        Ok(()) => {
+            // Start every worker before `verify`; start hooks cannot return errors.
+            rayon::broadcast(|_| {});
+            affinity.verify().map_err(|error| CliError::Internal {
+                message: format!("CPU affinity setup failed: {error}"),
+            })?;
+            configured_threads
+        }
+        Err(err) if affinity.report().policy.binds_workers() => {
+            return Err(CliError::Internal {
+                message: format!(
+                    "cannot apply requested CPU affinity because the global rayon pool already exists: {err}"
+                ),
+            });
+        }
         Err(err) => {
             let actual = rayon::current_num_threads();
             tracing::warn!(
@@ -213,6 +395,23 @@ pub(super) fn setup_communicator(
             message: "rayon reported zero active threads — unexpected state".to_string(),
         });
     }
+    if affinity.report().is_oversubscribed(actual_threads) {
+        tracing::warn!(
+            workers = actual_threads,
+            visible_cpus = affinity.report().visible_processing_units,
+            "rayon workers exceed the visible CPU allocation",
+        );
+    }
+    if affinity.report().is_cpuset_restricted() && topology.slurm.is_none() && comm.size() == 1 {
+        tracing::warn!(
+            visible_cpus = affinity.report().visible_processing_units,
+            online_cpus = affinity.report().online_processing_units,
+            "process inherited a restricted CPU set; workers remain inside it",
+        );
+    }
+
+    let local_rank_affinity = rank_affinity_from_report(comm.rank(), affinity.report());
+    let rank_affinity = gather_rank_affinity(&comm, &local_rank_affinity)?;
 
     let solver_version = active_solver_version();
 
@@ -224,6 +423,7 @@ pub(super) fn setup_communicator(
             actual_threads,
             active_solver_name(),
             Some(&solver_version),
+            Some(&local_rank_affinity),
         );
     }
 
@@ -239,6 +439,7 @@ pub(super) fn setup_communicator(
         is_root,
         quiet,
         n_threads: actual_threads,
+        rank_affinity,
         output_dir,
         term_width,
         stderr,
@@ -760,9 +961,37 @@ mod tests {
     use console::Term;
 
     use super::{
-        load_case_and_config, reconstruct_stochastic_context_non_root, study_stage_noise_group_ids,
+        gather_rank_affinity, load_case_and_config, rank_affinity_from_report,
+        reconstruct_stochastic_context_non_root, study_stage_noise_group_ids,
     };
-    use crate::commands::run::{CommBackendArg, RunArgs};
+    use crate::commands::run::{CommBackendArg, CpuBindArg, RunArgs};
+    use cobre_comm::{AffinityPolicy, AffinityReport, LocalBackend};
+
+    #[test]
+    fn local_rank_affinity_metadata_round_trips_through_collective() {
+        let report = AffinityReport {
+            policy: AffinityPolicy::Core,
+            online_processing_units: Some(96),
+            visible_processing_units: Some(48),
+            physical_cores: Some(48),
+            numa_nodes: Some(4),
+            visible_cpus: vec![0, 2, 4, 6],
+            memory_policy: Some("bind".to_string()),
+            memory_policy_nodes: vec![0, 1],
+            allowed_memory_nodes: vec![0, 1, 2, 3],
+            memory_discovery_error: None,
+            worker_cpus: vec![0, 2],
+            discovery_error: None,
+        };
+        let local = rank_affinity_from_report(0, &report);
+        let gathered = gather_rank_affinity(&LocalBackend, &local)
+            .expect("local affinity gather must succeed");
+
+        assert_eq!(gathered.len(), 1);
+        assert_eq!(gathered[0].policy, "core");
+        assert_eq!(gathered[0].visible_processing_units, Some(48));
+        assert_eq!(gathered[0].worker_cpus, vec![0, 2]);
+    }
 
     fn d29_case_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -781,6 +1010,7 @@ mod tests {
             output: None,
             quiet: true,
             threads: None,
+            cpu_bind: CpuBindArg::None,
             comm_backend: CommBackendArg::Local,
         };
         let (prepared, _hydro_models, bcast, _config, _scalars, _timings) =

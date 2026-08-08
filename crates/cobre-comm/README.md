@@ -34,6 +34,10 @@ new backend.
   `mpi` feature flag
 - **`BackendKind`** — enum listing the available backends detected at compile
   time, used to select a backend via `create_communicator`
+- **`CpuTopology`** — physical-core, processing-unit, and NUMA resources visible
+  inside the process or scheduler cpuset
+- **`WorkerAffinity`** — deterministic worker mapping and Linux binding hook for
+  Rayon pools
 - **`SharedMemoryProvider`** — trait for intra-node memory-region allocation
   used by collocated processes
 
@@ -42,7 +46,8 @@ new backend.
 | Feature         | Default | Description                                                                                                                                          |
 | --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mpi`           | off     | Enables `FerrompiBackend` and the `ferrompi` dependency (gates `dep:ferrompi`)                                                                       |
-| `numa`          | off     | Extends `mpi` with NUMA-aware topology information from the ferrompi NUMA extension (implies `mpi`)                                                  |
+| `affinity`      | off     | Enables Linux CPU/NUMA discovery and current-thread CPU binding; other platforms retain an explicit unsupported fallback                            |
+| `numa`          | off     | Extends MPI topology through ferrompi and enables worker affinity (implies `mpi` and `affinity`)                                                     |
 | `shared-memory` | off     | Experimental intra-node shared-memory region API (`SharedMemoryProvider`, `SharedRegion`, `LocalCommunicator`, `HeapRegion`). Composable with `mpi`. |
 
 Without any feature flags, only `LocalBackend`, the trait definitions, and the
@@ -52,6 +57,21 @@ default because its only implementation, `HeapRegion<T>`, is a heap-backed
 placeholder — each rank allocates its own private `Vec<T>` with no memory
 actually shared across processes; a true implementation on ferrompi's
 `SharedWindow<T>` is deferred until a downstream consumer exists.
+
+## Worker affinity
+
+`CpuTopology::discover()` intersects Linux sysfs topology with the CPU set
+inherited from the operating system, MPI launcher, container, or scheduler. It
+also reports the allowed memory nodes and current memory policy when the kernel
+permits the query. `WorkerAffinity` then resolves one of three policies:
+
+- `none` — observe topology without changing scheduling;
+- `core` — fill physical cores before SMT siblings;
+- `numa` — round-robin physical cores across visible NUMA nodes before SMT.
+
+The CLI and Python binding use the same planner and current-thread binding API.
+MPI rank placement remains the launcher's responsibility; Cobre never expands a
+rank beyond its inherited CPU set.
 
 ## Backend selection
 

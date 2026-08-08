@@ -17,14 +17,21 @@ thiserror = "2"
 ferrompi = { version = "0.5", optional = true }
 gethostname = "1.1.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }
+
 [features]
 mpi = ["dep:ferrompi"]
-numa = ["mpi", "ferrompi/numa"]
+affinity = ["dep:libc"]
+numa = ["mpi", "affinity", "ferrompi/numa"]
 # Experimental intra-node shared-memory region API. Off by default — the
 # current implementation is a heap-backed placeholder (HeapRegion) with no
 # true memory sharing across ranks. Enable to access SharedMemoryProvider,
 # SharedRegion, LocalCommunicator, and HeapRegion. Composable with `mpi`.
 shared-memory = []
+
+[dev-dependencies]
+rayon.workspace = true
 
 # Override unsafe_code to "allow" for this crate because FerrompiBackend requires
 # `unsafe impl Send` and `unsafe impl Sync` to satisfy the Communicator trait bounds.

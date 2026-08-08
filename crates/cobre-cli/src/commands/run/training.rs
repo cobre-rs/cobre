@@ -236,7 +236,8 @@ pub(super) fn run_training_phase(
 
     // Assign only this field; `final_upper_bound_std` is populated upstream and
     // must stay untouched.
-    training_output.training_solve_stats = MetadataTrainingSolveStats {
+    #[allow(clippy::cast_precision_loss)]
+    let persisted_stats = MetadataTrainingSolveStats {
         total_lp_solves: Some(global_lp_solves),
         first_try: Some(global_stats.first_try),
         retried: Some(global_stats.retried),
@@ -244,7 +245,17 @@ pub(super) fn run_training_phase(
         forward_solve_seconds: Some(global_stats.forward_solve_seconds),
         backward_solve_seconds: Some(global_stats.backward_solve_seconds),
         parallelism: Some(parallelism),
+        forward_phase_wall_seconds: Some(global_stats.forward_phase_wall_ms as f64 / 1000.0),
+        backward_phase_wall_seconds: Some(global_stats.backward_phase_wall_ms as f64 / 1000.0),
+        forward_wait_seconds: Some(global_stats.forward_wait_ms as f64 / 1000.0),
+        backward_wait_seconds: Some(global_stats.backward_wait_ms as f64 / 1000.0),
+        serial_lower_bound_seconds: Some(global_stats.serial_lower_bound_ms as f64 / 1000.0),
+        serial_row_selection_seconds: Some(global_stats.serial_cut_selection_ms as f64 / 1000.0),
+        serial_row_sync_seconds: Some(global_stats.serial_cut_sync_ms as f64 / 1000.0),
+        serial_allreduce_seconds: Some(global_stats.serial_allreduce_ms as f64 / 1000.0),
+        serial_scheduling_seconds: Some(global_stats.serial_scheduling_ms as f64 / 1000.0),
     };
+    training_output.training_solve_stats = persisted_stats;
 
     Ok(TrainingPhaseResult {
         result: training_result,

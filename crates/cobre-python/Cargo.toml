@@ -34,9 +34,10 @@ serde_json = "1"
 tempfile = "3"
 
 [features]
-default = ["highs"]
+default = ["highs", "affinity"]
 highs = ["cobre-solver/highs", "cobre-sddp/highs"]
 clp = ["cobre-solver/clp", "cobre-sddp/clp"]
+affinity = ["cobre-comm/affinity"]
 
 # PyO3 proc macros generate unsafe code internally. The workspace forbids unsafe_code,
 # but this crate must override that lint to allow it, because the #[pymodule] and

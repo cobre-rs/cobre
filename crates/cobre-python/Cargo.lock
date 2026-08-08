@@ -320,6 +320,7 @@ name = "cobre-comm"
 version = "0.13.0"
 dependencies = [
  "gethostname",
+ "libc",
  "thiserror",
 ]
 

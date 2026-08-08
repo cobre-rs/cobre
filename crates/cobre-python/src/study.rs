@@ -21,6 +21,7 @@ use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use cobre_comm::AffinityPolicy;
 use cobre_sddp::{
     FutureCostFunction, HydroModelSummary, ModelProvenanceReport, StochasticSummary, StudySetup,
     TrainingResult,
@@ -91,6 +92,8 @@ pub struct Study {
     output_dir: PathBuf,
     /// The requested thread count, stored for later `train`/`simulate` calls.
     threads: Option<u32>,
+    /// Worker CPU-binding policy reused by every scoped pool.
+    cpu_bind: AffinityPolicy,
 }
 
 /// The output of [`Study::train`]: an in-memory trained-policy handle.
@@ -237,8 +240,9 @@ impl Study {
     /// `training/model_provenance.json`, `training/hydro_models.json`, and the
     /// stochastic exports when enabled) to `output_dir`.
     ///
-    /// `output_dir` defaults to `case_dir/output` when `None`. `threads` is
-    /// stored for later `train`/`simulate` calls and is not used during load.
+    /// `output_dir` defaults to `case_dir/output` when `None`. `threads` and
+    /// `cpu_bind` are stored for later `train`/`simulate` calls and are not used
+    /// during load.
     /// `config_overrides` is a flat dotted-key mapping (e.g.
     /// `{"training.tree_seed": 7}`) converted under the GIL before the load runs
     /// with the GIL released.
@@ -251,7 +255,7 @@ impl Study {
     /// - Raises `OSError` on a sidecar write failure, and `RuntimeError` on any
     ///   other load/preprocessing/construction failure.
     #[new]
-    #[pyo3(signature = (case_dir, output_dir=None, threads=None, config_overrides=None))]
+    #[pyo3(signature = (case_dir, output_dir=None, threads=None, config_overrides=None, cpu_bind=None))]
     // PyO3 `#[new]` extracts owned argument types; the path values are then used
     // only by reference here, so clippy's pass-by-value lint does not apply.
     #[allow(clippy::needless_pass_by_value)]
@@ -261,6 +265,7 @@ impl Study {
         output_dir: Option<PathBuf>,
         threads: Option<u32>,
         config_overrides: Option<Bound<'_, PyDict>>,
+        cpu_bind: Option<String>,
     ) -> PyResult<Self> {
         if !case_dir.exists() {
             return Err(PyOSError::new_err(format!(
@@ -270,6 +275,11 @@ impl Study {
         }
 
         let resolved_output = output_dir.unwrap_or_else(|| case_dir.join("output"));
+        let cpu_bind = cpu_bind
+            .as_deref()
+            .unwrap_or("none")
+            .parse::<AffinityPolicy>()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         // Convert UNDER THE GIL, before py.detach releases it; the resulting owned
         // `serde_json::Map` is Send and crosses the py.detach boundary.
@@ -304,6 +314,7 @@ impl Study {
             warnings,
             output_dir: resolved_output,
             threads,
+            cpu_bind,
         })
     }
 
@@ -412,6 +423,7 @@ impl Study {
         let seed = self.seed;
         let output_dir = self.output_dir.clone();
         let threads = self.threads;
+        let cpu_bind = self.cpu_bind;
         let setup = &mut self.setup;
         let system = self.system.as_ref();
         let config = &self.config;
@@ -422,7 +434,7 @@ impl Study {
             py.detach(|| {
                 // Outer `?` surfaces pool-construction failure (a `String`);
                 // the inner `Result<_, PhaseError>` is the training/artifact outcome.
-                run_in_scoped_pool(threads, |n| {
+                run_in_scoped_pool(threads, cpu_bind, |n, rank_affinity| {
                     // FCF replacement BEFORE training — shared verbatim with
                     // `run_via_study`.
                     apply_training_policy_mode(setup, system, config, &output_dir)?;
@@ -444,6 +456,7 @@ impl Study {
                         &training,
                         seed,
                         n,
+                        rank_affinity,
                     )?;
                     write_fpha_hyperplanes_if_any(&output_dir, setup)?;
                     write_evaporation_models_if_any(&output_dir, setup, system)?;
@@ -580,6 +593,7 @@ impl Study {
         self.setup.replace_fcf(policy.fcf.clone());
 
         let threads = self.threads;
+        let cpu_bind = self.cpu_bind;
         let setup = &mut self.setup;
         let system = self.system.as_ref();
         let training_result = &policy.training_result;
@@ -589,8 +603,8 @@ impl Study {
         let summary: Result<SimSummary, PhaseError> = py.detach(|| {
             // Outer `?` surfaces pool-construction failure (a `String`); the inner
             // `Result<SimSummary, PhaseError>` is the simulation outcome.
-            run_in_scoped_pool(threads, |n| {
-                run_simulation_phase_py(setup, &out_dir, system, training_result, n)
+            run_in_scoped_pool(threads, cpu_bind, |n, rank_affinity| {
+                run_simulation_phase_py(setup, &out_dir, system, training_result, n, rank_affinity)
             })?
         });
 

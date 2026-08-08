@@ -104,6 +104,11 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
         metadata.distribution.threads_per_rank as usize,
         &metadata.solver,
         metadata.solver_version.as_deref(),
+        metadata
+            .distribution
+            .rank_affinity
+            .iter()
+            .find(|affinity| affinity.rank == 0),
     );
 
     if let Some(hydro) = &hydro_models {
@@ -182,17 +187,15 @@ fn build_training_summary(
         total_backward_solve_seconds: metadata.solve_stats.backward_solve_seconds,
         parallelism: metadata.solve_stats.parallelism,
         initial_gap_percent,
-        // Per-iteration timing is not persisted to metadata.json; unavailable
-        // when a summary is reconstructed from a completed output directory.
-        forward_phase_wall_seconds: None,
-        backward_phase_wall_seconds: None,
-        forward_wait_seconds: None,
-        backward_wait_seconds: None,
-        serial_lower_bound_seconds: None,
-        serial_cut_selection_seconds: None,
-        serial_cut_sync_seconds: None,
-        serial_allreduce_seconds: None,
-        serial_scheduling_seconds: None,
+        forward_phase_wall_seconds: metadata.solve_stats.forward_phase_wall_seconds,
+        backward_phase_wall_seconds: metadata.solve_stats.backward_phase_wall_seconds,
+        forward_wait_seconds: metadata.solve_stats.forward_wait_seconds,
+        backward_wait_seconds: metadata.solve_stats.backward_wait_seconds,
+        serial_lower_bound_seconds: metadata.solve_stats.serial_lower_bound_seconds,
+        serial_cut_selection_seconds: metadata.solve_stats.serial_row_selection_seconds,
+        serial_cut_sync_seconds: metadata.solve_stats.serial_row_sync_seconds,
+        serial_allreduce_seconds: metadata.solve_stats.serial_allreduce_seconds,
+        serial_scheduling_seconds: metadata.solve_stats.serial_scheduling_seconds,
     }
 }
 
@@ -357,6 +360,15 @@ mod tests {
                 forward_solve_seconds: Some(123.5),
                 backward_solve_seconds: Some(456.75),
                 parallelism: Some(8),
+                forward_phase_wall_seconds: Some(150.0),
+                backward_phase_wall_seconds: Some(500.0),
+                forward_wait_seconds: Some(10.0),
+                backward_wait_seconds: Some(20.0),
+                serial_lower_bound_seconds: Some(30.0),
+                serial_row_selection_seconds: Some(40.0),
+                serial_row_sync_seconds: Some(50.0),
+                serial_allreduce_seconds: Some(60.0),
+                serial_scheduling_seconds: Some(70.0),
             },
             setup: None,
             production_fit_deviation: None,
@@ -371,6 +383,7 @@ mod tests {
                 thread_level: None,
                 slurm_job_id: None,
                 hosts: Vec::new(),
+                rank_affinity: Vec::new(),
             },
         }
     }
@@ -428,6 +441,7 @@ mod tests {
                 thread_level: None,
                 slurm_job_id: None,
                 hosts: Vec::new(),
+                rank_affinity: Vec::new(),
             },
         }
     }
@@ -467,16 +481,15 @@ mod tests {
         assert_eq!(summary.total_forward_solve_seconds, Some(123.5));
         assert_eq!(summary.total_backward_solve_seconds, Some(456.75));
         assert_eq!(summary.parallelism, Some(8));
-        // Per-iteration timing is not persisted to metadata.json.
-        assert_eq!(summary.forward_phase_wall_seconds, None);
-        assert_eq!(summary.backward_phase_wall_seconds, None);
-        assert_eq!(summary.forward_wait_seconds, None);
-        assert_eq!(summary.backward_wait_seconds, None);
-        assert_eq!(summary.serial_lower_bound_seconds, None);
-        assert_eq!(summary.serial_cut_selection_seconds, None);
-        assert_eq!(summary.serial_cut_sync_seconds, None);
-        assert_eq!(summary.serial_allreduce_seconds, None);
-        assert_eq!(summary.serial_scheduling_seconds, None);
+        assert_eq!(summary.forward_phase_wall_seconds, Some(150.0));
+        assert_eq!(summary.backward_phase_wall_seconds, Some(500.0));
+        assert_eq!(summary.forward_wait_seconds, Some(10.0));
+        assert_eq!(summary.backward_wait_seconds, Some(20.0));
+        assert_eq!(summary.serial_lower_bound_seconds, Some(30.0));
+        assert_eq!(summary.serial_cut_selection_seconds, Some(40.0));
+        assert_eq!(summary.serial_cut_sync_seconds, Some(50.0));
+        assert_eq!(summary.serial_allreduce_seconds, Some(60.0));
+        assert_eq!(summary.serial_scheduling_seconds, Some(70.0));
     }
 
     #[test]
@@ -622,6 +635,7 @@ mod tests {
                 hostname: "h".to_string(),
                 ranks: vec![0],
             }],
+            rank_affinity: Vec::new(),
         };
 
         let topology = reconstruct_topology(&dist);
@@ -656,6 +670,7 @@ mod tests {
                     ranks: vec![4, 5, 6, 7],
                 },
             ],
+            rank_affinity: Vec::new(),
         };
 
         let topology = reconstruct_topology(&dist);
@@ -692,6 +707,7 @@ mod tests {
             thread_level: None,
             slurm_job_id: None,
             hosts: Vec::new(),
+            rank_affinity: Vec::new(),
         };
 
         // Missing thread_level alone leaves mpi as None.
@@ -715,6 +731,7 @@ mod tests {
             thread_level: None,
             slurm_job_id: None,
             hosts: Vec::new(),
+            rank_affinity: Vec::new(),
         };
 
         let mut mpi = base.clone();

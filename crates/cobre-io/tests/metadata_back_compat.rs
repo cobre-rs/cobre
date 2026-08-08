@@ -129,6 +129,15 @@ fn legacy_training_json_deserializes_with_defaults() {
     assert_eq!(decoded.solve_stats.forward_solve_seconds, None);
     assert_eq!(decoded.solve_stats.backward_solve_seconds, None);
     assert_eq!(decoded.solve_stats.parallelism, None);
+    assert_eq!(decoded.solve_stats.forward_phase_wall_seconds, None);
+    assert_eq!(decoded.solve_stats.backward_phase_wall_seconds, None);
+    assert_eq!(decoded.solve_stats.forward_wait_seconds, None);
+    assert_eq!(decoded.solve_stats.backward_wait_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_lower_bound_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_row_selection_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_row_sync_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_allreduce_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_scheduling_seconds, None);
 
     assert!(decoded.distribution.hosts.is_empty());
 
@@ -138,6 +147,40 @@ fn legacy_training_json_deserializes_with_defaults() {
 
     assert_eq!(decoded.iterations.completed, 100);
     assert_eq!(decoded.row_pool.total_generated, 1_250_000);
+}
+
+#[test]
+fn training_metadata_with_legacy_solve_stats_defaults_phase_timings() {
+    let mut value = serde_json::to_value(fully_populated_training_metadata())
+        .expect("metadata fixture must serialize");
+    let solve_stats = value["solve_stats"]
+        .as_object_mut()
+        .expect("solve_stats must be an object");
+    for field in [
+        "forward_phase_wall_seconds",
+        "backward_phase_wall_seconds",
+        "forward_wait_seconds",
+        "backward_wait_seconds",
+        "serial_lower_bound_seconds",
+        "serial_row_selection_seconds",
+        "serial_row_sync_seconds",
+        "serial_allreduce_seconds",
+        "serial_scheduling_seconds",
+    ] {
+        solve_stats.remove(field);
+    }
+
+    let decoded: TrainingMetadata =
+        serde_json::from_value(value).expect("legacy solve_stats must deserialize");
+    assert_eq!(decoded.solve_stats.forward_phase_wall_seconds, None);
+    assert_eq!(decoded.solve_stats.backward_phase_wall_seconds, None);
+    assert_eq!(decoded.solve_stats.forward_wait_seconds, None);
+    assert_eq!(decoded.solve_stats.backward_wait_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_lower_bound_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_row_selection_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_row_sync_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_allreduce_seconds, None);
+    assert_eq!(decoded.solve_stats.serial_scheduling_seconds, None);
 }
 
 #[test]
@@ -243,6 +286,7 @@ fn fully_populated_distribution() -> DistributionInfo {
                 ranks: vec![4, 5, 6, 7],
             },
         ],
+        rank_affinity: Vec::new(),
     }
 }
 
@@ -301,6 +345,15 @@ fn fully_populated_training_metadata() -> TrainingMetadata {
             forward_solve_seconds: Some(123.5),
             backward_solve_seconds: Some(456.75),
             parallelism: Some(8),
+            forward_phase_wall_seconds: Some(150.0),
+            backward_phase_wall_seconds: Some(500.0),
+            forward_wait_seconds: Some(10.0),
+            backward_wait_seconds: Some(20.0),
+            serial_lower_bound_seconds: Some(30.0),
+            serial_row_selection_seconds: Some(40.0),
+            serial_row_sync_seconds: Some(50.0),
+            serial_allreduce_seconds: Some(60.0),
+            serial_scheduling_seconds: Some(70.0),
         },
         setup: None,
         production_fit_deviation: Some(DeviationSummary {
@@ -396,6 +449,42 @@ fn training_metadata_new_fields_survive_write_read_roundtrip() {
     assert_eq!(
         decoded.solve_stats.parallelism,
         original.solve_stats.parallelism
+    );
+    assert_eq!(
+        decoded.solve_stats.forward_phase_wall_seconds,
+        original.solve_stats.forward_phase_wall_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.backward_phase_wall_seconds,
+        original.solve_stats.backward_phase_wall_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.forward_wait_seconds,
+        original.solve_stats.forward_wait_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.backward_wait_seconds,
+        original.solve_stats.backward_wait_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.serial_lower_bound_seconds,
+        original.solve_stats.serial_lower_bound_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.serial_row_selection_seconds,
+        original.solve_stats.serial_row_selection_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.serial_row_sync_seconds,
+        original.solve_stats.serial_row_sync_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.serial_allreduce_seconds,
+        original.solve_stats.serial_allreduce_seconds
+    );
+    assert_eq!(
+        decoded.solve_stats.serial_scheduling_seconds,
+        original.solve_stats.serial_scheduling_seconds
     );
 
     assert_eq!(decoded.distribution.hosts.len(), 2);

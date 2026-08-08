@@ -553,6 +553,19 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install maturin pytest pytest-cov pyarrow
+      - name: Build CLI for frontend affinity parity
+        if: matrix.python-version == '3.12'
+        run: cargo build --release -p cobre-cli
+      - name: Smoke test NUMA benchmark harness
+        if: matrix.python-version == '3.12'
+        run: |
+          python scripts/benchmark_numa.py \
+            examples/deterministic/d01-thermal-dispatch \
+            --binary target/release/cobre \
+            --results "${{ runner.temp }}/numa-benchmark" \
+            --threads 1 2 \
+            --policies none core numa \
+            --repetitions 2
       - name: Build and install cobre-python
         working-directory: crates/cobre-python
         run: |

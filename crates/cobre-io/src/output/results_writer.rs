@@ -340,6 +340,7 @@ mod tests {
                 thread_level: None,
                 slurm_job_id: None,
                 hosts: Vec::new(),
+                rank_affinity: Vec::new(),
             },
             setup: None,
             production_fit_deviation: None,
@@ -836,6 +837,15 @@ mod tests {
             forward_solve_seconds: Some(3.0),
             backward_solve_seconds: Some(5.0),
             parallelism: Some(4),
+            forward_phase_wall_seconds: Some(4.0),
+            backward_phase_wall_seconds: Some(7.0),
+            forward_wait_seconds: Some(0.5),
+            backward_wait_seconds: Some(0.75),
+            serial_lower_bound_seconds: Some(0.25),
+            serial_row_selection_seconds: Some(0.125),
+            serial_row_sync_seconds: Some(0.0625),
+            serial_allreduce_seconds: Some(0.03125),
+            serial_scheduling_seconds: Some(0.015_625),
         };
 
         write_training_results(
@@ -857,6 +867,21 @@ mod tests {
         assert_eq!(metadata.solve_stats.forward_solve_seconds, Some(3.0));
         assert_eq!(metadata.solve_stats.backward_solve_seconds, Some(5.0));
         assert_eq!(metadata.solve_stats.parallelism, Some(4));
+        assert_eq!(metadata.solve_stats.forward_phase_wall_seconds, Some(4.0));
+        assert_eq!(metadata.solve_stats.backward_phase_wall_seconds, Some(7.0));
+        assert_eq!(metadata.solve_stats.forward_wait_seconds, Some(0.5));
+        assert_eq!(metadata.solve_stats.backward_wait_seconds, Some(0.75));
+        assert_eq!(metadata.solve_stats.serial_lower_bound_seconds, Some(0.25));
+        assert_eq!(
+            metadata.solve_stats.serial_row_selection_seconds,
+            Some(0.125)
+        );
+        assert_eq!(metadata.solve_stats.serial_row_sync_seconds, Some(0.0625));
+        assert_eq!(metadata.solve_stats.serial_allreduce_seconds, Some(0.03125));
+        assert_eq!(
+            metadata.solve_stats.serial_scheduling_seconds,
+            Some(0.015_625)
+        );
     }
 
     #[test]

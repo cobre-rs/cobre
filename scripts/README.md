@@ -9,8 +9,8 @@ Helper scripts for Cobre, grouped by role.
   directory (pass `--root` to override).
 - **`gen/`** — generators for release/build artifacts.
 - **`benchmark_numa.py`** — matched-epoch worker-count/affinity benchmark matrix;
-  writes topology, timing, solve-count, memory, and placement data to JSON and
-  rejects numerical policy or solver-work drift between arms.
+  writes topology, per-phase timing, solve-count, memory, and placement data to
+  JSON and rejects numerical policy or solver-work drift between arms.
 - **`pre-commit`** — the git pre-commit hook. Install with
   `ln -sf ../../scripts/pre-commit .git/hooks/pre-commit`.
 

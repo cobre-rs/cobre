@@ -104,7 +104,12 @@ def numerical_payload_digest(output: Path) -> str:
             continue
         files.append(path)
     return files_digest(
-        output, files, normalized_json={"training/dictionaries/codes.json"}
+        output,
+        files,
+        normalized_json={
+            "policy/metadata.json",
+            "training/dictionaries/codes.json",
+        },
     )
 
 
@@ -185,6 +190,26 @@ def run_arm(
     metadata = json.loads((output / "training" / "metadata.json").read_text())
     simulation_path = output / "simulation" / "metadata.json"
     simulation = json.loads(simulation_path.read_text()) if simulation_path.is_file() else None
+    solve_stats = metadata.get("solve_stats", {})
+    phase_wall_seconds = {
+        "forward": solve_stats.get("forward_phase_wall_seconds"),
+        "backward": solve_stats.get("backward_phase_wall_seconds"),
+        "lower_bound": solve_stats.get("serial_lower_bound_seconds"),
+        "cut_selection": solve_stats.get("serial_row_selection_seconds"),
+        "cut_sync": solve_stats.get("serial_row_sync_seconds"),
+        "allreduce": solve_stats.get("serial_allreduce_seconds"),
+        "scheduling": solve_stats.get("serial_scheduling_seconds"),
+        "simulation": simulation["duration_seconds"] if simulation else None,
+    }
+    required_phase_fields = ("forward", "backward", "cut_selection")
+    missing_phase_fields = [
+        field for field in required_phase_fields if phase_wall_seconds[field] is None
+    ]
+    if missing_phase_fields:
+        raise RuntimeError(
+            "binary did not persist required phase timing fields: "
+            + ", ".join(missing_phase_fields)
+        )
     return {
         "threads": threads,
         "policy": policy,
@@ -194,8 +219,9 @@ def run_arm(
         "training_wall_seconds": metadata["duration_seconds"],
         "simulation_wall_seconds": simulation["duration_seconds"] if simulation else None,
         "peak_rss_kib": peak_rss_kib,
+        "phase_wall_seconds": phase_wall_seconds,
         "setup": metadata.get("setup"),
-        "solve_stats": metadata.get("solve_stats", {}),
+        "solve_stats": solve_stats,
         "simulation_solve_stats": simulation.get("solve_stats", {}) if simulation else None,
         "simulation_numerical_metadata": {
             "scenarios": simulation.get("scenarios", {}),
@@ -220,6 +246,13 @@ def summarize(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summary = []
     for (threads, policy), group in sorted(groups.items()):
         walls = [run["training_wall_seconds"] for run in group]
+        phase_names = tuple(group[0]["phase_wall_seconds"])
+        median_phase_wall_seconds = {}
+        for phase in phase_names:
+            values = [run["phase_wall_seconds"][phase] for run in group]
+            median_phase_wall_seconds[phase] = (
+                statistics.median(values) if all(value is not None for value in values) else None
+            )
         summary.append(
             {
                 "threads": threads,
@@ -232,6 +265,7 @@ def summarize(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "training_wall_seconds_mad": statistics.median(
                     abs(wall - statistics.median(walls)) for wall in walls
                 ),
+                "median_phase_wall_seconds": median_phase_wall_seconds,
             }
         )
     baselines = {

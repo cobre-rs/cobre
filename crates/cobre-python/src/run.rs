@@ -89,6 +89,7 @@ use cobre_sddp::orchestration::export_stochastic_artifacts;
 use cobre_sddp::orchestration::write_checkpoint;
 use cobre_sddp::rescale_checkpoint_cuts_for_load;
 use cobre_sddp::solver_stats_log_to_rows;
+use cobre_sddp::sum_phase_timing_ms;
 use cobre_sddp::validate_policy_load;
 use cobre_sddp::{
     ArOrderSummary, DEFAULT_SEED, HydroModelSummary, ModelProvenanceReport, SolverStatsDelta,
@@ -330,7 +331,9 @@ fn build_training_phase_result(
         .sum();
     let (first_try, retried, failed, forward_solve_seconds, backward_solve_seconds) =
         aggregate_training_solve_stats(&training_result.solver_stats_log);
-    training_output.training_solve_stats = MetadataTrainingSolveStats {
+    let phase_timing = sum_phase_timing_ms(&training_output.convergence_records);
+    #[allow(clippy::cast_precision_loss)]
+    let persisted_stats = MetadataTrainingSolveStats {
         total_lp_solves: Some(total_lp_solves),
         first_try: Some(first_try),
         retried: Some(retried),
@@ -338,7 +341,17 @@ fn build_training_phase_result(
         forward_solve_seconds: Some(forward_solve_seconds),
         backward_solve_seconds: Some(backward_solve_seconds),
         parallelism: Some(u32::try_from(n_threads).unwrap_or(u32::MAX)),
+        forward_phase_wall_seconds: Some(phase_timing.forward_wall_ms as f64 / 1000.0),
+        backward_phase_wall_seconds: Some(phase_timing.backward_wall_ms as f64 / 1000.0),
+        forward_wait_seconds: Some(phase_timing.forward_wait_ms as f64 / 1000.0),
+        backward_wait_seconds: Some(phase_timing.backward_wait_ms as f64 / 1000.0),
+        serial_lower_bound_seconds: Some(phase_timing.lower_bound_ms as f64 / 1000.0),
+        serial_row_selection_seconds: Some(phase_timing.cut_selection_ms as f64 / 1000.0),
+        serial_row_sync_seconds: Some(phase_timing.cut_sync_ms as f64 / 1000.0),
+        serial_allreduce_seconds: Some(phase_timing.allreduce_ms as f64 / 1000.0),
+        serial_scheduling_seconds: Some(phase_timing.scheduling_ms as f64 / 1000.0),
     };
+    training_output.training_solve_stats = persisted_stats;
 
     TrainingPhaseResult {
         result: training_result,
@@ -2030,7 +2043,7 @@ mod tests {
             None,
             None,
         )
-            .expect("run_via_study must succeed for 1dtoy via Python path");
+        .expect("run_via_study must succeed for 1dtoy via Python path");
 
         let training = cobre_io::read_training_metadata(&output_dir.join("training/metadata.json"))
             .expect("read training metadata");
@@ -2203,7 +2216,7 @@ mod tests {
             None,
             None,
         )
-            .expect("edited-config run must succeed");
+        .expect("edited-config run must succeed");
 
         // (b) Override path: run the unedited case with the equivalent override.
         let mut overrides = serde_json::Map::new();
@@ -2280,7 +2293,7 @@ mod tests {
             None,
             None,
         )
-            .expect("run_via_study must succeed for 1dtoy");
+        .expect("run_via_study must succeed for 1dtoy");
 
         // Build a fresh study and reconstruct the policy from the checkpoint. The
         // policy directory is `<output_dir>/<policy_path>` (the configured
@@ -2369,7 +2382,7 @@ mod tests {
             None,
             None,
         )
-            .expect("train-then-simulate run_via_study must succeed");
+        .expect("train-then-simulate run_via_study must succeed");
 
         let train_then_sim =
             cobre_io::read_simulation_metadata(&output_dir.join("simulation/metadata.json"))

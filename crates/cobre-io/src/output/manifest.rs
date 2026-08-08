@@ -285,6 +285,33 @@ pub struct MetadataTrainingSolveStats {
     pub backward_solve_seconds: Option<f64>,
     /// Degree of parallelism (e.g. worker count) used during training.
     pub parallelism: Option<u32>,
+    /// Coordinator-measured forward-phase wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_phase_wall_seconds: Option<f64>,
+    /// Coordinator-measured backward-phase wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backward_phase_wall_seconds: Option<f64>,
+    /// Forward-phase worker wait time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_wait_seconds: Option<f64>,
+    /// Backward-phase worker wait time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backward_wait_seconds: Option<f64>,
+    /// Serial lower-bound evaluation wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_lower_bound_seconds: Option<f64>,
+    /// Serial row-selection wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_row_selection_seconds: Option<f64>,
+    /// Serial row-synchronization wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_row_sync_seconds: Option<f64>,
+    /// Serial collective-reduction wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_allreduce_seconds: Option<f64>,
+    /// Serial scheduling wall time, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_scheduling_seconds: Option<f64>,
 }
 
 /// Per-phase setup wall time (wall-clock seconds) embedded in
@@ -660,6 +687,15 @@ mod tests {
                 forward_solve_seconds: Some(123.5),
                 backward_solve_seconds: Some(456.75),
                 parallelism: Some(8),
+                forward_phase_wall_seconds: Some(150.0),
+                backward_phase_wall_seconds: Some(500.0),
+                forward_wait_seconds: Some(10.0),
+                backward_wait_seconds: Some(20.0),
+                serial_lower_bound_seconds: Some(30.0),
+                serial_row_selection_seconds: Some(40.0),
+                serial_row_sync_seconds: Some(50.0),
+                serial_allreduce_seconds: Some(60.0),
+                serial_scheduling_seconds: Some(70.0),
             },
             setup: None,
             production_fit_deviation: None,
@@ -963,6 +999,15 @@ mod tests {
                 forward_solve_seconds: Some(123.5),
                 backward_solve_seconds: Some(456.75),
                 parallelism: Some(8),
+                forward_phase_wall_seconds: Some(150.0),
+                backward_phase_wall_seconds: Some(500.0),
+                forward_wait_seconds: Some(10.0),
+                backward_wait_seconds: Some(20.0),
+                serial_lower_bound_seconds: Some(30.0),
+                serial_row_selection_seconds: Some(40.0),
+                serial_row_sync_seconds: Some(50.0),
+                serial_allreduce_seconds: Some(60.0),
+                serial_scheduling_seconds: Some(70.0),
             },
             ..make_training_metadata()
         };
@@ -979,6 +1024,15 @@ mod tests {
         assert_eq!(decoded.solve_stats.forward_solve_seconds, Some(123.5));
         assert_eq!(decoded.solve_stats.backward_solve_seconds, Some(456.75));
         assert_eq!(decoded.solve_stats.parallelism, Some(8));
+        assert_eq!(decoded.solve_stats.forward_phase_wall_seconds, Some(150.0));
+        assert_eq!(decoded.solve_stats.backward_phase_wall_seconds, Some(500.0));
+        assert_eq!(decoded.solve_stats.forward_wait_seconds, Some(10.0));
+        assert_eq!(decoded.solve_stats.backward_wait_seconds, Some(20.0));
+        assert_eq!(decoded.solve_stats.serial_lower_bound_seconds, Some(30.0));
+        assert_eq!(decoded.solve_stats.serial_row_selection_seconds, Some(40.0));
+        assert_eq!(decoded.solve_stats.serial_row_sync_seconds, Some(50.0));
+        assert_eq!(decoded.solve_stats.serial_allreduce_seconds, Some(60.0));
+        assert_eq!(decoded.solve_stats.serial_scheduling_seconds, Some(70.0));
     }
 
     #[test]

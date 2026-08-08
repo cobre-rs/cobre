@@ -604,14 +604,7 @@ impl Study {
             // Outer `?` surfaces pool-construction failure (a `String`); the inner
             // `Result<SimSummary, PhaseError>` is the simulation outcome.
             run_in_scoped_pool(threads, cpu_bind, |n, rank_affinity| {
-                run_simulation_phase_py(
-                    setup,
-                    &out_dir,
-                    system,
-                    training_result,
-                    n,
-                    rank_affinity,
-                )
+                run_simulation_phase_py(setup, &out_dir, system, training_result, n, rank_affinity)
             })?
         });
 

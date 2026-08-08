@@ -60,8 +60,9 @@ the work at that phase rather than promoting an unmeasured optimization.
 
 ### Phase 0 — establish the external-binding baseline
 
-**Status:** benchmark protocol defined; execution on the target EPYC host is
-still required.
+**Status:** the benchmark harness records the required phase timing, topology,
+placement, memory, solver-work, and numerical-parity evidence; execution on the
+target EPYC host is still required.
 
 No Cobre code changes are required. On the target host:
 

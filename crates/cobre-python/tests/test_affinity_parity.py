@@ -75,4 +75,5 @@ def test_cli_python_core_affinity_and_policy_parity(tmp_path: pathlib.Path) -> N
     cli_affinity = cli_metadata["distribution"]["rank_affinity"]
     py_affinity = py_metadata["distribution"]["rank_affinity"]
     assert cli_affinity == py_affinity
+    assert cli_metadata["solve_stats"].keys() == py_metadata["solve_stats"].keys()
     assert _policy_files(cli_out) == _policy_files(py_out)

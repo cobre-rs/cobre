@@ -83,6 +83,19 @@ def test_run_threads_parameter(tmp_path: pathlib.Path) -> None:
     assert len(affinity) == 1
     assert affinity[0]["rank"] == 0
     assert affinity[0]["policy"] == "none"
+    solve_stats = metadata["solve_stats"]
+    for field in (
+        "forward_phase_wall_seconds",
+        "backward_phase_wall_seconds",
+        "forward_wait_seconds",
+        "backward_wait_seconds",
+        "serial_lower_bound_seconds",
+        "serial_row_selection_seconds",
+        "serial_row_sync_seconds",
+        "serial_allreduce_seconds",
+        "serial_scheduling_seconds",
+    ):
+        assert solve_stats[field] >= 0.0
 
 
 def test_run_rejects_unknown_cpu_binding_policy(tmp_path: pathlib.Path) -> None:

@@ -51,6 +51,19 @@ pip install cobre-python
 - **New to SDDP?** -- Read [What Cobre Solves](https://docs.cobre-rs.dev/tutorial/what-cobre-solves.html)
 - **Python user?** -- Try the [Python Quickstart](https://docs.cobre-rs.dev/guide/python-quickstart.html)
 
+On Linux, worker affinity is opt-in and respects the CPU set inherited from the
+shell, container, MPI launcher, or scheduler:
+
+```bash
+cobre run CASE_DIR --threads 48 --cpu-bind numa
+```
+
+The Python binding exposes the same policy:
+
+```python
+cobre.run.run("CASE_DIR", threads=48, cpu_bind="numa")
+```
+
 ## Current Status
 
 Cobre is alpha software with a fully functional SDDP solver. The pipeline covers case loading, stochastic scenario generation, training, simulation, policy checkpointing, and output writing. See the [CHANGELOG](CHANGELOG.md) for release history.

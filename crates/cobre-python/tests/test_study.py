@@ -90,6 +90,14 @@ def test_study_missing_case_raises(tmp_path: pathlib.Path) -> None:
         cobre.Study(MISSING_CASE, output_dir=str(tmp_path))
 
 
+def test_study_rejects_unknown_cpu_binding_policy(tmp_path: pathlib.Path) -> None:
+    """Study validates cpu_bind before loading the case."""
+    import cobre  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="unknown CPU binding policy"):
+        cobre.Study(VALID_CASE, output_dir=str(tmp_path), cpu_bind="socket")
+
+
 def test_study_train_returns_policy(tmp_path: pathlib.Path) -> None:
     """Study.train() trains in-memory, writes _SUCCESS, and returns a Policy."""
     import cobre  # noqa: PLC0415

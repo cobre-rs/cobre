@@ -1,9 +1,9 @@
 # NUMA-aware execution plan
 
-> **Status:** Design and measurement plan — no implementation in this document.
-> The optimization is gated by measurements on representative Linux servers and
-> must preserve Cobre's numerical determinism contract. CPU topology and binding
-> are portable concerns; AMD EPYC is the first target platform, not a
+> **Status:** CPU-topology observability and opt-in worker affinity are
+> implemented. Target-host performance validation remains open, and NUMA memory
+> placement remains gated on those measurements. CPU topology and binding are
+> portable concerns; AMD EPYC is the first target platform, not a
 > vendor-specific implementation target.
 
 ## Objective
@@ -31,13 +31,22 @@ model-result payloads and explicitly excludes only those operational fields.
 `RunArgs::threads` controls a process-wide Rayon pool in
 `setup_communicator`. When omitted, the CLI resolves the worker count to one.
 The Python binding creates a scoped Rayon pool with the same one-thread default.
-Neither path assigns workers to CPUs.
+Both accept an opt-in `none|core|numa` CPU-binding policy and use the same
+`cobre-comm::WorkerAffinity` planner.
 
-`cobre-comm` already owns `ExecutionTopology` and has a `numa` Cargo feature.
-That feature currently extends MPI topology and scheduler metadata; it does not
-discover processing units, bind a worker, or select a memory-placement policy.
-There is no current `hwloc`, `libnuma`, `sched_setaffinity`, or equivalent
-integration in the workspace.
+The optional `cobre-comm/affinity` feature discovers the Linux CPU set,
+processing units, physical cores, packages, NUMA nodes, and the current memory
+policy/nodemask without a native library dependency. A blocked or unavailable
+memory-policy query is retained as non-fatal telemetry. `core` fills physical
+cores before SMT siblings; `numa` spreads physical-core assignments across
+visible nodes before SMT. Explicit binding fails on unsupported builds instead
+of silently continuing unbound. The existing `numa` feature now implies
+`affinity` alongside MPI topology.
+
+Every run persists per-rank topology and worker mappings in
+`distribution.rank_affinity`. The CLI gathers variable-length rank reports
+collectively; Python writes the equivalent rank-zero local report. Timing and
+topology remain operational metadata outside the numerical parity set.
 
 MPI launchers and batch schedulers already know the allocation boundary. Cobre
 must not silently override their rank placement. In an MPI run it should inspect
@@ -50,6 +59,9 @@ Implementation proceeds only through the following gates. A failed gate closes
 the work at that phase rather than promoting an unmeasured optimization.
 
 ### Phase 0 — establish the external-binding baseline
+
+**Status:** benchmark protocol defined; execution on the target EPYC host is
+still required.
 
 No Cobre code changes are required. On the target host:
 
@@ -79,6 +91,9 @@ unrelated host contention. Document the recommended launch command instead.
 
 ### Phase 1 — topology and observability
 
+**Status:** implemented, including memory-policy observability, synthetic
+sparse/asymmetric topology tests, and a Linux inherited-cpuset integration test.
+
 Extend `cobre-comm` with a platform-neutral description of:
 
 - packages/sockets;
@@ -102,6 +117,10 @@ integration test verifies that reported affinity is a subset of the process
 cpuset.
 
 ### Phase 2 — CPU affinity
+
+**Status:** implemented for CLI and Python. Linux binding, metadata parity, and
+bound-versus-unbound numerical parity gates are included; target-host performance
+validation remains open.
 
 Add an opt-in affinity policy shared by the CLI and Python binding:
 
@@ -138,6 +157,9 @@ the launcher's responsibility.
 - the target-host gain remains at or above the Phase 0 threshold.
 
 ### Phase 3 — NUMA memory placement, separately gated
+
+**Status:** not implemented. The Phase 2 target-host measurement must show
+material remote-memory traffic before this phase is authorized.
 
 CPU affinity alone can expose remote-memory traffic when large structures were
 allocated by the main thread before workers start. Do not add memory policy on

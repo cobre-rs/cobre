@@ -38,7 +38,7 @@ terminal_size = "0.4.4"
 
 [features]
 ## Default feature set: build against the HiGHS solver backend.
-default = ["highs"]
+default = ["highs", "affinity"]
 
 ## Select the HiGHS LP solver backend across the dependency graph.
 ##
@@ -51,6 +51,11 @@ highs = ["cobre-solver/highs", "cobre-sddp/highs"]
 clp = ["cobre-solver/clp", "cobre-sddp/clp"]
 
 mpi = ["cobre-comm/mpi"]
+## Enable Linux CPU-topology discovery and worker affinity. The CLI surface is
+## always present and reports an actionable error on unsupported builds.
+affinity = ["cobre-comm/affinity"]
+## Enable MPI NUMA metadata together with local worker affinity.
+numa = ["mpi", "affinity", "cobre-comm/numa"]
 ## Opt-in to the slow test suite (no slow tests currently in this crate;
 ## declaration reserved for workspace consistency).
 slow-tests = []

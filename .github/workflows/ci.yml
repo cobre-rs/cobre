@@ -553,6 +553,9 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           pip install maturin pytest pytest-cov pyarrow
+      - name: Build CLI for frontend affinity parity
+        if: matrix.python-version == '3.12'
+        run: cargo build --release -p cobre-cli
       - name: Build and install cobre-python
         working-directory: crates/cobre-python
         run: |

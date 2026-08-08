@@ -31,7 +31,43 @@ fn run_help_exits_0_and_lists_flags() {
         .stdout(predicate::str::contains("--output"))
         .stdout(predicate::str::contains("--quiet"))
         .stdout(predicate::str::contains("--threads"))
+        .stdout(predicate::str::contains("--cpu-bind"))
         .stdout(predicate::str::contains("CASE_DIR"));
+}
+
+#[test]
+fn run_cpu_bind_invalid_exits_with_clap_error() {
+    cobre()
+        .args(["run", "--cpu-bind", "socket", "/some/path"])
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn run_cpu_bind_none_is_accepted_by_clap() {
+    cobre()
+        .args(["run", "--cpu-bind", "none", "/nonexistent/path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("I/O error"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn run_cpu_bind_core_initializes_before_case_loading() {
+    cobre()
+        .args([
+            "run",
+            "--threads",
+            "2",
+            "--cpu-bind",
+            "core",
+            "/nonexistent/path",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("I/O error"));
 }
 
 /// Exit 2 here is a clap validation error (the `.range(1..)` parser), not I/O —

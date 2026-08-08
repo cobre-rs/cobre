@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence, Union
 
 from . import errors as errors
 from . import io as io
@@ -20,6 +20,7 @@ class Study:
         output_dir: Optional[Union[str, Path]] = None,
         threads: Optional[int] = None,
         config_overrides: Optional[Mapping[str, Any]] = None,
+        cpu_bind: Optional[Literal["none", "core", "numa"]] = None,
     ) -> None: ...
     @property
     def output_dir(self) -> str: ...

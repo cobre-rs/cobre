@@ -104,6 +104,11 @@ pub fn execute(args: SummaryArgs) -> Result<(), CliError> {
         metadata.distribution.threads_per_rank as usize,
         &metadata.solver,
         metadata.solver_version.as_deref(),
+        metadata
+            .distribution
+            .rank_affinity
+            .iter()
+            .find(|affinity| affinity.rank == 0),
     );
 
     if let Some(hydro) = &hydro_models {
@@ -371,6 +376,7 @@ mod tests {
                 thread_level: None,
                 slurm_job_id: None,
                 hosts: Vec::new(),
+                rank_affinity: Vec::new(),
             },
         }
     }
@@ -428,6 +434,7 @@ mod tests {
                 thread_level: None,
                 slurm_job_id: None,
                 hosts: Vec::new(),
+                rank_affinity: Vec::new(),
             },
         }
     }
@@ -622,6 +629,7 @@ mod tests {
                 hostname: "h".to_string(),
                 ranks: vec![0],
             }],
+            rank_affinity: Vec::new(),
         };
 
         let topology = reconstruct_topology(&dist);
@@ -656,6 +664,7 @@ mod tests {
                     ranks: vec![4, 5, 6, 7],
                 },
             ],
+            rank_affinity: Vec::new(),
         };
 
         let topology = reconstruct_topology(&dist);
@@ -692,6 +701,7 @@ mod tests {
             thread_level: None,
             slurm_job_id: None,
             hosts: Vec::new(),
+            rank_affinity: Vec::new(),
         };
 
         // Missing thread_level alone leaves mpi as None.
@@ -715,6 +725,7 @@ mod tests {
             thread_level: None,
             slurm_job_id: None,
             hosts: Vec::new(),
+            rank_affinity: Vec::new(),
         };
 
         let mut mpi = base.clone();

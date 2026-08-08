@@ -81,6 +81,51 @@ pub struct HostLayout {
     pub ranks: Vec<u32>,
 }
 
+/// CPU topology and worker binding resolved for one process/rank.
+///
+/// These fields are operational telemetry: changing the execution shape may
+/// change them without changing deterministic numerical results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankAffinity {
+    /// Global communicator rank (`0` for the local backend and Python).
+    pub rank: u32,
+    /// Requested binding policy: `"none"`, `"core"`, or `"numa"`.
+    pub policy: String,
+    /// Logical CPUs online on the host, including CPUs outside this rank's set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online_processing_units: Option<u32>,
+    /// Logical CPUs visible to this rank.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_processing_units: Option<u32>,
+    /// Physical cores visible to this rank.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub physical_cores: Option<u32>,
+    /// NUMA nodes intersecting this rank's visible CPU set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numa_nodes: Option<u32>,
+    /// Visible operating-system CPU identifiers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_cpus: Vec<u32>,
+    /// Active memory policy, when readable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_policy: Option<String>,
+    /// NUMA nodes selected by the active memory policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_policy_nodes: Vec<u32>,
+    /// NUMA nodes allowed for memory allocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_memory_nodes: Vec<u32>,
+    /// Non-fatal memory-binding discovery failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_discovery_error: Option<String>,
+    /// Worker-index to operating-system CPU mapping; empty when unbound.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_cpus: Vec<u32>,
+    /// Discovery error retained when the unbound policy continues safely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_error: Option<String>,
+}
+
 /// Execution distribution information embedded in metadata files.
 ///
 /// Captures the communication backend, process topology, and optional
@@ -113,6 +158,10 @@ pub struct DistributionInfo {
     /// local runs.
     #[serde(default)]
     pub hosts: Vec<HostLayout>,
+    /// Per-rank CPU topology and resolved worker placement. Absent in metadata
+    /// written by versions before NUMA-aware execution support.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rank_affinity: Vec<RankAffinity>,
 }
 
 /// Selected training configuration fields captured for reproducibility.
@@ -552,6 +601,7 @@ mod tests {
             thread_level: None,
             slurm_job_id: None,
             hosts: Vec::new(),
+            rank_affinity: Vec::new(),
         }
     }
 
@@ -827,6 +877,37 @@ mod tests {
     }
 
     #[test]
+    fn distribution_info_rank_affinity_round_trip() {
+        let mut original = make_distribution_info();
+        original.rank_affinity.push(RankAffinity {
+            rank: 0,
+            policy: "core".to_string(),
+            online_processing_units: Some(96),
+            visible_processing_units: Some(48),
+            physical_cores: Some(48),
+            numa_nodes: Some(4),
+            visible_cpus: vec![0, 2, 4, 6],
+            memory_policy: Some("bind".to_string()),
+            memory_policy_nodes: vec![0, 1],
+            allowed_memory_nodes: vec![0, 1, 2, 3],
+            memory_discovery_error: None,
+            worker_cpus: vec![0, 2],
+            discovery_error: None,
+        });
+
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: DistributionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.rank_affinity.len(), 1);
+        let affinity = &decoded.rank_affinity[0];
+        assert_eq!(affinity.policy, "core");
+        assert_eq!(affinity.visible_processing_units, Some(48));
+        assert_eq!(affinity.memory_policy.as_deref(), Some("bind"));
+        assert_eq!(affinity.memory_policy_nodes, vec![0, 1]);
+        assert_eq!(affinity.allowed_memory_nodes, vec![0, 1, 2, 3]);
+        assert_eq!(affinity.worker_cpus, vec![0, 2]);
+    }
+
+    #[test]
     fn distribution_info_back_compat_without_hosts() {
         let legacy = r#"{
             "backend": "local",
@@ -841,6 +922,7 @@ mod tests {
             decoded.hosts.is_empty(),
             "missing hosts key must deserialize to an empty vector"
         );
+        assert!(decoded.rank_affinity.is_empty());
     }
 
     #[test]

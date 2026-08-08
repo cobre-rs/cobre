@@ -243,6 +243,7 @@ fn fully_populated_distribution() -> DistributionInfo {
                 ranks: vec![4, 5, 6, 7],
             },
         ],
+        rank_affinity: Vec::new(),
     }
 }
 

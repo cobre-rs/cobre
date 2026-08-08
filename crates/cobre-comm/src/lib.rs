@@ -13,8 +13,12 @@
 //! - **`mpi`** — MPI collectives via [ferrompi](https://github.com/cobre-rs/ferrompi)
 //!   (Cargo feature). Provides the [`FerrompiBackend`] and the [`CommBackend`]
 //!   enum-dispatched wrapper.
+//! - **`affinity`** — discovers the CPU/NUMA resources visible to a Linux
+//!   process and supports opt-in worker-to-CPU binding. The public API remains
+//!   available without the feature and returns an explicit unsupported error.
 //! - **`numa`** — extends `mpi` with NUMA-aware topology information from the
-//!   ferrompi NUMA extension (Cargo feature; implies `mpi`).
+//!   ferrompi NUMA extension and enables `affinity` (Cargo feature; implies
+//!   `mpi`).
 //! - **`shared-memory`** — experimental intra-node shared-memory region API
 //!   (Cargo feature, off by default). Exposes [`SharedMemoryProvider`],
 //!   [`SharedRegion`], [`LocalCommunicator`], and [`HeapRegion`]. The current
@@ -44,6 +48,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod affinity;
 mod factory;
 mod local;
 pub mod topology;
@@ -53,6 +58,10 @@ mod types;
 #[cfg(feature = "mpi")]
 mod ferrompi;
 
+pub use affinity::{
+    AffinityError, AffinityPolicy, AffinityReport, CpuTopology, MemoryBinding, NumaNode,
+    ProcessingUnit, WorkerAffinity, current_thread_cpu_set,
+};
 pub use factory::{BackendKind, available_backends, create_communicator};
 pub use local::LocalBackend;
 pub use topology::{ExecutionTopology, HostInfo, MpiRuntimeInfo, SlurmJobInfo};

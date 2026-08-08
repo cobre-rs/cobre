@@ -219,7 +219,12 @@ fn write_sim_outputs_on_root(
         solver_version: None,
         started_at: sim_started_at,
         completed_at: now_iso8601(),
-        distribution: build_distribution_info(&ctx.topology, ctx.n_threads, mpi_world_size),
+        distribution: build_distribution_info(
+            &ctx.topology,
+            ctx.n_threads,
+            mpi_world_size,
+            &ctx.rank_affinity,
+        ),
         setup: None,
         production_fit_deviation: None,
     };

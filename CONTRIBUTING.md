@@ -128,6 +128,15 @@ cargo test -p cobre-comm
 cargo test -p cobre-comm --features mpi
 ```
 
+**With Linux CPU affinity**:
+
+```bash
+cargo test -p cobre-comm --features affinity
+```
+
+The native integration test is Linux-only; topology-planning tests run on every
+platform using synthetic sparse/NUMA layouts.
+
 MPI installation required: Debian/Ubuntu: `sudo apt install libmpich-dev`; Fedora:
 `sudo dnf install mpich-devel`; macOS: `brew install mpich`. The conformance suite
 validates the `Communicator` contract and runs without the `mpi` feature.

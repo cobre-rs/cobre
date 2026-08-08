@@ -13,8 +13,9 @@ use assert_cmd::prelude::*;
 use cobre_io::{
     DistributionInfo, HostLayout, MetadataBounds, MetadataConfiguration, MetadataConvergence,
     MetadataCost, MetadataIterations, MetadataProblemDimensions, MetadataRowPool,
-    MetadataScenarios, MetadataSimulationSolveStats, MetadataTrainingSolveStats,
-    SimulationMetadata, TrainingMetadata, write_simulation_metadata, write_training_metadata,
+    MetadataScenarios, MetadataSimulationSolveStats, MetadataTrainingSolveStats, RankAffinity,
+    SimulationMetadata, TrainingMetadata, read_training_metadata, write_simulation_metadata,
+    write_training_metadata,
 };
 use predicates::prelude::*;
 use serde_json::json;
@@ -38,6 +39,7 @@ fn local_distribution() -> DistributionInfo {
             hostname: "fixture-host".to_string(),
             ranks: vec![0],
         }],
+        rank_affinity: Vec::new(),
     }
 }
 
@@ -296,6 +298,42 @@ fn summary_only_training_required_minimal_dir() {
     assert!(!stderr.contains("Hydro models"));
     assert!(!stderr.contains("Model provenance"));
     assert!(!stderr.contains("Simulation complete"));
+}
+
+#[test]
+fn summary_prints_persisted_cpu_and_memory_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    write_training_fixture(path);
+    let metadata_path = path.join("training/metadata.json");
+    let mut metadata = read_training_metadata(&metadata_path).unwrap();
+    metadata.distribution.rank_affinity.push(RankAffinity {
+        rank: 0,
+        policy: "numa".to_string(),
+        online_processing_units: Some(96),
+        visible_processing_units: Some(48),
+        physical_cores: Some(48),
+        numa_nodes: Some(4),
+        visible_cpus: vec![0, 2, 4, 6],
+        memory_policy: Some("bind".to_string()),
+        memory_policy_nodes: vec![0, 1],
+        allowed_memory_nodes: vec![0, 1, 2, 3],
+        memory_discovery_error: None,
+        worker_cpus: vec![0, 2],
+        discovery_error: None,
+    });
+    write_training_metadata(&metadata_path, &metadata).unwrap();
+
+    let output = cobre()
+        .args(["summary", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("48 physical cores, 4 NUMA node(s), 48/96 logical CPUs visible"));
+    assert!(stderr.contains("Affinity:  numa (2 worker bindings)"));
+    assert!(stderr.contains("Memory:    bind on nodes 0–1, allowed nodes 0–3"));
 }
 
 #[test]

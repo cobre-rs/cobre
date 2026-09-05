@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the expectation floor in expectation/CVaR mixture weights for
+  backward cuts and risk-adjusted cost evaluation. Mixed-risk runs previously
+  could overweight expensive scenarios; retrain affected policies and cuts.
+  Pure CVaR and expectation retain their mathematical definitions. See the
+  `cobre-sddp` risk aggregation contract and its reproducible example.
+
 ## [0.15.0] - 2026-08-24
 
 ### Added

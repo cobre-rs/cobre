@@ -17,6 +17,33 @@ embedding it in a custom orchestration layer, running parameter sweeps, or
 integrating the solver into a larger application. For single-study command-line
 use, prefer `cobre-cli`, which wraps this crate.
 
+## Risk aggregation contract
+
+`RiskMeasure::CVaR { alpha, lambda }` evaluates
+`(1-lambda) E[Z] + lambda CVaR_alpha[Z]`, where `alpha` is the upper-tail
+probability fraction. Both scalar evaluation and backward-cut aggregation
+reserve `(1-lambda)*p[i]` on every scenario, then allocate the remaining
+`lambda` mass in descending cost order with an additional cap
+`lambda*p[i]/alpha`. The final weights sum to one and stay between the
+expectation floor and that floor plus the cap. Scratch buffers are reused.
+
+```rust
+use cobre_sddp::risk_measure::RiskMeasure;
+
+let risk = RiskMeasure::CVaR { alpha: 0.15, lambda: 0.4 };
+let value = risk.evaluate_risk(&[0.0, 100.0], &[0.5, 0.5]);
+assert!((value - 70.0).abs() < 1e-10); // 0.6 * 50 + 0.4 * 100
+```
+
+The regression tests `cvar_mixture_preserves_expectation_floor_in_value_and_cut`
+and `cvar_mixture_matches_primal_tail_formula_and_envelope` pin the floor and
+compare the result with the primal CVaR formula, including partial tail atoms.
+Retrain mixed-risk policies computed without this floor; their existing cuts
+can overestimate the intended nested risk objective. A sampled forward mean
+still estimates risk-neutral policy cost and is not a compatible upper bound
+for a risk-adjusted optimality gap. The [methodology reference](https://docs.cobre-rs.dev/math/risk-measures/)
+owns the full derivation.
+
 ## Key Types
 
 - **`TrainingConfig`** — algorithm parameters: iteration budget, forward scenario

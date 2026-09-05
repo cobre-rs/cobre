@@ -3,7 +3,8 @@
 //! [`RiskMeasure`] aggregation replaces opening probabilities `p(ω)` with
 //! risk-adjusted weights `μ*_ω`. For `Expectation`, `μ*_ω = p(ω)`; for `CVaR`,
 //! a greedy allocation places maximum mass on the highest-cost scenarios
-//! (Risk Measures SS7), realizing `ρ^{λ,α}[Z] = (1 - λ)·E[Z] + λ·CVaR_α[Z]`.
+//! after reserving `(1 - λ)·p(ω)` for every scenario, realizing
+//! `ρ^{λ,α}[Z] = (1 - λ)·E[Z] + λ·CVaR_α[Z]`.
 //!
 //! ## Examples
 //!
@@ -29,7 +30,7 @@ use cobre_core::StageRiskConfig::Expectation;
 /// rayon worker (a field of `BackwardAccumulators`), so no synchronisation.
 #[derive(Debug, Default, Clone)]
 pub struct RiskMeasureScratch {
-    /// Per-scenario upper bounds `μ̄_ω`.
+    /// Per-scenario caps on additional `CVaR` mass `λ p_ω / α`.
     pub upper_bounds: Vec<f64>,
     /// Scenario indices sorted descending by objective/cost value.
     pub order: Vec<usize>,
@@ -89,7 +90,7 @@ pub enum RiskMeasure {
     /// Convex combination of expectation and `CVaR`:
     /// `ρ^{λ,α}[Z] = (1 - λ) E[Z] + λ · CVaR_α[Z]` (Risk Measures SS3, SS7).
     CVaR {
-        /// `CVaR` confidence level `α ∈ (0, 1]`; `α = 1` equals expectation,
+        /// `CVaR` upper-tail fraction `α ∈ (0, 1]`; `α = 1` equals expectation,
         /// smaller `α` concentrates weight on the worst `α`-fraction.
         alpha: f64,
 
@@ -279,11 +280,9 @@ pub fn compute_cvar_weights_into(
     let n = outcomes.len();
 
     scratch.upper_bounds.clear();
-    scratch.upper_bounds.extend(
-        probabilities
-            .iter()
-            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
-    );
+    scratch
+        .upper_bounds
+        .extend(probabilities.iter().map(|&p| lambda * p / alpha));
 
     scratch.order.clear();
     scratch.order.extend(0..n);
@@ -294,14 +293,16 @@ pub fn compute_cvar_weights_into(
     });
 
     scratch.mu.clear();
-    scratch.mu.resize(n, 0.0);
-    let mut remaining = 1.0_f64;
+    scratch
+        .mu
+        .extend(probabilities.iter().map(|&p| (1.0 - lambda) * p));
+    let mut remaining = lambda;
     for &idx in &scratch.order {
         if remaining <= 0.0 {
             break;
         }
         let alloc = scratch.upper_bounds[idx].min(remaining);
-        scratch.mu[idx] = alloc;
+        scratch.mu[idx] += alloc;
         remaining -= alloc;
     }
 }
@@ -318,11 +319,9 @@ pub fn compute_cvar_weights_from_costs_into(
     let n = costs.len();
 
     scratch.upper_bounds.clear();
-    scratch.upper_bounds.extend(
-        probabilities
-            .iter()
-            .map(|&p| (1.0 - lambda) * p + lambda * p / alpha),
-    );
+    scratch
+        .upper_bounds
+        .extend(probabilities.iter().map(|&p| lambda * p / alpha));
 
     scratch.order.clear();
     scratch.order.extend(0..n);
@@ -331,14 +330,16 @@ pub fn compute_cvar_weights_from_costs_into(
         .sort_by(|&i, &j| costs[j].total_cmp(&costs[i]));
 
     scratch.mu.clear();
-    scratch.mu.resize(n, 0.0);
-    let mut remaining = 1.0_f64;
+    scratch
+        .mu
+        .extend(probabilities.iter().map(|&p| (1.0 - lambda) * p));
+    let mut remaining = lambda;
     for &idx in &scratch.order {
         if remaining <= 0.0 {
             break;
         }
         let alloc = scratch.upper_bounds[idx].min(remaining);
-        scratch.mu[idx] = alloc;
+        scratch.mu[idx] += alloc;
         remaining -= alloc;
     }
 }
@@ -527,6 +528,103 @@ mod tests {
     }
 
     #[test]
+    fn cvar_mixture_preserves_expectation_floor_in_value_and_cut() {
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.15,
+            lambda: 0.4,
+        };
+        let outcomes = [
+            outcome_with_coeffs(10.0, 0.0, vec![1.0, 0.0]),
+            outcome_with_coeffs(20.0, 100.0, vec![0.0, 1.0]),
+        ];
+        let probabilities = [0.5, 0.5];
+        assert!((rm.evaluate_risk(&[0.0, 100.0], &probabilities) - 70.0).abs() < 1e-10);
+        let (intercept, coefficients) = rm.aggregate_cut(&outcomes, &probabilities);
+        assert!((intercept - 17.0).abs() < 1e-10);
+        assert!((coefficients[0] - 0.3).abs() < 1e-10);
+        assert!((coefficients[1] - 0.7).abs() < 1e-10);
+        let mut scratch = super::RiskMeasureScratch::new();
+        let mut buffered_intercept = 0.0;
+        let mut buffered_coefficients = [0.0; 2];
+        rm.aggregate_cut_into(
+            &outcomes,
+            &probabilities,
+            &mut buffered_intercept,
+            &mut buffered_coefficients,
+            &mut scratch,
+        );
+        assert_eq!(buffered_intercept, intercept);
+        assert_eq!(buffered_coefficients.as_slice(), coefficients.as_slice());
+    }
+
+    #[test]
+    fn cvar_mixture_twenty_equiprobable_costs() {
+        let costs: Vec<_> = (1..=20).map(f64::from).collect();
+        let rm = RiskMeasure::CVaR {
+            alpha: 0.15,
+            lambda: 0.4,
+        };
+        assert!((rm.evaluate_risk(&costs, &[0.05; 20]) - 13.9).abs() < 1e-10);
+    }
+
+    #[test]
+    fn cvar_mixture_matches_primal_tail_formula_and_envelope() {
+        let costs = [-20.0, 10.0, 10.0, 80.0, 1000.0];
+        let probabilities = [0.1, 0.2, 0.5, 0.2, 0.0];
+        let outcomes: Vec<_> = costs.iter().map(|&c| outcome(c, c)).collect();
+        let expectation: f64 = costs.iter().zip(probabilities).map(|(c, p)| c * p).sum();
+        let mut scratch = super::RiskMeasureScratch::new();
+        let mut outcome_scratch = super::RiskMeasureScratch::new();
+        for alpha in [0.01, 0.15, 0.3, 0.5, 1.0] {
+            let cvar = costs
+                .iter()
+                .map(|&eta| {
+                    eta + costs
+                        .iter()
+                        .zip(probabilities)
+                        .map(|(&cost, p)| p * (cost - eta).max(0.0))
+                        .sum::<f64>()
+                        / alpha
+                })
+                .fold(f64::INFINITY, f64::min);
+            for lambda in [0.0, 0.1, 0.4, 0.5, 0.9, 1.0] {
+                let rm = RiskMeasure::CVaR { alpha, lambda };
+                let actual = rm.evaluate_risk_into(&costs, &probabilities, &mut scratch);
+                let expected = (1.0 - lambda) * expectation + lambda * cvar;
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "alpha={alpha}, lambda={lambda}: {actual} != {expected}"
+                );
+                super::compute_cvar_weights_into(
+                    &outcomes,
+                    &probabilities,
+                    alpha,
+                    lambda,
+                    &mut outcome_scratch,
+                );
+                assert_eq!(scratch.mu, outcome_scratch.mu);
+                assert!((scratch.mu.iter().sum::<f64>() - 1.0).abs() < 1e-10);
+                for (&mu, p) in scratch.mu.iter().zip(probabilities) {
+                    let floor = (1.0 - lambda) * p;
+                    assert!(mu >= floor - 1e-12);
+                    assert!(mu <= floor + lambda * p / alpha + 1e-12);
+                }
+                assert_eq!(scratch.mu[4], 0.0);
+            }
+        }
+        super::compute_cvar_weights_from_costs_into(
+            &[0.0, 100.0],
+            &[0.5, 0.5],
+            0.15,
+            0.4,
+            &mut scratch,
+        );
+        assert_eq!(scratch.mu.len(), 2);
+        assert!((scratch.mu[0] - 0.3).abs() < 1e-10);
+        assert!((scratch.mu[1] - 0.7).abs() < 1e-10);
+    }
+
+    #[test]
     fn cvar_evaluate_risk_convex_combination() {
         let rm = RiskMeasure::CVaR {
             alpha: 0.5,
@@ -596,7 +694,7 @@ mod tests {
 
     #[test]
     fn cvar_aggregate_cut_lambda_zero_equals_expectation() {
-        // lambda=0: upper bounds equal p, weights = p, same as Expectation
+        // lambda=0: the expectation floor is the entire mass.
         let outcomes = vec![
             outcome(10.0, 10.0),
             outcome(20.0, 20.0),

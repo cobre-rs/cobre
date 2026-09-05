@@ -1956,3 +1956,14 @@ Read: `setup/mod.rs` (`warn_on_boundary_absent_post_study_delivery`,
 `warn_on_boundary_absent_post_study_delivery_fires_once_when_boundary_absent` and
 `warn_on_boundary_absent_post_study_delivery_silent_when_boundary_present`
 (`setup/tests.rs`).
+
+
+## Expectation/CVaR mixture keeps the expectation floor
+
+Both risk-weight entry points in `convergence/risk_measure.rs` initialize
+`mu[i] = (1-lambda)*p[i]` and allocate only `lambda` additional mass, capped
+per scenario by `lambda*p[i]/alpha`. Starting from zero with a full unit of
+mass and only the combined upper bound changes the risk measure and can
+invalidate cuts for the intended objective. The scalar and cut paths share
+this contract, pinned by `cvar_mixture_preserves_expectation_floor_in_value_and_cut`
+and `cvar_mixture_matches_primal_tail_formula_and_envelope`.

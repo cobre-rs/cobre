@@ -250,3 +250,136 @@ def git_show(baseline: str, path: str) -> str | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.decode("utf-8", errors="replace")
+
+
+@dataclass(frozen=True, slots=True)
+class Table:
+    header: list[str]
+    header_line: int
+    body: list[tuple[int, list[str]]]
+
+
+@dataclass(frozen=True, slots=True)
+class Milestone:
+    name: str
+    wave: int
+    trigger: str
+    line: int
+
+
+def _split_cells(stripped: str) -> list[str]:
+    return [c.strip() for c in stripped.strip("|").split("|")]
+
+
+def parse_table(section: Section, index: int = 0) -> Table | None:
+    """The `index`-th pipe table of the section with 1-based line numbers and raw cells.
+
+    Unlike parse_tables, rows are not zipped against the header, so a caller can
+    detect a row whose cell count disagrees with the header.
+    """
+    tables: list[Table] = []
+    header: list[str] | None = None
+    header_line = 0
+    body: list[tuple[int, list[str]]] = []
+    for offset, raw in enumerate(section.lines + [""]):
+        lineno = section.start + 2 + offset
+        stripped = raw.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = _split_cells(stripped)
+            if header is None:
+                header, header_line = cells, lineno
+            elif set("".join(cells)) <= set("-: "):
+                continue
+            else:
+                body.append((lineno, cells))
+            continue
+        if header is not None:
+            tables.append(Table(header, header_line, body))
+        header, body = None, []
+    return tables[index] if index < len(tables) else None
+
+
+def parse_milestones(lines: list[str], section: Section | None = None) -> dict[str, Milestone]:
+    """The waved Milestones table (`Milestone | Wave | Trigger`), keyed by milestone name.
+
+    Searched inside `section` first, then over the whole register. A Milestones
+    table without a Wave column (the header vocabulary block) does not qualify.
+    """
+    scopes: list[Section] = []
+    if section is not None:
+        scopes.append(section)
+    scopes.append(Section(name="*", heading="*", level=0, start=-1, end=len(lines), lines=list(lines)))
+    for scope in scopes:
+        idx = 0
+        while (table := parse_table(scope, idx)) is not None:
+            idx += 1
+            head = [h.strip("`").casefold() for h in table.header]
+            if "milestone" not in head or "wave" not in head:
+                continue
+            name_col, wave_col = head.index("milestone"), head.index("wave")
+            trig_col = head.index("trigger") if "trigger" in head else None
+            out: dict[str, Milestone] = {}
+            for lineno, cells in table.body:
+                if len(cells) <= max(name_col, wave_col):
+                    continue
+                name = cells[name_col].strip("`")
+                wave_text = cells[wave_col].strip("`* ")
+                if not wave_text.isdigit():
+                    continue
+                trigger = cells[trig_col] if trig_col is not None and trig_col < len(cells) else ""
+                out[name] = Milestone(name=name, wave=int(wave_text), trigger=trigger, line=lineno)
+            if out:
+                return out
+    return {}
+
+
+DO_NOT_TOUCH_LINE_RE = re.compile(r"^\*\*Do-not-touch list[^*]*:\*\*")
+FINDING_ID_RE = re.compile(r"\b(?:CD|PD|OD|TD)-\d{3}\b")
+STATUS_MARKERS = (
+    ("RETRACTED", "retracted"), ("REFUTED", "refuted"), ("WONTFIX", "wontfix"),
+    ("DEFERRED", "deferred"), ("FIXED", "fixed"), ("CLEARED", "cleared"),
+)
+
+
+def register_findings(lines: list[str]) -> dict[str, str]:
+    """Finding id -> status for every `**<ID> · …**` entry in the register.
+
+    An explicit `- **Status:** <token>` bullet wins; otherwise an upper-case marker
+    in the heading or in a `**→ MARKER` body line (RETRACTED, REFUTED, WONTFIX,
+    DEFERRED, FIXED, CLEARED) sets it; otherwise the entry is `open`. Ids named
+    on the do-not-touch list are `do-not-touch` regardless.
+    """
+    statuses: dict[str, str] = {}
+    current: str | None = None
+    for raw in lines:
+        hit = ENTRY_RE.match(raw)
+        if hit:
+            current = hit.group("id")
+            status = "open"
+            for marker, token in STATUS_MARKERS:
+                if marker in raw:
+                    status = token
+                    break
+            statuses.setdefault(current, status)
+            continue
+        if SECTION_RE.match(raw):
+            current = None
+            continue
+        if current is None:
+            continue
+        field = FIELD_RE.match(raw)
+        if field and field.group("label").strip() == "Status":
+            statuses[current] = field.group("value").strip("`* ").split()[0].casefold() if field.group("value").strip() else statuses[current]
+            continue
+        if raw.startswith("**→") and statuses[current] == "open":
+            for marker, token in STATUS_MARKERS:
+                if marker in raw:
+                    statuses[current] = token
+                    break
+    for idx, raw in enumerate(lines):
+        if DO_NOT_TOUCH_LINE_RE.match(raw):
+            para = " ".join(lines[idx:idx + 4]).split("**Resume protocol", 1)[0]
+            for fid in FINDING_ID_RE.findall(para):
+                statuses[fid] = "do-not-touch"
+            break
+    return statuses

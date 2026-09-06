@@ -1,0 +1,825 @@
+{
+  "station": "core-io",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "measuredAtHead": "959156e0bad06505463fc25cd54b42d10101cf15",
+  "driftRule": "HEAD is the pin or a descendant with `git diff --quiet <pin> HEAD -- crates docs scripts .github schemas Cargo.toml Cargo.lock examples tests` empty (backlog_parse.baseline_matches_head); the evaluated surfaces are byte-identical to the pin, so every count here is the pin's",
+  "producedAt": "2026-09-06",
+  "commands": {
+    "dirs": "find crates/<crate>/src -mindepth 1 -type d | sort",
+    "topLevel": "find crates/<crate>/src -maxdepth 1 -name '*.rs' | sort",
+    "linesRaw": "find <path> -name '*.rs' -print0 | xargs -0 wc -l | tail -1   (wc -l <path> for a file)",
+    "linesNonTest": "python3 -c \"import sys; sys.path.insert(0,'plans/architecture-debt-audit/tools'); from lib.station_checks import non_test_lines; print(non_test_lines('<path>'))\"   (scripts/loc-stats.sh rule: excludes tests/ and benches/ files, sibling tests.rs and test_support.rs, and inline #[cfg(test)] blocks; crate sums equal `bash scripts/loc-stats.sh --csv` PROD_ALL / PROD_CODE)",
+    "integrationBinaries": "find crates/<crate>/tests -maxdepth 1 -name '*.rs' | wc -l",
+    "partition": "python3 -m unittest plans/architecture-debt-audit/stations/core-io/tests/test_station.py -k partition"
+  },
+  "crates": {
+    "cobre-core": {
+      "layer": "L0",
+      "srcFiles": 40,
+      "linesRaw": 18671,
+      "linesNonTest": 9228,
+      "linesNonTestCode": 4377,
+      "reconciliation": {
+        "linesRawCommand": "find crates/cobre-core/src -name '*.rs' -print0 | xargs -0 wc -l | tail -1",
+        "linesRaw": 18671,
+        "locStatsRow": {
+          "files": 42,
+          "prod_code": 4377,
+          "prod_all": 9228,
+          "test_code": 9025,
+          "test_all": 10111,
+          "test_fns": 349
+        },
+        "locStatsFilesNote": "loc-stats.sh FILES=42 counts src/ (40) plus tests/ .rs files; the raw total covers src/ only",
+        "ratioRawToNonTest": 2.02,
+        "note": "raw counts inline #[cfg(test)] modules and sibling tests.rs/test_support.rs; linesNonTest is the loc-stats.sh PROD_ALL figure \u2014 use it for LOC-based severity calls, never the raw one"
+      },
+      "modules": [
+        {
+          "path": "crates/cobre-core/src/constraints",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "generic_constraint.rs",
+            "initial_conditions.rs",
+            "mod.rs",
+            "training_event.rs"
+          ],
+          "linesRaw": 2747,
+          "linesNonTest": 1249,
+          "linesNonTestCode": 496,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "training_event.rs is a Phase-1 purification target (training_event out of cobre-core)"
+        },
+        {
+          "path": "crates/cobre-core/src/entities",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "bus.rs",
+            "energy_contract.rs",
+            "hydro.rs",
+            "line.rs",
+            "mod.rs",
+            "non_controllable.rs",
+            "pumping_station.rs",
+            "thermal.rs"
+          ],
+          "linesRaw": 1732,
+          "linesNonTest": 555,
+          "linesNonTestCode": 259,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/model",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "horizon.rs",
+            "mod.rs",
+            "parameters.rs",
+            "penalty.rs",
+            "post_study.rs",
+            "resolved/",
+            "scenario.rs",
+            "temporal.rs",
+            "temporal/"
+          ],
+          "linesRaw": 8916,
+          "linesRawNested": {
+            "crates/cobre-core/src/model/resolved": 4978,
+            "crates/cobre-core/src/model/temporal": 265
+          },
+          "linesNonTest": 5147,
+          "linesNonTestCode": 2067,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "model/resolved is 56% of the directory; model/temporal (overlap, stage_key) is the landing zone the mirror names for the stage-calendar relocation"
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "block_bounds.rs",
+            "bounds.rs",
+            "factors.rs",
+            "generic.rs",
+            "group_bounds.rs",
+            "mod.rs",
+            "penalties.rs"
+          ],
+          "linesRaw": 4978,
+          "linesNonTest": 2747,
+          "linesNonTestCode": 1297,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "overlap.rs",
+            "stage_key.rs"
+          ],
+          "linesRaw": 265,
+          "linesNonTest": 121,
+          "linesNonTestCode": 62,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/stats",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "mod.rs",
+            "welford.rs"
+          ],
+          "linesRaw": 202,
+          "linesNonTest": 130,
+          "linesNonTestCode": 87,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/system",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "builder.rs",
+            "mod.rs",
+            "validate.rs"
+          ],
+          "linesRaw": 3520,
+          "linesNonTest": 1409,
+          "linesNonTestCode": 999,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/topology",
+          "kind": "directory",
+          "subStation": "A",
+          "files": [
+            "cascade.rs",
+            "mod.rs",
+            "network.rs"
+          ],
+          "linesRaw": 912,
+          "linesNonTest": 346,
+          "linesNonTestCode": 236,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/commissioning.rs",
+          "kind": "file",
+          "subStation": "A",
+          "linesRaw": 215,
+          "linesNonTest": 90,
+          "linesNonTestCode": 48,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "kind": "file",
+          "subStation": "A",
+          "linesRaw": 117,
+          "linesNonTest": 52,
+          "linesNonTestCode": 20,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/error.rs",
+          "kind": "file",
+          "subStation": "A",
+          "linesRaw": 201,
+          "linesNonTest": 141,
+          "linesNonTestCode": 91,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-core/src/lib.rs",
+          "kind": "file",
+          "subStation": "A",
+          "linesRaw": 109,
+          "linesNonTest": 109,
+          "linesNonTestCode": 74,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        }
+      ]
+    },
+    "cobre-io": {
+      "layer": "L2",
+      "srcFiles": 115,
+      "linesRaw": 104066,
+      "linesNonTest": 45915,
+      "linesNonTestCode": 29944,
+      "reconciliation": {
+        "linesRawCommand": "find crates/cobre-io/src -name '*.rs' -print0 | xargs -0 wc -l | tail -1",
+        "linesRaw": 104066,
+        "locStatsRow": {
+          "files": 128,
+          "prod_code": 29944,
+          "prod_all": 45915,
+          "test_code": 56679,
+          "test_all": 66625,
+          "test_fns": 1891
+        },
+        "locStatsFilesNote": "loc-stats.sh FILES=128 counts src/ (115) plus tests/ .rs files; the raw total covers src/ only",
+        "ratioRawToNonTest": 2.27,
+        "note": "raw counts inline #[cfg(test)] modules and sibling tests.rs/test_support.rs; linesNonTest is the loc-stats.sh PROD_ALL figure \u2014 use it for LOC-based severity calls, never the raw one"
+      },
+      "modules": [
+        {
+          "path": "crates/cobre-io/src/config",
+          "kind": "directory",
+          "subStation": "C",
+          "files": [
+            "estimation.rs",
+            "exports.rs",
+            "mod.rs",
+            "modeling.rs",
+            "policy.rs",
+            "scenario_source.rs",
+            "simulation.rs",
+            "training.rs"
+          ],
+          "linesRaw": 3839,
+          "linesNonTest": 1606,
+          "linesNonTestCode": 842,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/constraints",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "bounds.rs",
+            "generic.rs",
+            "generic_bounds.rs",
+            "hydro_unit_group_bounds.rs",
+            "mod.rs",
+            "named_expression_inline.rs",
+            "ncs_bounds.rs",
+            "penalty_overrides.rs",
+            "rhs_normalize.rs"
+          ],
+          "linesRaw": 10933,
+          "linesNonTest": 7383,
+          "linesNonTestCode": 4897,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/extensions",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "evaporation_models.rs",
+            "fpha_deviation_points.rs",
+            "fpha_hyperplanes.rs",
+            "hydro_energy_productivity.rs",
+            "hydro_geometry.rs",
+            "hydro_reference_volumes.rs",
+            "mod.rs",
+            "production_models.rs",
+            "scalar_parameters.rs",
+            "tailrace_curves.rs"
+          ],
+          "linesRaw": 6378,
+          "linesNonTest": 2981,
+          "linesNonTestCode": 1615,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/output",
+          "kind": "directory",
+          "subStation": "D",
+          "files": [
+            "atomic.rs",
+            "convergence_reader.rs",
+            "dictionary.rs",
+            "error.rs",
+            "fixed_delivery.rs",
+            "generic_constraints_echo.rs",
+            "hydro_models.rs",
+            "manifest.rs",
+            "mod.rs",
+            "parquet_config.rs",
+            "policy/",
+            "provenance.rs",
+            "results_writer.rs",
+            "scaling_report.rs",
+            "schemas.rs",
+            "simulation_writer.rs",
+            "solver_stats_writer.rs",
+            "stochastic.rs",
+            "training_writer.rs"
+          ],
+          "linesRaw": 22530,
+          "linesRawNested": {
+            "crates/cobre-io/src/output/policy": 3598
+          },
+          "linesNonTest": 9957,
+          "linesNonTestCode": 6450,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "second-largest directory; output/policy is the persisted value-function codec (scanned by the genericity gate since EXCLUDED_FILES=())"
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy",
+          "kind": "directory",
+          "subStation": "D",
+          "files": [
+            "checkpoint.rs",
+            "codec.rs",
+            "mod.rs",
+            "records.rs"
+          ],
+          "linesRaw": 3598,
+          "linesNonTest": 2195,
+          "linesNonTestCode": 1335,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/resolution",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "bounds.rs",
+            "generic_bounds.rs",
+            "group_bounds.rs",
+            "load_factors.rs",
+            "mod.rs",
+            "ncs_bounds.rs",
+            "ncs_factors.rs",
+            "penalties.rs"
+          ],
+          "linesRaw": 4807,
+          "linesNonTest": 1692,
+          "linesNonTestCode": 1111,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "annual_component.rs",
+            "ar_coefficients.rs",
+            "assembly.rs",
+            "correlation.rs",
+            "estimation.rs",
+            "estimation/",
+            "external.rs",
+            "inflow_history.rs",
+            "inflow_stats.rs",
+            "load_factors.rs",
+            "load_stats.rs",
+            "mod.rs",
+            "noise_openings.rs",
+            "non_controllable_factors.rs",
+            "non_controllable_stats.rs",
+            "residual_derivation.rs"
+          ],
+          "linesRaw": 11672,
+          "linesRawNested": {
+            "crates/cobre-io/src/scenarios/estimation": 2758
+          },
+          "linesNonTest": 5554,
+          "linesNonTestCode": 3364,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "scenarios/estimation holds only the sibling tests.rs (whole-file test under the loc-stats rule)"
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/estimation",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "tests.rs"
+          ],
+          "linesRaw": 2758,
+          "linesNonTest": 0,
+          "linesNonTestCode": 0,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/system",
+          "kind": "directory",
+          "subStation": "B",
+          "files": [
+            "buses.rs",
+            "energy_contracts.rs",
+            "hydros.rs",
+            "lines.rs",
+            "mod.rs",
+            "non_controllable.rs",
+            "pumping_stations.rs",
+            "thermals.rs"
+          ],
+          "linesRaw": 6799,
+          "linesNonTest": 2690,
+          "linesNonTestCode": 1605,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/validation",
+          "kind": "directory",
+          "subStation": "C",
+          "files": [
+            "dimensional.rs",
+            "mod.rs",
+            "productivity_resolution.rs",
+            "referential.rs",
+            "scalar_parameters.rs",
+            "schema.rs",
+            "semantic/",
+            "structural.rs"
+          ],
+          "linesRaw": 28672,
+          "linesRawNested": {
+            "crates/cobre-io/src/validation/semantic": 20035
+          },
+          "linesNonTest": 9904,
+          "linesNonTestCode": 7531,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "largest single directory in the station; 70% of it is validation/semantic \u2014 the validation-sprawl lens targets this first"
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic",
+          "kind": "directory",
+          "subStation": "C",
+          "files": [
+            "block_bounds.rs",
+            "constraints.rs",
+            "correlation.rs",
+            "hydro.rs",
+            "inflow_seeding.rs",
+            "mod.rs",
+            "pumping.rs",
+            "scenarios.rs",
+            "season.rs",
+            "sobol.rs",
+            "stages.rs",
+            "test_support.rs",
+            "thermal.rs",
+            "travel_time.rs"
+          ],
+          "linesRaw": 20035,
+          "linesNonTest": 6647,
+          "linesNonTestCode": 5032,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          },
+          "note": "test_support.rs is a sibling test-support file (whole-file test under the loc-stats rule)"
+        },
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 722,
+          "linesNonTest": 327,
+          "linesNonTestCode": 134,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "kind": "file",
+          "subStation": "C",
+          "linesRaw": 248,
+          "linesNonTest": 144,
+          "linesNonTestCode": 58,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/initial_conditions.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 1610,
+          "linesNonTest": 589,
+          "linesNonTestCode": 336,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/lib.rs",
+          "kind": "file",
+          "subStation": "C",
+          "linesRaw": 297,
+          "linesNonTest": 287,
+          "linesNonTestCode": 139,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "kind": "file",
+          "subStation": "D",
+          "linesRaw": 166,
+          "linesNonTest": 166,
+          "linesNonTestCode": 138,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/penalties.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 909,
+          "linesNonTest": 362,
+          "linesNonTestCode": 265,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "kind": "file",
+          "subStation": "D",
+          "linesRaw": 296,
+          "linesNonTest": 296,
+          "linesNonTestCode": 219,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/post_study_stages.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 354,
+          "linesNonTest": 234,
+          "linesNonTestCode": 141,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/report.rs",
+          "kind": "file",
+          "subStation": "D",
+          "linesRaw": 250,
+          "linesNonTest": 151,
+          "linesNonTestCode": 54,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "kind": "file",
+          "subStation": "C",
+          "linesRaw": 285,
+          "linesNonTest": 156,
+          "linesNonTestCode": 86,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/stage_resolve.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 160,
+          "linesNonTest": 87,
+          "linesNonTestCode": 50,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 2795,
+          "linesNonTest": 1239,
+          "linesNonTestCode": 836,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        },
+        {
+          "path": "crates/cobre-io/src/windowed_history.rs",
+          "kind": "file",
+          "subStation": "B",
+          "linesRaw": 344,
+          "linesNonTest": 110,
+          "linesNonTestCode": 73,
+          "commandRef": {
+            "linesRaw": "linesRaw",
+            "linesNonTest": "linesNonTest"
+          }
+        }
+      ]
+    }
+  },
+  "integrationBinaries": {
+    "cobre-core": {
+      "count": 2,
+      "files": [
+        "infra_genericity.rs",
+        "integration.rs"
+      ],
+      "command": "find crates/cobre-core/tests -maxdepth 1 -name '*.rs' | wc -l"
+    },
+    "cobre-io": {
+      "count": 12,
+      "files": [
+        "clean_break_no_deprecated_fallbacks.rs",
+        "defaults_cascade.rs",
+        "flatbuffers_schema_conformance.rs",
+        "genericity_gate.rs",
+        "integration.rs",
+        "invariance.rs",
+        "load_case_productivity_resolution.rs",
+        "load_case_scalar_parameters.rs",
+        "metadata_back_compat.rs",
+        "policy_checkpoint_date_consistency.rs",
+        "post_study_stages.rs",
+        "resolver_builder_index_alignment.rs"
+      ],
+      "command": "find crates/cobre-io/tests -maxdepth 1 -name '*.rs' | wc -l",
+      "naiveCount": 14,
+      "naiveCommand": "ls crates/cobre-io/tests | wc -l",
+      "note": "the naive `ls | wc -l` of 14 counts the fixtures/ and helpers/ directories (helpers/mod.rs is a shared module, not a binary); the epic-context figure of 13 is superseded by the measured 12"
+    },
+    "combined": {
+      "count": 14,
+      "command": "find crates/cobre-core/tests crates/cobre-io/tests -maxdepth 1 -name '*.rs' | wc -l"
+    }
+  },
+  "subStations": {
+    "A": {
+      "crate": "cobre-core",
+      "description": "L0 foundation: entities, model, system, topology, constraints, stats and the four top-level files",
+      "paths": [
+        "crates/cobre-core/src/constraints",
+        "crates/cobre-core/src/entities",
+        "crates/cobre-core/src/model",
+        "crates/cobre-core/src/model/resolved",
+        "crates/cobre-core/src/model/temporal",
+        "crates/cobre-core/src/stats",
+        "crates/cobre-core/src/system",
+        "crates/cobre-core/src/topology",
+        "crates/cobre-core/src/commissioning.rs",
+        "crates/cobre-core/src/entity_id.rs",
+        "crates/cobre-core/src/error.rs",
+        "crates/cobre-core/src/lib.rs"
+      ],
+      "linesRaw": 18671,
+      "linesNonTest": 9228,
+      "linesNonTestCode": 4377,
+      "budgetNote": "line budgets sum the top-level entries only; nested directories are listed for coverage but already counted inside their parent"
+    },
+    "B": {
+      "crate": "cobre-io",
+      "description": "input path: system/, scenarios/ (incl. estimation/), extensions/, constraints/, resolution/ and the stage/initial-condition/penalty/broadcast top-level files",
+      "paths": [
+        "crates/cobre-io/src/system",
+        "crates/cobre-io/src/scenarios",
+        "crates/cobre-io/src/scenarios/estimation",
+        "crates/cobre-io/src/extensions",
+        "crates/cobre-io/src/constraints",
+        "crates/cobre-io/src/resolution",
+        "crates/cobre-io/src/stages.rs",
+        "crates/cobre-io/src/stage_resolve.rs",
+        "crates/cobre-io/src/initial_conditions.rs",
+        "crates/cobre-io/src/windowed_history.rs",
+        "crates/cobre-io/src/post_study_stages.rs",
+        "crates/cobre-io/src/penalties.rs",
+        "crates/cobre-io/src/broadcast.rs"
+      ],
+      "linesRaw": 47483,
+      "linesNonTest": 23248,
+      "linesNonTestCode": 14427,
+      "budgetNote": "line budgets sum the top-level entries only; nested directories are listed for coverage but already counted inside their parent"
+    },
+    "C": {
+      "crate": "cobre-io",
+      "description": "validation + config + schema: config/, validation/ (incl. semantic/), schema.rs, error.rs, lib.rs",
+      "paths": [
+        "crates/cobre-io/src/config",
+        "crates/cobre-io/src/validation",
+        "crates/cobre-io/src/validation/semantic",
+        "crates/cobre-io/src/schema.rs",
+        "crates/cobre-io/src/error.rs",
+        "crates/cobre-io/src/lib.rs"
+      ],
+      "linesRaw": 33341,
+      "linesNonTest": 12097,
+      "linesNonTestCode": 8656,
+      "budgetNote": "line budgets sum the top-level entries only; nested directories are listed for coverage but already counted inside their parent"
+    },
+    "D": {
+      "crate": "cobre-io",
+      "description": "output path: output/ (incl. output/policy/), parquet_helpers.rs, pipeline.rs, report.rs",
+      "paths": [
+        "crates/cobre-io/src/output",
+        "crates/cobre-io/src/output/policy",
+        "crates/cobre-io/src/parquet_helpers.rs",
+        "crates/cobre-io/src/pipeline.rs",
+        "crates/cobre-io/src/report.rs"
+      ],
+      "linesRaw": 23242,
+      "linesNonTest": 10570,
+      "linesNonTestCode": 6861,
+      "budgetNote": "line budgets sum the top-level entries only; nested directories are listed for coverage but already counted inside their parent"
+    }
+  },
+  "partition": {
+    "command": "find crates/cobre-core/src crates/cobre-io/src -maxdepth 1 ; find crates/cobre-core/src crates/cobre-io/src -mindepth 1 -type d",
+    "treePaths": 36,
+    "assignedPaths": 36,
+    "unassigned": [],
+    "unknown": [],
+    "assignedTwice": [],
+    "isPartition": true,
+    "perSubStation": {
+      "A": 12,
+      "B": 13,
+      "C": 6,
+      "D": 5
+    }
+  }
+}

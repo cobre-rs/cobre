@@ -58,6 +58,7 @@ class Entry:
     heading: str
     fields: dict[str, str]
     body: list[str]
+    lineno: int
 
 
 class SectionNotFound(LookupError):
@@ -101,16 +102,18 @@ def find_section(lines: list[str], name: str) -> Section:
     raise SectionNotFound(name)
 
 
-def iter_anchors(section: Section) -> list[Anchor]:
-    """Every backticked repo-rooted path in the section, attributed to its entry ID.
+def parse_anchors(lines: list[str], first_lineno: int = 1,
+                  entry_id: str | None = None) -> list[Anchor]:
+    """Every backticked repo-rooted path in `lines`, attributed to its entry ID.
 
     Accepted forms: `crates/x/lib.rs`, `crates/x/lib.rs:412`, `crates/x/lib.rs::Sym`.
     Prose backticks (`god-fn`, `Sev A`) and the legacy abbreviated anchors
     (`run/setup.rs:405`) are not repo-rooted and never enter the check set.
+    `first_lineno` is the 1-based register line of `lines[0]`; an entry heading
+    inside `lines` re-attributes the anchors that follow it.
     """
     out: list[Anchor] = []
-    entry_id: str | None = None
-    for offset, raw in enumerate(section.lines):
+    for offset, raw in enumerate(lines):
         hit = ENTRY_RE.match(raw)
         if hit:
             entry_id = hit.group("id")
@@ -119,37 +122,54 @@ def iter_anchors(section: Section) -> list[Anchor]:
             out.append(Anchor(raw=m.group(0).strip("`"), path=m.group("path"),
                               line=int(line) if line else None,
                               symbol=m.group("symbol"), entry_id=entry_id,
-                              lineno=section.start + 1 + offset + 1))
+                              lineno=first_lineno + offset))
     return out
+
+
+def all_evaluation_sections(lines: list[str]) -> list[Section]:
+    """Every dated `★ QUALITY EVALUATION (…) — <name>` section, in register order."""
+    out: list[Section] = []
+    for raw in lines:
+        m = SECTION_RE.match(raw)
+        if m and "QUALITY EVALUATION (" in m.group("title"):
+            out.append(find_section(lines, m.group("title")))
+    return out
+
+
+def iter_anchors(section: Section) -> list[Anchor]:
+    return parse_anchors(section.lines, first_lineno=section.start + 2)
 
 
 def iter_entries(section: Section) -> list[Entry]:
     """Split a section into entries headed by a bold `**CD-nnn · …**` line.
 
     `fields` is keyed by the bold bullet labels below the heading
-    ("- **Alignment:** advances-0a (…)" -> fields["Alignment"]).
+    ("- **Alignment:** advances-0a (…)" -> fields["Alignment"]); `lineno` is the
+    1-based register line of the heading.
     """
     entries: list[Entry] = []
-    current: tuple[str, str, list[str]] | None = None
+    current: tuple[str, str, list[str], int] | None = None
 
     def flush() -> None:
         if current is None:
             return
-        entry_id, heading, body = current
+        entry_id, heading, body, lineno = current
         fields: dict[str, str] = {}
         for raw in body:
             f = FIELD_RE.match(raw)
             if f and f.group("label") not in fields:
                 fields[f.group("label").strip()] = f.group("value")
-        entries.append(Entry(id=entry_id, heading=heading, fields=fields, body=list(body)))
+        entries.append(Entry(id=entry_id, heading=heading, fields=fields,
+                             body=list(body), lineno=lineno))
 
-    for raw in section.lines:
+    for offset, raw in enumerate(section.lines):
         hit = ENTRY_RE.match(raw)
         if hit:
             flush()
-            current = (hit.group("id"), raw.strip().strip("*").strip(), [])
+            current = (hit.group("id"), raw.strip().strip("*").strip(), [],
+                       section.start + 2 + offset)
         elif current is not None:
-            current[2].append(raw)
+            current[3 - 1].append(raw)
     flush()
     return entries
 

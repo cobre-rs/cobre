@@ -1,0 +1,293 @@
+{
+  "station": "core-io",
+  "subStation": "C",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "The eight-file valid-case JSON corpus, `write_file` and `make_minimal_case` are triplicated across two inline test modules and the shared integration helper",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/schema.rs",
+          "symbol": "VALID_CONFIG_JSON",
+          "line": 807
+        },
+        {
+          "path": "crates/cobre-io/src/validation/schema.rs",
+          "symbol": "write_file",
+          "line": 887
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "make_minimal_case",
+          "line": 1257
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "VALID_CONFIG_JSON",
+          "line": 1191
+        },
+        {
+          "path": "crates/cobre-io/tests/helpers/mod.rs",
+          "symbol": "make_minimal_case",
+          "line": 107
+        },
+        {
+          "path": "crates/cobre-io/tests/helpers/mod.rs",
+          "symbol": "VALID_CONFIG_JSON",
+          "line": 20
+        }
+      ],
+      "evidence": {
+        "command": "diff <(sed -n '807,884p' crates/cobre-io/src/validation/schema.rs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^pub const/const/' | grep -vE '^(//|$)') <(sed -n '20,91p' crates/cobre-io/tests/helpers/mod.rs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^pub const/const/' | grep -vE '^(///|//|$)') && echo \"IDENTICAL (57 normalized lines each)\"; diff <(sed -n '1191,1247p' crates/cobre-io/src/validation/referential.rs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -vE '^(//|$)') <(sed -n '807,884p' crates/cobre-io/src/validation/schema.rs | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -vE '^(//|$)' | head -52) && echo \"IDENTICAL (referential 4 consts == schema first 4)\"; grep -rn 'fn write_file' crates/cobre-io --include='*.rs'; grep -rn 'mod helpers;' crates/cobre-io/tests/*.rs | wc -l",
+        "output": "IDENTICAL (57 normalized lines each)\nIDENTICAL (referential 4 consts == schema first 4)\ncrates/cobre-io/src/validation/schema.rs:887:    fn write_file(root: &Path, relative: &str, content: &str) {\ncrates/cobre-io/src/validation/referential.rs:1248:    fn write_file(root: &std::path::Path, relative: &str, content: &str) {\ncrates/cobre-io/tests/helpers/mod.rs:95:pub fn write_file(root: &Path, relative: &str, content: &str) {\n6",
+        "reading": "After stripping leading/trailing whitespace, comments and the `pub` qualifier, the eight `VALID_*_JSON` constants in the `validation/schema.rs` inline test module are byte-identical (57 lines) to the eight in `tests/helpers/mod.rs`, and the four in the `validation/referential.rs` inline test module are byte-identical to the first four of that same corpus (52 lines). `write_file` is declared three times with the same body, and `make_minimal_case` twice (`referential.rs:1257`, `helpers/mod.rs:107`) writing the same eight relative paths. The shared home already exists and is already consumed by six integration binaries, so the two inline copies are not a visibility workaround for an absent helper: they predate or bypass it."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Make the minimal-case corpus have exactly one owner. Hoist the eight JSON constants, `write_file` and `make_minimal_case` into a single crate-internal fixture module gated by a test-support cfg (the convention docs/design/testing-architecture.md section 5.2 prescribes: helpers live with the type they build, exposed through a `test-support` feature rather than a dedicated crate), then have both inline test modules and `tests/helpers/mod.rs` re-export from it instead of restating it. Keep the deliberately different `structural.rs::make_case_with_required`, which writes empty-object placeholders because the structural phase only checks file presence: that one is not a copy. The payoff is that a change to the accepted case format lands in one place; today a renamed penalty key or a newly required file must be edited in three, and two of the three are invisible to anyone working from the shared helper.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`validation/semantic/test_support.rs` is `pub(super)`-scoped one level too deep, so the four sibling validation-phase modules hand-roll byte-identical fixture builders and two more full `ParsedData` skeletons",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/mod.rs",
+          "symbol": "test_support",
+          "line": 153
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/test_support.rs",
+          "symbol": "penalties_all",
+          "line": 43
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/test_support.rs",
+          "symbol": "base_parsed_data",
+          "line": 207
+        },
+        {
+          "path": "crates/cobre-io/src/validation/dimensional.rs",
+          "symbol": "penalties_default",
+          "line": 426
+        },
+        {
+          "path": "crates/cobre-io/src/validation/dimensional.rs",
+          "symbol": "base_parsed_data",
+          "line": 503
+        },
+        {
+          "path": "crates/cobre-io/src/validation/productivity_resolution.rs",
+          "symbol": "penalties_default",
+          "line": 253
+        },
+        {
+          "path": "crates/cobre-io/src/validation/productivity_resolution.rs",
+          "symbol": "base_parsed_data",
+          "line": 304
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "hydro_penalties",
+          "line": 1297
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "make_unit_group",
+          "line": 1397
+        },
+        {
+          "path": "crates/cobre-io/src/validation/scalar_parameters.rs",
+          "symbol": "zero_hydro_penalties",
+          "line": 210
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '152,153p' crates/cobre-io/src/validation/semantic/mod.rs; grep -c 'pub(super)' crates/cobre-io/src/validation/semantic/test_support.rs; grep -rln 'super::super::test_support' crates/cobre-io/src/validation/semantic/*.rs | wc -l; grep -rln 'test_support' crates/cobre-io/src/validation/*.rs | wc -l; diff <(sed -n '427,444p' crates/cobre-io/src/validation/dimensional.rs | sed 's/^ *//') <(sed -n '254,271p' crates/cobre-io/src/validation/productivity_resolution.rs | sed 's/^ *//') && echo EQ_dim_prod; diff <(sed -n '427,444p' crates/cobre-io/src/validation/dimensional.rs | sed 's/^ *//') <(sed -n '1298,1315p' crates/cobre-io/src/validation/referential.rs | sed 's/^ *//') && echo EQ_dim_ref; diff <(sed -n '117,135p' crates/cobre-io/src/validation/semantic/test_support.rs | sed 's/^ *//;s/^pub(super) //') <(sed -n '1397,1415p' crates/cobre-io/src/validation/referential.rs | sed 's/^ *//') && echo EQ_make_unit_group; diff <(sed -n '44,58p' crates/cobre-io/src/validation/semantic/pumping.rs | sed 's/^ *//') <(sed -n '1381,1395p' crates/cobre-io/src/validation/referential.rs | sed 's/^ *//') && echo EQ_make_pumping",
+        "output": "#[cfg(test)]\nmod test_support;\n31\n12\n0\nEQ_dim_prod\nEQ_dim_ref\nEQ_make_unit_group\nEQ_make_pumping",
+        "reading": "`mod test_support;` is private inside `validation/semantic/mod.rs` and all 31 of its helpers are `pub(super)`, so the module is reachable only from `validation::semantic`. All 12 modules inside that subtree import it (`use super::super::test_support::*`); zero of the four phase modules one level up (`dimensional.rs`, `productivity_resolution.rs`, `referential.rs`, `scalar_parameters.rs`) import it, and none can. The consequence is measured duplication, not a style preference: `dimensional::penalties_default`, `productivity_resolution::penalties_default` and `referential::hydro_penalties` are pairwise byte-identical 18-line builders of the same 16-field `HydroPenalties`; `scalar_parameters::zero_hydro_penalties` differs only in the constant (0.0 where the others use 1.0, exactly `test_support::penalties_all(0.0)`); `make_unit_group` and `make_pumping` are byte-identical across the boundary; and the 51-field `ParsedData` skeleton is written out in full three times (`test_support.rs:207`, `dimensional.rs:503`, `productivity_resolution.rs:337`)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Move the fixture module up one level so its scope matches its audience: home it at `validation/` rather than `validation/semantic/`, widen the helper visibility from `pub(super)` to the crate-internal test surface, and delete the hand-rolled clones in the four phase modules in favour of it. Parameterize where the copies legitimately differ rather than forking: the penalty builders differ only in one scalar, which the existing `penalties_all(v)` signature already takes, and the stage builders differ only in block count and branching factor, which the existing `make_stage_with_blocks` shape already covers. Keep `test_support.rs`'s own stated rule that single-use helpers stay in their own module's test block; the target is the five families proven identical above, not every local builder. The blast radius is bounded to test code in one directory, and the benefit is that the 51-field `ParsedData` skeleton gains one owner, so adding an input file stops being a three-site edit whose omissions surface only as compile errors in whichever module someone forgot.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`thermal.rs`'s `boundary_tests` sub-module restates three tests that already exist 140 lines above it with the same fixture arguments and weaker assertions",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "boundary_tests",
+          "line": 3715
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "override_at_t_minus_1_acceptance_boundary",
+          "line": 3720
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "test_thermal_bounds_override_stage_within_horizon_accepted",
+          "line": 3579
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "test_thermal_bounds_override_stage_equals_n_rejected",
+          "line": 3598
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "test_thermal_bounds_override_multiple_offending_rows",
+          "line": 3652
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'make_data_thermal_bounds(5, vec!\\[make_thermal_bounds_row(1, \\(4\\|5\\|-1\\))\\])' crates/cobre-io/src/validation/semantic/thermal.rs; sed -n '3710,3714p' crates/cobre-io/src/validation/semantic/thermal.rs; grep -rn 'boundary_tests' --include='*.md' . | wc -l",
+        "output": "3580:        let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, 4)]);\n3601:        let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, 5)]);\n3637:        let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, -1)]);\n3721:            let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, 4)]);\n3742:            let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, 5)]);\n3790:            let data = make_data_thermal_bounds(5, vec![make_thermal_bounds_row(1, -1)]);\n    // ── boundary_tests sub-module ─────────────────────────────────────────────\n    //\n    // These mirror the strict-inequality boundary tests above for the guard\n    // `stage_id < 0 || stage_id >= n_stages`; the originals above are intentional\n    // duplicate coverage — do not delete them.\n0",
+        "reading": "Three of the four tests in `boundary_tests` build their fixture with arguments identical to a test earlier in the same file: (5, row(1,4)) at 3580 and 3721, (5, row(1,5)) at 3601 and 3742, (5, row(1,-1)) at 3637 and 3790. The earlier `test_thermal_bounds_override_stage_equals_n_rejected` additionally asserts the message contains `stage_id=5`, `[0, 5)` and `not allowed`, so the mirror at 3742 is strictly weaker. The one input the sub-module does not repeat, `stage_id = 6`, is a stage past `n_stages`, which `test_thermal_bounds_override_multiple_offending_rows` already covers with `stage_id = 9`. The comment at 3710-3714 self-sanctions the duplication, but a repo-wide grep of Markdown finds zero references to `boundary_tests`, so the sanction lives only in the file and is backed by no register or design-doc entry."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pick one home for the half-open-interval guard's boundary coverage and keep only that. The natural survivor is the earlier family, because it already asserts the diagnostic text and not just the violation count, and because `test_thermal_bounds_override_multiple_offending_rows` already carries the past-the-boundary case. If the sub-module's grouping is what is valued, invert it instead: move the earlier three tests into `boundary_tests` and drop the outer copies, so the boundary claim is stated once with its strongest assertions. Either way, if the duplication is genuinely wanted, the reason belongs in a register entry the audit can cite, not in a comment that only asks future readers not to delete it. This is test-only, so the change is behaviour-neutral by construction.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`test_filling_guard_no_exit_no_error` is a byte-for-byte clone of `test_filling_guard_entry_below_horizon_no_error` and cannot exercise the condition its name claims",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/hydro.rs",
+          "symbol": "test_filling_guard_no_exit_no_error",
+          "line": 1795
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/hydro.rs",
+          "symbol": "test_filling_guard_entry_below_horizon_no_error",
+          "line": 1692
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/hydro.rs",
+          "symbol": "make_filling_hydro",
+          "line": 1505
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/hydro.rs",
+          "symbol": "test_filling_guard_exit_on_filling_errors",
+          "line": 1771
+        }
+      ],
+      "evidence": {
+        "command": "diff <(sed -n '1693,1709p' crates/cobre-io/src/validation/semantic/hydro.rs) <(sed -n '1796,1812p' crates/cobre-io/src/validation/semantic/hydro.rs); sed -n '1505,1513p' crates/cobre-io/src/validation/semantic/hydro.rs",
+        "output": "14c14\n<             \"entry below horizon should produce no error, got: {:?}\",\n---\n>             \"no exit on a filling hydro should produce no error, got: {:?}\",\n    fn make_filling_hydro(id: i32, start_stage_id: i32, entry_stage_id: i32, inflow: f64) -> Hydro {\n        let mut h = make_hydro(id, None);\n        h.entry_stage_id = Some(entry_stage_id);\n        h.filling = Some(FillingConfig {\n            start_stage_id,\n            filling_min_rate_m3s: inflow,\n        });\n        h\n    }",
+        "reading": "The two seventeen-line test bodies differ on exactly one line, the assertion's failure message; both call `make_filling_hydro(1, 1, 4, 10.0)` against `make_stages(vec![0,1,2,3,4,5])` and both assert `hydro_invalid_value_messages(&ctx).is_empty()`. `make_filling_hydro` sets only `entry_stage_id` and `filling` and never touches `exit_stage_id`, which stays `None` from `make_hydro`, so the builder cannot produce a hydro that has an exit. The test named for the no-exit case therefore has no way to vary the condition it is named for and can never fail differently from its twin. The violating counterpart `test_filling_guard_exit_on_filling_errors` at 1771 does set `exit_stage_id = Some(10)` explicitly, so guard 5's rejection path is genuinely covered; only its well-formed counterpart is empty."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the clone at 1795 and let the existing test at 1692 stand for the accepted case, since the two assert the identical fact about the identical fixture. If a well-formed counterpart to guard 5 is wanted for symmetry with the other guards, it has to actually vary the guard's input, which means building the hydro with `exit_stage_id` explicitly set to none at the call site rather than relying on a builder that cannot set it, so a future change to `make_filling_hydro`'s defaults cannot silently turn the test into a tautology again. The guard's rejection path is already covered and needs no change.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Four of `schema.rs`'s seven inline tests assert nested-subsumed structural properties of an artifact the CI schema gate already pins byte-exactly, and the count assertion tolerates losing a schema",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "symbol": "test_generate_schemas_returns_expected_count",
+          "line": 162
+        },
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "symbol": "test_all_schema_filenames_and_values_non_empty",
+          "line": 172
+        },
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "symbol": "test_all_schemas_are_objects",
+          "line": 182
+        },
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "symbol": "test_all_schemas_have_structure_keys",
+          "line": 193
+        },
+        {
+          "path": "crates/cobre-io/src/schema.rs",
+          "symbol": "generate_schemas",
+          "line": 88
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'schemas.len() >= 17' crates/cobre-io/src/schema.rs; awk 'NR>=88 && NR<=150' crates/cobre-io/src/schema.rs | grep -c '\\.schema\\.json\"'; ls schemas/*.json | wc -l; grep -n 'diff -ruN' scripts/ci/check_schemas.sh; grep -n 'Verify schema freshness' -A1 .github/workflows/ci.yml",
+        "output": "84:/// assert!(schemas.len() >= 17);\n166:            schemas.len() >= 17,\n18\n18\n31:if diff -ruN \"$REPO_ROOT/schemas/\" \"$TMP_DIR/\" > \"$TMP_DIR/drift.diff\"; then\n338:      - name: Verify schema freshness\n339-        run: ./scripts/ci/check_schemas.sh --build",
+        "reading": "`generate_schemas` builds 18 entries and `schemas/` holds 18 committed files, yet both the rustdoc doctest at line 84 and the unit test at line 166 assert only `>= 17`, so deleting one export passes the assertion whose name promises an expected count. The CI `schemas` job runs `diff -ruN` between the committed directory and a live export, which is a byte-exact oracle over every one of those files. Against that oracle, `!value.is_null()` (line 172), `value.is_object()` (line 182) and the check for one of properties/oneOf/anyOf/$defs (line 193) are nested-subsumed: `is_object` implies `!is_null`, and any schemars output that has properties satisfies the third. Each of the four re-runs the full 18-schema generation to assert progressively weaker facts."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Fold the four structural walks into one test that asserts the strongest of the three properties, since the weaker two are implied, and stop re-generating the whole schema set once per assertion. Replace the floor of 17 in both the doctest and the unit test with an exact expected count, or better, with an assertion that the produced name set equals the full expected name set rather than the current thirteen-of-eighteen subset in `test_all_expected_schema_filenames_present`. That last test and the two per-schema field spot-checks are worth keeping, because they are the only assertions here that survive a regeneration of `schemas/` and so catch a deliberate export deletion that the drift gate would wave through. Keep the doctest as documentation, but make its assertion say something the reader can rely on.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`error.rs`'s six inline tests assert only that thiserror interpolates the format strings declared a hundred lines above them, and two of the six are the same test twice",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "LoadError",
+          "line": 30
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "test_load_error_io_display",
+          "line": 152
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "test_load_error_io_helper",
+          "line": 240
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "test_load_error_schema_display",
+          "line": 181
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "test_load_error_is_std_error",
+          "line": 230
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '29,32p;49,52p' crates/cobre-io/src/error.rs; sed -n '26,27p' crates/cobre-io/src/error.rs; sed -n '152,164p;240,248p' crates/cobre-io/src/error.rs | grep -E 'fn |contains|matches!|source\\(\\)'",
+        "output": "#[derive(Debug, thiserror::Error)]\npub enum LoadError {\n    /// Filesystem read failure (file not found, permission denied, I/O error).\n    #[error(\"I/O error reading {path}: {source}\")]\n    /// Schema validation failure (missing required field, wrong type, value out of range).\n    #[error(\"schema error in {path}, field {field}: {message}\")]\n    SchemaError {\n        /// Path to the file containing the invalid entry.\n/// assert!(err.to_string().contains(\"bus_id\"));\n/// ```\n    fn test_load_error_io_display() {\n            display.contains(\"system/hydros.json\"),\n            display.contains(\"no such file or directory\"),\n    fn test_load_error_io_helper() {\n        assert!(matches!(err, LoadError::IoError { .. }));\n        assert!(display.contains(\"config.json\"));\n        assert!(display.contains(\"permission denied\"));",
+        "reading": "Every assertion in the module is of the form `display.contains(<a value the test just put into the variant>)`, which the `#[error(\"... {path} ...\")]` attributes in the same file mechanically guarantee; the tests would still pass if the message text were reordered or rewritten, so they pin no user-facing wording. `test_load_error_io_display` and `test_load_error_io_helper` construct the same `IoError` variant through the same `LoadError::io` helper and assert the same two `contains` facts, differing only in the two string literals and one `matches!`. `test_load_error_schema_display` restates the module's own rustdoc doctest at line 27, which already asserts `err.to_string().contains(\"bus_id\")`. `test_load_error_is_std_error` asserts `source().is_none()` on a variant that declares no `#[source]` field, which the derive determines."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Decide what the module is actually contracting for and test that, rather than the derive's own substitution. If the diagnostic wording is a user-facing contract, pin the full rendered message for one or two representative variants so a reorder or rewrite is caught, and drop the per-variant contains walks. If it is not a contract, the derive already guarantees interpolation and the whole module can shrink to the existing doctest plus the one behavioural fact worth stating, which is that a `LoadError` carrying a source chains it and one without does not. Collapse the two `IoError` tests into one either way, since they differ only in their literals.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/config/mod.rs:2040 (`unknown_key_injection_is_rejected_at_every_object_path`, with `collect_object_pointers` at :2015 and `injection_sweep_base_configs` at :1902)",
+      "why": "A mechanical closure rather than a hand-listed case set: it walks every JSON object node of several maximal valid configs and asserts an injected unknown key is rejected at each pointer, which is exactly the property tier docs/design/testing-architecture.md section 5.3 prescribes for a claim that quantifies over all inputs. Its own doc comment names the serde gaps it closes (internally-tagged unit variants, untagged inline struct variants, a missing `deny_unknown_fields`) that a per-type reject test cannot cover. This is the strongest test in the sub-station and must not be collapsed into the per-field reject tests.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.3 — the Property tier and its decision rule"
+    },
+    {
+      "subject": "crates/cobre-io/src/config/training.rs and crates/cobre-io/src/config/simulation.rs — the unknown-field and unknown-variant reject tests for retired config spellings",
+      "why": "Load-bearing guards, not bloat. They stand in for a version snapshot under the clean-break rule, so the test-bloat lens explicitly leaves them alone; the per-field reject tests are not subsumed by the injection sweep above, because the sweep proves that unknown keys are rejected while these prove that a specific retired spelling is the one being rejected.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — `## Do not re-raise`, config-spelling reject tests as test bloat (load-bearing guard: mirror \"Retired input spellings\")"
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/test_support.rs:1-3 (module doc) and its `make_stage_with_blocks` at :176",
+      "why": "The module states and follows the right homing rule (single-use helpers stay in their own module's test block to keep the blast radius small), and its derived builders compose rather than fork: `make_stage_with_blocks` calls `make_stage` and mutates one field, with a doc comment saying why, so the two cannot drift. `make_data` documents why it sorts unit groups at the data boundary rather than inside `make_hydro`. The module is the correct shape; candidate two is about its scope, not its design.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.2 — helpers live with the type they build, exposed through a `test-support` feature"
+    },
+    {
+      "subject": "crates/cobre-io/src/config/training.rs:531 (`LipschitzConfig`), :534 (`mode`), :509 (`UpperBoundEvaluationConfig`)",
+      "why": "A ratified reserved seam inside this sub-station's paths: loaded, validated and schema-exported without a consumer, by design. Not recordable as dead config or over-engineering, and its absence of tests is therefore not a coverage gap.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — section `LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`, and prior-register.md \"Sanctioned reserved seams\""
+    },
+    {
+      "subject": "crates/cobre-io/tests/clean_break_no_deprecated_fallbacks.rs:7-17 (module doc) and its two lexical gates",
+      "why": "A lexical clean-break gate that names, in its own doc comment, the per-site behavioural tests it complements rather than replaces (`retired_scheduler_spellings_are_deserialize_error`, `test_num_scenarios_removed_field_rejected`, and the FlatBuffers conformance check). That cross-reference is what stops the next reader from mistaking either half for redundant coverage. It is an in-crate oracle of the class the prior register keeps as a positive, and cobre-io links no solver, so its cost as a separate binary is small.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — \"Executable oracles (the gate is the register entry)\", KEEP the two in-crate oracles as positives; docs/design/testing-architecture.md section 5.1, non-solver crates are out of scope for binary consolidation"
+    }
+  ],
+  "_needsHuman": [
+    "The `boundary_tests` comment at crates/cobre-io/src/validation/semantic/thermal.rs:3712-3714 declares the duplication intentional and says do not delete them, but no register, mirror or design-doc entry backs it (a repo-wide Markdown grep for `boundary_tests` returns zero hits), so the owner has to say whether the sanction stands and, if so, where it should be recorded.",
+    "The four tests in crates/cobre-io/tests/load_case_scalar_parameters.rs pair one-to-one with four inline unit tests in crates/cobre-io/src/validation/scalar_parameters.rs (dangling hydro reference, per-stage length mismatch, duplicate id, fully valid); the integration copies additionally prove that `load_case` reaches the check and maps it to `LoadError::ConstraintError`, so whether four reachability tests or one is the right number for a single wiring claim is a call for the test owner, not evidence of bloat.",
+    "Twelve modules in this sub-station keep inline `#[cfg(test)]` blocks above the 500-test-LOC threshold that docs/design/testing-architecture.md section 5.1 proposes as a homing lint, while the same crate already uses an extracted sibling at crates/cobre-io/src/scenarios/estimation/tests.rs; the doc is marked Proposal rather than adopted, so whether that threshold is yet binding on cobre-io needs the owner's word before it is raised as debt."
+  ]
+}

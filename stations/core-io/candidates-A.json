@@ -1,0 +1,898 @@
+{
+  "_needsHuman": [
+    {
+      "lens": "architecture",
+      "note": "Destination for `StageLagTransition`: cobre-stochastic is the only L1 consumer today, but if the future cobre-model carve-out is meant to own multistage layout descriptions then the type may belong there instead, and moving it twice is worse than waiting."
+    },
+    {
+      "lens": "architecture",
+      "note": "Whether the six HashMap fields nested in the System payload are a deliberate exemption from the wire-reproducibility rationale stated at crates/cobre-core/src/system/mod.rs:62, or an oversight — the answer decides whether the fix is to make them ordered or to retire the rationale."
+    },
+    {
+      "lens": "architecture",
+      "note": "Whether the disconnected-bus rule is still wanted at all: implementing it may reject decks that load today, so the choice between implementing the variant and deleting it is an owner call, not a cleanup call."
+    },
+    {
+      "lens": "architecture",
+      "note": "Whether `System::with_scenario_models` is intended as a permanent post-construction mutation seam on an otherwise immutable type, or a temporary bridge for the inflow-estimation pass that the Milestone-1 stochastic-store move is expected to delete."
+    },
+    {
+      "lens": "perf",
+      "note": "`crates/cobre-io/src/broadcast.rs::serialize_system` and `::deserialize_system` have no production consumer at the baseline — a repo-wide grep finds only the crate-root re-export, their own doc examples, and `crates/cobre-io/tests/integration.rs:989-995`, while production broadcasts `System` through `crates/cobre-cli/src/commands/broadcast.rs::broadcast_value` — so whether that pair is a reserved seam or a dead public surface is an owner call belonging to the cobre-io over-engineering lens, not to this perf pass."
+    },
+    {
+      "lens": "perf",
+      "note": "`crates/cobre-core/src/model/horizon.rs:43` (`stage_discount_rate_overrides: HashMap<i32, f64>`) is serialized onto the same postcard payload whose HashMap-iteration-order instability the `System` index-skip comment at `crates/cobre-core/src/system/mod.rs:64-68` cites as its reason to skip; content survives the round trip either way so results are unaffected, and whether wire-byte reproducibility is a contract the owner actually wants is a question outside the perf lens."
+    },
+    {
+      "lens": "over-engineering",
+      "note": "The NCS resolved-penalty axis needs an owner decision on direction: wiring the accessor makes a per-stage NCS curtailment override effective for the first time and will move objective coefficients on any deck that ships penalty_overrides_ncs, whereas retiring the axis means declaring that file's curtailment_cost column retired and rejecting it, and only the input-contract owner can choose which of those the case format is supposed to mean."
+    },
+    {
+      "lens": "over-engineering",
+      "note": "Whether NetworkTopology is the intended adjacency seam for the reserved power-flow vertical, in which case it should enter the reserved-seam register with that owner and a first-consumer condition, or whether it is residue to delete, is an owner call this pass cannot settle from the tree alone."
+    },
+    {
+      "lens": "test-bloat",
+      "note": "The fix shapes for the `HydroPenalties` fixture, the entity-builder family and the bit comparators all land in cobre-core's `test-support` surface, but the document that names that landing zone is marked \"Status: Proposal — target standard, not yet implemented\", so an owner needs to confirm the surface is sanctioned before three candidates are scheduled against it."
+    },
+    {
+      "lens": "test-bloat",
+      "note": "`tests/integration.rs:180` and `:447` assert whole-`System` `PartialEq` under two hand-picked orderings while the proptest at `system/builder.rs:938` asserts only the canonical id projection under random shuffles; I could not determine whether the stronger-assertion-at-two-orderings and weaker-assertion-at-many-orderings split is deliberate layering or drift, so I did not raise it as overlap."
+    }
+  ],
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 58,
+          "path": "crates/cobre-core/src/entities/hydro.rs",
+          "symbol": "HydroPenalties"
+        },
+        {
+          "line": 37,
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "HydroStagePenalties"
+        },
+        {
+          "line": 43,
+          "path": "crates/cobre-core/src/model/penalty.rs",
+          "symbol": "HydroPenaltyOverrides"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-00",
+      "evidence": {
+        "command": "python3 -c \"\nimport re\ng=lambda p,n:(lambda s:re.findall(r'pub (\\w+): (\\S+?),',s[s.index('pub struct '+n+' {'):s.index('\\n}',s.index('pub struct '+n+' {'))]))(open(p).read())\na=g('crates/cobre-core/src/entities/hydro.rs','HydroPenalties')\nb=g('crates/cobre-core/src/model/resolved/penalties.rs','HydroStagePenalties')\nc=g('crates/cobre-core/src/model/penalty.rs','HydroPenaltyOverrides')\nprint(len(a),len(b),len(c),a==b,[x for x,_ in a]==[x for x,_ in c])\n\"",
+        "output": "16 16 16 True True",
+        "reading": "All three structs declare exactly 16 fields. `HydroPenalties` and `HydroStagePenalties` have identical (name, type) lists — every field is `f64` and every name matches, so the two types are structurally indistinguishable. `HydroPenaltyOverrides` repeats the same 16 names as `Option<f64>`. The cross-crate consequence is visible at `crates/cobre-io/src/resolution/penalties.rs:399-421`, whose own doc line reads `/// Convert a `Hydro`'s entity-level `HydroPenalties` to the per-cell `HydroStagePenalties` — identical fields, distinct types.` followed by a hand-written 16-line positional copy. Because every source and target field is `f64`, transposing two lines there (for example `evaporation_violation_pos_cost` and `evaporation_violation_neg_cost`) compiles and type-checks."
+      },
+      "fixShape": "Collapse the two identical structs into one declaration owned by the entity module, and have the resolved per-(hydro, stage) table store that single type rather than a twin. The override struct stays distinct because its `Option` semantics differ, but it should be derived from the same field list rather than restated, so a new penalty column is added once. The hand-written conversion in the cobre-io resolution layer then disappears entirely, taking its silent-transposition hazard with it. If keeping two nominal types is preferred for layering reasons, the replacement guard is a conversion that cannot be written positionally — a `From` impl generated alongside the declaration, plus a test that asserts each of the 16 columns round-trips to a distinct sentinel value so a swap fails loudly.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "The 16-column hydro penalty vocabulary is declared three times inside cobre-core, two of them field-for-field identical"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 65,
+          "path": "crates/cobre-core/src/error.rs",
+          "symbol": "ValidationError"
+        },
+        {
+          "line": 72,
+          "path": "crates/cobre-core/src/error.rs"
+        },
+        {
+          "line": 90,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "build"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-03",
+      "evidence": {
+        "command": "grep -rn 'DisconnectedBus\\|InvalidPenalty' crates/ --include='*.rs' | grep -v '^crates/cobre-core/src/error.rs'; echo ---; grep -rn 'ValidationError' crates/cobre-io/src --include='*.rs' | wc -l; echo ---; sed -n '88,92p' crates/cobre-core/src/topology/network.rs; echo ---; grep -rni 'no connections\\|isolated bus\\|connectivity' crates/cobre-io/src crates/cobre-sddp/src --include='*.rs' | wc -l",
+        "output": "crates/cobre-core/src/topology/network.rs:90:        // TODO: use `buses` for disconnected-bus validation (ValidationError::DisconnectedBus)\n---\n0\n---\n        let mut bus_loads: HashMap<EntityId, BusLoads> = HashMap::new();\n\n        // TODO: use `buses` for disconnected-bus validation (ValidationError::DisconnectedBus)\n        let _ = buses;\n---\n0",
+        "reading": "Outside its own declaration and Display arm, `DisconnectedBus` appears only in a TODO comment and `InvalidPenalty` appears nowhere at all — neither variant is ever constructed in production or test code. Both carry the doc line 'Emitted by `cobre-io` validation' (error.rs:63 and :70), but cobre-io mentions the identifier `ValidationError` zero times, so it cannot emit them. The `NetworkTopology::build` signature takes a `buses: &[Bus]` slice that is immediately discarded via `let _ = buses;` to satisfy the unused-parameter lint, and the rule the TODO points at exists nowhere in cobre-io or cobre-sddp either. The result is an L0 public validation vocabulary advertising a bus-connectivity rule the system does not implement, and a public L0 constructor whose signature promises an input it does not read."
+      },
+      "fixShape": "Decide whether the disconnected-bus rule is wanted, then make the code say so. If it is wanted, implement it where the topology is already being built — that is the one place with every entity family in hand — and drop the parameter's discard; the penalty-validity variant needs the same treatment or an owner who actually raises it. If it is not wanted, remove both variants, remove the now-purposeless `buses` parameter from the builder signature, and delete the TODO, so the enum lists only rules the crate enforces. Either way the two stale 'Emitted by cobre-io validation' doc lines must go, because cobre-io does not reference this error type at all and a reader chasing that claim finds nothing. Neither variant is reserved config, so the 'unwired config is reserved, not dead' rule does not shelter them; if the owner intends them as a reserved seam for a future network-validation pass, that intent belongs in the mirror's reserved-seam register where the dismissal can cite it.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "Two ValidationError variants are constructed nowhere in the workspace and claim an emitter that never imports the type; the parameter that would implement one is dead behind a TODO"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 560,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "thermal_cell_index"
+        },
+        {
+          "line": 329,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "ResolvedBounds"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-06",
+      "evidence": {
+        "command": "grep -c 'n_stages + stage_index\\]' crates/cobre-core/src/model/resolved/bounds.rs; grep -n 'n_stages + stage_index\\]' crates/cobre-core/src/model/resolved/bounds.rs | head -6; grep -n 'fn thermal_cell_index' -A 6 crates/cobre-core/src/model/resolved/bounds.rs",
+        "output": "14\n554:        &self.hydro[hydro_index * self.n_stages + stage_index].stage\n641:        &mut self.hydro[hydro_index * self.n_stages + stage_index].stage\n653:        &mut self.hydro[hydro_index * self.n_stages + stage_index].block\n693:        &mut self.line[line_index * self.n_stages + stage_index]\n703:        &mut self.pumping[pumping_index * self.n_stages + stage_index]\n713:        &mut self.contract[contract_index * self.n_stages + stage_index]\n560:    fn thermal_cell_index(&self, thermal_index: usize, stage_index: usize) -> usize {\n562:            self.thermal.is_empty() || self.thermal_stage_axis_len > 0,\n563:            \"thermal_stage_axis_len must be > 0 when the thermal table is non-empty\",\n564:        );\n565:        thermal_index * self.thermal_stage_axis_len + stage_index",
+        "reading": "The flat cell-index invariant is owned once for the thermal table by `thermal_cell_index`, which also carries a debug assertion protecting its stride. For hydro, line, pumping and contract the same arithmetic is written out at 14 separate sites. The precedent is not hypothetical: the thermal family already diverged once, gaining a `n_stages + k_max` stride for delivery-stage padding, and that divergence is exactly what forced the helper into existence. Any second family that needs a different stride must be tracked through 14 call sites with no compile-time guard, in a table whose indexing correctness the solver depends on."
+      },
+      "fixShape": "Give the four remaining families the same treatment the thermal table already has: one private index helper per family, or a single shared helper taking the stride, so the layout rule is stated once and each accessor reads a named call rather than repeating the multiply-add. This is a mechanical, behaviour-preserving change confined to one file, and it makes a future stride change for any family a one-line edit instead of a fourteen-site sweep. It also lets the debug assertion that currently guards only the thermal stride be applied uniformly.",
+      "lens": "architecture",
+      "proposedSeverity": "C",
+      "title": "ResolvedBounds open-codes the cell-index arithmetic fourteen times for four entity families while the fifth has a named helper"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 285,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "Stage"
+        },
+        {
+          "line": 364,
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "build"
+        },
+        {
+          "line": 32,
+          "path": "crates/cobre-core/src/model/temporal/stage_key.rs",
+          "symbol": "StudyPos"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-05",
+      "evidence": {
+        "command": "sed -n '283,285p' crates/cobre-core/src/model/temporal.rs; echo '--- builder ---'; sed -n '364p' crates/cobre-core/src/system/builder.rs; echo '--- any index handling in core system module ---'; grep -rn '\\.index' crates/cobre-core/src/system/ | grep -v tests | wc -l; echo '--- assignment site ---'; sed -n '811,816p' crates/cobre-io/src/stages.rs",
+        "output": "    /// 0-based array position in the canonical-ordered stages vector, assigned\n    /// during loading after sorting by `id`.\n    pub index: usize,\n--- builder ---\n        self.stages.sort_by_key(|s| s.id);\n--- any index handling in core system module ---\n0\n--- assignment site ---\n    // Sort by id ascending (declaration-order invariance), then assign index.\n    all_stages.sort_by_key(|s| s.id);\n\n    for (idx, stage) in all_stages.iter_mut().enumerate() {\n        stage.index = idx;\n    }\n---",
+        "reading": "`Stage.index` is documented as the position in the canonical-ordered stage vector. `SystemBuilder::build` re-sorts the stages into exactly that order at builder.rs:364, but the whole cobre-core system module never reads or writes the field — the grep for `.index` outside tests returns zero hits, and `validate.rs` has no stage-index check alongside its duplicate and cross-reference checks. The only writer is the cobre-io stage parser at stages.rs:811-815. Two crates therefore encode one ordering fact, and the crate that performs the sort is not the crate that records its result. Any other producer reaching `SystemBuilder` — the Python binding, a test fixture, a future engine — can hand in stages whose `index` disagrees with its post-sort slot, and the builder accepts it silently. That the field is a live footgun is already recorded downstream: `crates/cobre-sddp/src/production/hydro_models/production.rs:136-139` warns 'Key by the 0-based study_stages position, NOT stage.index', and stage_key.rs:30-32 documents `StudyPos` as equal to `Stage::index` only when no pre-study stages are declared."
+      },
+      "fixShape": "Move the assignment to the sort. The builder already establishes the canonical stage order, so it should reassign each stage's position immediately after sorting, making the field a derived value that cannot disagree with its slot and letting the cobre-io parser drop its own loop. If reassignment is unacceptable because some caller supplies an index with independent meaning, the alternative is a validation pass beside the existing duplicate-stage check that rejects any stage whose recorded index differs from its position, so the disagreement is an error rather than a silent wrong-stage lookup. The stronger long-term shape, given the typed keys already in the temporal module, is to stop storing the position on the stage at all and let callers ask for it through the existing key types, which is the distinction those newtypes were introduced to enforce.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "Stage.index encodes the canonical stage order but is assigned in cobre-io and never re-derived or validated by the builder that owns that order"
+    },
+    {
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "line": 175,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "StageLagTransition"
+        },
+        {
+          "line": 202,
+          "path": "crates/cobre-core/src/model/temporal.rs"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-02",
+      "evidence": {
+        "command": "grep -rn '\\bStageLagTransition\\b' crates/ --include='*.rs' | sed 's#crates/\\([^/]*\\)/.*#\\1#' | sort | uniq -c; echo ---; grep -n '\\bStageLagTransition\\b' crates/cobre-core/src/model/temporal.rs; echo ---; grep -rn 'fn accumulate_and_shift_lag_state' crates/ --include='*.rs'",
+        "output": "      4 cobre-core\n     37 cobre-sddp\n     60 cobre-stochastic\n---\n151:// StageLagTransition (SS12.3.1)\n158:/// contributing to a monthly lag slot). `StageLagTransition` encodes the\n163:/// A `Vec<StageLagTransition>` indexed by stage index is the canonical way\n175:pub struct StageLagTransition {\n---\ncrates/cobre-sddp/src/stochastic/noise.rs:232:pub(crate) fn accumulate_and_shift_lag_state(",
+        "reading": "All four cobre-core occurrences are the declaration itself and its own doc/section comment — the type has no cobre-core consumer. Its 97 real uses are split between cobre-stochastic (L1) and cobre-sddp (L3). Its field docs are written against engine internals: temporal.rs:202 says 'accumulate_and_shift_lag_state overwrites state[lag_start..] with the completed downstream lags', and that function is `pub(crate)` in cobre-sddp, so an L0 doc contract names an L3 private symbol that no cobre-core reader can follow. The struct's own fields (accumulate_weight, spillover_weight, finalize_period, the four downstream_* fields, rebuild_from_downstream) describe a PAR-lag ring-buffer accumulation schedule, not a power-system fact. The Part-I I.3-2 disposition in partI-handoff.json names only state_config, risk_config and scenario_config on `Stage`; this type sits in the same file and is not covered by it."
+      },
+      "fixShape": "Relocate the type to the crate that owns the uncertainty representation, cobre-stochastic, alongside the PAR machinery that is its only L1 consumer, and re-express its field docs against that crate's own kernel rather than against an engine-private function. Nothing in cobre-core reads it, so the move is a pure re-home plus an import change in the two consuming crates. Note the direction of travel differs from the registered stage-calendar item in the mirror: that one moves machinery from cobre-stochastic into cobre-core, this one moves an L1-only type out of cobre-core, and the two should be sequenced together so the temporal module ends up holding calendar facts and nothing algorithmic. If the owner instead wants the type to stay in L0 as a shared schedule description, the doc contract must be rewritten so it stands on its own without naming an engine symbol.",
+      "lens": "architecture",
+      "partIRef": "I.3-2",
+      "proposedSeverity": "B",
+      "title": "StageLagTransition is a PAR-lag ring-buffer control block living in L0 with zero cobre-core consumers, documented in terms of a cobre-sddp private function"
+    },
+    {
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "line": 331,
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "build"
+        },
+        {
+          "line": 229,
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "inflow_models"
+        },
+        {
+          "line": 434,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "inflow_models"
+        },
+        {
+          "line": 572,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "with_scenario_models"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-01",
+      "evidence": {
+        "command": "grep -n 'sort_canonical(&mut\\|sort_by_key(|s| s.id)\\|sort_by_key(|c| c.id.0)' crates/cobre-core/src/system/builder.rs; echo ---; grep -n 'self.inflow_models = \\|self.load_models = \\|self.ncs_models = \\|self.inflow_history = \\|self.external_scenarios = \\|self.external_load_scenarios = \\|self.external_ncs_scenarios = ' crates/cobre-core/src/system/builder.rs; echo ---; sed -n '432,434p;438,440p;466,468p' crates/cobre-core/src/system/mod.rs; echo ---; sed -n '158,160p' crates/cobre-stochastic/src/par/precompute.rs",
+        "output": "331:        sort_canonical(&mut self.buses, |b| b.operational_start_date, |b| b.id.0);\n332:        sort_canonical(&mut self.lines, ...);\n333:        sort_canonical(&mut self.hydros, ...);\n348:        sort_canonical(&mut self.thermals, ...);\n364:        self.stages.sort_by_key(|s| s.id);\n365:        self.generic_constraints.sort_by_key(|c| c.id.0);\n---\n230:        self.inflow_models = inflow_models;\n237:        self.load_models = load_models;\n244:        self.ncs_models = ncs_models;\n275:        self.inflow_history = rows;\n283:        self.external_scenarios = rows;\n291:        self.external_load_scenarios = rows;\n299:        self.external_ncs_scenarios = rows;\n---\n    /// Returns all PAR(p) inflow models in canonical order (by hydro ID, then stage ID).\n    pub fn inflow_models(&self) -> &[InflowModel] {\n    /// Returns all load models in canonical order (by bus ID, then stage ID).\n    pub fn load_models(&self) -> &[LoadModel] {\n    /// Returns all NCS availability noise models in canonical order (by NCS ID, then stage ID).\n    pub fn ncs_models(&self) -> &[NcsModel] {\n---\n    /// # Parameters\n    ///\n    /// - `inflow_models`: raw PAR parameters sorted by `(hydro_id, stage_id)`",
+        "reading": "`build` sorts nine collections (seven operational families via `sort_canonical`, plus stages and generic constraints). The seven setters at :230-:299 store their vectors verbatim and `build` never touches them again, yet the accessors at mod.rs:432/438/466 promise 'in canonical order'. The three `*_models` setters state no ordering obligation at all, so the promise appears only on the read side. A consumer already documents the order as a precondition: `PrecomputedPar::build` in cobre-stochastic declares `inflow_models` as 'sorted by (hydro_id, stage_id) from the system'. The producer that actually satisfies it is cobre-io (for example `crates/cobre-io/src/scenarios/estimation.rs:1030 rows.sort_by_key(|r| (r.hydro_id.0, r.stage_id));`), i.e. an L2 crate, so the L0 owner of the declaration-order invariance rule does not own its enforcement for these tables. `with_scenario_models` at mod.rs:572 widens the gap: it replaces `inflow_models` after construction with no sort and no validation, on a type whose own doc calls it 'immutable and thread-safe after construction'."
+      },
+      "fixShape": "Make the L0 owner own the invariant it advertises. Either the builder sorts these seven tables into their documented canonical key the way it already sorts the other nine, or it validates them as sorted and returns a validation error otherwise — the second is cheaper and preserves the current cobre-io behaviour byte-for-byte, since cobre-io already emits them sorted. Whichever is chosen, the accessor doc promise and the setter contract must agree, and the post-construction replacement path needs the same treatment as the constructor path rather than being an unchecked hole. The roadmap-consistent end state is different and larger: these seven tables are the Milestone-1 'stochastic off System' set, so the eventual home is the cobre-stochastic store, which owns its own ordering. Until that move lands, the invariant should be enforced where it is declared rather than left as a doc comment.",
+      "lens": "architecture",
+      "partIRef": "I.3-1",
+      "proposedSeverity": "B",
+      "title": "SystemBuilder enforces canonical order for nine collections and delegates it by doc comment for the seven scenario/stochastic tables it never sorts or checks"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 62,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "System"
+        },
+        {
+          "line": 43,
+          "path": "crates/cobre-core/src/model/horizon.rs",
+          "symbol": "HorizonGraph"
+        },
+        {
+          "line": 22,
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "symbol": "CascadeTopology"
+        },
+        {
+          "line": 60,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "NetworkTopology"
+        }
+      ],
+      "candidateRef": "cio-architecture-A-04",
+      "evidence": {
+        "command": "sed -n '61,66p' crates/cobre-core/src/system/mod.rs; echo '--- mechanism 2 ---'; sed -n '72p' crates/cobre-core/src/model/resolved/generic.rs; echo '--- mechanism 3 ---'; sed -n '701,703p' crates/cobre-core/src/model/scenario.rs; echo '--- unguarded ---'; grep -n 'HashMap' crates/cobre-core/src/model/horizon.rs crates/cobre-core/src/topology/cascade.rs crates/cobre-core/src/topology/network.rs | grep -v 'use std\\|::new()\\|let mut'",
+        "output": "    // Not serialized: `HashMap` iteration order is unstable, so serializing an\n    // index would make the wire payload non-reproducible for identical content.\n--- mechanism 2 ---\n            // Sort keys for deterministic output regardless of HashMap iteration order.\n--- mechanism 3 ---\n/// `profiles` uses [`BTreeMap`] rather than [`HashMap`](std::collections::HashMap) to preserve\n/// deterministic iteration order, satisfying the declaration-order\n/// invariance requirement (design-principles.md §3).\n--- unguarded ---\ncrates/cobre-core/src/model/horizon.rs:43:    pub stage_discount_rate_overrides: HashMap<i32, f64>,\ncrates/cobre-core/src/topology/cascade.rs:22:    downstream: HashMap<EntityId, EntityId>,\ncrates/cobre-core/src/topology/cascade.rs:25:    upstream: HashMap<EntityId, Vec<EntityId>>,\ncrates/cobre-core/src/topology/network.rs:60:    bus_lines: HashMap<EntityId, Vec<BusLineConnection>>,\ncrates/cobre-core/src/topology/network.rs:64:    bus_loads: HashMap<EntityId, BusLoads>,",
+        "reading": "cobre-core states the same rule three times and enforces it three different ways: `serde(skip)` on the seven index maps with an explicit wire-reproducibility rationale, a hand-written `Serialize` that sorts its composite keys, and a `BTreeMap` chosen over `HashMap` for the correlation profiles. Meanwhile `HorizonGraph`, `CascadeTopology` and `NetworkTopology` each carry `derive(Serialize, Deserialize)` (horizon.rs:21, cascade.rs:19, network.rs:58) and six `HashMap` fields between them, and all three are non-skipped fields of `SystemRepr` (system/mod.rs:157, :158, :161), so they ride the same postcard payload the skip comment is protecting. No live wrong result follows today: the broadcast serializes once on rank 0 and the round-trip guard is a value-equality assertion, not a byte comparison. What is missing is a single owner — the rule has no one statement, no shared mechanism, and nothing that fails when a new nested type serializes a HashMap."
+      },
+      "fixShape": "Give the rule one owner instead of three restatements. State once, in the crate root or the system module, that anything reachable from the System payload must serialize in a content-determined order, and satisfy it uniformly — the cheapest route is switching these six fields to an ordered map, since all six are keyed by an already-`Ord` entity id or stage id and none is on a hot path where the lookup cost would matter. The two topology maps additionally have a natural non-map wire form, since their contents are already derived from canonical-ordered entity slices. Whatever mechanism is picked, the guard that keeps it true is a test that serializes two independently-built but equal Systems and compares bytes, which is the assertion the current round-trip test deliberately does not make. If the owner judges byte-level payload reproducibility to be a non-goal, the right fix is the opposite one: retire the skip comment's rationale and the two other bespoke mechanisms, so the crate stops implying a contract it does not keep.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "The wire-payload reproducibility rule is enforced by three different bespoke mechanisms and skipped for six HashMap fields that serialize inside the same System payload"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 23,
+          "path": "crates/cobre-core/src/error.rs",
+          "symbol": "ValidationError"
+        },
+        {
+          "line": 65,
+          "path": "crates/cobre-core/src/error.rs"
+        },
+        {
+          "line": 72,
+          "path": "crates/cobre-core/src/error.rs"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-A-02",
+      "evidence": {
+        "command": "grep -rn 'DisconnectedBus\\|InvalidPenalty' crates/ --include='*.rs'; sed -n '62,64p;69,71p' crates/cobre-core/src/error.rs; grep -n 'pub enum ErrorKind' crates/cobre-io/src/validation/mod.rs",
+        "output": "crates/cobre-core/src/error.rs:65:    DisconnectedBus {\ncrates/cobre-core/src/error.rs:72:    InvalidPenalty {\ncrates/cobre-core/src/error.rs:121:            Self::DisconnectedBus { bus_id } => {\ncrates/cobre-core/src/error.rs:127:            Self::InvalidPenalty {\ncrates/cobre-core/src/error.rs:196:        let err = ValidationError::DisconnectedBus {\ncrates/cobre-core/src/topology/network.rs:90:        // TODO: use `buses` for disconnected-bus validation (ValidationError::DisconnectedBus)\n    /// A bus has no connections (no lines, generators, or loads).\n    ///\n    /// Emitted by `cobre-io` validation.\n    /// Entity-level penalty value is invalid (e.g., negative cost).\n    ///\n    /// Emitted by `cobre-io` validation.\ncrates/cobre-io/src/validation/mod.rs:56:pub enum ErrorKind {",
+        "reading": "Across the whole workspace the only occurrences of the two variants are their declaration, their Display arm, one construction inside error.rs's own test module at :196, and a TODO comment. No production site constructs either, and `InvalidPenalty` is not even constructed in a test. The doc comments on both claim cobre-io emits them, but cobre-io's validation layer raises its own `ErrorKind` enum, so the claim describes a producer that does not exist. The five remaining variants are all constructed in cobre-core's own builder and validate modules."
+      },
+      "fixShape": "Remove the two never-constructed variants together with their Display arms, the test that only exists to construct one of them, and the TODO that promises one of them; the enum then describes exactly the failures the builder can report. If the disconnected-bus check is genuinely wanted, it belongs in the validation layer that already has a code for it rather than as a reserved variant on the construction error, and the false attribution line should go either way, since it invites a maintainer to look for a cobre-io producer that never existed.",
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "title": "Two of the seven ValidationError variants are constructed nowhere in the workspace, and both carry a doc comment attributing them to a cobre-io validation path that uses a different error vocabulary"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 274,
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ncs_penalties"
+        },
+        {
+          "line": 310,
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ncs_penalties_mut"
+        },
+        {
+          "line": 125,
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "NcsStagePenalties"
+        },
+        {
+          "line": 175,
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ResolvedPenalties"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-A-00",
+      "evidence": {
+        "command": "grep -rn 'ncs_penalties(' crates/ --include='*.rs'; grep -n '#\\[cfg(test)\\]' crates/cobre-core/src/model/resolved/penalties.rs crates/cobre-io/src/resolution/penalties.rs; sed -n '1136p' crates/cobre-sddp/src/lp/builder/columns.rs; grep -rn 'penalties\\.bus_penalties\\|penalties\\.line_penalties\\|penalties\\.hydro_penalties' crates/cobre-sddp/src --include='*.rs' | head -3",
+        "output": "crates/cobre-core/src/model/resolved/penalties.rs:274:    pub fn ncs_penalties(&self, ncs_index: usize, stage_index: usize) -> NcsStagePenalties {\ncrates/cobre-core/src/model/resolved/penalties.rs:416:        assert!((table.ncs_penalties(0, 2).curtailment_cost - 50.0).abs() < f64::EPSILON);\ncrates/cobre-io/src/resolution/penalties.rs:856:            (result.ncs_penalties(0, 0).curtailment_cost - 10.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:860:            (result.ncs_penalties(0, 2).curtailment_cost - 999.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:864:            (result.ncs_penalties(0, 3).curtailment_cost - 10.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:421:#[cfg(test)]\ncrates/cobre-core/src/model/resolved/penalties.rs:328:#[cfg(test)]\n            bufs.objective[col] = -ncs.curtailment_cost * block_hours;\ncrates/cobre-sddp/src/lp/builder/columns.rs:347:        let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);\ncrates/cobre-sddp/src/lp/builder/columns.rs:687:        let lp = ctx.resolved.penalties.line_penalties(l_idx, stage_idx);\ncrates/cobre-sddp/src/lp/builder/columns.rs:722:        let bp = ctx.resolved.penalties.bus_penalties(b_idx, stage_idx);",
+        "reading": "Every remaining call of the read accessor `ncs_penalties` sits past the `#[cfg(test)]` marker of its file (cobre-core line 416 is past 328; cobre-io lines 856-864 are past 421), so there is no production reader. Its three sibling accessors on the same struct each have production call sites in the LP column builder (hydro at :347, line at :687, bus at :722). The NCS objective coefficient at columns.rs:1136 is built from `ncs.curtailment_cost` on the `NonControllableSource` entity, which is stage-invariant, not from the resolved per-stage cell. cobre-io still populates the axis through `ncs_penalties_mut` (resolution/penalties.rs:292 and :387), including the per-stage override read from the optional user file `constraints/penalty_overrides_ncs.parquet` (constraints/mod.rs:229, resolution/penalties.rs:380-390), so a declared stage-varying NCS curtailment cost is parsed, validated, resolved, stored on `System` and then never consulted."
+      },
+      "fixShape": "Decide the axis one way and make the code say so. Either wire it: have the NCS column builder take its objective coefficient from the resolved per-(ncs, stage) cell the way the hydro, line and bus column builders already take theirs, which makes the declared stage override effective and puts all four penalty families on one read path. Or retire it: drop the NCS arm from the resolved penalty table, drop the accessor pair, drop the resolver arm that fills it, and make the loader reject a non-empty penalty_overrides_ncs file with a typed error instead of accepting rows it will ignore, matching the project's own admission-gate principle that an unsupported combination is a rejection and never a silent ignore. Whichever way it goes, the choice belongs in the register with an owner, because today the same field name means a live stage-varying value for three families and an inert one for the fourth.",
+      "lens": "over-engineering",
+      "proposedSeverity": "A",
+      "title": "The whole resolved per-(NCS, stage) penalty axis has no reader: ResolvedPenalties::ncs_penalties is called only from tests while the LP objective reads the entity-level curtailment cost, so the declared penalty_overrides_ncs stage override is resolved and dropped"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 6,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "WelfordAccumulator"
+        },
+        {
+          "line": 49,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "variance"
+        },
+        {
+          "line": 61,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "std_dev"
+        },
+        {
+          "line": 73,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "sample_variance"
+        },
+        {
+          "line": 96,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "ci_95_half_width"
+        },
+        {
+          "line": 37,
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "count"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-A-03",
+      "evidence": {
+        "command": "grep -rn '\\.variance()\\|\\.std_dev()\\|\\.ci_95_half_width()\\|\\.sample_variance()\\|\\.sample_std_dev()\\|\\.sample_ci_95_half_width()\\|\\.count()' crates/ --include='*.rs' | grep -i 'welford\\|acc\\.\\|self\\.'; grep -n 'cfg(test)' crates/cobre-cli/src/progress.rs | head -1",
+        "output": "crates/cobre-core/src/stats/welford.rs:62:        self.variance().sqrt()\ncrates/cobre-core/src/stats/welford.rs:89:        self.sample_variance().sqrt()\ncrates/cobre-core/src/stats/welford.rs:102:            1.96 * self.std_dev() / count_f64.sqrt()\ncrates/cobre-core/src/stats/welford.rs:117:            1.96 * self.sample_std_dev() / count_f64.sqrt()\ncrates/cobre-core/src/stats/welford.rs:147:            (acc.variance() - 4.0).abs() < 1e-10,\ncrates/cobre-core/src/stats/welford.rs:152:            (acc.std_dev() - 2.0).abs() < 1e-10,\ncrates/cobre-core/src/stats/welford.rs:173:            acc.ci_95_half_width(),\ncrates/cobre-core/src/stats/welford.rs:193:        assert_eq!(acc.count(), 0, \"count must be 0 before any updates\");\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:195:                    welford.sample_std_dev(),\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:196:                    welford.sample_ci_95_half_width(),\ncrates/cobre-cli/src/progress.rs:1021:            (acc.std_dev() - expected_std).abs() < 1e-6,\ncrates/cobre-cli/src/progress.rs:550:#[cfg(test)]",
+        "reading": "The only production consumer of the accumulator is the forward-pass statistics aggregator, and it calls new, update, mean, sample_std_dev and sample_ci_95_half_width. Every call of count, variance, std_dev, ci_95_half_width and sample_variance is either internal to welford.rs (std_dev delegating to variance, ci_95_half_width to std_dev, sample_std_dev to sample_variance) or inside a test module: welford.rs's own tests, and cobre-cli's progress tests, whose module starts at line 550 and so contains the line 1021 call. The similarly named hits in the SDDP convergence monitor are a struct field and a different type's accessor, not this one."
+      },
+      "fixShape": "Keep the arm the single consumer uses and drop the mirrored one. Remove the population variance, population standard deviation, population confidence half-width and the sample variance accessor, keeping sample standard deviation and sample confidence half-width as the surface the aggregator reads, and fold their internal delegation into the two survivors. The count accessor goes with them unless a reader appears. The tests that assert the deleted accessors should be rewritten against the survivors on the same known dataset so the numerical check is not lost, and the cobre-cli progress test should assert the sample statistic it can actually get. If instead the owner wants the population arm kept as a general utility, it needs the same treatment every other inert surface in this workspace gets: an owner and a first-consumer condition in the register, not silent symmetry.",
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "title": "WelfordAccumulator ships a symmetric population-statistics half that no production caller wants: five of its nine methods have no production call site anywhere in the workspace"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 59,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "NetworkTopology"
+        },
+        {
+          "line": 77,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "build"
+        },
+        {
+          "line": 91,
+          "path": "crates/cobre-core/src/topology/network.rs"
+        },
+        {
+          "line": 87,
+          "path": "crates/cobre-core/src/system/mod.rs"
+        },
+        {
+          "line": 365,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "network"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-A-01",
+      "evidence": {
+        "command": "grep -rn 'NetworkTopology\\|BusGenerators\\|BusLineConnection\\|BusLoads\\|\\.network()' crates/ --include='*.rs' | grep -v '^crates/cobre-core/' | wc -l; grep -rn '\\.network()' crates/ --include='*.rs'; grep -n 'network: NetworkTopology\\|pub fn network' crates/cobre-core/src/system/mod.rs; grep -n 'let _ = buses' crates/cobre-core/src/topology/network.rs; grep -rn 'NetworkTopology' docs/ ARCHITECTURE.md CHANGELOG.md plans/architecture-debt-audit/BACKLOG.md | wc -l",
+        "output": "0\ncrates/cobre-core/tests/integration.rs:324:    let network = system.network();\ncrates/cobre-core/tests/integration.rs:378:    let network = system.network();\ncrates/cobre-core/tests/integration.rs:400:    let network = system.network();\ncrates/cobre-core/src/system/mod.rs:970:        let connections = system.network().bus_lines(EntityId(0));\ncrates/cobre-core/src/system/mod.rs:87:    network: NetworkTopology,\ncrates/cobre-core/src/system/mod.rs:158:    network: NetworkTopology,\ncrates/cobre-core/src/system/mod.rs:365:    pub fn network(&self) -> &NetworkTopology {\ncrates/cobre-core/src/topology/network.rs:91:        let _ = buses;\n0",
+        "reading": "The first count is zero: no file outside crates/cobre-core mentions `NetworkTopology`, `BusGenerators`, `BusLineConnection`, `BusLoads`, or calls `System::network()` anywhere in the workspace, cobre-python included. The only readers are cobre-core's own integration binary and one inline unit test. The field at system/mod.rs:87 carries no serde(skip), unlike the seven lookup-index fields immediately above it, and it is repeated in the deserialize mirror at :158, so the structure rides every postcard `System` broadcast that cobre-io's serialize_system produces. `NetworkTopology::build` takes a `buses` slice it immediately discards at network.rs:91 under a TODO naming a validation error that no code constructs. The last count is zero: the type is named in no design document, in ARCHITECTURE.md, in CHANGELOG.md or in the audit BACKLOG, so it is neither a registered reserved seam nor registered debt."
+      },
+      "fixShape": "Give it an owner and a consuming milestone or delete it, which is the register's own admission rule for an inert surface. The plausible owner is the reserved power-flow vertical, since bus-to-line, bus-to-generator and bus-to-load adjacency is exactly what a network formulation would pull; if that is the intent, record it in the reserved-seam register with that owner and the first-consumer condition, and say there that it is on the System broadcast wire so the cost of keeping it is visible. If no such consumer is committed, remove the module, the System field, the matching slot in the deserialize mirror, the crate-root re-exports and the accessor, and move the adjacency assertions in the integration binary to whatever survives; note that the field sits in a positional postcard layout, so the removal has to change the mirror struct and the field order in lockstep. Independently of that decision, the discarded buses parameter and its TODO should go, since the disconnected-bus check it points at is a validation-layer concern and the error variant it names is itself unconstructed.",
+      "lens": "over-engineering",
+      "partIRef": "I.3-1",
+      "proposedSeverity": "B",
+      "title": "NetworkTopology and its three companion records are a fully unconsumed derived structure: built at System construction, carried on System, serialized into the MPI broadcast payload, re-exported at the crate root, and referenced nowhere outside cobre-core"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 403,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "canonical_calendar_days"
+        },
+        {
+          "line": 485,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "is_multi_resolution"
+        },
+        {
+          "line": 382,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "span_days"
+        },
+        {
+          "line": 502,
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "resolution_level_of"
+        }
+      ],
+      "candidateRef": "cio-perf-A-01",
+      "evidence": {
+        "command": "grep -n 'canonical_calendar_days' crates/cobre-core/src/model/temporal.rs; echo '--- per-stage caller ---'; grep -n 'for (i, raw_stage) in raw.stages\\|resolve_or_validate_season_id(\\|is_multi_resolution()' crates/cobre-io/src/stages.rs",
+        "output": "378:    /// `Custom` counts covered days out of the leap `canonical_calendar_days`\n390:            SeasonCycleType::Custom => canonical_calendar_days()\n403:fn canonical_calendar_days() -> Vec<(u32, u32)> {\n489:        canonical_calendar_days().into_iter().any(|(month, day)| {\n--- per-stage caller ---\n739:    for (i, raw_stage) in raw.stages.into_iter().enumerate() {\n754:        let season_id = resolve_or_validate_season_id(\n1127:fn resolve_or_validate_season_id(\n1140:    if season_map.is_multi_resolution() {",
+        "reading": "`canonical_calendar_days` builds a fresh 366-entry `Vec<(u32, u32)>` on the heap and is reached from two places: the `Custom` arm of `span_days` (:390, itself reached through `resolution_level_of` at :502) and `is_multi_resolution` (:489). Its contents depend on nothing — a fixed 12-entry leap-month table walked into a fixed 366-entry sequence. On the caller side, `is_multi_resolution()` is the first branch of `resolve_or_validate_season_id` (:1140), which the stage loader calls once per raw stage from the loop at :739, and the season map it is asked about is the same immutable `policy_graph.season_map` on every iteration."
+      },
+      "fixShape": "Two independent moves. First, stop rebuilding the constant: express the 366-day canonical calendar as a compile-time constant array or a process-lifetime lazily-initialised static, and have both readers borrow it instead of receiving an owned vector — the function's own doc already states the sequence is year-independent, so nothing observable changes. Second, hoist the map-level classification out of the per-stage loop: the multi-resolution answer is a property of the season map, so the stage loader should evaluate it once before entering the stage loop and pass the resulting flag into the per-stage season resolution, or the season map should carry the classification as a field computed when it is constructed. Prefer the loader-side hoist over caching inside the type if the owner wants the data model to stay a plain aggregate; either way the per-stage recomputation disappears without changing any accepted or rejected input.",
+      "lens": "perf",
+      "mechanism": "Allocation per call plus a repeated pass over the same immutable input. For a `Custom` season map, one `is_multi_resolution()` call allocates the 366-entry vector and then runs up to 366 x n_seasons `covers` tests; the loader repeats that whole computation once per study stage even though the answer is fixed by the season map alone, so the work is O(n_stages x 366 x n_seasons) where one evaluation at map-construction time would do. `span_days`'s `Custom` arm rebuilds the same vector again per season queried. Non-`Custom` maps short-circuit at the cycle-type test (:486) and pay nothing, so the cost is confined to the multi-resolution decomposition decks, but on those it scales with the stage count rather than sitting flat. The path is stage parsing, i.e. setup-time and once per run, which caps the severity; what makes it worth recording is that the growth is in the deck's stage count and the constant table is knowable at compile time.",
+      "proposedSeverity": "C",
+      "title": "The 366-day canonical calendar is heap-built on every call, and the season map's multi-resolution classification — a pure function of an immutable map — is recomputed once per study stage by the loader"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 20,
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs",
+          "symbol": "window_period_overlaps"
+        },
+        {
+          "line": 41,
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs"
+        },
+        {
+          "line": 55,
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs"
+        }
+      ],
+      "candidateRef": "cio-perf-A-02",
+      "evidence": {
+        "command": "grep -rn 'window_period_overlaps(' crates/cobre-stochastic/src crates/cobre-io/src crates/cobre-sddp/src --include='*.rs' | grep -v '///' | grep -v '//!'; echo '--- signature ---'; sed -n '19,24p;41,42p;55,62p' crates/cobre-core/src/model/temporal/overlap.rs",
+        "output": "crates/cobre-stochastic/src/par/lag_transition.rs:37:    window_period_overlaps(window_start_hours, window_width_hours, &[period_hours])\ncrates/cobre-stochastic/src/season_cast/mod.rs:576:                let overlap = window_period_overlaps(\ncrates/cobre-stochastic/src/season_cast/mod.rs:644:        window_period_overlaps(window_start, period_duration, &self.stage_hours)\ncrates/cobre-io/src/validation/semantic/travel_time.rs:98:    window_period_overlaps(t, future[0], future)\ncrates/cobre-io/src/validation/semantic/travel_time.rs:334:        if !window_period_overlaps(t, future[0], future).is_empty() {\ncrates/cobre-sddp/src/setup/bucket_topology.rs:113:    window_period_overlaps(0.0, t_v, study_durations).len()\ncrates/cobre-sddp/src/lead_time/mod.rs:89:    let stage_weight_overlaps = window_period_overlaps(window_start, h_anchor, future_calendar);\ncrates/cobre-sddp/src/lead_time/mod.rs:197:        let combined = window_period_overlaps(travel_time_hours, duration_b, &target);\ncrates/cobre-sddp/src/lead_time/mod.rs:260:                        window_period_overlaps(local_start, width, partition)\n--- signature ---\n#[must_use]\npub fn window_period_overlaps(\n    window_start_hours: f64,\n    window_width_hours: f64,\n    stage_lengths_hours: &[f64],\n) -> Vec<f64> {\n    let mut overlaps = Vec::new();\n    match overlaps.iter().rposition(|&overlap| overlap > 0.0) {\n        Some(last_nonzero) => {\n            overlaps.truncate(last_nonzero + 1);\n            overlaps\n        }\n        None => Vec::new(),\n    }\n}",
+        "reading": "The only entry point returns an owned `Vec<f64>`, and its accumulator is built with `Vec::new()` (:41) rather than reserving against `stage_lengths_hours.len()`, which is known before the loop starts. Five call sites never look at the vector as a sequence: `lag_transition.rs:37` and `season_cast/mod.rs:576` pass a one-element slice and immediately take `.first().copied()`; `travel_time.rs:98` and `bucket_topology.rs:113` read only `.len()`; `travel_time.rs:334` reads only `.is_empty()`. The last of those sits inside `check_horizon_inertness`'s loop over every study stage (`crates/cobre-io/src/validation/semantic/travel_time.rs:332`), and each iteration passes the whole remaining stage tail, so the vector it allocates and discards is O(remaining stages) wide."
+      },
+      "fixShape": "Keep the vector-returning function as the multi-period answer, and give the same module two narrower entry points beside it that the discarding callers can use: a scalar single-period overlap that returns the intersected hours for one period without touching the heap, and a reach predicate or depth count that answers how far a window extends by walking periods and returning a boolean or an index instead of materialising the per-period series. All three should share one internal walk so the overlap arithmetic stays single-owner and the existing bit-exactness tests keep covering it. Independently, reserve the accumulator against the input slice length before the loop, since the upper bound is known and the current zero-capacity start guarantees a reallocation chain for any multi-period window. Then move the five scalar-shaped call sites onto the narrow entry points; the four genuine sequence consumers keep the existing signature unchanged.",
+      "lens": "perf",
+      "mechanism": "Allocation per call for a result the caller does not keep, compounded by an unreserved growth sequence. Because the accumulator starts at zero capacity and pushes one entry per walked period, a single call performs a reallocate-and-copy chain rather than one sized allocation, even though the upper bound on the entry count is the input slice length. Five of the nine production call sites then drop the vector after reading a scalar, a length, or an emptiness flag, so the entire heap round trip is dead work at those sites. The emptiness test in the travel-time horizon-inertness check makes it deck-scaling: the outer loop runs once per study stage and each iteration allocates a vector whose width grows with the stage tail, so the allocation volume for a boolean answer grows quadratically in the stage count. Every one of these is a setup-time or validation-time path rather than a per-scenario one, which is why this is recorded as an API-shape defect rather than a hot-path defect; the deck-independent reason it matters is that the wasted work is a function of stage count and travel-time depth, both of which the operator controls.",
+      "proposedSeverity": "B",
+      "title": "`window_period_overlaps` returns an owned, un-reserved `Vec<f64>` with no scalar or predicate entry point, so five of its nine production call sites allocate a vector purely to read one number, a length, or an emptiness test"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 85,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "System"
+        },
+        {
+          "line": 157,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "SystemRepr"
+        },
+        {
+          "line": 588,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "rebuild_indices"
+        },
+        {
+          "line": 20,
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "symbol": "CascadeTopology"
+        },
+        {
+          "line": 59,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "NetworkTopology"
+        }
+      ],
+      "candidateRef": "cio-perf-A-00",
+      "evidence": {
+        "command": "grep -n 'serde(skip)\\|cascade: CascadeTopology\\|network: NetworkTopology\\|rebuild_indices' crates/cobre-core/src/system/mod.rs; echo '--- build inputs ---'; grep -n 'pub fn build' -A 8 crates/cobre-core/src/topology/cascade.rs | head -12; grep -n 'pub fn build' -A 10 crates/cobre-core/src/topology/network.rs | head -14; echo '--- production broadcast ---'; grep -n 'broadcast_value(raw_system' crates/cobre-cli/src/commands/run/setup.rs",
+        "output": "69:    #[cfg_attr(feature = \"serde\", serde(skip))]\n71:    #[cfg_attr(feature = \"serde\", serde(skip))]\n73:    #[cfg_attr(feature = \"serde\", serde(skip))]\n75:    #[cfg_attr(feature = \"serde\", serde(skip))]\n77:    #[cfg_attr(feature = \"serde\", serde(skip))]\n79:    #[cfg_attr(feature = \"serde\", serde(skip))]\n81:    #[cfg_attr(feature = \"serde\", serde(skip))]\n85:    cascade: CascadeTopology,\n87:    network: NetworkTopology,\n94:    #[cfg_attr(feature = \"serde\", serde(skip))]\n157:    cascade: CascadeTopology,\n158:    network: NetworkTopology,\n221:        system.rebuild_indices();\n588:    pub(crate) fn rebuild_indices(&mut self) {\n--- build inputs ---\n37:    pub fn build(hydros: &[Hydro]) -> Self {\n38-        let mut downstream: HashMap<EntityId, EntityId> = HashMap::new();\n39-        for hydro in hydros {\n40-            if let Some(ds_id) = hydro.downstream_id {\n41-                downstream.insert(hydro.id, ds_id);\n42-            }\n43-        }\n45-        let mut upstream: HashMap<EntityId, Vec<EntityId>> = HashMap::new();\n77:    pub fn build(\n78-        buses: &[Bus],\n79-        lines: &[Line],\n80-        hydros: &[Hydro],\n81-        thermals: &[Thermal],\n82-        non_controllable_sources: &[NonControllableSource],\n83-        contracts: &[EnergyContract],\n84-        pumping_stations: &[PumpingStation],\n85-    ) -> Self {\n86-        let mut bus_lines: HashMap<EntityId, Vec<BusLineConnection>> = HashMap::new();\n87-        let mut bus_generators: HashMap<EntityId, BusGenerators> = HashMap::new();\n--- production broadcast ---\n322:    let system_result = broadcast_value(raw_system, &ctx.comm);",
+        "reading": "The eight `HashMap` index fields carry `serde(skip)` and are rebuilt by `rebuild_indices` from `From<SystemRepr>` at :221; the in-file rationale at :64-68 is that a serialized index makes the wire payload non-reproducible for identical content. `cascade` (:85) and `network` (:87) carry no skip and are listed in `SystemRepr` (:157-158), so their five `HashMap`s ride the payload. `CascadeTopology::build` reads only `hydro.id` and `hydro.downstream_id`, and `NetworkTopology::build` reads only the seven entity slices — every one of those is already serialized ahead of them in the same struct, so both topologies are pure derivations of bytes the receiving rank already holds. The last grep shows the payload is real in production: `crates/cobre-cli/src/commands/run/setup.rs:322` hands the loaded `System` to `crates/cobre-cli/src/commands/broadcast.rs::broadcast_value` (declared at line 410), which postcard-serializes its argument at :419."
+      },
+      "fixShape": "Give `cascade` and `network` the same treatment their sibling index maps already have: mark both fields skipped on the wire, drop them from the deserialize shadow struct, and extend the existing rebuild step that `From<SystemRepr>` already calls so it reconstructs both topologies from the deserialized entity slices alongside the seven entity indices and the stage index. The rebuild is safe to make unconditional because both builders are content-determined: the cascade's topological order is drawn from a min-heap keyed on the raw entity id (so it does not inherit the surrounding map's iteration order), and every upstream and per-bus list is explicitly sorted by id before the builder returns. State in the field comment that the two topologies are derived-not-transmitted for the same reason the indices are, so a future field addition inherits the rule rather than re-deciding it. Keep the deserialize shadow struct's field-order note intact — removing two fields changes the postcard layout, so the change must land together with whatever pins that layout.",
+      "lens": "perf",
+      "mechanism": "Redundant copy on the wire. Every worker rank receives five `HashMap`s (`CascadeTopology.downstream`/`.upstream`, `NetworkTopology.bus_lines`/`.bus_generators`/`.bus_loads`) whose contents are a deterministic function of the entity slices that precede them in the same payload. The receiving rank pays twice: once for the transferred bytes, and again to insert every deserialized pair into a fresh `HashMap` — the identical insert work a local `CascadeTopology::build` / `NetworkTopology::build` would do from the slices it already has, so no receive-side CPU is bought by the transfer. Cost scales with entity count (hydro cascade edges plus one bus-keyed entry per bus with a line, generator, contract or pump), so it grows with every deck rather than sitting at a fixed overhead. The path is setup-time (one broadcast per run), which is why this is payload waste rather than a hot-path defect; the rebuild it would be replaced by is exactly the setup-time recomputation the project rule already sanctions, and the precedent for it sits four lines away in the same `From<SystemRepr>` impl.",
+      "proposedSeverity": "B",
+      "title": "The MPI broadcast payload carries the two derived topologies (`cascade`, `network`) that every rank could rebuild locally, while the sibling index maps three fields above are skipped and rebuilt"
+    },
+    {
+      "alignmentHint": "advances-1",
+      "anchors": [
+        {
+          "line": 485,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "make_all_variants"
+        },
+        {
+          "line": 623,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_construct"
+        },
+        {
+          "line": 633,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_clone"
+        },
+        {
+          "line": 641,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_debug_non_empty"
+        },
+        {
+          "line": 649,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "forward_pass_complete_fields_accessible"
+        },
+        {
+          "line": 914,
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "stage_row_selection_record_fields_accessible"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-A-02",
+      "evidence": {
+        "command": "grep -c 'impl ' crates/cobre-core/src/constraints/training_event.rs; grep -n '#\\[cfg(test)\\]' crates/cobre-core/src/constraints/training_event.rs; wc -l < crates/cobre-core/src/constraints/training_event.rs; grep -c '#\\[test\\]' crates/cobre-core/src/constraints/training_event.rs",
+        "output": "0\n476:#[cfg(test)]\n938\n15",
+        "reading": "The file declares zero `impl` blocks, so `TrainingEvent` and its payload structs have no behaviour to test; the test module runs from line 476 to the end of a 938-line file, i.e. 463 lines and 49% of the file for 15 tests. Eight of the 15 are named `*_fields_accessible` and their bodies destructure a variant built two lines earlier and assert each binding equals the literal just written. `all_variants_clone` asserts `format!(\"{cloned:?}\")` is non-empty and `all_variants_debug_non_empty` asserts the same for the original, both exercising only the `#[derive(Clone, Debug)]` the compiler generated. The one test that looks like a contract, `all_variants_construct`, asserts `variants.len() == 16` with the message \"expected exactly 16 TrainingEvent variants\", but `make_all_variants` is a hand-written `vec![]` with no exhaustive match over the enum, so adding a 17th variant compiles and leaves the assert green. It pins the fixture's length, not the enum's arity."
+      },
+      "fixShape": "Delete the field-echo and derived-trait tests outright; they assert nothing a compile does not already guarantee. If the intent behind `all_variants_construct` is worth keeping, replace it with something that actually fails on an enum change: an exhaustive `match` over a `TrainingEvent` value in the test that has no wildcard arm, so a new variant is a compile error at the fixture. Everything the emitting side genuinely depends on belongs in a test next to the emitter, not next to the plain data enum. Note the separate, already-registered question of whether this file belongs in an L0 crate at all: the mirror carries that as a Milestone-1 target and this candidate does not restate it, but shrinking the module by half makes the eventual relocation carry less dead weight.",
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "title": "`training_event.rs` carries a 463-line inline test module over a data enum with zero methods; every test echoes literals it just wrote or asserts a derived Debug is non-empty"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 58,
+          "path": "crates/cobre-core/src/entities/hydro.rs",
+          "symbol": "HydroPenalties"
+        },
+        {
+          "line": 296,
+          "path": "crates/cobre-core/src/entities/hydro.rs",
+          "symbol": "penalties_all"
+        },
+        {
+          "line": 511,
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "zero_penalties"
+        },
+        {
+          "line": 636,
+          "path": "crates/cobre-core/src/system/mod.rs"
+        },
+        {
+          "line": 145,
+          "path": "crates/cobre-core/src/topology/cascade.rs"
+        },
+        {
+          "line": 235,
+          "path": "crates/cobre-core/src/topology/network.rs"
+        },
+        {
+          "line": 19,
+          "path": "crates/cobre-core/tests/integration.rs",
+          "symbol": "zero_hydro_penalties"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-A-00",
+      "evidence": {
+        "command": "grep -rn \"fn zero_penalties\\|fn zero_hydro_penalties\\|fn penalties_all\\|let zero_penalties = HydroPenalties {\" crates/cobre-core/src crates/cobre-core/tests; sed -n '56,58p' crates/cobre-core/src/entities/hydro.rs; sed -n '/^pub struct HydroPenalties/,/^}/p' crates/cobre-core/src/entities/hydro.rs | grep -c '    pub '",
+        "output": "crates/cobre-core/src/topology/cascade.rs:145:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/src/topology/network.rs:235:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/tests/integration.rs:19:fn zero_hydro_penalties() -> HydroPenalties {\ncrates/cobre-core/src/system/mod.rs:636:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/src/system/builder.rs:511:    pub(super) fn zero_penalties() -> HydroPenalties {\ncrates/cobre-core/src/entities/hydro.rs:296:    fn penalties_all(v: f64) -> HydroPenalties {\n#[derive(Debug, Clone, Copy, PartialEq)]\n#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\npub struct HydroPenalties {\n16",
+        "reading": "Six fixture sites in the sub-station build the same uniform-value `HydroPenalties`. The struct has 16 `pub f64` fields and derives only Debug/Clone/Copy/PartialEq (no `Default`), so each site must spell out all 16 fields and a 17th penalty field is a compile break at all six at once. One of the six (`system/builder.rs:511`) was already made `pub(super)` to be shared, and its sibling `system/mod.rs:636` still open-codes its own copy anyway, which shows the sharing intent exists but has no home. The same fixture shape escapes the crate: `grep -rlE \"fn [a-z_]*penalties[a-z_]*\\([^)]*\\) -> HydroPenalties\" crates/ --include='*.rs' | sed 's|/src/.*||;s|/tests/.*||' | sort | uniq -c` reports 3 files in cobre-core, 10 in cobre-io and 19 in cobre-sddp, all declaring their own fixture for a type cobre-core owns."
+      },
+      "fixShape": "Give the type one shareable fixture where the type lives. Two composable moves: derive or hand-write `Default` for `HydroPenalties` so a fixture can write only the fields a test actually cares about and spread the rest, and expose a single uniform-value constructor from cobre-core behind the `test-support` feature the crate already declares (it currently gates exactly one item, `Hydro::declare_mirror_unit_group`), so cobre-io's and cobre-sddp's test modules can reach it as a dev-dependency feature instead of re-declaring it. Then delete the five in-crate duplicates and let the sibling crates migrate opportunistically. Do not introduce a separate test-support crate; the testing yardstick explicitly rejects that in favour of the feature the crate already has.",
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "title": "Six independent all-same-value `HydroPenalties` test fixtures inside cobre-core, one per test module, each re-enumerating all 16 fields"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 61,
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_equality"
+        },
+        {
+          "line": 70,
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_copy"
+        },
+        {
+          "line": 78,
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_hash_consistency"
+        },
+        {
+          "line": 86,
+          "path": "crates/cobre-core/src/entities/bus.rs",
+          "symbol": "test_bus_equality"
+        },
+        {
+          "line": 87,
+          "path": "crates/cobre-core/src/entities/energy_contract.rs",
+          "symbol": "test_contract_type_equality"
+        },
+        {
+          "line": 44,
+          "path": "crates/cobre-core/src/entities/pumping_station.rs",
+          "symbol": "test_pumping_station_construction"
+        },
+        {
+          "line": 1166,
+          "path": "crates/cobre-core/src/model/scenario.rs",
+          "symbol": "annual_component_partial_eq_clone"
+        },
+        {
+          "line": 254,
+          "path": "crates/cobre-core/src/constraints/initial_conditions.rs",
+          "symbol": "test_hydro_storage_clone"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-A-04",
+      "evidence": {
+        "command": "grep -nE 'fn (test_equality|test_copy|test_hash_consistency|test_bus_equality|test_contract_type_equality|test_pumping_station_construction|annual_component_partial_eq_clone|test_hydro_storage_clone)\\(\\)' crates/cobre-core/src/entity_id.rs crates/cobre-core/src/entities/bus.rs crates/cobre-core/src/entities/energy_contract.rs crates/cobre-core/src/entities/pumping_station.rs crates/cobre-core/src/model/scenario.rs crates/cobre-core/src/constraints/initial_conditions.rs",
+        "output": "crates/cobre-core/src/entities/bus.rs:86:    fn test_bus_equality() {\ncrates/cobre-core/src/entity_id.rs:61:    fn test_equality() {\ncrates/cobre-core/src/entity_id.rs:70:    fn test_copy() {\ncrates/cobre-core/src/entity_id.rs:78:    fn test_hash_consistency() {\ncrates/cobre-core/src/constraints/initial_conditions.rs:254:    fn test_hydro_storage_clone() {\ncrates/cobre-core/src/model/scenario.rs:1166:    fn annual_component_partial_eq_clone() {\ncrates/cobre-core/src/entities/pumping_station.rs:44:    fn test_pumping_station_construction() {\ncrates/cobre-core/src/entities/energy_contract.rs:87:    fn test_contract_type_equality() {",
+        "reading": "I read each of these eight bodies. `test_equality` builds `EntityId(1)` twice and asserts they are equal; `test_copy` assigns an `EntityId` to a second binding and asserts equality; `test_hash_consistency` hashes `EntityId(99)` twice with `DefaultHasher` and asserts the two digests match, which tests the standard library's hasher determinism rather than anything in this crate. `test_bus_equality`, `test_hydro_storage_clone` and `annual_component_partial_eq_clone` each clone a value and assert the clone equals the original. `test_contract_type_equality` asserts `ContractType::Import == ContractType::Import` and `!= ContractType::Export` on a fieldless enum. `test_pumping_station_construction` is the entire test module of its file and asserts each of the ten fields equals the literal written on the line above. None of these types has a hand-written `PartialEq`, `Clone`, `Copy` or `Hash`; the impls are all derived, so every one of these assertions is guaranteed by codegen. I deliberately left the serde and postcard round-trip tests in these same modules out of this candidate: they touch a real wire path even where the derive is plain."
+      },
+      "fixShape": "Delete the tests whose assertions are discharged by the derive. Where a test module would then be empty, as in `entities/pumping_station.rs`, delete the module rather than inventing a replacement; that entity is plain data covered end to end by the builder and integration tests. Where a construction test is doing real work in one assertion and echoing literals in the rest, keep the one assertion and drop the echo. Treat this as opportunistic cleanup on files already being touched rather than a sweep of its own, and pair it with a homing convention so new plain-data types do not attract the same pattern.",
+      "lens": "test-bloat",
+      "proposedSeverity": "C",
+      "title": "Tests that exercise derived `PartialEq`, `Clone`, `Copy` and `Hash` rather than any code the crate wrote, scattered across `entities/` and `entity_id.rs`"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 1883,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "opt_f64_bits_eq"
+        },
+        {
+          "line": 1891,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "hydro_stage_bounds_bits_eq"
+        },
+        {
+          "line": 1898,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "hydro_block_bounds_bits_eq"
+        },
+        {
+          "line": 1911,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "thermal_block_bounds_bits_eq"
+        },
+        {
+          "line": 1916,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "line_bounds_bits_eq"
+        },
+        {
+          "line": 1921,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "pumping_bounds_bits_eq"
+        },
+        {
+          "line": 1926,
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "contract_bounds_bits_eq"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-A-03",
+      "evidence": {
+        "command": "grep -n 'fn opt_f64_bits_eq\\|fn hydro_stage_bounds_bits_eq\\|fn hydro_block_bounds_bits_eq\\|fn thermal_block_bounds_bits_eq\\|fn line_bounds_bits_eq\\|fn pumping_bounds_bits_eq\\|fn contract_bounds_bits_eq' crates/cobre-core/src/model/resolved/bounds.rs",
+        "output": "1883:    fn opt_f64_bits_eq(a: Option<f64>, b: Option<f64>) -> bool {\n1891:    fn hydro_stage_bounds_bits_eq(a: &HydroStageBounds, b: &HydroStageBounds) -> bool {\n1898:    fn hydro_block_bounds_bits_eq(a: &HydroBlockBounds, b: &HydroBlockBounds) -> bool {\n1911:    fn thermal_block_bounds_bits_eq(a: &ThermalBlockBounds, b: &ThermalBlockBounds) -> bool {\n1916:    fn line_bounds_bits_eq(a: &LineBlockBounds, b: &LineBlockBounds) -> bool {\n1921:    fn pumping_bounds_bits_eq(a: &PumpingBlockBounds, b: &PumpingBlockBounds) -> bool {\n1926:    fn contract_bounds_bits_eq(a: &ContractBlockBounds, b: &ContractBlockBounds) -> bool {",
+        "reading": "Six struct-specific bit comparators plus one Option helper are hand-written inside one inline test module, each an explicit `a.field.to_bits() == b.field.to_bits()` chain per field. I checked exhaustiveness at the baseline and it holds today: `HydroStageBounds` has 4 fields and its comparator covers 4, `HydroBlockBounds` has 10 and its comparator covers 10, `ThermalBlockBounds` has 2 and covers 2. The debt is that nothing keeps it that way. A field added to any of these bounds structs compiles cleanly and is simply never compared, silently narrowing a bit-exactness assertion in the crate that owns the declaration-order-invariance hard rule. The only other `*_bits_eq` family in the workspace is in `crates/cobre-solver/tests/clp_determinism.rs`, so no shared comparator surface exists for either to reuse."
+      },
+      "fixShape": "Make the comparators exhaustive by construction rather than by review: destructure both sides with a full field pattern that has no `..` rest, so adding a field to a bounds struct fails to compile until the comparator names it. Then hoist the generic pieces, the scalar and `Option<f64>` bit comparison, into cobre-core's `test-support` surface as the shared exact-equality comparator the testing yardstick asks for, leaving only the per-struct field lists local. That also gives the solver crate's determinism harness one comparator to depend on instead of its own copy.",
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "title": "Ad-hoc per-struct bit comparators in `resolved/bounds.rs` with nothing enforcing field exhaustiveness, where the testing yardstick calls for one shared comparator"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 218,
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "make_line"
+        },
+        {
+          "line": 619,
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "make_line"
+        },
+        {
+          "line": 53,
+          "path": "crates/cobre-core/tests/integration.rs",
+          "symbol": "make_line"
+        },
+        {
+          "line": 649,
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "line"
+        },
+        {
+          "line": 144,
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "symbol": "make_hydro"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-A-01",
+      "evidence": {
+        "command": "grep -rn 'fn make_bus\\|fn make_line\\|fn make_thermal\\|fn make_ncs\\|fn make_group' crates/cobre-core/src crates/cobre-core/tests && diff <(sed -n '218,232p' crates/cobre-core/src/topology/network.rs) <(sed -n '619,633p' crates/cobre-core/src/system/mod.rs)",
+        "output": "crates/cobre-core/src/topology/network.rs:208:    fn make_bus(id: i32) -> Bus {\ncrates/cobre-core/src/topology/network.rs:218:    fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/src/topology/network.rs:285:    fn make_thermal(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/src/topology/network.rs:300:    fn make_ncs(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/topology/network.rs:329:    fn make_group(id: i32, bus_id: i32) -> HydroUnitGroup {\ncrates/cobre-core/tests/integration.rs:40:fn make_bus(id: i32) -> cobre_core::Bus {\ncrates/cobre-core/tests/integration.rs:53:fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/tests/integration.rs:102:fn make_group(id: i32, bus_id: i32) -> HydroUnitGroup {\ncrates/cobre-core/tests/integration.rs:114:fn make_thermal(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/tests/integration.rs:165:fn make_ncs(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/system/mod.rs:609:    fn make_bus(id: i32) -> Bus {\ncrates/cobre-core/src/system/mod.rs:619:    fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/src/system/mod.rs:691:    fn make_thermal_on_bus(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/src/system/mod.rs:707:    fn make_thermal(id: i32) -> Thermal {\ncrates/cobre-core/src/system/mod.rs:755:    fn make_ncs_on_bus(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/system/mod.rs:769:    fn make_ncs(id: i32) -> NonControllableSource {\n4c4\n<             name: String::new(),\n---\n>             name: format!(\"line-{id}\"),",
+        "reading": "The same builder family is declared in `topology/network.rs`, `system/mod.rs`, `tests/integration.rs`, `topology/cascade.rs` (make_hydro only) and twice inside `system/builder.rs` under the names `bus`/`line`/`hydro`/`thermal`/`ncs`/`contract`/`pumping`. The diff proves they are copies rather than differently-purposed fixtures: the 15-line `make_line` bodies at `topology/network.rs:218` and `system/mod.rs:619` differ in exactly one line, the name string. `system/builder.rs` alone declares `fn bus` twice (lines 498 and 636) in two sibling test modules of one file. Each entity struct in this crate is a plain field-per-line record, so adding a field to `Line` or `Bus` requires editing every one of these copies."
+      },
+      "fixShape": "Hoist one entity-builder family into cobre-core behind the existing `test-support` feature, next to the entities it constructs, parameterised on the axes the current copies actually vary (id, bus id, operational date, name) and defaulting the rest, so a field addition is an O(1) edit rather than an O(sites) one. Have the five in-crate sites and `tests/integration.rs` call it, and drop the local copies. Keep the per-test specialisation that genuinely differs (the deficit segments the integration deck needs, the date-varying overloads `system/builder.rs` uses for canonical-order tests) as thin wrappers over the shared builder rather than as forks of it.",
+      "lens": "test-bloat",
+      "proposedSeverity": "B",
+      "title": "The entity fixture-builder family (make_bus / make_line / make_thermal / make_ncs / make_group / make_hydro / make_contract / make_pumping_station) is copy-pasted across five test sites in cobre-core"
+    }
+  ],
+  "lenses": {
+    "cio-architecture-A": 7,
+    "cio-over-engineering-A": 4,
+    "cio-perf-A": 3,
+    "cio-test-bloat-A": 5
+  },
+  "positives": [
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-core/src/system/mod.rs:1750 (`fully_populated_system_survives_postcard_roundtrip_intact`) guarding the `SystemRepr` hand-mirror at crates/cobre-core/src/system/mod.rs:147",
+      "why": "The deserialize-only mirror struct is exactly the hand-maintained duplicate this station usually raises, and it is documented as a silent-corruption hazard ('postcard is non-self-describing, so a reorder silently decodes into the wrong fields'). It is not a candidate, because a named regression test builds a fully populated System across every field and asserts value equality after a postcard round-trip, with a failure comment that names the drift it detects. This is the pattern the other findings in this envelope are missing: a duplicated declaration pinned by a test that says what its failure means."
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-core/src/commissioning.rs:13 (`commissioning_active`), :50 (`filling_phase`), :79 (`hydro_operating_active`)",
+      "why": "One module owns the entire commissioning and filling-lifecycle predicate family for every equipment type: three total functions with no panic path, each documented as the single owner, keyed explicitly on the stage id rather than the stage index with the reason for that choice stated, and backed by a truth-table test that pins each branch and names the forbidden alternative it rules out. This is the shape the Stage.index and canonical-order findings above are asking for elsewhere in the crate."
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-core/src/model/temporal/stage_key.rs:25 (`StageId`), :32 (`StudyPos`), :41 (`CalendarMonth`)",
+      "why": "Three zero-cost newtypes turn a whole class of positional bugs into compile errors: domain stage id versus study-horizon position versus calendar month, each previously a bare integer that a mismatched call site would have silently keyed by the wrong convention. The module doc states precisely which pairs are confusable and why season id is not the calendar month on weekly or custom cycles. Worth protecting, and worth extending — `Stage.index` is the one positional convention in this family still carried as a bare field."
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-core/src/model/resolved/generic.rs:70 (`impl Serialize for ResolvedGenericConstraintBounds`)",
+      "why": "A hand-written serializer that sorts its composite keys before emitting, with the determinism reason stated inline. It is the correct handling of a HashMap on the wire and the reference the six unguarded HashMap fields in the finding above should be measured against."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — 'Hydro `storage_violation_below_cost` / `filling_target_violation_cost` penalties — KEEP (consumed, not reserved)', citing docs/design/reserved-seams-and-deferred-debt.md section 'Verified NOT reserved'",
+      "subject": "crates/cobre-core/src/model/resolved/penalties.rs:46 (`storage_violation_below_cost`) and :37 (`HydroStagePenalties`)",
+      "why": "Ratified as consumed, not reserved, so no unwired-seam candidate is raised against these penalties. Flagging explicitly that the hydro-penalty candidate in this envelope is a different claim — it concerns the same 16 columns being declared three times in cobre-core, not whether any column is consumed — so it should not be dismissed by this citation."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — '`historical_years` on `ScenarioSource` — KEEP (consumed, not reserved)', citing docs/design/reserved-seams-and-deferred-debt.md section 'Verified NOT reserved'",
+      "subject": "crates/cobre-core/src/model/scenario.rs:109 (`ScenarioSource`, `historical_years`)",
+      "why": "Ratified as consumed by the window and historical samplers; no inert-field candidate raised against it."
+    },
+    {
+      "lens": "architecture",
+      "subject": "crates/cobre-core/src/model/resolved/bounds.rs:872 (`line_bounds_at_block`), :945 (`pumping_bounds_at_block`), :1021 (`contract_bounds_at_block`)",
+      "why": "Each carries a `compile_fail` doctest asserting that the stage-level accessor a reader would reach for does not exist, paired with a compiling sibling showing the correct call. That turns an API-shape contract into an executable one, which is a stronger guard than a doc sentence and is worth keeping when this file is refactored."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/model/resolved/factors.rs:84 (`ResolvedLoadFactors::factor`) and :267 (`ResolvedNcsFactors::factor`)",
+      "why": "The per-block factor tables are flat dense arrays with an inline index-arithmetic lookup, no hashing and no allocation, and an `empty()` state that turns a factor-free deck into one emptiness test per lookup instead of a populated table of identity values. The doc comment on `factor` also states exactly where the fallback does and does not hold, so a caller cannot mistake it for a general out-of-range guard."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/model/resolved/block_bounds.rs:243 (`ResolvedBlockBounds::hydro_override_mut`)",
+      "why": "Each entity family grows its dense cell array only on its own first successful write, so a deck with a per-block bound row in one family never allocates the other four families' `n_entities * n_stages * max_blocks` cells. The type-level doc states this laziness as a contract rather than leaving it as an implementation accident."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/model/resolved/group_bounds.rs:67 (`ResolvedHydroUnitGroupBounds.plant_group_start`)",
+      "why": "The ragged unit-group axis is addressed through CSR offsets rather than a dense `max_groups_per_plant` stride, so one many-group plant does not inflate every other plant's row; the stage and block layers are additionally lazy in the same way as the block-bounds families."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/constraints/training_event.rs:96 (`StoppingRuleResult.rule_name`, `.detail` at :101)",
+      "why": "The per-iteration convergence event carries a borrowed static rule name and a clone-on-write detail string rather than owned `String`s, and the field doc names avoiding a hot-path allocation as the reason. This is the right default for an event type that crosses a channel once per rule per iteration."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/commissioning.rs:50 (`filling_phase`) and :13 (`commissioning_active`)",
+      "why": "The per-(entity, stage) lifecycle decision is a total, inline, branch-only function with no allocation, and its doc pins the contract that callers recompute per stage rather than materialising a cached phase mask. Keeping the decision recomputed is cheaper here than the mask it replaces and removes a staleness class outright."
+    },
+    {
+      "lens": "perf",
+      "subject": "crates/cobre-core/src/system/mod.rs:55 (`System`), with the send/sync assertion at :140-141",
+      "why": "The largest aggregate in the foundation crate derives only `Debug` and `PartialEq`, never `Clone`, so it cannot be deep-copied by accident on a per-worker path; the compile-time send/sync assertion pins the shared-read-across-threads use that makes the missing `Clone` viable."
+    },
+    {
+      "lens": "perf",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — `## Verified NOT reserved` (line 102); prior-register.md `### Hydro storage_violation_below_cost / filling_target_violation_cost penalties — KEEP (consumed, not reserved)`",
+      "subject": "crates/cobre-core/src/model/resolved/penalties.rs:37 (`HydroStagePenalties`), :46 (`storage_violation_below_cost`)",
+      "why": "Verified consumed, not an unwired seam: both the storage and filling-target penalties are read for filling-phase hydros, so a candidate calling them always-zero dead weight repeats an over-generalisation the mirror already corrected."
+    },
+    {
+      "lens": "perf",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — `## Verified NOT reserved` (line 102); prior-register.md `### historical_years on ScenarioSource — KEEP (consumed, not reserved)`",
+      "subject": "crates/cobre-core/src/model/scenario.rs:109 (`ScenarioSource`), `historical_years` at :125",
+      "why": "Verified consumed, not an inert field: it is threaded into historical-window discovery and read by the historical sampler, so it is neither dead config nor payload the broadcast could drop."
+    },
+    {
+      "lens": "over-engineering",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Verified NOT reserved' (the hydro storage_violation_below_cost / filling_target_violation_cost paragraph); prior-register.md 'Hydro storage_violation_below_cost / filling_target_violation_cost penalties — KEEP (consumed, not reserved)'",
+      "subject": "crates/cobre-core/src/model/resolved/penalties.rs::HydroStagePenalties (line 37), storage_violation_below_cost (line 46) and filling_target_violation_cost (line 48)",
+      "why": "Checked first under the reserved-seam rule and left out of the candidate list: both penalties are consumed at filling stages by the SDDP column builder and are unconsumed only for ordinary hydros whose storage bounds are hard, so the 'always zero / unwired' reading the mirror already corrected is not repeated here."
+    },
+    {
+      "lens": "over-engineering",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Verified NOT reserved' (the historical_years paragraph); prior-register.md '`historical_years` on `ScenarioSource` — KEEP (consumed, not reserved)'",
+      "subject": "crates/cobre-core/src/model/scenario.rs::ScenarioSource (line 109), field historical_years (line 125)",
+      "why": "Checked first under the reserved-seam rule and left out of the candidate list: the field is threaded into historical-window discovery and read by the historical sampler, so the older inert-field reading predates the wiring and is not re-raised."
+    },
+    {
+      "lens": "over-engineering",
+      "sanctionedBy": "prior-register.md 'Phase-1 purification targets' (Milestone 1 — training_event out of cobre-core; Milestone 1 — stochastic off System / Stage); partI-handoff.json dispositions I.3-1 (sharpen) and I.3-2 (keep)",
+      "subject": "crates/cobre-core/src/constraints/training_event.rs::TrainingEvent (line 164) and the System / Stage paradigm surfaces at crates/cobre-core/src/system/mod.rs::System and crates/cobre-core/src/model/temporal.rs::Stage",
+      "why": "Recorded as already-registered rather than re-discovered: the training-event vocabulary in an L0 crate and the stochastic/risk configuration on System and Stage are open Milestone-1 purification targets with live anchors, so this pass adds no new over-engineering finding on them."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-core public field surface (whole crate)",
+      "why": "A sweep of every pub struct field declared in cobre-core against production lines across every crate found exactly one field with no production reader outside the crate, BusLineConnection.is_source, and it belongs to the one unconsumed family already raised. No inert Option config field, no speculative widening field, nothing needing a reserved-seam judgment. For an L0 data model that is the strongest possible result on this lens."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-core/src/model/temporal/stage_key.rs — StageId (line 25), StudyPos (line 32), CalendarMonth (line 41), month_of (line 55)",
+      "why": "A three-newtype abstraction that earned its second consumer before it was built, not speculative generality: StageId keys the parameter and productivity override tables in cobre-sddp, StudyPos keys the reference-volume resolver in cobre-io and the energy-conversion builder in cobre-sddp, and month_of feeds the evaporation month lookup, each with a regression test pinning the domain-id-versus-position distinction. Worth protecting under the pull-don't-push rule."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-core — absence of the #[allow(dead_code)] symmetry class and of unused genericity",
+      "why": "A grep of every allow attribute in the crate returns only numeric-cast and refactor-decision lints plus one struct-field-names rationale; there is no dead_code allow anywhere, so the sanctioned 'kept for symmetry' class that exists in other crates has no instance here. The crate also carries almost no generic parameters, and the one generic helper, sort_canonical, takes closure extractors instead of a trait bound, so the unused-BuildHasher-genericity shape has no foothold."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-core/src/commissioning.rs — commissioning_active (line 13), filling_phase (line 50), hydro_operating_active (line 79)",
+      "why": "Three small total functions that are the single owner of the commissioning and filling-phase decision for every equipment family, each with a truth-table test and each consumed outside the crate. The thin hydro_operating_active wrapper is a named predicate over filling_phase rather than a forwarding newtype, and it removes a repeated matches! at its call sites."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.9 (\"Expand proptest ... to cover the declaration-order-invariance and reduction-order invariants directly (permute → assert identical bits)\") and §3.1 item 3 (\"a gate proves it exercises the condition it guards\")",
+      "subject": "crates/cobre-core/src/system/builder.rs:938 (`build_canonical_order_invariant_under_input_permutation`)",
+      "why": "The order-invariance hard rule is guarded by a real property test, not by examples: nine entity collections are independently `prop_shuffle`d through `SystemBuilder::build()` and the canonical projection is compared. It carries its own power self-check, asserting `expected.is_sorted()` on every precomputed expectation before comparing, so a mistake in the expectation cannot mask a sort bug. This is exactly the proptest expansion the testing yardstick asks for and the only proptest site in the crate."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "CLAUDE.md hard rule \"Never delete or weaken a load-bearing correctness contract\"; the register's analogous \"Retired input spellings — the reject tests are load-bearing, not bloat\" entry in plans/architecture-debt-audit/stations/core-io/prior-register.md",
+      "subject": "crates/cobre-core/src/constraints/generic_constraint.rs:758 (`test_variable_ref_postcard_discriminant_pin`) and :1121 (`non_controllable_curtailment_discriminant_is_19`)",
+      "why": "Not bloat, and not a duplicate of a const. `VariableRef` declares 24 variants with zero explicit discriminants (`sed -n '/pub enum VariableRef/,/^}/p' ... | grep -c '= [0-9]'` returns 0), so the postcard wire byte is purely positional and these two tests are the only thing pinning it. Pinning index 19 catches any insertion at or before it, and the second test pins 0x14 through 0x17 above it, so the pair covers the mid-enum-insertion failure mode across the whole enum."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — \"Infra-genericity gate scans output/policy/ ... Disposition: RETIRE the exemption claim; KEEP the two in-crate oracles as positives\"",
+      "subject": "crates/cobre-core/tests/infra_genericity.rs (`infra_genericity_gate`)",
+      "why": "A 41-line integration binary that shells out to `scripts/ci/check-infra-genericity.sh` and asserts a clean exit, so the L0 paradigm-neutrality rule is enforced by `cargo test` and not only by a CI job. Small, single-purpose, and explicitly kept as a positive by the station's prior register."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.2 (\"Keep the `test-support` cargo-feature mechanism the repo already uses ... do not introduce a dedicated test crate\")",
+      "subject": "crates/cobre-core/src/entities/hydro.rs:276 (`#[cfg(any(test, feature = \"test-support\"))]`) and crates/cobre-core/Cargo.toml:29 (`test-support = []`)",
+      "why": "The mechanism the three fixture-duplication candidates need already exists and is wired correctly: the feature is declared, documented as \"Must NOT be enabled in production builds\", gated with the `any(test, feature = ...)` idiom, and enabled for the crate's own tests through the self-referential dev-dependency at Cargo.toml:39. It currently gates exactly one helper, so the fixes above are an extension of a working seam rather than new machinery."
+    }
+  ],
+  "station": "core-io",
+  "subStation": "A"
+}

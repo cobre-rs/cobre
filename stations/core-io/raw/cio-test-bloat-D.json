@@ -1,0 +1,257 @@
+{
+  "station": "core-io",
+  "subStation": "D",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Byte-identical 73-line fixture block (`make_config` / `make_output_context` / `make_system`) copy-pasted between two sibling inline test modules in `output/`",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_config",
+          "line": 278
+        },
+        {
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_config",
+          "line": 276
+        },
+        {
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_output_context",
+          "line": 321
+        },
+        {
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_output_context",
+          "line": 331
+        },
+        {
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_system",
+          "line": 272
+        },
+        {
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_system",
+          "line": 270
+        }
+      ],
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-io/src/output/convergence_reader.rs | sed -n '278,320p' | md5sum; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-io/src/output/results_writer.rs | sed -n '276,318p' | md5sum; diff <(sed -n '321,344p' crates/cobre-io/src/output/convergence_reader.rs) <(sed -n '331,354p' crates/cobre-io/src/output/results_writer.rs)",
+        "output": "a0a5e282fc95629f4ff82b9f85ed2045  -\na0a5e282fc95629f4ff82b9f85ed2045  -\n2c2\n<         use crate::output::DistributionInfo;\n---\n>         use super::super::manifest::DistributionInfo;",
+        "reading": "The two `make_config()` bodies (43 lines each) hash identically at the pinned baseline, so they are byte-for-byte the same fixture. The two 24-line `make_output_context()` bodies differ on exactly one line, and only in how the same `DistributionInfo` type is spelled in a local `use`. `make_system()` (6 lines) is likewise identical. Total duplicated fixture surface between two files in the same directory is roughly 73 lines."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Hoist the three fixtures to a single owner shared by the `output/` inline test modules and have both files call it. The natural home is a `#[cfg(test)]` fixture module under `output/` (a sibling `output/test_fixtures.rs` declared once from `output/mod.rs`, following the `validation/semantic/test_support.rs` precedent already established in this crate), or, if the fixtures are wanted by the crate's integration binaries too, a `test-support`-gated surface on cobre-io mirroring the `test-support` feature cobre-core already exposes. Keep the small value differences the two call sites actually need as arguments rather than forking the body again. Do not merge the two test modules themselves; only the fixture construction moves.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`output/policy/mod.rs` is a 29-line re-export shim carrying a 1315-line inline test module whose 36 tests target the three submodules, which themselves are nearly untested",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/policy/mod.rs",
+          "symbol": "tests",
+          "line": 37
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "tests",
+          "line": 1420
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs",
+          "symbol": "read_policy_checkpoint"
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy/records.rs",
+          "symbol": "tests",
+          "line": 433
+        }
+      ],
+      "evidence": {
+        "command": "grep -n '#\\[cfg(test)\\]' crates/cobre-io/src/output/policy/mod.rs; wc -l crates/cobre-io/src/output/policy/*.rs; for f in codec checkpoint records; do printf '%-12s #[test]=%s\\n' \"$f\" \"$(grep -c '#\\[test\\]' crates/cobre-io/src/output/policy/$f.rs)\"; done",
+        "output": "30:#[cfg(test)]\n  317 crates/cobre-io/src/output/policy/checkpoint.rs\n 1467 crates/cobre-io/src/output/policy/codec.rs\n 1344 crates/cobre-io/src/output/policy/mod.rs\n  470 crates/cobre-io/src/output/policy/records.rs\ncodec        #[test]=1\ncheckpoint   #[test]=0\nrecords      #[test]=3",
+        "reading": "The production body of `policy/mod.rs` ends at line 28 (module doc, three `pub mod` lines, four `pub use` blocks); the `#[cfg(test)]` attribute is at line 30 and the module body runs to line 1344, so 1315 of 1344 lines are test. A classifier over the 37 parsed `#[test]` bodies (matching calls to `serialize_*`/`deserialize_*` versus `write_policy_checkpoint`/`read_policy_checkpoint`) reports 21 codec-only, 15 checkpoint-only, 0 mixed, 1 neither. Meanwhile `codec.rs` (1467 lines) carries 1 inline test and `checkpoint.rs` (317 lines) carries none. The tests are homed two module levels away from the code they exercise, in the one file in the directory with no production logic."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Move each test to the submodule it exercises: the 21 serialize/deserialize tests become an extracted sibling `codec` test module, the 15 write/read-checkpoint tests become a `checkpoint` test module, and the shared record fixtures (`make_cut_record`, `chain_manifest`, `make_metadata`, `make_stage_cuts_payload`, `make_basis_record`, `sample_manifest`) go to one fixture module both import. Leave in `policy/mod.rs` only tests that genuinely assert the composed round trip across all three submodules, if any survive that classification. Apply the yardstick's single homing rule at the same time: above the extraction threshold the module goes to a sibling file, so this lands as `codec/tests.rs` and `checkpoint/tests.rs` rather than as three more giant inline modules. This is a pure relocation, so the migration invariant is unchanged test-function count.",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-6"
+    },
+    {
+      "title": "`parquet_helpers.rs`, the crate's most reused extraction module, has zero direct tests while all twelve of its error branches are only reachable transitively",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_int32",
+          "line": 13
+        },
+        {
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_date32",
+          "line": 144
+        },
+        {
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_optional_float64",
+          "line": 92
+        }
+      ],
+      "evidence": {
+        "command": "grep -c '#\\[cfg(test)\\]' crates/cobre-io/src/parquet_helpers.rs; grep -n '^pub(crate) fn' crates/cobre-io/src/parquet_helpers.rs; grep -rln 'crate::parquet_helpers' crates/cobre-io/src/ | wc -l",
+        "output": "0\n13:pub(crate) fn extract_required_int32<'a>(\n40:pub(crate) fn extract_required_float64<'a>(\n67:pub(crate) fn extract_optional_int32<'a>(\n92:pub(crate) fn extract_optional_float64<'a>(\n117:pub(crate) fn extract_required_uint32<'a>(\n144:pub(crate) fn extract_required_date32<'a>(\n16",
+        "reading": "Zero `#[cfg(test)]` modules, which matches the inventory's `linesRaw: 166` equalling `linesNonTest: 166` for this file. Six extractors, each with a missing-column arm and a wrong-Arrow-type arm, so twelve error branches that build a user-facing `LoadError::SchemaError` message naming the column and the required type. Sixteen modules import from it. No test names any extractor directly: the only workspace mention outside the file is a doc comment in `crates/cobre-io/tests/clean_break_no_deprecated_fallbacks.rs:8` referring to removed aliased variants."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Add one inline test module to `parquet_helpers.rs` that builds a small in-memory `RecordBatch` and asserts, per extractor, the happy path, the missing-column message and the wrong-type message, so the parse-error contract is pinned once at its owner instead of being re-asserted incidentally in sixteen consumer test modules. This is the counterpart to the duplication findings: the same consolidation that removes redundant assertions elsewhere depends on the shared helper carrying its own contract test. Scope note for the merge: the consumers are all sub-station B modules, so only the helper-side test belongs to this sub-station.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The Parquet read-back step is open-coded 47 times across nine `output/` inline test modules, including three helpers with the same body under two names",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/fixed_delivery.rs",
+          "symbol": "read_batch",
+          "line": 142
+        },
+        {
+          "path": "crates/cobre-io/src/output/generic_constraints_echo.rs",
+          "symbol": "read_batch",
+          "line": 227
+        },
+        {
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "read_parquet",
+          "line": 328
+        },
+        {
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "line": 2653
+        },
+        {
+          "path": "crates/cobre-io/src/output/stochastic.rs",
+          "line": 851
+        }
+      ],
+      "evidence": {
+        "command": "grep -rc 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/output/*.rs | grep -v ':0'; grep -r 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/output/ | wc -l; diff <(sed -n '142,147p' crates/cobre-io/src/output/fixed_delivery.rs) <(sed -n '227,232p' crates/cobre-io/src/output/generic_constraints_echo.rs)",
+        "output": "convergence_reader.rs:2\nfixed_delivery.rs:1\ngeneric_constraints_echo.rs:2\nsolver_stats_writer.rs:4\ntraining_writer.rs:9\nhydro_models.rs:3\ndictionary.rs:6\nstochastic.rs:7\nresults_writer.rs:3\nsimulation_writer.rs:12\n49\n(no output — files identical)",
+        "reading": "49 total sites; the two in `convergence_reader.rs` (lines 45 and 97) are production, so 47 are test-side across nine files, all above each file's `#[cfg(test)]` line (verified per file, e.g. `dictionary.rs` sites at 2412-2945 against its test module at 1354). `fixed_delivery.rs::read_batch` and `generic_constraints_echo.rs::read_batch` diff empty, so they are byte-identical; `solver_stats_writer.rs::read_parquet` is the same four-line body under a different name. A further 34 sites carry an in-function `use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;` re-import rather than a module-level one."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Give the `output/` test surface one read-back helper with a single agreed name, alongside the fixture module the first candidate calls for, and have the nine modules import it instead of re-deriving open-file / build-reader / take-first-batch per test. Fold the 34 in-function imports up to the test module's own import block while doing so. Note the shape asymmetry to resolve at the same time: three files chose a named helper and six inlined the step, which is the same intra-directory homing coin-flip the yardstick names. Production `convergence_reader.rs` already owns a real reader, so this touches only test code and asserts nothing new.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Fourteen output-schema field counts are pinned twice in `schemas.rs`, once in a per-schema test and again in the umbrella test's expected table",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "all_schema_functions_return_valid_schemas",
+          "line": 1282
+        },
+        {
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "thermals_schema_field_count",
+          "line": 852
+        },
+        {
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "costs_schema_field_count_and_names",
+          "line": 593
+        },
+        {
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "rank_timing_schema_field_count",
+          "line": 1160
+        }
+      ],
+      "evidence": {
+        "command": "python3 - <<'EOF'  # parse the umbrella `expected` table, parse every per-schema `fields().len(), N` assert, intersect\n… (regex over crates/cobre-io/src/output/schemas.rs)\nEOF",
+        "output": "umbrella entries: 20\nper-schema count asserts: 21\n\nfield counts pinned in BOTH the per-schema test and the umbrella table:\n  buses_schema_field_count                             -> umbrella (\"buses\", 12)\n  contracts_schema_field_count                         -> umbrella (\"contracts\", 10)\n  costs_schema_field_count_and_names                   -> umbrella (\"costs\", 29)\n  exchanges_schema_field_count                         -> umbrella (\"exchanges\", 13)\n  generic_constraint_echo_schema_field_count_and_names -> umbrella (\"generic_constraint_echo\", 13)\n  generic_violations_schema_field_count                -> umbrella (\"generic_violations\", 7)\n  hydro_bus_generation_schema_field_count_and_names    -> umbrella (\"hydro_bus_generation\", 9)\n  hydros_schema_field_count_and_names                  -> umbrella (\"hydros\", 37)\n  inflow_lags_schema_field_count                       -> umbrella (\"inflow_lags\", 6)\n  iteration_timing_schema_field_count                  -> umbrella (\"iteration_timing\", 19)\n  non_controllables_schema_field_count                 -> umbrella (\"non_controllables\", 12)\n  pumping_stations_schema_field_count                  -> umbrella (\"pumping_stations\", 11)\n  rank_timing_schema_field_count                       -> umbrella (\"rank_timing\", 8)\n  thermals_schema_field_count                          -> umbrella (\"thermals\", 12)\ntotal double-pinned: 14\n\nnot double-pinned: [('transit_seed_schema_field_count', '5'), …]",
+        "reading": "`all_schema_functions_return_valid_schemas` (line 1282) holds a twenty-row `expected: &[(&str, usize)]` table asserting the field count of every output schema. Fourteen of those counts are asserted a second time by a dedicated per-schema test with the identical literal. Seven of those fourteen are count-only tests whose whole body is that one assertion (`thermals_schema_field_count` and its six siblings at lines 852-1160), so they add no assertion the umbrella does not already make. Adding a column therefore requires two coordinated magic-number edits and produces two failures naming one cause. `transit_seed_schema_field_count` is the one count-only test not in the umbrella table."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Pick one registry for field counts. The umbrella table is the better owner because it is exhaustive and a new schema cannot be added without appearing there, so the seven count-only per-schema tests collapse into it, and `transit_seed` gains the umbrella row it is currently missing. Where a per-schema test also pins the full column-name vector, drop only its redundant length assertion — the name vector already implies the count and, unlike the count, actually pins the output wire contract against a rename. The end state is one count per schema in one table plus name-vector pins per schema, with no number maintained in two places.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Three `dictionary.rs` description tests are strict subsets of the exhaustive description test in the same module",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_listed_schema_column_has_a_nonempty_description",
+          "line": 1380
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "new_energy_columns_have_descriptions",
+          "line": 3193
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_hydros_schema_column_has_description",
+          "line": 3226
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_hydro_bus_generation_schema_column_has_description",
+          "line": 3239
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "variables_csv_schemas",
+          "line": 222
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '222,228p' crates/cobre-io/src/output/dictionary.rs; for c in equivalent_productivity_mw_per_m3s accumulated_productivity_mw_per_m3s incremental_inflow_energy_mw stored_energy_initial_mwh stored_energy_final_mwh; do printf '%-40s ' \"$c\"; awk '/pub\\(crate\\) fn hydros_schema/,/^}/' crates/cobre-io/src/output/schemas.rs | grep -c \"\\\"$c\\\"\"; done",
+        "output": "fn variables_csv_schemas() -> Vec<(&'static str, Schema)> {\n    vec![\n        (\"costs\", costs_schema()),\n        (\"hydros\", hydros_schema()),\n        (\"hydro_bus_generation\", hydro_bus_generation_schema()),\n        (\"thermals\", thermals_schema()),\n        (\"exchanges\", exchanges_schema()),\nequivalent_productivity_mw_per_m3s       1\naccumulated_productivity_mw_per_m3s      1\nincremental_inflow_energy_mw             1\nstored_energy_initial_mwh                1\nstored_energy_final_mwh                  1",
+        "reading": "`every_listed_schema_column_has_a_nonempty_description` iterates `variables_csv_schemas()` and asserts `!description_for(file, field).is_empty()` for every column of every listed schema. `variables_csv_schemas()` lists `(\"hydros\", hydros_schema())` and `(\"hydro_bus_generation\", hydro_bus_generation_schema())`, so the two per-schema description tests at lines 3226 and 3239 iterate a subset of the same pairs with the same assertion. All five columns checked by `new_energy_columns_have_descriptions` are declared in `hydros_schema()`, so that test is a five-element subset of the same sweep. None of the three can fail while the exhaustive test passes. `bounds_hydro_id_column_has_a_description` at line 3168 is NOT subsumed — `\"bounds\"` is absent from `variables_csv_schemas()` — and must be kept."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Delete the three subsumed tests and rely on the exhaustive sweep, which is the stronger gate because a new column added to any listed schema fails it automatically while a per-schema test has to be remembered and written. Keep `bounds_hydro_id_column_has_a_description` and `new_energy_columns_have_units`: the first covers a table the sweep does not list, and the second asserts specific unit strings rather than mere non-emptiness, which is a different property. If the intent behind the three was to pin those particular columns by name rather than to re-check non-emptiness, convert them into the unit-style assertion instead of deleting, so the pin survives and the redundancy does not.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/output/manifest.rs:571 (`make_training_metadata`) and :635 (`make_simulation_metadata`)",
+      "why": "The metadata test module uses one fixture builder per type and reaches every variant through functional-update syntax at seven call sites (`..make_training_metadata()` at :864, :895, :977, :1062, :1091; `..make_simulation_metadata()` at :730, :760), so adding a field to `TrainingMetadata` costs one edit rather than seven. This is the O(1) fixture field-add pattern the yardstick names as a strength, already practised inside sub-station D — it is the model the two duplicated-fixture candidates above should be aligned to, not an instance of the problem.",
+      "sanctionedBy": "docs/design/testing-architecture.md §3.1 item 4 (\"O(1) fixture field-add builder\")"
+    },
+    {
+      "subject": "crates/cobre-io/tests/metadata_back_compat.rs:1-24 and its `legacy_*_fixture_omits_new_keys` tests (:167, :191)",
+      "why": "The legacy fixtures are hand-frozen JSON literals with the reason recorded in the file header — a struct-serialized fixture carries every field and so could never catch a field accidentally made required — and two further tests guard the fixtures themselves against acquiring the new keys. A self-guarding fixture whose deliberate non-reuse is justified in place; the test-bloat lens must not propose folding these into a shared builder.",
+      "sanctionedBy": "docs/design/testing-architecture.md §3.1 item 2 (contract-pinning) — the fixture is the pin, and the `*_omits_new_keys` tests are its power self-check"
+    },
+    {
+      "subject": "crates/cobre-io/src/output/policy/codec.rs::deserialize_rejects_buffer_without_cbvf_identifier (line 1428) and crates/cobre-io/src/output/policy/records.rs::state_family_codes_match_policy_fbs_entity_type (line 437)",
+      "why": "Both are load-bearing wire-format pins, not bloat: the first proves a pre-0.14 buffer without the file identifier is rejected before any field is decoded, the second pins the four `StateFamily` discriminants against `schemas/policy.fbs`. They are the surviving inline tests in the two submodules and must move with their code, never be dropped, if the homing candidate above is acted on.",
+      "sanctionedBy": "prior-register.md — CD-010 RETIRE entry (the typed `StateFamily` enum and `EntitySlot::family` are the resolved state these tests pin)"
+    },
+    {
+      "subject": "crates/cobre-io/tests/flatbuffers_schema_conformance.rs (whole file, gated `#![cfg(feature = \"flatc-conformance\")]` at line 18)",
+      "why": "The gate is not dormant. CI enables the feature and installs the compiler it needs, so the flatc cross-check genuinely runs in automation rather than being local-dev-only as the Cargo.toml comment alone might suggest. Verified by `grep -rn 'flatc' .github/workflows/`: `NON_SOLVER_FEATURES` at ci.yml:32 includes `flatc-conformance`, and an \"Install flatc (FlatBuffers compiler)\" step appears at ci.yml:107, :200 and :489. Its 1341 lines are an executing conformance gate, not unrun weight.",
+      "sanctionedBy": "prior-register.md — \"Retired input spellings\" KEEP entry names this file as part of the load-bearing guard set"
+    },
+    {
+      "subject": "crates/cobre-core/src/entities/hydro.rs::declare_mirror_unit_group (line 277, behind `#[cfg(any(test, feature = \"test-support\"))]`)",
+      "why": "The cross-crate sharing mechanism the yardstick prescribes exists and is genuinely consumed from sub-station D: cobre-io declares the dev-dependency with the feature on (crates/cobre-io/Cargo.toml:44) and calls the symbol from `output/simulation_writer.rs:2095` and `output/dictionary.rs:1445`, among roughly a hundred workspace call sites. The seam is proven and available — it is the landing zone the fixture-consolidation candidates should extend, not a mechanism that needs inventing.",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.2 (\"A uniform `test-support` feature convention (not a dedicated test crate)\")"
+    }
+  ],
+  "_needsHuman": [
+    "Whether the double-pinned field counts in `schemas.rs` are deliberate belt-and-braces for a published output wire contract or accidental drift; if deliberate, the owner should say which of the two sites is the intended registry so the other can be reduced rather than both kept.",
+    "Whether `output/policy/mod.rs` hosts the codec and checkpoint tests deliberately, because they are meant to exercise only the crate-public re-export surface, or incidentally; the 21 codec-only tests reach `serialize_*`/`deserialize_*` through `use super::*` and would resolve equally well beside `codec.rs`, but a deliberate re-export-surface intent would change the fix shape from relocation to leaving them in place.",
+    "Whether cobre-io should gain its own `test-support` feature to share output fixtures with its twelve integration binaries, or whether an internal `#[cfg(test)]` fixture module under `output/` is sufficient; the answer decides the landing zone for both fixture-duplication candidates and is a crate-surface decision beyond this sub-station."
+  ]
+}

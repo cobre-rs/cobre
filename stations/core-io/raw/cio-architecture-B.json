@@ -1,0 +1,209 @@
+{
+  "station": "core-io",
+  "subStation": "B",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "The entity-slice ordering precondition is stated three contradictory ways across the seven resolvers in `resolution/`, and two of the wrong statements sit on crate-root-public functions",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/resolution/bounds.rs",
+          "symbol": "BoundsEntitySlices",
+          "line": 24
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/penalties.rs",
+          "symbol": "PenaltiesEntitySlices",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/ncs_bounds.rs",
+          "symbol": "resolve_ncs_bounds",
+          "line": 18
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/load_factors.rs",
+          "symbol": "resolve_load_factors",
+          "line": 17
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/ncs_factors.rs",
+          "symbol": "resolve_ncs_factors",
+          "line": 19
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/group_bounds.rs",
+          "symbol": "resolve_hydro_unit_group_bounds",
+          "line": 25
+        },
+        {
+          "path": "crates/cobre-io/src/lib.rs",
+          "line": 130
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'must be sorted by ID\\|must already be in the order' crates/cobre-io/src/resolution/*.rs; grep -n 'sort_into_canonical_order<T>' -A 6 crates/cobre-io/src/pipeline.rs | tail -4; grep -n 'pub use resolution::' crates/cobre-io/src/lib.rs",
+        "output": "crates/cobre-io/src/resolution/generic_bounds.rs:15:/// `constraints` must be sorted by ID (slice position becomes the constraint index);\ncrates/cobre-io/src/resolution/group_bounds.rs:25:/// `hydros` must already be in the order `SystemBuilder::build` assigns --\ncrates/cobre-io/src/resolution/penalties.rs:23:/// Entity slices for penalties resolution. Each must be sorted by ID — the slice\ncrates/cobre-io/src/resolution/bounds.rs:24:/// Entity slices for bounds resolution. Each must be sorted by ID — the slice\n295-    entities.sort_by_key(|e| (date(e), id(e)));\n130:pub use resolution::{resolve_bounds, resolve_penalties};",
+        "reading": "Seven resolvers share one precondition — slice position becomes the table's entity index — but state it four different ways. `group_bounds.rs:25-35` states it correctly and completely: `(operational_start_date, id)`, with an explicit warning that the parsers' id-only sort coincides with it only when every entity shares one date, plus the name of its regression test. `bounds.rs:24` and `penalties.rs:23` state the OPPOSITE key, `sorted by ID`, for five and four entity families that all carry `operational_start_date` (Hydro, Thermal, Line, PumpingStation, EnergyContract, Bus, NonControllableSource). `ncs_bounds.rs:18`, `load_factors.rs:17` and `ncs_factors.rs:19` say only `must be sorted`, naming no key at all. `generic_bounds.rs:15` says `sorted by ID` and is correct, because `GenericConstraint` (crates/cobre-core/src/constraints/generic_constraint.rs:537) declares no `operational_start_date` and the builder sorts that collection by id alone. The order the sole in-tree caller actually establishes is `(date, id)`: `crates/cobre-io/src/pipeline.rs:295` sorts by `(date(e), id(e))` and its own doc at :288-290 says `not (id, date) or id alone`. `crates/cobre-io/src/lib.rs:130` re-exports `resolve_bounds` and `resolve_penalties` at the crate root, so the two wrong statements are the public contract a downstream caller reads. Honoring them — sorting by id, which is exactly what every system parser does at buses.rs:264, lines.rs:255, hydros.rs:852, thermals.rs:319, pumping_stations.rs:246, energy_contracts.rs:266, non_controllable.rs:233 — silently assigns every entity's bounds and penalties to a different entity whenever operational start dates are staggered. No error is raised; the table is dense and every index is in range."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Give the canonical key one owner and make every resolver doc point at it instead of restating it. cobre-core already owns the ordering in `sort_canonical`; export the key itself (a named comparison or key-extraction the builder uses) so `cobre-io`'s post-validation resort and every resolver precondition cite one symbol rather than three prose spellings. Then rewrite `BoundsEntitySlices` and `PenaltiesEntitySlices` to say what `group_bounds.rs` already says — canonical `(operational_start_date, id)` order as assigned by the builder, not the parser's id sort — and give the three under-specified resolvers the same sentence. Where the entity family genuinely has no date axis, as with `GenericConstraint`, say so explicitly rather than leaving `sorted by ID` to read as the general rule. Not raised as severity A because the one in-tree caller establishes the right order and the regression suite covers eight families end to end; the debt is that the stated contract at a public boundary contradicts the enforced one, so the next caller or the next resolver is the one that breaks.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Every semantic stage rule the parser already enforces is unreachable: `stages.rs` rejects non-positive block hours and out-of-range CVaR at parse time, and the pipeline bails before Layer 5 ever sees such a deck",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "validate_block_hours",
+          "line": 623
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "validate_risk_measure",
+          "line": 661
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "validate_raw_stages",
+          "line": 518
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "convert_stages",
+          "line": 797
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+          "symbol": "check_stage_structure",
+          "line": 91
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'validate_block_hours(block.hours\\|validate_risk_measure(&stage.risk_measure' crates/cobre-io/src/stages.rs; grep -n 'blocks: vec!\\[\\]\\|risk_config: StageRiskConfig::Expectation' crates/cobre-io/src/stages.rs; sed -n '83,84p' crates/cobre-io/src/validation/semantic/mod.rs; sed -n '652,653p' crates/cobre-io/src/validation/schema.rs",
+        "output": "527:            validate_block_hours(block.hours, i, j, path)?;\n530:            validate_risk_measure(&stage.risk_measure, i, path)?;\n797:            blocks: vec![],\n803:            risk_config: StageRiskConfig::Expectation,\n//! | 4  | Every `Block.duration_hours > 0.0`                                      | `stages.json`                                  | `InvalidValue`           |\n//! | 5  | `CVaR`: `alpha` in (0, 1], `lambda` in [0, 1]                             | `stages.json`                                  | `InvalidValue`           |\n    if ctx.error_count() > error_count_before {\n        return None;",
+        "reading": "The Layer-5b rule table in `validation/semantic/mod.rs:83-84` claims rules 4 and 5 — block duration positive, CVaR alpha in (0,1] and lambda in [0,1] — as the semantic layer's own, sourced from stages.json. `check_stage_structure` implements both, at validation/semantic/stages.rs:91-104 and :123-141. Neither branch can fire for any deck loaded through the pipeline. `validate_raw_stages` (stages.rs:518-533) applies `validate_block_hours` to every block of every study stage and `validate_risk_measure` to every study stage's risk measure, returning `LoadError::SchemaError` on the first violation; `parse_or_error` (validation/schema.rs:251, 716-728) turns that into a ctx error and yields None; `validate_schema` returns None whenever the error count rose (schema.rs:652-653); and `run_pipeline_with_artifacts` returns early on that None at pipeline.rs:80-84, three lines before it would call `validate_semantic_stages_penalties_scenarios` at pipeline.rs:89 — the sole production call site. Pre-study stages are the only other inhabitants of `StagesData.stages`, and `convert_stages` builds them with `blocks: vec![]` (stages.rs:797) and `risk_config: StageRiskConfig::Expectation` (stages.rs:803), both hardcoded, so the block loop has nothing to iterate and the CVaR match arm never binds. The unit tests `test_5b_block_zero_duration` and `test_5b_cvar_alpha_zero_invalid` pass only because they hand-assemble `ParsedData` and bypass the parser. The same module doc states the project's own convention for exactly this situation, for retired rule 42: a rule owned by the parse layer is struck from the semantic table rather than duplicated there."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Decide which layer owns each of the two rules and delete the other copy, following the retired-rule-42 precedent already recorded in the semantic module doc. If the parse layer keeps them, strike rules 4 and 5 from the Layer-5b table with a note that stages.rs owns them, delete the two unreachable branches from `check_stage_structure`, and delete or relabel the two unit tests so they stop reading as coverage of a live rule. If the semantic layer should own them — the argument for that is the accumulating error context, which reports every bad block in one pass instead of the parser's fail-fast first error — then drop `validate_block_hours` and the CVaR range half of `validate_risk_measure` from `validate_raw_stages` and let the checks run where the rule table says they run, keeping the parser's unrecognized-risk-measure-string check, which is a genuine deserialization concern with no semantic counterpart. The transition-probability rule shows the second shape is already understood here: `normalize_out_edge_probabilities` is deliberately deferred to pipeline.rs:103, after the semantic gate, so the accumulating validator sees the raw values.",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-2"
+    },
+    {
+      "title": "Nineteen input-path parsers open-code the same eight-line Parquet reader prologue, and three of them re-declare byte-identical copies of two helpers `parquet_helpers.rs` already exports",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/extensions/hydro_geometry.rs",
+          "symbol": "extract_int32_column",
+          "line": 147
+        },
+        {
+          "path": "crates/cobre-io/src/extensions/hydro_energy_productivity.rs",
+          "symbol": "extract_int32_column",
+          "line": 177
+        },
+        {
+          "path": "crates/cobre-io/src/extensions/tailrace_curves.rs",
+          "symbol": "extract_int32_column",
+          "line": 232
+        },
+        {
+          "path": "crates/cobre-io/src/constraints/bounds.rs",
+          "symbol": "parse_line_bounds",
+          "line": 760
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/inflow_stats.rs",
+          "symbol": "parse_inflow_seasonal_stats"
+        },
+        {
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_int32",
+          "line": 13
+        }
+      ],
+      "evidence": {
+        "command": "md5sum extracted-hydro_geometry.int32 extracted-hydro_energy_productivity.int32 extracted-tailrace_curves.int32; grep -rn 'fn extract_int32_column\\|fn extract_float64_column' crates/cobre-io/src/extensions/*.rs; grep -c 'ParquetRecordBatchReaderBuilder::try_new' $(grep -rl 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/scenarios crates/cobre-io/src/constraints crates/cobre-io/src/extensions --include='*.rs') | awk -F: '{s+=$2} END {print s}'",
+        "output": "d3b14375eda71e6e4e3d0afb5e4c7fc7  extracted-hydro_geometry.int32\nd3b14375eda71e6e4e3d0afb5e4c7fc7  extracted-hydro_energy_productivity.int32\nd3b14375eda71e6e4e3d0afb5e4c7fc7  extracted-tailrace_curves.int32\ncrates/cobre-io/src/extensions/hydro_energy_productivity.rs:177:fn extract_int32_column\ncrates/cobre-io/src/extensions/hydro_energy_productivity.rs:201:fn extract_float64_column\ncrates/cobre-io/src/extensions/hydro_geometry.rs:147:fn extract_int32_column\ncrates/cobre-io/src/extensions/hydro_geometry.rs:171:fn extract_float64_column\ncrates/cobre-io/src/extensions/tailrace_curves.rs:232:fn extract_int32_column\ncrates/cobre-io/src/extensions/tailrace_curves.rs:256:fn extract_float64_column\n28",
+        "reading": "The md5 line is over the 23-line bodies of `extract_int32_column` sliced from the three extension files with sed; the identical digest proves the three copies are byte-for-byte the same. A diff of one of them against `parquet_helpers::extract_required_int32` (crates/cobre-io/src/parquet_helpers.rs:13-34) differs in three lines only: the visibility and name, the `RecordBatch` path spelling, and one word in the missing-column message. `extract_float64_column` is the same story against `extract_required_float64` at parquet_helpers.rs:37. So six private functions in `extensions/` re-declare two functions the crate already centralises, in the one module whose stated purpose is `centralising the typed-downcast logic used by every Parquet parser in cobre-io`. The count of 28 is `ParquetRecordBatchReaderBuilder::try_new` occurrences across the 19 sub-station-B files that use it, every one in the production region — the per-file split, taken above the first `#[cfg(test)]`, is bounds.rs 5, penalty_overrides.rs 4, external.rs 3 and 1 each in the other sixteen. Reading the prologue verbatim out of scenarios/inflow_stats.rs, extensions/fpha_deviation_points.rs and constraints/ncs_bounds.rs shows the same eight lines each time: `File::open` mapped through `LoadError::io`, `try_new` mapped through `LoadError::parse`, `builder.build()` mapped through `LoadError::parse`, then `let mut rows: Vec<T> = Vec::new()`. Only the row type changes. `parquet_helpers.rs` stops at column extraction and never covers reader construction, and it also has no string extractor — which is why `extensions/evaporation_models.rs:158` had to open-code `extract_required_string` for a type the shared module does not offer, a legitimate gap rather than a duplicate."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Extend `parquet_helpers.rs` past column extraction to cover the reader itself: one helper that takes a path and returns the batch reader with the three error mappings applied, so each parser opens with a single call and keeps only its own column reads and row loop. Delete the six copied extractors in `extensions/` in favour of the shared pair, accepting the one-word change in the missing-column message or reconciling the two spellings first. Add the string extractor the shared module lacks so `evaporation_models.rs` can drop its local one too, which removes the standing reason for a parser to define its own extractor at all. The parallel stats parsers make the same shape visible a second way: `scenarios/load_stats.rs` and `scenarios/non_controllable_stats.rs` differ only in column names, the row struct and one range check, with an identical batch loop, reserve, finiteness guard and trailing sort around them.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`resolve_load_factors` and `resolve_ncs_factors` are the same function twice, algorithm and tests included, differing only in entity type",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/resolution/load_factors.rs",
+          "symbol": "resolve_load_factors",
+          "line": 21
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/ncs_factors.rs",
+          "symbol": "resolve_ncs_factors",
+          "line": 23
+        }
+      ],
+      "evidence": {
+        "command": "diff -u crates/cobre-io/src/resolution/load_factors.rs crates/cobre-io/src/resolution/ncs_factors.rs | grep -c '^[+-]'; wc -l crates/cobre-io/src/resolution/load_factors.rs crates/cobre-io/src/resolution/ncs_factors.rs",
+        "output": "crates/cobre-io/src/resolution/load_factors.rs  184\ncrates/cobre-io/src/resolution/ncs_factors.rs  191",
+        "reading": "A full `diff -u` of the two files shows no structural divergence anywhere. Both build an id-to-index HashMap over their entity slice, both derive `study_stage_ids` with the same `filter(|s| s.id >= 0)`, both construct a `StageIdResolver` and take its index map, both compute `max_blocks` the same way, both allocate the table and both run the same nested skip-unknown-entity, skip-unknown-stage, bounds-check-block loop ending in `table.set(...)`. The only differences the diff reports are the entity type (`Bus` versus `NonControllableSource`), the entry type (`LoadFactorEntry` versus `NcsFactorEntry`), the output table type, the local variable names, and one incidental style split where load_factors uses `usize::try_from(...).ok()` in a let-else and ncs_factors uses `let Ok(...)`. The five inline tests are the same five tests with the fixture renamed. Both files also carry the under-specified ordering precondition recorded in the first candidate."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the two into one resolution routine parameterised over the entity id accessor and the destination table, keeping `resolve_load_factors` and `resolve_ncs_factors` as thin named entry points so the call sites in the pipeline stay readable and the two output types remain distinct. Two present consumers make this a fold of existing duplication, not a speculative seam, so it does not trip the one-consumer-abstraction rule. The five duplicated tests collapse with it; keep one copy per entity type only where the fixture actually exercises something entity-specific, which on inspection is nothing beyond the id column. If the shared routine is not wanted, the cheaper half of the fix still applies: make the two files agree on the `usize::try_from` spelling and on one ordering precondition sentence, so the divergence that does exist is intentional rather than incidental.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/resolution/group_bounds.rs:25-35",
+      "why": "The single resolver that states the ordering precondition completely and correctly: it names `(operational_start_date, id)`, attributes it to `SystemBuilder::build`, warns explicitly that the parser's id-only sort coincides with it only when every entity shares one operational start date, separates the unit-group axis as having no equivalent divergence, and names the regression test that falsifies a resolve-before-resort regression. This is the template the other six resolver docs should be rewritten against, and it should not be shortened in any cleanup pass.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/tests/resolver_builder_index_alignment.rs",
+      "why": "An eleven-test end-to-end suite that drives the real `load_case` pipeline against decks whose operational-start-date order is the reverse of their id order, covering hydro, bus penalty, line, thermal, pumping, contract, NCS and hydro unit group overrides, plus a direct assertion that the pipeline's presort key equals the builder's canonical key and that referential error order survives the post-validation sort. It is the executable oracle for the parser-id-versus-builder-canonical-order bug class and the reason the first candidate above is debt rather than an active defect.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/src/constraints/bounds.rs:73-79",
+      "why": "The block-eligibility documentation refuses to be the source of truth about itself: it states that a column is block-eligible exactly when its family's `<Family>BlockOverride` struct in `cobre_core::resolved` carries a field for it, and that the struct's field set is the check rather than the table. A prose table that names the type as its own authority cannot silently drift out of date the way a free-standing table would.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/src/broadcast.rs:112-181",
+      "why": "The postcard mirror types exist for a stated technical reason — postcard does not support serde internally-tagged enums, which the user-facing JSON schema needs — and every `From` conversion between the mirror and the real type is an exhaustive match with no wildcard arm. Widening `ParameterKind` or `ComputedParameter` upstream in cobre-core breaks the build rather than silently dropping a variant on the wire, which is the property a hand-maintained mirror normally fails to have.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/src/windowed_history.rs::validate_windowed_records",
+      "why": "Three on-disk surfaces with the same window shape — `recent_observations`, `past_defluences` and `inflow_history` — map into one `WindowedRecord` view and share a single Layer-1 validator, with the per-surface labels passed in so each surface's error text stays byte-identical to its own convention. This is the crate's own precedent for the shared-skeleton fix proposed for the Parquet parsers, and it is the right precedent to point at.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/estimation.rs:598-600, 817-822",
+      "why": "The estimation path joins user stats against fitted stats entirely through `HashSet<EntityId>` and `BTreeMap<(EntityId, usize), f64>`, never through slice position, so the canonical-order hazard that the resolvers have to defend against does not reach it. The `missing_stats.sort()` before formatting also makes the error text order-independent. Worth protecting when this file is refactored.",
+      "sanctionedBy": ""
+    },
+    {
+      "subject": "crates/cobre-io/src/stages.rs:134",
+      "why": "`graph_type: RawPolicyGraphType` accepts only the finite-horizon value and is a deletion candidate under the node-native engine. Checked and deliberately not raised: it is already registered as deferred debt with a named trigger, the next licensed input-format break.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — `Horizon-type config field (graph_type in stages.rs)`, register id `mirror:Horizon-type config field long-term fate`"
+    },
+    {
+      "subject": "crates/cobre-io/src/stages.rs:212",
+      "why": "`num_openings: Option<u32>` is the conditionally-required first step in the stage file forcing every study kind to declare the uncertainty and risk axes. Checked and deliberately not raised as a new finding: it is the registered Milestone-1 stochastic-off-Stage target and only an alignment hint on the existing entry is permitted here.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — `Stage-configuration engine-scoping (stages.rs carries every axis)`, register id `mirror:Stage-configuration engine-scoping`"
+    }
+  ],
+  "_needsHuman": [
+    "`validate_windowed_records` documents its canonical order as `(entity_id, start_date)` and claims the validation outcome and the entity named on rejection do not depend on input order, but the sort at windowed_history.rs:87 is by `start_date` alone and stable, so two windows of one entity sharing a start date keep declaration order and produce different entry indices in the overlap message, and the earlier end-date and finiteness loop reports whichever malformed record was declared first — accept versus reject is genuinely order-invariant, so the owner should say whether the error text is inside the invariance contract before this is recorded as debt.",
+    "The fix for the resolver ordering-contract asymmetry can either stay inside cobre-io as a doc correction across six files or push a canonical-order key up into cobre-core so the builder, the pipeline resort and every resolver doc cite one exported symbol; the second shape edits sub-station A's crate and needs the owner to say whether that is in scope for this station."
+  ]
+}

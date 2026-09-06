@@ -1,0 +1,137 @@
+{
+  "station": "core-io",
+  "subStation": "B",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "`load_scenarios` and its 9-field `ScenarioData` result are a zero-consumer public scenario-assembly orchestrator that mirrors the production assembly path and diverges from it by construction",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/scenarios/mod.rs",
+          "symbol": "load_scenarios",
+          "line": 322
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/mod.rs",
+          "symbol": "ScenarioData",
+          "line": 260
+        },
+        {
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "populate_derived_residual_ratios",
+          "line": 225
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '\\bload_scenarios\\b\\|\\bScenarioData\\b' crates/ --include='*.rs' | grep -v 'crates/cobre-io/src/scenarios/mod.rs'; sed -n '397p;403p' crates/cobre-io/src/scenarios/mod.rs; sed -n '225p' crates/cobre-io/src/pipeline.rs",
+        "output": "crates/cobre-io/src/lib.rs:134:    NoiseOpeningRow, ScenarioData, assemble_inflow_models, assemble_load_models, load_correlation,\ncrates/cobre-io/src/lib.rs:137:    load_load_factors, load_load_seasonal_stats, load_noise_openings, load_scenarios,\n    if manifest.stages_json {\n        populate_derived_residual_ratios(&mut inflow_models, &stage_to_season, n_seasons)?;\n    populate_derived_residual_ratios(&mut inflow_models, &stage_to_season, n_seasons)?;",
+        "reading": "Outside its own file the only two hits for either symbol are the crate-root `pub use` lines: no production caller, no integration-test caller and no Python-binding caller exists anywhere in the workspace. The only call sites are the file's own `#[cfg(test)]` module (mod.rs:496, :548, :624) and a `no_run` doctest (mod.rs:317). The eleven per-file `load_*` helpers it wraps are NOT dead - `crates/cobre-io/src/validation/schema.rs:369-491` calls each of them - so the dead surface is exactly the aggregate orchestrator and its result struct, not the layer beneath. The last two output lines are the divergence: `load_scenarios` runs the residual-ratio derivation only under `if manifest.stages_json` (mod.rs:397-403), while the loader production actually runs, `crates/cobre-io/src/pipeline.rs:225`, runs it unconditionally. The function's own doc (mod.rs:291-296) states both the mirror ('mirroring the four production call sites') and the trap: with `stages_json` unset every model keeps the placeholder `residual_std_ratio = 1.0` unresolved. `ScenarioData`'s nine fields are `inflow_models`, `load_models`, `ncs_models`, `correlation`, `inflow_history`, `external_scenarios`, `external_load_scenarios`, `external_ncs_scenarios` and `load_factors` - the first eight are exactly the eight stochastic fields the Part-I I.3-1 disposition widened the claim to on `System` (crates/cobre-core/src/system/mod.rs:111-117 and :125-131)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete `load_scenarios` and `ScenarioData` together with their crate-root re-exports, and re-home the three inline tests that exercise them onto the assembly surface production actually uses. If an aggregate entry point is wanted as a supported library convenience rather than deleted, it must stop being a second assembly implementation: have it consume the same parsed artifacts the pipeline consumes so the residual-ratio derivation cannot be manifest-gated in one path and unconditional in the other, and drop the gate entirely. Either way the per-file `load_*` helpers stay - they have a real consumer in the schema-validation path. Doing this before the case-format-v2 break is what keeps the second public carrier of the stochastic tables out of the v1 compatibility shim.",
+      "alignmentHint": "advances-1",
+      "partIRef": "I.3-1"
+    },
+    {
+      "title": "cobre-io's four public postcard broadcast helpers are a parallel MPI serialization facade that the MPI path does not use",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "symbol": "serialize_system",
+          "line": 214
+        },
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "symbol": "deserialize_system",
+          "line": 250
+        },
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "symbol": "serialize_parameters",
+          "line": 285
+        },
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "symbol": "deserialize_parameters",
+          "line": 322
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'serialize_system\\|deserialize_system\\|serialize_parameters\\|deserialize_parameters' crates/ --include='*.rs' | grep -v 'crates/cobre-io/src/broadcast.rs'; grep -n 'postcard::to_allocvec' crates/cobre-cli/src/commands/broadcast.rs | head -1",
+        "output": "crates/cobre-io/src/lib.rs:70:    deserialize_parameters, deserialize_system, serialize_parameters, serialize_system,\ncrates/cobre-io/tests/integration.rs:26:    ParquetWriterConfig, deserialize_system, load_case, serialize_system, validate_case,\ncrates/cobre-io/tests/integration.rs:989:    let bytes = serialize_system(&original)\ncrates/cobre-io/tests/integration.rs:990:        .unwrap_or_else(|e| panic!(\"serialize_system should succeed, got: {e}\"));\ncrates/cobre-io/tests/integration.rs:994:    let deserialized = deserialize_system(&bytes)\ncrates/cobre-io/tests/integration.rs:995:        .unwrap_or_else(|e| panic!(\"deserialize_system should succeed, got: {e}\"));\n419:            Some(ref v) => postcard::to_allocvec(v).map_err(|e| CliError::Internal {",
+        "reading": "All four are `pub` and crate-root re-exported. `serialize_parameters` and `deserialize_parameters` have zero references anywhere outside their own file; `serialize_system` and `deserialize_system` have exactly one, a round-trip assertion in `crates/cobre-io/tests/integration.rs:989-995`. The real MPI broadcast does not route through any of them: `crates/cobre-cli/src/commands/run/setup.rs:322-326` broadcasts the system, the config, the scalar parameters and the opening tree through `broadcast_value`, which performs its own `postcard::to_allocvec` (`crates/cobre-cli/src/commands/broadcast.rs:419`) and `postcard::from_bytes` (:456), and setup.rs:290 builds the `Vec<BroadcastScalarParameter>` inline via `BroadcastScalarParameter::from`. The mirror types are therefore live and correctly motivated; only the four helper bodies (each a three-line postcard call plus an error map) and the module's `Usage` block (broadcast.rs:20-34, a `rust,ignore` example describing a flow no caller follows) are the unused facade. No entry for these symbols exists in `docs/design/reserved-seams-and-deferred-debt.md`, in `prior-register.md`, or in the BACKLOG's OD/CD registers."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the four helper functions and their crate-root re-exports, keeping the `Broadcast*` mirror types and their `From` conversions, which the CLI genuinely consumes. Rewrite the module doc so the seam it describes is the one that exists - the mirror types plus the generic value broadcaster in the CLI - rather than a usage example built on the deleted helpers, and keep the integration round-trip assertion by expressing it as a direct postcard round-trip over `System`, so the guarantee that `System`'s `Deserialize` rebuilds its lookup indices stays pinned by a test. The opposite resolution is equally acceptable and cheaper to argue: if these helpers are meant to be the crate's supported broadcast API, have the CLI call them instead of open-coding the same postcard calls, so exactly one owner holds the encoding.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Two zero-consumer public convenience helpers ship from the crate root: a `case_dir`-taking wrapper whose only real consumer open-codes the join it owns, and a stage-to-season map builder nothing builds",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/extensions/scalar_parameters.rs",
+          "symbol": "load_scalar_parameters_json",
+          "line": 258
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "build_season_stage_map",
+          "line": 509
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '\\bload_scalar_parameters_json\\b\\|\\bbuild_season_stage_map\\b' crates/ --include='*.rs' | grep -v 'crates/cobre-io/src/extensions/scalar_parameters.rs:' | grep -v 'crates/cobre-io/src/stages.rs:2\\|crates/cobre-io/src/stages.rs:5'; sed -n '544p' crates/cobre-io/src/validation/schema.rs",
+        "output": "crates/cobre-io/src/lib.rs:94:    load_scalar_parameters_json, parse_evaporation_models, parse_fpha_deviation_points,\ncrates/cobre-io/src/lib.rs:143:pub use stages::{StagesData, build_season_stage_map, parse_stages};\ncrates/cobre-io/src/extensions/mod.rs:57:pub use scalar_parameters::{load_scalar_parameters_json, parse_scalar_parameters_json};\n        || parse_scalar_parameters_json(&case_root.join(\"constraints/generic_parameters.json\")),",
+        "reading": "Every hit outside the two defining files is a `pub use` re-export; neither symbol has a caller in any crate, integration binary, benchmark or Python binding (a repo-wide grep over `*.rs`, `*.py`, `*.pyi` and `*.md` excluding `target/` returns only these re-exports, the definitions and their own doc examples). `load_scalar_parameters_json` has a one-line body, `parse_scalar_parameters_json(&case_dir.join(\"constraints/generic_parameters.json\"))`, and the last output line shows the only real consumer - `crates/cobre-io/src/validation/schema.rs:544` - open-coding that exact join against the sibling parser instead. That is the OD-002 shape verbatim: a `pub` `case_dir`-taking wrapper whose every real consumer already holds the inner entry point. `build_season_stage_map` is a five-line filter_map/collect whose only call sites are three assertions in its own `#[cfg(test)]` module (stages.rs:2446, :2456, :2480) plus a doctest at :505. In both cases `pub` rather than `pub(crate)` suppresses the `dead_code` lint, so the speculative surface ships silently; neither carries a `// Rationale:` or Voice-4 comment naming a future reader, and neither appears in the reserved-seam register or in `prior-register.md`."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete both functions together with their crate-root and module re-exports. If a case-relative scalar-parameter entry point is wanted, re-add it beside the first real caller and route the schema-validation site through it, so a single owner holds the `constraints/generic_parameters.json` path literal - the same collapse already executed for the boundary checkpoint path accessor. For the season map, delete outright and let its three inline assertions go with it: stage-to-season resolution already has an owner in the season-resolution helper the production assembly path calls, and a second `stage id -> season id` builder with no consumer is a drift hazard rather than a convenience.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/stages.rs:134 (`graph_type: RawPolicyGraphType`) and `RawPolicyGraphType::Cyclic` (crates/cobre-io/src/stages.rs:232)",
+      "why": "Checked first under the reserved-seam rule and deliberately not raised. The enum's second value is not dead: it parses and is then rejected during conversion so the reserved-value message fires instead of a generic unknown-variant error, which is the registered behaviour, not an accidental one-valued enum.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md - deferred-debt register, `Horizon-type config field long-term fate`; prior-register.md `## Do not re-raise`, `graph_type` finite-only horizon field"
+    },
+    {
+      "subject": "crates/cobre-io/src/stages.rs:382-383 - the `#[allow(dead_code)]` on `RawRiskMeasure::Expectation(String)`",
+      "why": "The only `#[allow(dead_code)]` in the whole sub-station, and it is load-bearing rather than the OD-004 narration class: the attached rationale states that serde's `#[serde(untagged)]` matches this variant by attempting a `String` deserialization, so collapsing it to a unit variant breaks every expectation-config deck. It belongs to the census's load-bearing class, not the symmetry-or-test-retention one.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md - `#[allow(...)]` census, `Load-bearing` class"
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/correlation.rs:113 - the single-inhabitant `CorrelationMethod` enum",
+      "why": "Probed as a one-inhabitant wrapper enum and cleared. It pays for itself twice: `RawCorrelationFile` is a schema-export root (crates/cobre-io/src/schema.rs:126), so the enum is what pins `method` to a closed value set in the published JSON schema, and the resolved string is not inert - it is echoed to the stochastic output at crates/cobre-io/src/output/stochastic.rs:364. Removing the type would weaken the exported schema and the reject path, not just delete a wrapper."
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/assembly.rs:167 - `report_orphaned_keys<'a, I>`",
+      "why": "Probed against the OD-007 unused-genericity precedent and cleared: the two call sites (assembly.rs:146 and :155) pass `Keys` iterators over maps with different value types (`Vec<f64>` and `AnnualComponent`), so the type parameter is genuinely exercised by both callers rather than being polymorphism nothing uses."
+    },
+    {
+      "subject": "crates/cobre-io/src/windowed_history.rs:19 (`WindowedRecord`) and :50 (`validate_windowed_records`)",
+      "why": "The right amount of structure: one `pub(crate)` post-parse view plus one shared Layer-1 validator serving three surfaces that share an on-disk shape, introducing no on-disk shape of its own, with the label parameters keeping each surface's error text byte-identical and the canonical sort internal so the outcome is declaration-order invariant."
+    },
+    {
+      "subject": "crates/cobre-io/src/stage_resolve.rs:20 - `StageIdResolver`",
+      "why": "A single-owner abstraction that earns its existence: 64 references across cobre-io and cobre-sddp resolve declared `stage_id` domain ids through it, and `unresolved_stage_id_error` gives every input file one error shape. This is the opposite of a one-consumer abstraction."
+    },
+    {
+      "subject": "crates/cobre-io/src/constraints/named_expression_inline.rs:22 (`MAX_INLINED_TERMS`) and :163 (`detect_cycles`)",
+      "why": "Machinery justified by named failure modes rather than by speculation: the iterative three-colour DFS exists so a deep reference chain cannot overflow the stack, and the term cap exists to abort the doubling-chain blowup the doc names. Neither is generality without a consumer."
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/estimation.rs:96 - `EstimationPath` and its seven variants",
+      "why": "A seven-variant enum that could easily be over-built, and is not: every variant is separately distinguished downstream by the provenance classifier in crates/cobre-sddp/src/policy/provenance.rs:202-221, and `resolve` is a total map over the three-flag manifest matrix."
+    },
+    {
+      "subject": "crates/cobre-io/src/extensions/production_models.rs:114, :189, :231 - `SelectionMode`, `PlaneReductionConfig`, `ReferenceVolume`",
+      "why": "Every variant of all three enums has a real consumer outside the defining file (crates/cobre-io/src/validation/dimensional.rs, crates/cobre-io/src/validation/productivity_resolution.rs, crates/cobre-sddp/src/production/fpha_fitting/reduction.rs, crates/cobre-sddp/src/production/hydro_models/production.rs). No speculative input-shape variant is carried."
+    }
+  ],
+  "_needsHuman": [
+    "Whether cobre-io's crate-root `pub use` block is a supported external library API or only the workspace's internal loader surface - if it is genuinely public API, the three candidates become semver-visible removals that need an owner decision on the deprecation path rather than a straight delete.",
+    "`StageIdResolver::study_stage_ids` (crates/cobre-io/src/stage_resolve.rs:53) has exactly one reader in the workspace and it is a cross-crate test assertion (crates/cobre-sddp/src/setup/tests.rs:7326); the owner should say whether that is the sanctioned symmetry-or-test-retention class or a demote-to-`pub(crate)` case, since the field it exposes is private and no production path reads it."
+  ]
+}

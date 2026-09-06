@@ -1,0 +1,183 @@
+{
+  "station": "core-io",
+  "subStation": "C",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "perf",
+  "candidates": [
+    {
+      "title": "`slot_occupying_classes` re-scans all three external scenario tables once per graph node and once per staged stage, recomputing a per-stage column count the sibling module already builds in one pass",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+          "symbol": "slot_occupying_classes",
+          "line": 357
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+          "symbol": "check_realization_rules",
+          "line": 308
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+          "symbol": "check_num_openings_declaration",
+          "line": 667
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/stages.rs",
+          "symbol": "check_sampling_method_meaningfulness",
+          "line": 797
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "ClassExternal",
+          "line": 536
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'slot_occupying_classes(data\\|filter(|r| r.stage_id == stage_id)\\|fn distinct_count' crates/cobre-io/src/validation/semantic/stages.rs",
+        "output": "308:        let classes = slot_occupying_classes(data, &source, node.stage_id);\n371:                .filter(|r| r.stage_id == stage_id)\n382:                .filter(|r| r.stage_id == stage_id)\n393:                .filter(|r| r.stage_id == stage_id)\n403:fn distinct_count(scenario_ids: impl Iterator<Item = i32>) -> usize {\n667:        let generated = slot_occupying_classes(data, &source, stage_id).is_empty();\n797:            .is_some_and(|s| !slot_occupying_classes(data, s, stage_id).is_empty());",
+        "reading": "The helper body at 365-397 filters `data.external_scenarios`, `data.external_load_scenarios` and `data.external_ncs_scenarios` in full for a single `stage_id`, then `distinct_count` (line 403) collects the surviving scenario ids into a fresh `HashSet<i32>`. Line 308 sits inside `for node in nodes {` (line 304), so the whole triple-table scan and three set allocations repeat once per declared node; lines 667 and 797 repeat it once per staged stage in two further rules. The identical per-stage distinct-scenario-id count is already computed in one pass by `extract_class` and stored as `ClassExternal.raw_c` (crates/cobre-io/src/validation/semantic/scenarios.rs:536, filled at :716), so the recount is not the only source of the value."
+      },
+      "mechanism": "Repeated full-table pass plus per-call hash-set allocation. The external scenario tables are the largest inputs a deck carries, with one row per (entity, stage, scenario column). Each `slot_occupying_classes` call walks every row of all three of them and allocates one `HashSet<i32>` per external class. The number of calls is the node count plus twice the staged-stage count, and under enumerated forward selection the node count grows with the declared column count per stage, so the total row visits grow as the product of the node count and the table size rather than linearly in the table size. The path is setup-time, once per case load, but it runs on rank 0 only (crates/cobre-cli/src/commands/run/setup.rs:65 documents the rank-0 load), so every other rank waits on it before the broadcast.",
+      "proposedSeverity": "B",
+      "fixShape": "Compute the per-stage slot-occupancy vector once per validation run, before any node or stage loop, with a single pass over each external table that accumulates a distinct-scenario-id count per resolved stage index, and have all three call sites index that vector instead of recounting. The value already has an owner one module over: the external-library coherence check builds exactly this vector in one pass and keeps it on its per-class record. The clean shape is one owner for the per-stage raw column count, consumed by both the node-graph rules and the library-coherence rules, rather than a second open-coded recount per node. No diagnostic text or rule semantics need change.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`merged_windows_for_hydro` filters the whole inflow-history table per hydro, and two independent seeding rules each build the same per-hydro map from scratch",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/inflow_seeding.rs",
+          "symbol": "merged_windows_for_hydro",
+          "line": 181
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/inflow_seeding.rs",
+          "symbol": "check_slot_coverage",
+          "line": 244
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/inflow_seeding.rs",
+          "symbol": "check_inprogress_partial_coverage",
+          "line": 339
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '1,470p' crates/cobre-io/src/validation/semantic/inflow_seeding.rs | grep -n 'fn merged_windows_for_hydro\\|merged_windows_for_hydro(data\\|filter(|row| row.hydro_id == hydro_id)'",
+        "output": "181:fn merged_windows_for_hydro(data: &ParsedData, hydro_id: EntityId) -> Vec<RealizedWindow> {\n185:        .filter(|row| row.hydro_id == hydro_id)\n244:        .map(|h| (h.id.0, merged_windows_for_hydro(data, h.id)))\n339:        let merged = merged_windows_for_hydro(data, hydro.id);",
+        "reading": "The helper at 181 scans `data.inflow_history` in full and keeps the rows matching one hydro id (line 185), collects them into a fresh `Vec<RealizedWindow>`, does the same over `recent_observations`, and returns a third vector from `merge_layered_windows`. Line 244 calls it inside `data.hydros.iter().map(...)`, so the full-table scan repeats once per hydro. Line 339 calls it again inside `for hydro in &data.hydros`, a second independent construction of the same per-hydro data in a different rule of the same entry point (`validate_inflow_seeding`, line 28, invokes both)."
+      },
+      "mechanism": "Nested scan plus duplicated construction. The inflow-history table holds one row per (hydro, historical window), so its length is itself proportional to the hydro count; filtering it once per hydro makes the row visits grow with the product of the hydro count and the table length, and the work is then done twice because the two rules do not share the result. Each call also allocates three vectors per hydro. Deck-independent reason: both factors scale with the same input dimension, so the cost grows faster than the data does on any deck that widens the plant set or lengthens the history. The path is setup-time, once per case load, on rank 0.",
+      "proposedSeverity": "B",
+      "fixShape": "Bucket the history rows and the recent observations by hydro id in one pass at the top of the inflow-seeding entry point, merge each bucket once, and pass the resulting per-hydro map into both the slot-coverage rule and the in-progress-coverage rule. That removes the nested scan and the duplicate construction together. The two rules keep their own diagnostics and their own coverage arithmetic; only the window construction becomes shared state built once.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Prefix-coherence re-walks the entire root prefix for every graph edge, so a repeated column pair is compared once per edge instead of once per pair",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "check_prefix_coherence",
+          "line": 832
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "line": 853
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '846,857p' crates/cobre-io/src/validation/semantic/scenarios.rs",
+        "output": "    for tr in &graph.transitions {\n        let (Some(&(sn, Some(cn))), Some(&(_, Some(cm)))) =\n            (node_info.get(&tr.source_id), node_info.get(&tr.target_id))\n        else {\n            continue;\n        };\n        for class in classes {\n            for s in 0..=sn {\n                let disagreement = class.entities.iter().find_map(|&e| {\n                    match (class.cells.get(&(s, cn, e)), class.cells.get(&(s, cm, e))) {\n                        (Some(&va), Some(&vb)) if va.to_bits() != vb.to_bits() => Some((e, va, vb)),\n                        _ => None,",
+        "reading": "The comparison depends only on the class, the two column indices `cn` and `cm`, and the source stage depth `sn`; nothing inside the three nested loops reads the edge itself except the message text. The `for s in 0..=sn` loop restarts at stage 0 for every transition, and the inner `entities.iter().find_map` does two hash lookups per entity at every stage. A column pair that recurs on several edges of the declared graph therefore has its whole shared prefix re-compared once per edge."
+      },
+      "mechanism": "Redundant repeated pass. The cost is the sum over edges of the source stage depth times the entity count times two hash lookups, so it grows with the product of the edge count, the horizon length and the entity count for a rule that only ever emits a warning. Because the comparison is a pure function of the column pair and the deepest source stage at which it appears, every extra edge carrying an already-compared pair is repeated work. The path is setup-time, once per case load, and only fires when the stage file declares an explicit node list.",
+      "proposedSeverity": "B",
+      "fixShape": "Compare each distinct column pair once rather than once per edge. Collect the distinct pairs with their maximum source stage depth and one representative edge before the comparison, then walk each pair's prefix a single time and attribute the first disagreement to its representative edge. The warnings emitted stay the same in content and in count per pair, and the trunk is walked once per pair instead of once per edge. If per-edge attribution must be preserved exactly, keep the per-edge loop but short-circuit on a pair already decided.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Three modules build the same sorted stage-window index and re-run the same per-row season resolution over the inflow-history table under one shared precondition",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/season.rs",
+          "symbol": "check_observation_season_alignment",
+          "line": 149
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/season.rs",
+          "symbol": "check_season_observation_coverage",
+          "line": 272
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "check_estimation_prerequisites",
+          "line": 1025
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)>\\|for row in &data.inflow_history\\|partition_point(|(start, _, _)| \\*start <= row.start_date)' crates/cobre-io/src/validation/",
+        "output": "crates/cobre-io/src/validation/semantic/season.rs:141:    let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data\ncrates/cobre-io/src/validation/semantic/season.rs:149:    for row in &data.inflow_history {\ncrates/cobre-io/src/validation/semantic/season.rs:150:        let pos = stage_index.partition_point(|(start, _, _)| *start <= row.start_date);\ncrates/cobre-io/src/validation/semantic/season.rs:264:    let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data\ncrates/cobre-io/src/validation/semantic/season.rs:272:    for row in &data.inflow_history {\ncrates/cobre-io/src/validation/semantic/season.rs:273:        let pos = stage_index.partition_point(|(start, _, _)| *start <= row.start_date);\ncrates/cobre-io/src/validation/semantic/scenarios.rs:1012:        let stage_index: Vec<(chrono::NaiveDate, chrono::NaiveDate, usize)> = data\ncrates/cobre-io/src/validation/semantic/scenarios.rs:1025:        for row in &data.inflow_history {\ncrates/cobre-io/src/validation/semantic/scenarios.rs:1026:            let pos = stage_index.partition_point(|(start, _, _)| *start <= row.start_date);",
+        "reading": "Three sites declare the identical index type, build it from the same stage filter, then run the identical predecessor lookup on the same table. All three are gated by the same estimation-active predicate: `season.rs:127-135`, `season.rs:246-250` and `scenarios.rs:966-973` each recompute `has_history && !(has_stats && has_ar_coefficients)` from the same three fields, so when one pass runs all three run. Only the counter each pass fills differs: `(hydro, season, year)` counts, per-season counts, and per-(hydro, stage occurrence) window buckets."
+      },
+      "mechanism": "Repeated pass over the same table with a rebuilt index. Three full traversals of the inflow-history table, three constructions of the same stage-window vector, and three evaluations of the same activation predicate, where one traversal could feed all three counters. The cost is linear in the table but carries a constant factor of three on the largest historical input, and each pass also re-derives per-row date arithmetic that the previous pass already computed. The path is setup-time, once per case load, on rank 0.",
+      "proposedSeverity": "C",
+      "fixShape": "Resolve each history row's season and stage occurrence once. Lift the index build and the per-row predecessor lookup into a single helper that returns, per history row, its resolved season and stage position, evaluate the estimation-active predicate once alongside it, and let the three rules consume that shared result to fill their own counters. The three diagnostics stay independent and unchanged in content; only the resolution work becomes shared. This also removes the standing risk that the three copies of the lookup drift apart, since they are currently kept in step by nothing but convention.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`extract_class` materializes four full-table-sized structures per external class, one of which carries values no rule reads on the chain dialect",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "extract_class",
+          "line": 647
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "check_external_library_coherence",
+          "line": 620
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'let mut cells\\|let mut entity_scen\\|let mut union_by_stage\\|let mut inflow_sample_rows\\|inflow_sample_rows.push\\|class.cells.get\\|policy_graph.nodes.is_empty()' crates/cobre-io/src/validation/semantic/scenarios.rs",
+        "output": "620:    if !data.stages.policy_graph.nodes.is_empty() {\n647:    let mut cells: HashMap<(usize, i32, i32), f64> = HashMap::new();\n649:    let mut union_by_stage: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); n_stages];\n650:    let mut entity_scen: HashMap<(usize, i32), BTreeSet<i32>> = HashMap::new();\n651:    let mut inflow_sample_rows: Vec<(EntityId, i32, i32, f64)> = Vec::new();\n694:            inflow_sample_rows.push((EntityId(entity_id), stage_idx_i32, scenario_id, value));\n2745:        assert!(data.stages.policy_graph.nodes.is_empty(), \"chain fixture\");\n855:        class.cells.get(&(s, cn, e)), class.cells.get(&(s, cm, e))",
+        "reading": "Every external row drives four inserts inside the single row loop: a `cells` hash insert (line 665), a `union_by_stage` set insert (line 684), an `entity_scen` set insert (lines 685-688), and, for the inflow class, a full row copy pushed onto `inflow_sample_rows` (line 694). Three of the four are index views of the same (stage, scenario, entity) triples. The only reader of `cells` values is `check_prefix_coherence` at line 855, and line 620 shows that call is guarded by a non-empty declared node list, so on a chain-dialect deck the values are built and dropped unread; the map's remaining duty there is duplicate-key detection, which needs the keys only. Line 2745 confirms the chain fixture is a first-class shape in this module's own tests."
+      },
+      "mechanism": "Memory amplification with per-row container inserts. For the inflow class the largest external table is materialized roughly four times over during validation: a hash map keyed by the triple with an f64 payload, a per-stage ordered set of scenario ids, a per-(stage, entity) ordered set of scenario ids, and a verbatim row copy. The row copy exists because the moment reduction takes a slice rather than an iterator. Peak resident memory during validation therefore scales as a multiple of the biggest input file, and each row pays several separate container insertions. The path is setup-time, once per case load, on rank 0.",
+      "proposedSeverity": "C",
+      "fixShape": "Build only what a rule will read. On a deck with no declared node list the class extraction can carry a key-only set for duplicate detection and skip the values entirely, since the value-carrying map has no other reader. The per-stage scenario-id union is derivable from the per-(stage, entity) sets already built and need not be a third copy. The inflow row copy can go away by widening the moment reduction to accept an iterator, or by feeding it the triple-keyed map directly, which removes a full duplicate of the largest external table. None of this changes which rows are checked or which diagnostics fire.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/validation/referential.rs::check_scenario_references",
+      "why": "The reference layer builds its entity id sets once into `LookupSets` (crates/cobre-io/src/validation/referential.rs:73) and then makes exactly one pass per scenario table, testing membership with a hash lookup instead of a nested scan. Every `format!` sits inside the failure branch, so a clean deck walks the largest tables with no allocation at all. This is the shape the semantic layer's scenario rules should be measured against.",
+      "sanctionedBy": "observed at the baseline: crates/cobre-io/src/validation/referential.rs:360-520"
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/block_bounds.rs::check_row_columns",
+      "why": "Duplicate-row detection across all six bound families keys a `HashSet` on `(i32, Option<i32>, i32, Option<i32>, &'static str)`, using the static column name rather than an owned `String`, and every message-building `format!` follows the insert-failed branch. The six bound tables are per (entity, stage, block) and can be large; this path allocates nothing per row on a clean deck.",
+      "sanctionedBy": "observed at the baseline: crates/cobre-io/src/validation/semantic/block_bounds.rs:341-381"
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/scenarios.rs::check_par_stationarity",
+      "why": "The stationarity gate builds its seasonal-standard-deviation map, its annual-parameter map and its per-hydro coefficient tree once, before the per-hydro loop, and the loop then does hash lookups only. It is the counter-example inside the same file to the per-node and per-hydro rescans raised above, and shows the intended index-once pattern is already understood here.",
+      "sanctionedBy": "observed at the baseline: crates/cobre-io/src/validation/semantic/scenarios.rs:325-365"
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/correlation.rs::check_correlation_matrices",
+      "why": "The matrix rules are quadratic only because a correlation matrix is quadratic; the symmetry test reads the upper triangle only, and no allocation happens outside the diagnostic branches. There is no redundant pass to remove here.",
+      "sanctionedBy": "observed at the baseline: crates/cobre-io/src/validation/semantic/correlation.rs:12-80"
+    },
+    {
+      "subject": "crates/cobre-io/src/config/training.rs:531",
+      "why": "ratified reserved seam, not raised under any lens",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — `LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`"
+    }
+  ],
+  "_needsHuman": [
+    "Whether any of these setup-time validation costs clears the project's bar for action is an owner call, since the standing rule accepts setup-time recomputation and none of these paths has been measured on a fixed deck.",
+    "If the per-stage raw column count gets a single owner, the owner must decide whether it belongs beside the stage-id resolver, which both consumers already share, or stays inside the validation layer as a value passed between the two semantic modules."
+  ]
+}

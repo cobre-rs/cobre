@@ -1,0 +1,148 @@
+{
+  "station": "core-io",
+  "subStation": "B",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "perf",
+  "scopeNote": "Every path in sub-station B is setup-time (case load / stochastic-pipeline preparation). Verified no sub-station B input-path symbol is reached from the SDDP training or simulation loops: `grep -rn 'cobre_io::' crates/cobre-sddp/src/training crates/cobre-sddp/src/simulation --include='*.rs'` returns only output-record types (`TrainingOutput`, `WorkerTimingRecord`, `IterationRecord`, `OwnedPolicyCutRecord`), config enums (`BackwardScheduler`, `PhaseSolverProfileConfig`) and `StageIdResolver` inside `#[cfg(test)]` modules — no parser, resolver or estimator. Every candidate below is therefore a once-per-run cost, and each is raised only because it is super-linear in a deck dimension or a redundant full-table materialization, not because it is merely repeated work.",
+  "candidates": [
+    {
+      "title": "The stochastic estimator resolves per-group work by re-scanning a whole table once per group, making history-window projection quadratic in record depth",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/scenarios/estimation.rs",
+          "symbol": "resolve_coverage_gated_observations",
+          "line": 468
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/estimation.rs",
+          "symbol": "check_std_ratio_divergence",
+          "line": 842
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '468,479p' crates/cobre-io/src/scenarios/estimation.rs; sed -n '137,142p;153p' crates/cobre-io/src/scenarios/inflow_history.rs",
+        "output": "        for occurrence in &occurrences {\n            let overlapping: Vec<RealizedWindow> = windows\n                .iter()\n                .filter(|w| w.start_date < occurrence.end && w.end_date > occurrence.start)\n                .map(|w| RealizedWindow {\n                    start_date: w.start_date,\n                    end_date: w.end_date,\n                    value_m3s: w.value_m3s,\n                })\n                .collect();\n\n            let projection = cast(&overlapping, occurrence);\n    rows.sort_by(|a, b| {\n        a.hydro_id\n            .0\n            .cmp(&b.hydro_id.0)\n            .then_with(|| a.start_date.cmp(&b.start_date))\n    });\n    validate_windowed_records(&windows, \"inflow_history\", \"hydro_id\", \"value_m3s\", path)?;",
+        "reading": "The inner loop walks every one of a hydro's history windows for every season occurrence of that hydro, and both counts grow linearly with the depth of the historical record, so the comparison count is quadratic in record depth per hydro. The second `sed` range proves the sweep never needs to be quadratic: `parse_inflow_history` returns rows already sorted by `(hydro_id, start_date)` and `validate_windowed_records` has already rejected any per-entity overlap, so each hydro's `windows` slice is ascending and disjoint; `discover_hydro_occurrences` returns `discovered.into_values()` from a `BTreeMap<NaiveDate, _>` (line 512 and 535), so `occurrences` is ascending too. Two monotone sequences are being joined with a nested scan. The `.map(...).collect()` inside the inner loop additionally copies each matching window into a fresh heap `Vec` once per occurrence, when the matching set is by construction a contiguous subslice of `windows`. The second anchor is the same shape at smaller scale: `check_std_ratio_divergence` scans the entire `user_std` key set (hydros times seasons) once per hydro in `common_hydros`, allocating and sorting a `Vec<usize>` each time, instead of grouping the map by hydro in one pass. I ran `grep -rn 'estimate_from_history' crates/ --include='*.rs'` to confirm the single production entry point is `crates/cobre-sddp/src/setup/stochastic_pipeline.rs:386`, i.e. setup-time.",
+        "commandsAlsoRun": [
+          "sed -n '388,540p' crates/cobre-io/src/scenarios/estimation.rs",
+          "sed -n '842,852p' crates/cobre-io/src/scenarios/estimation.rs",
+          "sed -n '360,405p' crates/cobre-stochastic/src/season_cast/mod.rs",
+          "grep -rn 'estimate_from_history' crates/ --include='*.rs'"
+        ]
+      },
+      "mechanism": "Repeated full pass plus per-iteration allocation: for each season occurrence the code re-filters the hydro's complete window list and materializes the survivors into a new `Vec<RealizedWindow>`, giving O(occurrences x windows) date comparisons and one heap allocation plus a struct-by-struct copy per occurrence, per hydro. Both loop bounds are the deck's history depth, so the work grows as the square of how many years of inflow record the deck ships while the useful work grows linearly. Deck-independent reason it matters: the two sequences being joined are both already in ascending date order and the windows are already proven non-overlapping, so the quadratic factor buys nothing — it is a merge join written as a nested scan. Setup-time (once per run, only on the history-estimation path), not per-scenario.",
+      "proposedSeverity": "B",
+      "fixShape": "Replace the nested filter with a single forward sweep that advances one cursor through the hydro's window slice as it advances through the occurrence list, since both are already ascending and the windows are already proven disjoint. Hand `cast` the resulting contiguous subslice of the existing window list by borrow instead of building a per-occurrence owned vector, which removes the allocation and the copy entirely. Keep the summation order identical to today's filtered order so the projection stays bit-for-bit the same value: today's filter already visits the overlapping windows in ascending order, and a subslice preserves exactly that order, so the change is determinism-safe under the reproducibility and order-invariance contract. Apply the same one-pass grouping to the second anchor: build the hydro-to-seasons grouping once from the shared key set, then iterate the groups, rather than re-filtering the whole key set inside the per-hydro loop. Pin the result with the existing estimation integration coverage so a refactor that changes a fitted statistic is caught rather than assumed.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Named-expression inlining rebuilds the whole name index on every call, and the relational path pays a linear table scan plus a throwaway one-element vector per reference term",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/constraints/named_expression_inline.rs",
+          "symbol": "inline",
+          "line": 57
+        },
+        {
+          "path": "crates/cobre-io/src/constraints/generic.rs",
+          "symbol": "resolve_split_side",
+          "line": 1254
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'let index: HashMap<&str' crates/cobre-io/src/constraints/named_expression_inline.rs; grep -n 'inline(&parsed, table)\\|inline(&vec!\\|table.iter().any' crates/cobre-io/src/constraints/generic.rs",
+        "output": "57:    let index: HashMap<&str, &ParsedExpression> = table\n489:                let terms = inline(&parsed, table).map_err(expression_err)?;\n1254:                if table.iter().any(|(declared, _)| declared == &name) {\n1255:                    let inlined = inline(&vec![ParsedTerm::Ref { name, scale }], table)?;",
+        "reading": "`inline` takes the named-expression table as a flat slice and constructs a `HashMap<&str, &ParsedExpression>` over the entire table as its first statement, so the index is rebuilt from scratch on every invocation rather than once. Line 489 invokes it once per parsed constraint inside `convert`'s `for (i, c) in raw.constraints.into_iter().enumerate()` loop (read at `sed -n '455,500p'`), so the index build repeats once per constraint. Line 1255 is worse: it invokes `inline` for a single reference term, so the full table index is built to answer one lookup, and the preceding line 1254 has already walked the same table linearly with `any` to decide whether that lookup is worth attempting. The `&vec![...]` argument allocates a one-element heap vector per reference purely to satisfy the `&ParsedExpression` (that is, `&Vec<ParsedTerm>`) parameter type.",
+        "commandsAlsoRun": [
+          "sed -n '455,500p' crates/cobre-io/src/constraints/generic.rs",
+          "sed -n '1235,1275p' crates/cobre-io/src/constraints/generic.rs",
+          "sed -n '53,120p' crates/cobre-io/src/constraints/named_expression_inline.rs"
+        ]
+      },
+      "mechanism": "Redundant index construction inside a per-item loop: the name-to-expression hash map is rebuilt for every constraint and again for every individual reference term on the relational path, so index-building work scales as the product of the number of generic constraints, the references per constraint, and the size of the named-expression table, where one build would serve all of them. Two smaller costs ride along on the relational path — a linear membership scan of the same table immediately before the map that would answer it, and a single-element heap vector allocated and dropped per reference. Deck-independent reason it matters: the generic-constraint surface is the one input whose size the modeller sets directly rather than the system dimensions, so this is the input path most likely to grow without bound relative to the rest of the case. Setup-time (case load), not per-scenario.",
+      "proposedSeverity": "C",
+      "fixShape": "Build the name-to-expression index once where the table itself is built and thread that index through the conversion instead of the flat slice, so both call sites do lookups rather than rebuilds. Give the inlining entry point a form that accepts a single reference so the relational path stops wrapping one term in a temporary vector, and let the membership question be answered by the same index lookup that then performs the substitution, removing the separate linear scan. The recursive helper already takes the index by reference, so this is a signature change at the boundary rather than a rewrite of the substitution logic, and the term ordering and scale distribution stay exactly as they are — the inlined term order is part of the parsed expression's meaning and must not change.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The generic-constraint tokenizer copies each expression into a `Vec<char>` and allocates a fresh `String` for every identifier and numeric literal instead of borrowing the input",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/constraints/generic.rs",
+          "symbol": "tokenize",
+          "line": 631
+        },
+        {
+          "path": "crates/cobre-io/src/constraints/generic.rs",
+          "symbol": "Token",
+          "line": 623
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'let chars: Vec<char>\\|let ident: String = chars\\|let s: String = chars\\|let name: String = chars' crates/cobre-io/src/constraints/generic.rs",
+        "output": "631:    let chars: Vec<char> = input.chars().collect();\n709:                let s: String = chars[start..i].iter().collect();\n720:                let ident: String = chars[start..i].iter().collect();\n735:                let name: String = chars[start..i].iter().collect();",
+        "reading": "`tokenize` receives the expression as `&str` (line 629) and immediately expands it into an owned `Vec<char>`, which is four bytes per character against the input's one byte for ASCII text. It then rebuilds an owned `String` from that char slice three separate ways: line 709 for a numeric literal, whose `String` exists only to call `parse` on it and is then dropped; line 720 for an entity identifier; line 735 for a parameter reference. `Token::Ident(String)` and `Token::ParamRef(String)` at lines 623 and 625 are the owning variants that force the last two. Every token in every constraint expression therefore costs one heap allocation on top of the whole-expression char-vector copy.",
+        "commandsAlsoRun": [
+          "sed -n '628,650p' crates/cobre-io/src/constraints/generic.rs",
+          "sed -n '700,745p' crates/cobre-io/src/constraints/generic.rs",
+          "grep -n 'Ident(String)\\|ParamRef(String)' crates/cobre-io/src/constraints/generic.rs"
+        ]
+      },
+      "mechanism": "Allocation per token plus a whole-input copy: one `Vec<char>` per expression sized four times the expression's byte length, then one `String` per identifier, per parameter reference, and per numeric literal — the numeric one discarded immediately after `parse`. The token type owns its text rather than borrowing the caller's `&str`, which is what forces the copies. Cost scales with total generic-constraint expression text, a dimension the modeller controls independently of the number of hydros or stages. Deck-independent reason it matters: the input is a borrowed string slice that outlives the token vector, so every one of these copies is avoidable without changing what the tokenizer accepts. Setup-time (case load), not per-scenario.",
+      "proposedSeverity": "C",
+      "fixShape": "Walk the input with a byte-offset-and-character iterator rather than materializing a character vector, and let the identifier and parameter-reference token variants borrow a slice of the caller's expression string for the lifetime of the token list instead of owning a copy. Parse the numeric literal from the borrowed slice directly, so no string is allocated just to be parsed and dropped. Keep the accepted grammar exactly as it stands, including the non-ASCII-tolerant identifier start rule, and keep the byte offsets that error messages report pointing at the same place a reader counts to, so the existing rejection messages stay byte-identical.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Inflow-history parsing materializes a second full copy of the table solely to call the shared windowed-record validator",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/scenarios/inflow_history.rs",
+          "symbol": "parse_inflow_history",
+          "line": 144
+        },
+        {
+          "path": "crates/cobre-io/src/windowed_history.rs",
+          "symbol": "validate_windowed_records",
+          "line": 50
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '144,153p' crates/cobre-io/src/scenarios/inflow_history.rs",
+        "output": "    let windows: Vec<WindowedRecord> = rows\n        .iter()\n        .map(|r| WindowedRecord {\n            entity_id: r.hydro_id.0,\n            start_date: r.start_date,\n            end_date: r.end_date,\n            value: r.value_m3s,\n        })\n        .collect();\n    validate_windowed_records(&windows, \"inflow_history\", \"hydro_id\", \"value_m3s\", path)?;",
+        "reading": "Every parsed history row is copied field-by-field into a parallel `WindowedRecord` vector whose only consumer is the validator on the very next line; the copy is dropped as soon as the call returns. `WindowedRecord` carries the same four values as `InflowHistoryRow` with the entity id unwrapped from its newtype, so the second vector is a re-shaped duplicate of the first, not a projection that discards anything. This is the largest table on the sub-station B input path — one row per hydro per historical period — which is why the same shape at the three `initial_conditions.rs` call sites (lines 286, 297 and 306, found with `grep -rn 'validate_windowed_records' crates/cobre-io/src`) is not worth raising and this one is.",
+        "commandsAlsoRun": [
+          "sed -n '100,156p' crates/cobre-io/src/scenarios/inflow_history.rs",
+          "sed -n '50,110p' crates/cobre-io/src/windowed_history.rs",
+          "grep -rn 'validate_windowed_records' crates/cobre-io/src --include='*.rs'"
+        ]
+      },
+      "mechanism": "Redundant full-table materialization: a transient heap vector holding one struct per history row, built and discarded to satisfy a validator's parameter type. Peak memory during case load is therefore roughly double the history table for the duration of the validation call, and the copy itself is a linear pass over the largest input table that computes nothing. Deck-independent reason it matters: the duplication is driven purely by the validator taking a concrete owned-record slice rather than a view, so it grows with the deck's history depth for no analytical benefit. Setup-time (case load), not per-scenario.",
+      "proposedSeverity": "C",
+      "fixShape": "Change the shared validator's contract so callers hand it a view of the records they already hold rather than a re-shaped copy — either by having it take the four values it reads through a small accessor the calling row types implement, or by having it iterate a caller-supplied iterator of borrowed records. The three initial-conditions call sites should migrate with it so one contract serves every windowed surface, which is the point of the shared helper. The validation semantics, the per-surface label strings and the canonical `(entity_id, start_date)` sweep order must all stay exactly as they are, because the sweep order decides which entity a rejection names and that is an order-invariance guarantee, not an implementation detail.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/parquet_helpers.rs:13 (`extract_required_int32`) and its five siblings at :39-144, as consumed by `crates/cobre-io/src/scenarios/external.rs:105-113` and `crates/cobre-io/src/constraints/bounds.rs:491-501`",
+      "why": "Every Parquet parser in sub-station B extracts its typed columns once per record batch as zero-copy borrows into the Arrow buffers (`Result<&'a Int32Array, _>`), then indexes them positionally inside the row loop. There is no per-row downcast, no per-row column lookup by name, and no owned column copy. Row vectors are grown with `rows.reserve(n)` against the batch row count before the loop, so the largest input tables on this path are read with one allocation per batch rather than a reallocation cascade. Error strings are built only on the rejection branch, so the success path allocates nothing per row. This is the shape the perf lens would otherwise ask for, already in place across `external.rs`, `constraints/bounds.rs`, `constraints/penalty_overrides.rs`, `extensions/fpha_hyperplanes.rs`, `scenarios/inflow_history.rs` and the seasonal-stats parsers."
+    },
+    {
+      "subject": "crates/cobre-io/src/resolution/bounds.rs:213 (`resolve_bounds`), crates/cobre-io/src/resolution/penalties.rs:159, crates/cobre-io/src/stage_resolve.rs:63 (`StageIdResolver::index_map`)",
+      "why": "The resolution modules take the `stage_id`-to-index map as a caller-supplied parameter instead of each deriving its own, and `StageIdResolver::index_map` exists specifically so an existing map consumer reads the resolver's own map by borrow rather than deriving a second copy — its doc comment says exactly that. Inside `resolve_bounds` the per-entity-type id indexes are built once at :227-251 and then every override row is placed by hash lookup, never by scanning the entity list. The dense `(entity, stage)` and sparse per-block overlay tables it produces are a deliberate setup-time materialization that buys constant-time lookup during LP construction, which is the trade the project rule endorses. This is the opposite of the anti-pattern the perf probe was sent to look for."
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/assembly.rs:97 (`assemble_inflow_models`)",
+      "why": "The three-way join of seasonal statistics, autoregressive coefficients and annual-component rows is done through hash maps built with `HashMap::with_capacity(...)` sized from the input row counts, with the result vector likewise pre-sized from the statistics count, and coefficient entries are removed from the map as they are consumed rather than re-searched. A nested scan over the coefficient table per statistics row would have been the easy version and would have been quadratic; this is linear."
+    },
+    {
+      "subject": "crates/cobre-io/src/constraints/named_expression_inline.rs:22 (`MAX_INLINED_TERMS`) and :76 (`validate_references_resolve`)",
+      "why": "Two deliberate cost guards, both worth protecting even though the same file carries a candidate above. The term cap aborts an exponential reference expansion before the vector materializes rather than after, and `validate_references_resolve` checks that every reference resolves without materializing any terms, so declaring an expensive expression that no constraint actually references never forces its expansion. Its doc comment states that intent explicitly. The cycle detector is documented as an iterative three-colour depth-first search rather than recursion, so a deep chain cannot overflow the stack."
+    }
+  ],
+  "_needsHuman": [
+    "`crates/cobre-io/src/broadcast.rs::serialize_system` (line 214) has no production caller — `grep -rn '\\bserialize_system(' crates/ --include='*.rs'` returns only its own doc examples, its own `#[cfg(test)]` module, the `crates/cobre-io/src/lib.rs:70` re-export and `crates/cobre-io/tests/integration.rs:989` — so the perf question it raises cannot be settled from the tree: if it were wired, `postcard::to_allocvec(system)` would put the bulk external-scenario and inflow-history tables that `System` carries at `crates/cobre-core/src/system/mod.rs:125-131` into the broadcast payload and into every rank's resident memory, but as an unwired surface there is nothing to measure; whether it is a reserved MPI seam or a dead surface is an owner call and belongs to the over-engineering lens, not this one.",
+    "`crates/cobre-io/src/scenarios/mod.rs:322 (load_scenarios)` likewise has no production caller — `grep -rn '\\bload_scenarios(' crates/ --include='*.rs'` returns only its own doc example, its own test module and the `crates/cobre-io/src/lib.rs:137` re-export, while `crates/cobre-io/src/validation/schema.rs:400-432` open-codes the same per-file loads; its second parse of `stages.json` at :398 (the first is `crates/cobre-io/src/validation/schema.rs:251`) therefore costs nothing today, and whether the duplicate orchestration should be deleted or made the single owner is an ownership question for sub-station C or D, not a perf finding."
+  ]
+}

@@ -73,3 +73,6 @@ tests/slurm/staging/
 dhat-heap.json
 *.orig
 rust_out
+.specforge/
+.specforge-canary/
+.mcp.json

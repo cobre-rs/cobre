@@ -1,0 +1,238 @@
+{
+  "station": "core-io",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "measuredAtHead": "2a86a06c3ff3fa6ea4431bb198bbb4ca6267371c",
+  "producedAt": "2026-09-06",
+  "resolutionRule": "anchors re-resolved by symbol with the check-anchors.py DECL regex (v0.12 line numbers have drifted); a renamed type is dispositioned sharpen/retire with the rename as evidence, never rejected as anchor-missing",
+  "notOwned": {
+    "I.3-5": "training_event.rs — dispositioned directly by the alignment epic's Part-I consolidation ticket",
+    "I.3-8": "StageTemplate — Station: cobre-solver and cobre-comm"
+  },
+  "dispositions": [
+    {
+      "partIRef": "I.3-1",
+      "disposition": "sharpen",
+      "baselineAnchor": {
+        "path": "crates/cobre-core/src/system/mod.rs",
+        "symbol": "System",
+        "line": 55
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-core/src/system/mod.rs",
+        "line": 107
+      },
+      "proposedPhase": "1",
+      "owningStation": "core-io",
+      "subStation": "A",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "System stores the stochastic input model as first-class fields (four fields)",
+      "claimedFields": {
+        "inflow_models": "crates/cobre-core/src/system/mod.rs:111",
+        "load_models": "crates/cobre-core/src/system/mod.rs:113",
+        "ncs_models": "crates/cobre-core/src/system/mod.rs:115",
+        "correlation": "crates/cobre-core/src/system/mod.rs:117"
+      },
+      "wideningFields": {
+        "inflow_history": "crates/cobre-core/src/system/mod.rs:125",
+        "external_scenarios": "crates/cobre-core/src/system/mod.rs:127",
+        "external_load_scenarios": "crates/cobre-core/src/system/mod.rs:129",
+        "external_ncs_scenarios": "crates/cobre-core/src/system/mod.rs:131"
+      },
+      "changedSinceV012": "The four claimed fields still exist but moved from crates/cobre-core/src/system/mod.rs:107 to crates/cobre-core/src/system/mod.rs:111-117; the stochastic surface is WIDER than claimed — inflow_history, external_scenarios, external_load_scenarios and external_ncs_scenarios sit on the same struct at crates/cobre-core/src/system/mod.rs:125-131 (the v0.12 text folded them into 'plus external/historical scenario tables' without naming them). System::policy_graph (:92) is item 3's residue, not this item.",
+      "survivingClaim": "`System` carries eight stochastic-input fields — inflow_models, load_models, ncs_models, correlation (:111-117) plus inflow_history, external_scenarios, external_load_scenarios, external_ncs_scenarios (:125-131) — that a deterministic dispatch or power-flow study never reads; the Milestone-1 'stochastic off System/Stage' target.",
+      "evidenceCommands": [
+        "grep -n 'inflow_models\\|load_models\\|ncs_models\\|correlation:' crates/cobre-core/src/system/mod.rs",
+        "grep -n 'inflow_history\\|external_scenarios\\|external_load_scenarios\\|external_ncs_scenarios' crates/cobre-core/src/system/mod.rs"
+      ]
+    },
+    {
+      "partIRef": "I.3-2",
+      "disposition": "keep",
+      "baselineAnchor": {
+        "path": "crates/cobre-core/src/model/temporal.rs",
+        "symbol": "Stage",
+        "line": 282
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-core/src/model/temporal.rs",
+        "line": 281
+      },
+      "proposedPhase": "1",
+      "owningStation": "core-io",
+      "subStation": "A",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "Stage bakes in stochastic and risk configuration",
+      "claimedFields": {
+        "state_config": "crates/cobre-core/src/model/temporal.rs:309",
+        "risk_config": "crates/cobre-core/src/model/temporal.rs:312",
+        "scenario_config": "crates/cobre-core/src/model/temporal.rs:315"
+      },
+      "changedSinceV012": "Anchor drift only: `Stage` moved from :281 to :282; state_config / risk_config / scenario_config are all still declared on it.",
+      "evidenceCommands": [
+        "grep -n 'pub struct Stage\\b' crates/cobre-core/src/model/temporal.rs",
+        "grep -n 'pub state_config\\|pub risk_config\\|pub scenario_config' crates/cobre-core/src/model/temporal.rs"
+      ]
+    },
+    {
+      "partIRef": "I.3-3",
+      "disposition": "sharpen",
+      "baselineAnchor": {
+        "path": "crates/cobre-core/src/model/horizon.rs",
+        "symbol": "HorizonGraph",
+        "line": 22
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-core/src/model/horizon.rs",
+        "line": null
+      },
+      "proposedPhase": "1",
+      "owningStation": "core-io",
+      "subStation": "A",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "PolicyGraph is framed entirely around multi-stage-stochastic forward/backward traversal, discount rates, and cyclic convergence",
+      "v012Symbol": "PolicyGraph",
+      "renamedTo": "HorizonGraph",
+      "renameCommit": "bd2cd4c0",
+      "changedSinceV012": "`PolicyGraph` no longer exists under that name: the type is `HorizonGraph` (crates/cobre-core/src/model/horizon.rs:22, renamed in bd2cd4c0). A case-insensitive grep for forward|backward over that file returns 0 hits, so the traversal half of the claim retired. The discount-rate and cyclic framing survives (:23 doc, :24 `graph_type: PolicyGraphType`, :26-27 discount doc), and the `PolicyGraphType` enum (crates/cobre-core/src/model/temporal.rs:94) and the `System::policy_graph` field name (crates/cobre-core/src/system/mod.rs:92) keep the old vocabulary.",
+      "survivingClaim": "`HorizonGraph` still frames the horizon as discount-rate + cyclic-convergence (crates/cobre-core/src/model/horizon.rs:23 and crates/cobre-core/src/model/horizon.rs:26-27), and the residual `policy_graph` field name on `System` (crates/cobre-core/src/system/mod.rs:92) plus the `PolicyGraphType` enum name carry the policy vocabulary; the forward/backward traversal framing is gone.",
+      "forwardBackwardHits": 0,
+      "evidenceCommands": [
+        "grep -n 'pub struct HorizonGraph' crates/cobre-core/src/model/horizon.rs",
+        "grep -ci 'forward\\|backward' crates/cobre-core/src/model/horizon.rs",
+        "grep -n 'discount\\|cyclic' crates/cobre-core/src/model/horizon.rs",
+        "grep -n 'policy_graph' crates/cobre-core/src/system/mod.rs"
+      ]
+    },
+    {
+      "partIRef": "I.3-4",
+      "disposition": "sharpen",
+      "baselineAnchor": {
+        "path": "crates/cobre-core/src/constraints/initial_conditions.rs",
+        "symbol": "InitialConditions",
+        "line": 178
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-core/src/constraints/initial_conditions.rs",
+        "line": 183
+      },
+      "proposedPhase": "1",
+      "owningStation": "core-io",
+      "subStation": "A",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "InitialConditions is SDDP-warm-start-shaped: past_inflows, past_defluences, past_anticipated_commitments",
+      "currentFields": {
+        "storage": "crates/cobre-core/src/constraints/initial_conditions.rs:180",
+        "filling_storage": "crates/cobre-core/src/constraints/initial_conditions.rs:188",
+        "past_anticipated_commitments": "crates/cobre-core/src/constraints/initial_conditions.rs:193",
+        "recent_observations": "crates/cobre-core/src/constraints/initial_conditions.rs:198",
+        "past_defluences": "crates/cobre-core/src/constraints/initial_conditions.rs:206"
+      },
+      "changedSinceV012": "`InitialConditions` moved from :183 to :178. `past_inflows` is gone from production code (zero production references; it survives only as the rejection test `test_legacy_past_inflows_field_is_rejected` at crates/cobre-io/src/initial_conditions.rs:1560); `recent_observations` (:198) was ADDED — the field list is corrected in both directions. Current shape: storage, filling_storage, past_anticipated_commitments, recent_observations, past_defluences.",
+      "survivingClaim": "Two of the five fields remain warm-start-shaped — past_anticipated_commitments (:193) and past_defluences (:206); storage, filling_storage and recent_observations are paradigm-neutral realized data.",
+      "evidenceCommands": [
+        "grep -rn 'past_inflows' --include='*.rs' crates/ | grep -v test",
+        "grep -n 'pub storage\\|pub filling_storage\\|pub past_anticipated_commitments\\|pub recent_observations\\|pub past_defluences' crates/cobre-core/src/constraints/initial_conditions.rs"
+      ]
+    },
+    {
+      "partIRef": "I.3-6",
+      "disposition": "sharpen",
+      "baselineAnchor": {
+        "path": "crates/cobre-io/src/output/policy/records.rs",
+        "symbol": "PolicyCutRecord",
+        "line": 98
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-io/src/output/policy",
+        "line": null
+      },
+      "proposedPhase": "1",
+      "owningStation": "core-io",
+      "subStation": "D",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "cobre-io's policy checkpoint format is literally cut-records, exempt from the genericity gate",
+      "oracle": {
+        "command": "bash scripts/ci/check-infra-genericity.sh",
+        "exit": 0,
+        "stdout": "OK: no algorithm-specific vocabulary found in infrastructure crates.",
+        "excludedFiles": "scripts/ci/check-infra-genericity.sh:74 EXCLUDED_FILES=()",
+        "pattern": "scripts/ci/check-infra-genericity.sh:79",
+        "reachLimits": [
+          "the pattern matches `\\bCut\\b` with word boundaries: `printf 'PolicyCutRecord StageCutsPayload StageCuts' | grep -Eo '\\bCut\\b'` yields 0 matches, so CamelCase identifiers evade it",
+          "the scan is `find <crate>/src -name '*.rs'` over five src/ trees; `find crates/cobre-io/src -name '*.fbs'` returns 0, so crates/cobre-io/schemas/policy.fbs is never read"
+        ]
+      },
+      "changedSinceV012": "The gate exemption is retired by the script itself: EXCLUDED_FILES=() at scripts/ci/check-infra-genericity.sh:74 and the gate exits 0 at the baseline over output/policy. The FlatBuffers table vocabulary moved to affine pieces (`table AffinePiece` crates/cobre-io/schemas/policy.fbs:105) and the provenance carrier is now the `CheckpointManifest` table / policy/manifest.bin (crates/cobre-io/schemas/policy.fbs:284; metadata.json retired). Exit 0 is NOT proof the claim retired (see oracle.reachLimits).",
+      "survivingClaim": "Cut vocabulary the oracle cannot see persists in production: `PolicyCutRecord` (crates/cobre-io/src/output/policy/records.rs:98), `StageCutsPayload` (crates/cobre-io/src/output/policy/records.rs:176) and the `StageCuts` root table (crates/cobre-io/schemas/policy.fbs:140) — the persisted value-function format is still cut-shaped; the lexical exemption is gone, the structural coupling is not.",
+      "evidenceCommands": [
+        "bash scripts/ci/check-infra-genericity.sh; echo gate_exit=$?",
+        "sed -n '74p;79p' scripts/ci/check-infra-genericity.sh",
+        "grep -n 'pub struct PolicyCutRecord\\|pub struct StageCutsPayload' crates/cobre-io/src/output/policy/records.rs",
+        "grep -n '^table StageCuts' crates/cobre-io/schemas/policy.fbs"
+      ]
+    },
+    {
+      "partIRef": "I.3-7",
+      "disposition": "sharpen",
+      "baselineAnchor": {
+        "path": "crates/cobre-io/src/config/mod.rs",
+        "symbol": "Config",
+        "line": 67
+      },
+      "v012Anchor": {
+        "path": "crates/cobre-io/src/config/mod.rs",
+        "line": null
+      },
+      "proposedPhase": "0a",
+      "owningStation": "core-io",
+      "subStation": "C",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "sourceClaim": "plans/generalizing/beyond-sddp-generalization.md#I.3",
+      "v012Title": "The config type is SDDP-shaped: cobre_io::Config.training carries forward_passes, stopping_rules, cut_selection, tree_seed",
+      "field": "training (crates/cobre-io/src/config/mod.rs:77)",
+      "ownedFragment": "cobre_io::Config.training only; StudyParams::from_config and BroadcastConfig leave as handoffs",
+      "changedSinceV012": "`Config.training` (crates/cobre-io/src/config/mod.rs:77, `TrainingConfig` crates/cobre-io/src/config/training.rs:17) still carries tree_seed (:24), stopping_rules (:29) and cut_selection (:41); forward_passes moved into the forward-pass mode enum variant (:77). The surface GREW: per-phase solver-profile blocks `TrainingSolverConfig.backward/forward` (crates/cobre-io/src/config/training.rs:272/277) and `SimulationConfig.solver` (crates/cobre-io/src/config/simulation.rs:31), and the backward scheduler selector `ParallelismConfig.backward_scheduler` (crates/cobre-io/src/config/training.rs:375).",
+      "survivingClaim": "`cobre_io::Config.training` is SDDP-shaped: tree_seed, stopping_rules, cut_selection, the forward-pass mode, per-phase (backward/forward) solver profiles and the backward scheduler selector are all keyed by SDDP phase vocabulary at the L2 config surface — the Milestone-0a `study` config block / engine seam target.",
+      "evidenceCommands": [
+        "grep -n 'pub struct Config\\b\\|pub training:' crates/cobre-io/src/config/mod.rs",
+        "grep -n 'pub tree_seed\\|pub stopping_rules\\|pub cut_selection\\|forward_passes: u32\\|pub backward:\\|pub forward:\\|pub backward_scheduler' crates/cobre-io/src/config/training.rs"
+      ]
+    }
+  ],
+  "handoffs": [
+    {
+      "partIRef": "I.3-7",
+      "owningStation": "sddp",
+      "baselineAnchor": {
+        "path": "crates/cobre-sddp/src/setup/params.rs",
+        "symbol": "from_config",
+        "line": 186,
+        "owner": "StudyParams (crates/cobre-sddp/src/setup/params.rs:114)"
+      },
+      "claimFragment": "the real config-to-domain conversion is StudyParams::from_config, not a generic seam",
+      "proposedPhase": "0a",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "note": "core-io owns only cobre_io::Config.training; this fragment is yours to disposition"
+    },
+    {
+      "partIRef": "I.3-7",
+      "owningStation": "cli",
+      "baselineAnchor": {
+        "path": "crates/cobre-cli/src/commands/broadcast.rs",
+        "symbol": "BroadcastConfig",
+        "line": 87,
+        "visibility": "pub(crate)"
+      },
+      "claimFragment": "BroadcastConfig is a hand-maintained SDDP-parameter subset of Config; since v0.12 it gained backward_scheduler (crates/cobre-cli/src/commands/broadcast.rs:129), cost_scale_factor (crates/cobre-cli/src/commands/broadcast.rs:132), the three per-phase solver profiles (crates/cobre-cli/src/commands/broadcast.rs:121-125) and the boundary requirements (crates/cobre-cli/src/commands/broadcast.rs:139)",
+      "proposedPhase": "0a",
+      "alignmentDestination": "Epic 9 — Generalization alignment: Part-I re-verification and lp/ kernel boundary (Part-I consolidation ticket)",
+      "note": "pub(crate); the check-anchors.py symbol regex resolves it"
+    }
+  ],
+  "_needsHuman": []
+}

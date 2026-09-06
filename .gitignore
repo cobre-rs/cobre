@@ -30,8 +30,10 @@ book/output/
 # JSON schemas generated in the wrong directory (canonical location: book/src/schemas/)
 /*.schema.json
 
-# Implementation plans (local development only)
-plans/
+# Implementation plans (local development only); the quality-evaluation ledger
+# and tooling are tracked so its work sessions have git evidence
+plans/*
+!plans/architecture-debt-audit/
 
 # Claude Code — track project rules and hooks, ignore ephemeral state
 .claude/*

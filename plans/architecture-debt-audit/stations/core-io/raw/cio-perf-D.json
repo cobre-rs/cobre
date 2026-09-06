@@ -1,0 +1,165 @@
+{
+  "station": "core-io",
+  "subStation": "D",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "perf",
+  "candidates": [
+    {
+      "title": "`SolverStatsRow` owns a heap `String` phase and a heap `Vec<u64>` histogram per row, undoing the producer's explicit `&'static str` no-allocation choice",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "SolverStatsRow",
+          "line": 28
+        },
+        {
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "SolverStatsRow",
+          "line": 66
+        },
+        {
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "build_retry_histogram_batch",
+          "line": 185
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'pub phase: String\\|pub retry_level_histogram: Vec<u64>' crates/cobre-io/src/output/solver_stats_writer.rs; grep -n \"pub phase: &'static str\" crates/cobre-sddp/src/solver_stats.rs; grep -n 'phase: phase.to_string()\\|retry_level_histogram: delta.retry_level_histogram.clone()' crates/cobre-sddp/src/solver_stats.rs",
+        "output": "28:    pub phase: String,\n66:    pub retry_level_histogram: Vec<u64>,\n232:    pub phase: &'static str,\n293:        phase: phase.to_string(),\n310:        retry_level_histogram: delta.retry_level_histogram.clone(),",
+        "reading": "The producer's log entry deliberately stores `phase` as `&'static str` and its own doc at crates/cobre-sddp/src/solver_stats.rs:231-232 states the reason is 'to avoid per-entry heap allocation on the hot push path'. The cobre-io row DTO declares the same field as an owned `String`, so the conversion at crates/cobre-sddp/src/solver_stats.rs:293 must call `to_string()` once per log entry, reinstating exactly the allocation the producer avoided. The sibling field forces a second per-row allocation: `retry_level_histogram` is cloned per row at :310 into a fixed-length backend vector, and `build_retry_histogram_batch` (crates/cobre-io/src/output/solver_stats_writer.rs:185-201) immediately folds every one of those clones into a `BTreeMap` accumulator, so the per-row vector is materialized only to be summed away.",
+        "reading_note": null
+      },
+      "mechanism": "Two heap allocations per statistics row, driven by the DTO's owned-field shape rather than by any consumer need. `phase` is drawn from a closed four-value vocabulary the type's own doc enumerates ('forward', 'backward', 'lower_bound', 'simulation'), so a `&'static str` or a small enum would carry it without allocating; `retry_level_histogram` is a fixed-length per-backend counter vector that the only consumer aggregates into a map. The conversion is a bulk once-per-run pass over the whole training log, not a per-iteration write, but the log's row count is the product of three study dimensions (iterations x stages x openings, further multiplied by ranks and workers), so the allocation count and the peak memory of the duplicated `Vec<SolverStatsRow>` grow multiplicatively with study size rather than being bounded by a constant. Deck-independent: no deck makes the row count constant, and the duplicated log coexists with the original log in memory at the moment of conversion.",
+      "proposedSeverity": "B",
+      "fixShape": "Change the row's phase field to a borrowed or enumerated phase so the closed vocabulary travels without an allocation, and let the row reference the producer's histogram rather than owning a copy of it, since the writer's only use of it is to fold it into the aggregation map. If a borrow is undesirable across the crate boundary, the alternative shape is to have the writer accept the producer's log slice directly and do the phase-name and histogram handling internally, which removes the intermediate `Vec<SolverStatsRow>` entirely. Either shape must keep the row type usable from the Python binding path, which constructs the same rows, so the field-type change has to be made in cobre-io, cobre-sddp's conversion helper, the CLI output writer and the Python run module together.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`SimulationParquetWriter` accumulates one heap `String` per written partition for the whole run, and the merged result reaches no output file",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "write_partition",
+          "line": 690
+        },
+        {
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "SimulationOutput",
+          "line": 372
+        },
+        {
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "merge",
+          "line": 431
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'partitions_written' crates/cobre-io/src/output/simulation_writer.rs crates/cobre-io/src/output/mod.rs crates/cobre-cli/src/commands/run/simulation.rs | grep -v 'assert\\|vec!\\[' ; echo '-- occurrences of \"partition\" in the metadata module:'; grep -c 'partition' crates/cobre-io/src/output/manifest.rs",
+        "output": "crates/cobre-io/src/output/mod.rs:372:    pub partitions_written: Vec<String>,\ncrates/cobre-io/src/output/mod.rs:431:        let mut partitions_written: Vec<String> = outputs\ncrates/cobre-io/src/output/mod.rs:433:            .flat_map(|o| o.partitions_written.iter().cloned())\ncrates/cobre-io/src/output/mod.rs:435:        partitions_written.sort();\ncrates/cobre-io/src/output/mod.rs:446:            partitions_written,\ncrates/cobre-cli/src/commands/run/simulation.rs:305:    let local_paths_bytes = local.partitions_written.join(\"\\n\").into_bytes();\ncrates/cobre-cli/src/commands/run/simulation.rs:357:        partitions_written: all_partitions,\ncrates/cobre-io/src/output/simulation_writer.rs:545:    partitions_written: Vec<String>,\ncrates/cobre-io/src/output/simulation_writer.rs:690:        self.partitions_written\n-- occurrences of \"partition\" in the metadata module:\n0",
+        "reading": "`write_partition` pushes a freshly formatted path string (`format!(\"simulation/{subpath}/{suffix}/data.parquet\")` at crates/cobre-io/src/output/simulation_writer.rs:691) on every partition write, and `write_scenario` writes up to fourteen partitions per scenario. The strings are retained on the writer for the entire simulation, moved into `SimulationOutput` at `finalize` (crates/cobre-io/src/output/simulation_writer.rs:941), cloned and sorted again in `merge` (crates/cobre-io/src/output/mod.rs:431-435), and in the distributed CLI joined into one byte buffer and allgathered so every rank materializes every rank's paths (crates/cobre-cli/src/commands/run/simulation.rs:305-350). The final `grep -c` shows the word 'partition' does not occur anywhere in the metadata module, so `SimulationMetadata` — the struct `write_simulation_results` serializes to `simulation/metadata.json` — has no field to receive the list. Outside these sites the only references in the workspace are test fixtures and assertions.",
+        "reading_note": null
+      },
+      "mechanism": "Per-partition heap allocation plus unbounded retention on the per-scenario write path. `write_scenario` is invoked once per simulation scenario from a dedicated drain thread (crates/cobre-cli/src/commands/run/simulation.rs:83-86), so the retained string count grows as scenarios times populated entity types and the writer's memory grows monotonically for the whole simulation. The cost is then paid a second and third time: `merge` clones and sorts the full list, and the distributed path turns it into an MPI allgatherv whose payload and per-rank receive buffer both scale with the same product multiplied by the rank count. None of that work reaches an output file, so every allocation, the collective, and the sort are unrecovered. Per-scenario on the accumulation side, once-per-run on the merge and collective side.",
+      "proposedSeverity": "B",
+      "fixShape": "Decide first whether any consumer still needs the partition inventory; the evidence says none does. If it is genuinely unused, replace the retained path list with the count the manifest and the progress reporting actually need, which removes the per-partition allocation, the merge clone-and-sort, and the MPI allgatherv together. If the inventory must survive as a diagnostic, make it opt-in behind an explicit flag so a production run does not pay for it, and have the writer emit it as a file at finalize time rather than retaining it across the whole simulation and gathering it across ranks. Either way the field is part of a public re-exported type, so the change has to be coordinated with the CLI merge helper that currently gathers it.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Every per-scenario partition write rebuilds a run-invariant Arrow schema and a run-invariant Parquet `WriterProperties`",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "build_costs_batch",
+          "line": 1076
+        },
+        {
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "costs_schema",
+          "line": 22
+        },
+        {
+          "path": "crates/cobre-io/src/output/atomic.rs",
+          "symbol": "write_parquet_atomic",
+          "line": 115
+        }
+      ],
+      "evidence": {
+        "command": "grep -c 'let schema = Arc::new(.*_schema())' crates/cobre-io/src/output/simulation_writer.rs; sed -n '115,119p' crates/cobre-io/src/output/atomic.rs; python3 - <<'EOF'\nimport re\nsrc=open('crates/cobre-io/src/output/schemas.rs').read().split('#[cfg(test)]')[0]\nwant={'costs_schema','hydros_schema','hydro_bus_generation_schema','thermals_schema','exchanges_schema','buses_schema','pumping_stations_schema','contracts_schema','non_controllables_schema','inflow_lags_schema','in_transit_schema','transit_seed_schema','generic_violations_schema','anticipated_lanes_schema'}\ntot=0\nfor p in re.split(r'\\n(?=(?:pub\\(crate\\) )?fn )', src):\n    m=re.match(r'(?:pub\\(crate\\) )?fn (\\w+)', p)\n    if m and m.group(1) in want:\n        tot += p.count('Field::new') + (3 if 'simulation_row_prefix()' in p else 0)\nprint('Field::new constructions per fully populated scenario:', tot)\nEOF",
+        "output": "14\n    let props = WriterProperties::builder()\n        .set_compression(config.compression)\n        .set_max_row_group_row_count(Some(config.row_group_size))\n        .set_dictionary_enabled(config.dictionary_encoding)\n        .build();\nField::new constructions per fully populated scenario:  177",
+        "reading": "Each of the fourteen `build_*_batch` functions in `simulation_writer.rs` opens with `let schema = Arc::new(<entity>_schema());`, and each `*_schema()` in `schemas.rs` constructs its `Field` list from scratch (`costs_schema` at crates/cobre-io/src/output/schemas.rs:22-53 builds twenty-nine of them). Summing the fourteen schemas `write_scenario` can reach gives 177 `Field::new` calls, each carrying a fresh heap-allocated column-name `String`, for one fully populated scenario. Separately, `write_parquet_atomic` builds a fresh `WriterProperties` from the caller's already-resolved `ParquetWriterConfig` on every file it writes, and `write_partition` calls it once per partition per scenario. The schemas and the properties are functions of nothing that varies between scenarios.",
+        "reading_note": null
+      },
+      "mechanism": "A run-invariant constant reconstructed on the per-scenario path. `write_scenario` runs once per simulation scenario on the I/O drain thread, and each call rebuilds up to fourteen Arrow schemas (177 field-name string allocations plus the enclosing field vectors and `Arc`s) and fourteen `WriterProperties` values whose contents are fixed for the run. Deck-independent reason: scenario count is a study parameter that scales into the thousands, so the number of times the identical constant is rebuilt scales with it while the value never changes. This is not setup-time recomputation, which the project rule permits; it is repeated inside the per-scenario write loop. The absolute cost is small next to the Parquet encode and the file syscalls each partition also pays, which is why this is graded local quality rather than real debt.",
+      "proposedSeverity": "C",
+      "fixShape": "Give each output schema a single lazily initialized shared instance that the batch builders clone the handle of rather than the contents, so the field list and its column-name strings are constructed once per process instead of once per scenario. For the writer properties, resolve them once where the `ParquetWriterConfig` is already stored on the writer and pass the resolved value into the atomic write helper, rather than rebuilding them from the same config inside every file write. Both changes are byte-neutral by construction because neither the schema contents nor the properties depend on anything per-scenario, and the existing schema-shape tests already pin the field lists.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`solver_stats_writer` is the only Parquet writer in the crate that materializes an intermediate `Vec` per column instead of appending into a pre-sized Arrow builder",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "build_iterations_columns",
+          "line": 88
+        }
+      ],
+      "evidence": {
+        "command": "for f in crates/cobre-io/src/output/simulation_writer.rs crates/cobre-io/src/output/training_writer.rs crates/cobre-io/src/output/stochastic.rs crates/cobre-io/src/output/hydro_models.rs crates/cobre-io/src/output/solver_stats_writer.rs; do echo \"$(basename $f) collect=$(sed -n '1,/^#\\[cfg(test)\\]/p' $f | grep -c 'collect::<Vec') builders=$(sed -n '1,/^#\\[cfg(test)\\]/p' $f | grep -c 'Builder::with_capacity')\"; done",
+        "output": "simulation_writer.rs collect=0 builders=183\ntraining_writer.rs collect=0 builders=44\nstochastic.rs collect=0 builders=21\nhydro_models.rs collect=0 builders=25\nsolver_stats_writer.rs collect=18 builders=2",
+        "reading": "Counting only production code (the scan stops at the inline test module), every other Parquet writer in the crate builds its columns exclusively through `Builder::with_capacity` and per-row `append_value`, with zero intermediate collects. `build_iterations_columns` is the sole exception: eighteen of its nineteen columns are built as `Int32Array::from(rows.iter().map(...).collect::<Vec<Option<i32>>>())` and its unsigned and float siblings (crates/cobre-io/src/output/solver_stats_writer.rs:90-154), so each column allocates a full-length intermediate vector that the Arrow constructor then copies into its own buffer. Only the string phase column uses the builder idiom the rest of the crate uses.",
+        "reading_note": null
+      },
+      "mechanism": "Eighteen transient full-length vector allocations plus a second copy of every value, where the sibling writers do one pass straight into the Arrow buffer. The row count is the length of the training solver-stats log, which grows with iterations times stages times openings, so both the transient allocation volume and the transient peak memory grow with study size. The path is once-per-run at the end of training and again at the end of simulation, so this is a memory-peak and redundant-copy cost rather than a steady-state one; it is graded local quality because the parquet encode on the same call dominates. The value of raising it is the asymmetry: the cheaper shape is already the crate's universal idiom, so aligning this one writer is a mechanical change with an in-crate precedent, not a new technique.",
+      "proposedSeverity": "C",
+      "fixShape": "Rewrite the column construction to the idiom the other four writers already use: allocate one typed Arrow builder per column with the row count as its capacity, then walk the row slice once appending each column's value or null in the same loop. That removes the eighteen intermediate vectors and the duplicate copy, and it makes the writer read the same way as its siblings so a future column addition follows one pattern rather than two. The existing round-trip tests in the same file pin the column set and types, so the change is verifiable without a new test.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Every policy artifact is copied out of the FlatBuffers builder into a fresh `Vec` that exists only to be handed to `fs::write`",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "serialize_stage_cuts",
+          "line": 284
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs",
+          "symbol": "write_policy_checkpoint",
+          "line": 220
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'finished_data().to_vec()' crates/cobre-io/src/output/policy/codec.rs; grep -n 'let buf = serialize_\\|let manifest_buf = serialize_\\|std::fs::write' crates/cobre-io/src/output/policy/checkpoint.rs",
+        "output": "284:    builder.finished_data().to_vec()\n333:    builder.finished_data().to_vec()\n365:    builder.finished_data().to_vec()\n455:    builder.finished_data().to_vec()\n220:        let buf = serialize_stage_cuts(payload);\n221:        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n226:        let buf = serialize_stage_basis(record);\n227:        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n236:            let buf = serialize_stage_states(payload);\n237:            std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n238:    let manifest_buf = serialize_checkpoint_manifest(metadata);\n244:    std::fs::write(&manifest_path, &manifest_buf)",
+        "reading": "All four serializers end by copying the builder's finished bytes into a new owned vector. In every one of the four production call sites the returned vector's entire lifetime is the next line: it is borrowed as a slice by `std::fs::write` and dropped. A workspace grep for the four serializer names outside the codec finds only the crate re-exports, this checkpoint module, and test code, so no production caller needs the owned buffer for anything else.",
+        "reading_note": null
+      },
+      "mechanism": "A full redundant copy plus a second heap allocation of the whole serialized artifact, once per cut pool, once per stage basis, once per stage states file, and once for the manifest. The serialized cut payload is the largest artifact a training run produces — its size is the product of pool count, cuts per pool and state dimension — so the copy transiently doubles the peak memory held for that payload and does a memcpy of it, purely to change ownership of bytes the builder already holds contiguously. Once per run per artifact, not per iteration; the reason to record it is the size of the payload, not the frequency.",
+      "proposedSeverity": "C",
+      "fixShape": "Let the write path consume the builder's bytes without an intervening owned copy: either give the checkpoint writer serialize-and-write entry points that hand the builder's finished slice straight to the file write, or have the serializers surrender the builder's own buffer instead of copying out of it. Keep the current owning signatures available if external callers need a standalone buffer, so the copy is paid only by callers that genuinely want ownership rather than by the one production path that writes and drops. This is orthogonal to the disposition already recorded for this directory in the Part-I handoff, which concerns the persisted format's cut vocabulary, not its buffer handling.",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-6"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/output/simulation_writer.rs::write_scenario (line 708) and its fourteen batch builders",
+      "why": "The per-scenario write path never materializes a flat intermediate row vector: it counts the rows first with a cheap length sum, sizes every Arrow column builder with that count, then feeds a flat-mapped iterator over the stage records straight into the builders. This is the correct shape for the hottest output path in the crate, it is the idiom the rest of the writers follow, and the property is pinned by a named regression test rather than left to convention.",
+      "sanctionedBy": "crates/cobre-io/src/output/simulation_writer.rs::write_scenario_does_not_materialize_flat_vecs (line 3283)"
+    },
+    {
+      "subject": "crates/cobre-io/src/parquet_helpers.rs::extract_required_date32 and its five siblings (lines 13-166)",
+      "why": "Every extractor returns a borrowed reference to the typed Arrow array rather than copying or collecting the column, so the read path performs one downcast per column and no per-row or per-column data copy. The error construction that does allocate is confined to the failure branches behind closures, so the success path allocates nothing.",
+      "sanctionedBy": "crates/cobre-io/src/parquet_helpers.rs module doc (line 1) — the single owner of the typed-downcast logic"
+    },
+    {
+      "subject": "crates/cobre-io/src/output/policy/codec.rs::serialize_stage_cuts (line 240) and its three sibling serializers",
+      "why": "Each serializer computes a capacity estimate from the payload's own dimensions (cut count, state dimension, manifest length, string lengths) and pre-sizes the FlatBuffers builder with it, so the builder does not regrow while writing the largest artifact of a training run. The estimate is derived, not a magic constant, so it tracks the payload shape rather than a guessed deck size.",
+      "sanctionedBy": "crates/cobre-io/src/output/policy/codec.rs:240-247 (the `estimated` computation feeding `FlatBufferBuilder::with_capacity`)"
+    }
+  ],
+  "_needsHuman": [
+    "Whether `SimulationOutput.partitions_written` is meant to remain a supported public surface for consumers outside this workspace, since it is `pub` and re-exported from the crate root at crates/cobre-io/src/lib.rs:117 — that answer decides whether the fix for the accumulation candidate is deletion or an opt-in diagnostic.",
+    "Whether the policy serializers are deliberately kept as standalone owning-buffer entry points for external callers, which would constrain the fix shape for the checkpoint buffer copy to adding write-through entry points rather than changing the existing signatures."
+  ]
+}

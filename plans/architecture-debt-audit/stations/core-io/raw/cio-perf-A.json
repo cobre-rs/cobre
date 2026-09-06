@@ -1,0 +1,148 @@
+{
+  "station": "core-io",
+  "subStation": "A",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "perf",
+  "candidates": [
+    {
+      "title": "The MPI broadcast payload carries the two derived topologies (`cascade`, `network`) that every rank could rebuild locally, while the sibling index maps three fields above are skipped and rebuilt",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "System",
+          "line": 85
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "SystemRepr",
+          "line": 157
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "rebuild_indices",
+          "line": 588
+        },
+        {
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "symbol": "CascadeTopology",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "NetworkTopology",
+          "line": 59
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'serde(skip)\\|cascade: CascadeTopology\\|network: NetworkTopology\\|rebuild_indices' crates/cobre-core/src/system/mod.rs; echo '--- build inputs ---'; grep -n 'pub fn build' -A 8 crates/cobre-core/src/topology/cascade.rs | head -12; grep -n 'pub fn build' -A 10 crates/cobre-core/src/topology/network.rs | head -14; echo '--- production broadcast ---'; grep -n 'broadcast_value(raw_system' crates/cobre-cli/src/commands/run/setup.rs",
+        "output": "69:    #[cfg_attr(feature = \"serde\", serde(skip))]\n71:    #[cfg_attr(feature = \"serde\", serde(skip))]\n73:    #[cfg_attr(feature = \"serde\", serde(skip))]\n75:    #[cfg_attr(feature = \"serde\", serde(skip))]\n77:    #[cfg_attr(feature = \"serde\", serde(skip))]\n79:    #[cfg_attr(feature = \"serde\", serde(skip))]\n81:    #[cfg_attr(feature = \"serde\", serde(skip))]\n85:    cascade: CascadeTopology,\n87:    network: NetworkTopology,\n94:    #[cfg_attr(feature = \"serde\", serde(skip))]\n157:    cascade: CascadeTopology,\n158:    network: NetworkTopology,\n221:        system.rebuild_indices();\n588:    pub(crate) fn rebuild_indices(&mut self) {\n--- build inputs ---\n37:    pub fn build(hydros: &[Hydro]) -> Self {\n38-        let mut downstream: HashMap<EntityId, EntityId> = HashMap::new();\n39-        for hydro in hydros {\n40-            if let Some(ds_id) = hydro.downstream_id {\n41-                downstream.insert(hydro.id, ds_id);\n42-            }\n43-        }\n45-        let mut upstream: HashMap<EntityId, Vec<EntityId>> = HashMap::new();\n77:    pub fn build(\n78-        buses: &[Bus],\n79-        lines: &[Line],\n80-        hydros: &[Hydro],\n81-        thermals: &[Thermal],\n82-        non_controllable_sources: &[NonControllableSource],\n83-        contracts: &[EnergyContract],\n84-        pumping_stations: &[PumpingStation],\n85-    ) -> Self {\n86-        let mut bus_lines: HashMap<EntityId, Vec<BusLineConnection>> = HashMap::new();\n87-        let mut bus_generators: HashMap<EntityId, BusGenerators> = HashMap::new();\n--- production broadcast ---\n322:    let system_result = broadcast_value(raw_system, &ctx.comm);",
+        "reading": "The eight `HashMap` index fields carry `serde(skip)` and are rebuilt by `rebuild_indices` from `From<SystemRepr>` at :221; the in-file rationale at :64-68 is that a serialized index makes the wire payload non-reproducible for identical content. `cascade` (:85) and `network` (:87) carry no skip and are listed in `SystemRepr` (:157-158), so their five `HashMap`s ride the payload. `CascadeTopology::build` reads only `hydro.id` and `hydro.downstream_id`, and `NetworkTopology::build` reads only the seven entity slices — every one of those is already serialized ahead of them in the same struct, so both topologies are pure derivations of bytes the receiving rank already holds. The last grep shows the payload is real in production: `crates/cobre-cli/src/commands/run/setup.rs:322` hands the loaded `System` to `crates/cobre-cli/src/commands/broadcast.rs::broadcast_value` (declared at line 410), which postcard-serializes its argument at :419."
+      },
+      "mechanism": "Redundant copy on the wire. Every worker rank receives five `HashMap`s (`CascadeTopology.downstream`/`.upstream`, `NetworkTopology.bus_lines`/`.bus_generators`/`.bus_loads`) whose contents are a deterministic function of the entity slices that precede them in the same payload. The receiving rank pays twice: once for the transferred bytes, and again to insert every deserialized pair into a fresh `HashMap` — the identical insert work a local `CascadeTopology::build` / `NetworkTopology::build` would do from the slices it already has, so no receive-side CPU is bought by the transfer. Cost scales with entity count (hydro cascade edges plus one bus-keyed entry per bus with a line, generator, contract or pump), so it grows with every deck rather than sitting at a fixed overhead. The path is setup-time (one broadcast per run), which is why this is payload waste rather than a hot-path defect; the rebuild it would be replaced by is exactly the setup-time recomputation the project rule already sanctions, and the precedent for it sits four lines away in the same `From<SystemRepr>` impl.",
+      "proposedSeverity": "B",
+      "fixShape": "Give `cascade` and `network` the same treatment their sibling index maps already have: mark both fields skipped on the wire, drop them from the deserialize shadow struct, and extend the existing rebuild step that `From<SystemRepr>` already calls so it reconstructs both topologies from the deserialized entity slices alongside the seven entity indices and the stage index. The rebuild is safe to make unconditional because both builders are content-determined: the cascade's topological order is drawn from a min-heap keyed on the raw entity id (so it does not inherit the surrounding map's iteration order), and every upstream and per-bus list is explicitly sorted by id before the builder returns. State in the field comment that the two topologies are derived-not-transmitted for the same reason the indices are, so a future field addition inherits the rule rather than re-deciding it. Keep the deserialize shadow struct's field-order note intact — removing two fields changes the postcard layout, so the change must land together with whatever pins that layout.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The 366-day canonical calendar is heap-built on every call, and the season map's multi-resolution classification — a pure function of an immutable map — is recomputed once per study stage by the loader",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "canonical_calendar_days",
+          "line": 403
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "is_multi_resolution",
+          "line": 485
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "span_days",
+          "line": 382
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal.rs",
+          "symbol": "resolution_level_of",
+          "line": 502
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'canonical_calendar_days' crates/cobre-core/src/model/temporal.rs; echo '--- per-stage caller ---'; grep -n 'for (i, raw_stage) in raw.stages\\|resolve_or_validate_season_id(\\|is_multi_resolution()' crates/cobre-io/src/stages.rs",
+        "output": "378:    /// `Custom` counts covered days out of the leap `canonical_calendar_days`\n390:            SeasonCycleType::Custom => canonical_calendar_days()\n403:fn canonical_calendar_days() -> Vec<(u32, u32)> {\n489:        canonical_calendar_days().into_iter().any(|(month, day)| {\n--- per-stage caller ---\n739:    for (i, raw_stage) in raw.stages.into_iter().enumerate() {\n754:        let season_id = resolve_or_validate_season_id(\n1127:fn resolve_or_validate_season_id(\n1140:    if season_map.is_multi_resolution() {",
+        "reading": "`canonical_calendar_days` builds a fresh 366-entry `Vec<(u32, u32)>` on the heap and is reached from two places: the `Custom` arm of `span_days` (:390, itself reached through `resolution_level_of` at :502) and `is_multi_resolution` (:489). Its contents depend on nothing — a fixed 12-entry leap-month table walked into a fixed 366-entry sequence. On the caller side, `is_multi_resolution()` is the first branch of `resolve_or_validate_season_id` (:1140), which the stage loader calls once per raw stage from the loop at :739, and the season map it is asked about is the same immutable `policy_graph.season_map` on every iteration."
+      },
+      "mechanism": "Allocation per call plus a repeated pass over the same immutable input. For a `Custom` season map, one `is_multi_resolution()` call allocates the 366-entry vector and then runs up to 366 x n_seasons `covers` tests; the loader repeats that whole computation once per study stage even though the answer is fixed by the season map alone, so the work is O(n_stages x 366 x n_seasons) where one evaluation at map-construction time would do. `span_days`'s `Custom` arm rebuilds the same vector again per season queried. Non-`Custom` maps short-circuit at the cycle-type test (:486) and pay nothing, so the cost is confined to the multi-resolution decomposition decks, but on those it scales with the stage count rather than sitting flat. The path is stage parsing, i.e. setup-time and once per run, which caps the severity; what makes it worth recording is that the growth is in the deck's stage count and the constant table is knowable at compile time.",
+      "proposedSeverity": "C",
+      "fixShape": "Two independent moves. First, stop rebuilding the constant: express the 366-day canonical calendar as a compile-time constant array or a process-lifetime lazily-initialised static, and have both readers borrow it instead of receiving an owned vector — the function's own doc already states the sequence is year-independent, so nothing observable changes. Second, hoist the map-level classification out of the per-stage loop: the multi-resolution answer is a property of the season map, so the stage loader should evaluate it once before entering the stage loop and pass the resulting flag into the per-stage season resolution, or the season map should carry the classification as a field computed when it is constructed. Prefer the loader-side hoist over caching inside the type if the owner wants the data model to stay a plain aggregate; either way the per-stage recomputation disappears without changing any accepted or rejected input.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`window_period_overlaps` returns an owned, un-reserved `Vec<f64>` with no scalar or predicate entry point, so five of its nine production call sites allocate a vector purely to read one number, a length, or an emptiness test",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs",
+          "symbol": "window_period_overlaps",
+          "line": 20
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs",
+          "line": 41
+        },
+        {
+          "path": "crates/cobre-core/src/model/temporal/overlap.rs",
+          "line": 55
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'window_period_overlaps(' crates/cobre-stochastic/src crates/cobre-io/src crates/cobre-sddp/src --include='*.rs' | grep -v '///' | grep -v '//!'; echo '--- signature ---'; sed -n '19,24p;41,42p;55,62p' crates/cobre-core/src/model/temporal/overlap.rs",
+        "output": "crates/cobre-stochastic/src/par/lag_transition.rs:37:    window_period_overlaps(window_start_hours, window_width_hours, &[period_hours])\ncrates/cobre-stochastic/src/season_cast/mod.rs:576:                let overlap = window_period_overlaps(\ncrates/cobre-stochastic/src/season_cast/mod.rs:644:        window_period_overlaps(window_start, period_duration, &self.stage_hours)\ncrates/cobre-io/src/validation/semantic/travel_time.rs:98:    window_period_overlaps(t, future[0], future)\ncrates/cobre-io/src/validation/semantic/travel_time.rs:334:        if !window_period_overlaps(t, future[0], future).is_empty() {\ncrates/cobre-sddp/src/setup/bucket_topology.rs:113:    window_period_overlaps(0.0, t_v, study_durations).len()\ncrates/cobre-sddp/src/lead_time/mod.rs:89:    let stage_weight_overlaps = window_period_overlaps(window_start, h_anchor, future_calendar);\ncrates/cobre-sddp/src/lead_time/mod.rs:197:        let combined = window_period_overlaps(travel_time_hours, duration_b, &target);\ncrates/cobre-sddp/src/lead_time/mod.rs:260:                        window_period_overlaps(local_start, width, partition)\n--- signature ---\n#[must_use]\npub fn window_period_overlaps(\n    window_start_hours: f64,\n    window_width_hours: f64,\n    stage_lengths_hours: &[f64],\n) -> Vec<f64> {\n    let mut overlaps = Vec::new();\n    match overlaps.iter().rposition(|&overlap| overlap > 0.0) {\n        Some(last_nonzero) => {\n            overlaps.truncate(last_nonzero + 1);\n            overlaps\n        }\n        None => Vec::new(),\n    }\n}",
+        "reading": "The only entry point returns an owned `Vec<f64>`, and its accumulator is built with `Vec::new()` (:41) rather than reserving against `stage_lengths_hours.len()`, which is known before the loop starts. Five call sites never look at the vector as a sequence: `lag_transition.rs:37` and `season_cast/mod.rs:576` pass a one-element slice and immediately take `.first().copied()`; `travel_time.rs:98` and `bucket_topology.rs:113` read only `.len()`; `travel_time.rs:334` reads only `.is_empty()`. The last of those sits inside `check_horizon_inertness`'s loop over every study stage (`crates/cobre-io/src/validation/semantic/travel_time.rs:332`), and each iteration passes the whole remaining stage tail, so the vector it allocates and discards is O(remaining stages) wide."
+      },
+      "mechanism": "Allocation per call for a result the caller does not keep, compounded by an unreserved growth sequence. Because the accumulator starts at zero capacity and pushes one entry per walked period, a single call performs a reallocate-and-copy chain rather than one sized allocation, even though the upper bound on the entry count is the input slice length. Five of the nine production call sites then drop the vector after reading a scalar, a length, or an emptiness flag, so the entire heap round trip is dead work at those sites. The emptiness test in the travel-time horizon-inertness check makes it deck-scaling: the outer loop runs once per study stage and each iteration allocates a vector whose width grows with the stage tail, so the allocation volume for a boolean answer grows quadratically in the stage count. Every one of these is a setup-time or validation-time path rather than a per-scenario one, which is why this is recorded as an API-shape defect rather than a hot-path defect; the deck-independent reason it matters is that the wasted work is a function of stage count and travel-time depth, both of which the operator controls.",
+      "proposedSeverity": "B",
+      "fixShape": "Keep the vector-returning function as the multi-period answer, and give the same module two narrower entry points beside it that the discarding callers can use: a scalar single-period overlap that returns the intersected hours for one period without touching the heap, and a reach predicate or depth count that answers how far a window extends by walking periods and returning a boolean or an index instead of materialising the per-period series. All three should share one internal walk so the overlap arithmetic stays single-owner and the existing bit-exactness tests keep covering it. Independently, reserve the accumulator against the input slice length before the loop, since the upper bound is known and the current zero-capacity start guarantees a reallocation chain for any multi-period window. Then move the five scalar-shaped call sites onto the narrow entry points; the four genuine sequence consumers keep the existing signature unchanged.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-core/src/model/resolved/factors.rs:84 (`ResolvedLoadFactors::factor`) and :267 (`ResolvedNcsFactors::factor`)",
+      "why": "The per-block factor tables are flat dense arrays with an inline index-arithmetic lookup, no hashing and no allocation, and an `empty()` state that turns a factor-free deck into one emptiness test per lookup instead of a populated table of identity values. The doc comment on `factor` also states exactly where the fallback does and does not hold, so a caller cannot mistake it for a general out-of-range guard."
+    },
+    {
+      "subject": "crates/cobre-core/src/model/resolved/block_bounds.rs:243 (`ResolvedBlockBounds::hydro_override_mut`)",
+      "why": "Each entity family grows its dense cell array only on its own first successful write, so a deck with a per-block bound row in one family never allocates the other four families' `n_entities * n_stages * max_blocks` cells. The type-level doc states this laziness as a contract rather than leaving it as an implementation accident."
+    },
+    {
+      "subject": "crates/cobre-core/src/model/resolved/group_bounds.rs:67 (`ResolvedHydroUnitGroupBounds.plant_group_start`)",
+      "why": "The ragged unit-group axis is addressed through CSR offsets rather than a dense `max_groups_per_plant` stride, so one many-group plant does not inflate every other plant's row; the stage and block layers are additionally lazy in the same way as the block-bounds families."
+    },
+    {
+      "subject": "crates/cobre-core/src/constraints/training_event.rs:96 (`StoppingRuleResult.rule_name`, `.detail` at :101)",
+      "why": "The per-iteration convergence event carries a borrowed static rule name and a clone-on-write detail string rather than owned `String`s, and the field doc names avoiding a hot-path allocation as the reason. This is the right default for an event type that crosses a channel once per rule per iteration."
+    },
+    {
+      "subject": "crates/cobre-core/src/commissioning.rs:50 (`filling_phase`) and :13 (`commissioning_active`)",
+      "why": "The per-(entity, stage) lifecycle decision is a total, inline, branch-only function with no allocation, and its doc pins the contract that callers recompute per stage rather than materialising a cached phase mask. Keeping the decision recomputed is cheaper here than the mask it replaces and removes a staleness class outright."
+    },
+    {
+      "subject": "crates/cobre-core/src/system/mod.rs:55 (`System`), with the send/sync assertion at :140-141",
+      "why": "The largest aggregate in the foundation crate derives only `Debug` and `PartialEq`, never `Clone`, so it cannot be deep-copied by accident on a per-worker path; the compile-time send/sync assertion pins the shared-read-across-threads use that makes the missing `Clone` viable."
+    },
+    {
+      "subject": "crates/cobre-core/src/model/resolved/penalties.rs:37 (`HydroStagePenalties`), :46 (`storage_violation_below_cost`)",
+      "why": "Verified consumed, not an unwired seam: both the storage and filling-target penalties are read for filling-phase hydros, so a candidate calling them always-zero dead weight repeats an over-generalisation the mirror already corrected.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — `## Verified NOT reserved` (line 102); prior-register.md `### Hydro storage_violation_below_cost / filling_target_violation_cost penalties — KEEP (consumed, not reserved)`"
+    },
+    {
+      "subject": "crates/cobre-core/src/model/scenario.rs:109 (`ScenarioSource`), `historical_years` at :125",
+      "why": "Verified consumed, not an inert field: it is threaded into historical-window discovery and read by the historical sampler, so it is neither dead config nor payload the broadcast could drop.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — `## Verified NOT reserved` (line 102); prior-register.md `### historical_years on ScenarioSource — KEEP (consumed, not reserved)`"
+    }
+  ],
+  "_needsHuman": [
+    "`crates/cobre-io/src/broadcast.rs::serialize_system` and `::deserialize_system` have no production consumer at the baseline — a repo-wide grep finds only the crate-root re-export, their own doc examples, and `crates/cobre-io/tests/integration.rs:989-995`, while production broadcasts `System` through `crates/cobre-cli/src/commands/broadcast.rs::broadcast_value` — so whether that pair is a reserved seam or a dead public surface is an owner call belonging to the cobre-io over-engineering lens, not to this perf pass.",
+    "`crates/cobre-core/src/model/horizon.rs:43` (`stage_discount_rate_overrides: HashMap<i32, f64>`) is serialized onto the same postcard payload whose HashMap-iteration-order instability the `System` index-skip comment at `crates/cobre-core/src/system/mod.rs:64-68` cites as its reason to skip; content survives the round trip either way so results are unaffected, and whether wire-byte reproducibility is a contract the owner actually wants is a question outside the perf lens."
+  ]
+}

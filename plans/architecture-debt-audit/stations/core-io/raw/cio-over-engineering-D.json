@@ -1,0 +1,223 @@
+{
+  "station": "core-io",
+  "subStation": "D",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "`ParquetWriterConfig` is a configurability surface no shipped caller can vary: never constructed except via `Default`, and half the writers rebuild the default locally instead of accepting the parameter",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/parquet_config.rs",
+          "symbol": "ParquetWriterConfig",
+          "line": 24
+        },
+        {
+          "path": "crates/cobre-io/src/output/parquet_config.rs",
+          "symbol": "Default",
+          "line": 38
+        },
+        {
+          "path": "crates/cobre-io/src/output/atomic.rs",
+          "symbol": "write_parquet_atomic",
+          "line": 112
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "line": 76
+        },
+        {
+          "path": "crates/cobre-io/src/output/stochastic.rs",
+          "line": 132
+        },
+        {
+          "path": "crates/cobre-io/src/output/hydro_models.rs",
+          "line": 87
+        },
+        {
+          "path": "crates/cobre-io/src/config/exports.rs",
+          "symbol": "ExportsConfig",
+          "line": 15
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'ParquetWriterConfig *{' crates/ --include='*.rs'; echo \"--- field mutations ---\"; grep -rn '\\.compression *=\\|\\.row_group_size *=\\|\\.dictionary_encoding *=' crates/ --include='*.rs'; echo \"--- default() count by file ---\"; grep -rn 'ParquetWriterConfig::default()' crates/ --include='*.rs' | awk -F: '{print $1}' | sort | uniq -c | sort -rn",
+        "output": "crates/cobre-io/src/output/parquet_config.rs:24:pub struct ParquetWriterConfig {\ncrates/cobre-io/src/output/parquet_config.rs:38:impl Default for ParquetWriterConfig {\n--- field mutations ---\ncrates/cobre-io/src/output/parquet_config.rs:90:        cloned.row_group_size = 50_000;\n--- default() count by file ---\n     19 crates/cobre-io/src/output/simulation_writer.rs\n     13 crates/cobre-io/src/output/training_writer.rs\n      8 crates/cobre-io/src/output/dictionary.rs\n      5 crates/cobre-io/src/output/stochastic.rs\n      5 crates/cobre-io/src/output/parquet_config.rs\n      3 crates/cobre-io/src/output/hydro_models.rs\n      2 crates/cobre-sddp/tests/right_boundary_output.rs\n      2 crates/cobre-sddp/tests/hydro_sim.rs\n      2 crates/cobre-python/src/run.rs\n      2 crates/cobre-io/tests/integration.rs\n      1 crates/cobre-sddp/tests/simulation_integration.rs\n      1 crates/cobre-io/src/output/solver_stats_writer.rs\n      1 crates/cobre-io/src/output/schemas.rs\n      1 crates/cobre-io/src/output/results_writer.rs\n      1 crates/cobre-io/src/output/generic_constraints_echo.rs\n      1 crates/cobre-io/src/output/fixed_delivery.rs\n      1 crates/cobre-cli/src/commands/run/simulation.rs\n      1 crates/cobre-cli/src/commands/run/outputs.rs",
+        "reading": "The struct-literal grep returns only the declaration and the `Default` impl: nowhere in the workspace is a `ParquetWriterConfig` built with non-default fields, and the only field assignment anywhere is `cloned.row_group_size = 50_000` inside the type's own clone-independence test at parquet_config.rs:90. All 65 remaining uses are `ParquetWriterConfig::default()`, including both cobre-cli sites (run/outputs.rs:146, run/simulation.rs:77) and both cobre-python sites (run.rs:512, run.rs:679). The surface is also internally inconsistent: `write_parquet_atomic` (atomic.rs:112), `TrainingParquetWriter::new`, `SimulationParquetWriter::new` and `write_bounds_parquet` take it as a parameter, while 13 production writer functions (dictionary.rs:76, stochastic.rs:132/176/220/266/444, hydro_models.rs:87/206/304, solver_stats_writer.rs:252, fixed_delivery.rs:85, generic_constraints_echo.rs:105) construct their own local default and could not honour a caller's choice even if one existed. The user-facing route to these three settings was deliberately closed: the `exports.compression` key is now a rejected unknown field under `ExportsConfig`'s `deny_unknown_fields` (config/exports.rs:9-14), so no CLI or Python entry point can reach the knob. This is speculative generality by the brief's own test, a seam with no present consumer of its variability, and it is not a reserved seam: the mirror's reserved-seam register holds exactly three entries (`StudySetup.transit_bucket_topology`, `LipschitzConfig`, the cobre-comm shared-memory hierarchy) and none is in the output path. The claim is about the ParquetWriterConfig struct and its threading, not about the retired `exports.compression` spelling or its reject test; the mirror entry 'Retired input spellings' guards that test and is not re-raised here."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Decide first whether Parquet compression, row-group size and dictionary encoding are a supported knob for third-party library consumers of cobre-io or a frozen internal constant set; the retired `exports.compression` input key argues for frozen. If frozen: fold the three values into constants owned by the single place that consumes them, `write_parquet_atomic`, drop the parameter from the four signatures that carry it and the two writer-struct fields that store it, delete the 13 local default constructions, and record in the module doc that the Parquet encoding is pinned so output bytes stay comparable across runs. If it is meant to stay a knob: make it one, giving every writer the caller's value instead of a locally rebuilt default and giving the CLI and Python paths a way to supply a non-default value; shipping half-threaded always-default plumbing is the worst of both. Either way the blast radius is bounded and named: five cobre-io signatures, the TrainingParquetWriter and SimulationParquetWriter fields, 13 in-function defaults, two cobre-cli call sites, two cobre-python call sites, and four test binaries in cobre-io and cobre-sddp that name the type.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`IterationRecord.time_bwd_setup_ms` and `time_fwd_setup_ms` are write-only public fields whose doc arrows promise a Parquet column the writer feeds from a different source",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "IterationRecord",
+          "line": 140
+        },
+        {
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "IterationRecord",
+          "line": 149
+        },
+        {
+          "path": "crates/cobre-io/src/output/training_writer.rs",
+          "symbol": "build_iteration_timing_batch",
+          "line": 258
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '\\.time_bwd_setup_ms\\b\\|\\.time_fwd_setup_ms\\b' crates/ --include='*.rs'; echo \"(exit $?)\"; grep -n 'timings\\[8\\]\\|timings\\[11\\]' crates/cobre-io/src/output/training_writer.rs; sed -n '517,530p' crates/cobre-sddp/src/training/training_output.rs",
+        "output": "(exit 1)\n258:        bwd_setup_ms.append_value(rec.timings[8] as i64);\n261:        fwd_setup_ms.append_value(rec.timings[11] as i64);\n\n    for record in convergence_records {\n        let mut timings = [0_u64; WORKER_TIMING_SLOT_COUNT];\n        timings[2] = record.time_cut_selection_ms;\n        timings[3] = record.time_mpi_allreduce_ms;\n        timings[4] = record.time_cut_sync_ms;\n        timings[5] = record.time_lower_bound_ms;\n        timings[6] = record.time_state_exchange_ms;\n        timings[7] = record.time_cut_batch_build_ms;\n        timings[9] = record.time_bwd_load_imbalance_ms;\n        timings[10] = record.time_bwd_scheduling_overhead_ms;\n        timings[12] = record.time_fwd_load_imbalance_ms;\n        timings[13] = record.time_fwd_scheduling_overhead_ms;\n        timings[14] = record.time_overhead_ms;",
+        "reading": "A workspace-wide grep for a field read of either name returns nothing (exit 1). Every other `time_*` field on `IterationRecord` has a reader: eleven are copied into the `WorkerTimingRecord` slot array by the loop at cobre-sddp training_output.rs:517-530, and `time_forward_wall_ms` / `time_backward_wall_ms` are read by the rank aggregate at training_output.rs:450-451 while `time_forward_ms` / `time_backward_ms` / `time_total_ms` are read by `build_convergence_batch` at training_writer.rs:185-187. Slots 8 and 11 are conspicuously skipped in that loop; the `bwd_setup_ms` / `fwd_setup_ms` Parquet columns are filled from `rec.timings[8]` / `rec.timings[11]` (training_writer.rs:258,261), which the per-worker path populates from `WorkerPhaseTimings` at training_output.rs:505-508, never from `IterationRecord`. The two fields are therefore populated at training_output.rs:234,237 and read by nobody. `IterationRecord` derives only `Debug, Clone` (output/mod.rs:75), so there is no serde escape hatch. Their doc comments nonetheless assert the mapping, 'Backward thread-pool setup time (ms) -> `bwd_setup_ms`' and 'Forward thread-pool setup time (ms) -> `fwd_setup_ms`', a promise the writer does not keep, which is exactly the contract the struct-level doc at output/mod.rs:72-74 tells a reader to trust."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Confirm with the training owner whether the two setup timings were meant to travel on the per-iteration record as well as the per-worker record. If not, delete both fields from `IterationRecord`, delete the two producer assignments in the cobre-sddp training-output builder, and delete the two zero-initialisers each in the cobre-io training writer, results writer, convergence reader and output-module tests plus the cobre-cli summary fixture; the struct-level doc saying a `time_*` field's arrow names its column then becomes true of every remaining field. If the wiring was intended, the fix is the opposite direction: have the slot-array loop write slots 8 and 11 from these fields the way it already writes slots 2 through 14, and add a test asserting the two columns are non-zero for a run that recorded setup time.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`read_f32_vector_as_f64` is a dead codec reader kept by a completeness rationale, with no caller, no test and no f32 field in the schema it mirrors",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "read_f32_vector_as_f64",
+          "line": 575
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'read_f32_vector_as_f64' crates/ --include='*.rs'; grep -c 'float32' crates/cobre-io/schemas/policy.fbs; sed -n '570,576p' crates/cobre-io/src/output/policy/codec.rs",
+        "output": "crates/cobre-io/src/output/policy/codec.rs:575:fn read_f32_vector_as_f64(buf: &[u8], vec_pos: usize) -> Option<Vec<f64>> {\n0\n/// Read a `f32` vector stored at `vec_pos` and return its elements as `f64`.\n// Rationale: the f32 vector reader is the symmetric counterpart to `read_f64_vector`; retaining\n// it keeps the codec complete against the full FlatBuffers type palette and avoids re-deriving\n// the safe byte-level parsing pattern from scratch when an f32 field is added to the schema.\n#[allow(dead_code)]\nfn read_f32_vector_as_f64(buf: &[u8], vec_pos: usize) -> Option<Vec<f64>> {\n    let len = read_u32_le(buf, vec_pos)? as usize;",
+        "reading": "The symbol resolves exactly once in the whole workspace, at its own declaration: no production caller, no test caller, no re-export. The schema it claims to mirror contains zero `float32` fields, so the hypothetical it reserves against has never arrived. It is the only `#[allow(dead_code)]` in the entire sub-station D scope; a grep for dead_code and unused allows over output/, pipeline.rs, report.rs and parquet_helpers.rs returns this one hit. It fits neither sanctioned class in the mirror's `#[allow(...)]` census: the reserved-seam class requires a comment naming what will consume the item once a specific reader lands, and 'when an f32 field is added to the schema' names no owner and no landing reader; the symmetry-or-test-retention class requires the item to be exercised by unit tests, and no test touches it. It is the same shape as the already-executed OD-004 removal, whose 'rounds out the visit's identity' rationale was judged completeness narration rather than a milestone."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the function and its `#[allow(dead_code)]`. The byte-level reading pattern it claims to preserve is not at risk of being lost: `read_f64_vector`, `read_u32_vector` and `read_u8_vector` sit immediately beside it and demonstrate the identical bounds-checked shape, so a future f32 field costs one obvious copy of a neighbour rather than a rediscovery. If the owner would rather keep a reserved reader, the entry it needs is an owner plus the concrete schema change that activates it, recorded in the reserved-seam register the way the three existing seams are; a rationale comment alone is not that entry. This candidate is orthogonal to the Part-I I.3-6 disposition already recorded for these files, whose surviving claim is the persisting cut vocabulary (`PolicyCutRecord`, `StageCutsPayload`, the `StageCuts` root table), not this helper.",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-6"
+    },
+    {
+      "title": "`write_dictionaries` takes the whole SDDP-shaped study `Config` and never reads it, coupling a `System`-only writer to the engine config type for nothing",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "write_dictionaries",
+          "line": 68
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "line": 71
+        },
+        {
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "line": 16
+        },
+        {
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "write_training_results",
+          "line": 43
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'use crate::Config;\\|^pub fn write_dictionaries\\|^    _config: &Config,' crates/cobre-io/src/output/dictionary.rs; grep -rn '\\bwrite_dictionaries\\b' crates/ --include='*.rs' | grep -v '^crates/cobre-io/'; echo \"(external-consumer grep exit $?)\"",
+        "output": "16:use crate::Config;\n68:pub fn write_dictionaries(\n71:    _config: &Config,\n(external-consumer grep exit 1)",
+        "reading": "The parameter is spelled `_config`, the compiler-sanctioned marker for declared-and-never-read, and the file's sole `use crate::Config` exists only to name that unread parameter's type. The body calls four helpers, none of which is given the config: `write_codes_json(path)`, `write_entities_csv(path, system)`, `write_variables_csv(path)` and `write_bounds_parquet(path, system, &ParquetWriterConfig::default())`. The one caller, `write_training_results` at results_writer.rs:43, holds and forwards a `&Config` purely to satisfy the signature. The second grep shows zero consumers of `write_dictionaries` outside cobre-io, so the parameter is not preserved for an external caller either, even though the function is `pub` and re-exported at the crate root through output/mod.rs:34 and lib.rs:120. Per the partI-handoff disposition for I.3-7, `cobre_io::Config` is the SDDP-shaped config surface the roadmap wants off the engine-neutral path; carrying it unread into an output writer is that coupling at its cheapest to remove. Sub-station C owns the `Config.training` fragment itself; this candidate touches only a consumer of the type in the output path."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Drop the third parameter from `write_dictionaries`, drop the now-unneeded `use crate::Config` from the dictionary module, and drop the forwarded argument at the single call site in the training results writer. Then check whether that caller still needs its own `&Config` for anything else before narrowing its signature too. This is the smallest available step of the Milestone-0a direction for the output path: writers keyed on `System` and on writer-local settings rather than on the engine's study config, so a second engine's output orchestration can reuse them without inheriting an SDDP-shaped config type. If the parameter was a placeholder for dictionary content that should vary with config, name which content and wire it or open a ticket; an underscore-prefixed study config in a public signature records neither.",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.3-7"
+    },
+    {
+      "title": "`default_bounds` and `default_upper_bound_kind` are serde-attribute helpers published as crate-root public API with no consumer anywhere",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/output/manifest.rs",
+          "symbol": "default_bounds",
+          "line": 227
+        },
+        {
+          "path": "crates/cobre-io/src/output/manifest.rs",
+          "symbol": "default_upper_bound_kind",
+          "line": 220
+        },
+        {
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "line": 47
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '\\bdefault_bounds\\b\\|\\bdefault_upper_bound_kind\\b' crates/ --include='*.rs'",
+        "output": "crates/cobre-io/src/output/mod.rs:47:    default_bounds, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,\ncrates/cobre-io/src/output/manifest.rs:214:    #[serde(default = \"default_upper_bound_kind\")]\ncrates/cobre-io/src/output/manifest.rs:220:pub fn default_upper_bound_kind() -> String {\ncrates/cobre-io/src/output/manifest.rs:227:pub fn default_bounds() -> MetadataBounds {\ncrates/cobre-io/src/output/manifest.rs:232:        final_upper_bound_kind: default_upper_bound_kind(),\ncrates/cobre-io/src/output/manifest.rs:412:    #[serde(default = \"default_bounds\")]",
+        "reading": "Both functions exist solely to satisfy a `#[serde(default = \"...\")]` attribute on a field in their own file: `default_upper_bound_kind` for `MetadataBounds.final_upper_bound_kind` at manifest.rs:214, `default_bounds` for `TrainingMetadata.bounds` at manifest.rs:412. Serde resolves such a path against the surrounding module, so a private `fn` suffices in both cases and `pub` buys nothing. `default_bounds` goes further and is re-exported through output/mod.rs:47 into the crate root, making `cobre_io::default_bounds` published API; a per-symbol count of out-of-crate references across the whole output re-export list put it at zero, alongside `TrainingParquetWriter` and `write_dictionaries`. This is the OD-002 shape in miniature: `pub` on an item with no external caller silences the dead-code lint and ships a surface nobody asked for, here for a deserialization implementation detail that need not be part of the crate's contract."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Make both functions private to the manifest module and remove `default_bounds` from the output module's re-export list and from the crate-root re-export in lib.rs. Verify the `schema` feature's export path does not name either function before narrowing, since a schemars-visible helper would change the committed schemas and CI diffs them. While in that re-export list, re-check the other two zero-external-consumer entries: `TrainingParquetWriter` and `write_dictionaries` are both used inside cobre-io by the results writer, so unlike these two they are defensible as a deliberate library surface and the call is the owner's rather than an automatic narrowing.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Two of the three functions in `pipeline.rs` are pure one-caller adapters, so the crate's main load entry point crosses three forwarding hops before any work happens",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline",
+          "line": 47
+        },
+        {
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline_with_report",
+          "line": 57
+        },
+        {
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline_with_artifacts",
+          "line": 73
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'fn run_pipeline\\|run_pipeline(\\|run_pipeline_with_report(\\|run_pipeline_with_artifacts(' crates/ --include='*.rs'",
+        "output": "crates/cobre-io/src/lib.rs:235:    pipeline::run_pipeline(path)\ncrates/cobre-io/src/lib.rs:252:    pipeline::run_pipeline_with_artifacts(path).map(|(loaded, _report)| loaded)\ncrates/cobre-io/src/lib.rs:266:    pipeline::run_pipeline_with_report(path)\ncrates/cobre-io/src/lib.rs:285:    pipeline::run_pipeline_with_artifacts(path)\ncrates/cobre-io/src/pipeline.rs:47:pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {\ncrates/cobre-io/src/pipeline.rs:48:    run_pipeline_with_report(path).map(|(system, _report)| system)\ncrates/cobre-io/src/pipeline.rs:57:pub(crate) fn run_pipeline_with_report(\ncrates/cobre-io/src/pipeline.rs:60:    run_pipeline_with_artifacts(path).map(|(loaded, report)| (loaded.system, report))\ncrates/cobre-io/src/pipeline.rs:73:pub(crate) fn run_pipeline_with_artifacts(",
+        "reading": "`run_pipeline_with_artifacts` is the only function in the module that does work; `run_pipeline` (body: one `.map` discarding the report) and `run_pipeline_with_report` (body: one `.map` projecting `LoadedCase` to its `System` field) are pure adapters, and each has exactly one caller. That caller is itself a one-line adapter in lib.rs: `load_case` calls `run_pipeline`, `validate_case` calls `run_pipeline_with_report`. So `cobre_io::load_case`, the crate's headline entry point and the one every integration test uses, reaches the pipeline through three consecutive pass-throughs, two of which exist only to be called once from another pass-through. The four public entry points in lib.rs are each justified by a distinct return shape; the private layer beneath them re-derives two of those four shapes a second time. This is the OD-005 pass-through shape, differing only in being `pub(crate)` rather than `pub`."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Collapse the module to its one working function and let the four public entry points in lib.rs do their own projection directly: the system-only loader maps away both the artifacts and the report, the artifacts loader maps away the report, the report loader maps the loaded case to its system, and the full entry point forwards unchanged. Keep the module doc's pointer about which public entry point returns warnings, restated against the public names rather than the private ones. The change is mechanical, touches only lib.rs and pipeline.rs, and leaves every public signature and every caller outside the crate untouched.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/parquet_helpers.rs:13-160 — the six `extract_required_*` / `extract_optional_*` helpers",
+      "why": "One owner for the column-lookup, typed-downcast and `SchemaError` message shape, covering Int32, Float64, UInt32 and Date32 in required and optional forms. Every helper reports the missing column and the wrong-type case with the same wording and the same path, so a schema error reads identically whichever parser raised it. This is the dedup precedent the station measures the writers against, and it is not itself over-parameterized: the four types are four real Arrow types, not a speculative palette."
+    },
+    {
+      "subject": "crates/cobre-io/src/output/atomic.rs — `tmp_path`, `write_bytes_atomic`, `write_json_atomic`, `write_parquet_atomic`",
+      "why": "Single owner of the write-to-tmp, flush, rename contract for the whole output path, with the one non-obvious fact stated once in the module doc and nowhere else: `Drop::drop` cannot return an error, so a drop-flush would let a truncated file be renamed into place with no error surfaced. The extra explicit flush after `ArrowWriter::into_inner` even carries the pin telling a future reader not to remove it without re-checking the parquet version in Cargo.lock. This is a correctness contract documented at the right altitude, not defensive bloat."
+    },
+    {
+      "subject": "crates/cobre-io/src/output/provenance.rs::read_provenance_report and ::write_provenance_report, crates/cobre-io/src/output/scaling_report.rs::write_scaling_report, crates/cobre-io/src/output/hydro_models.rs::read_hydro_model_summary",
+      "why": "The one place in sub-station D where a generic parameter is load-bearing rather than over-parameterization. Taking `&impl Serialize` and `T: DeserializeOwned` is what lets the provenance, scaling and hydro-model report structs live in the calling algorithm crate, which is how the output path satisfies the infrastructure-genericity hard rule; each doc says so explicitly. The OD-007 test does not apply here: the point is not polymorphism across many callers but keeping an engine type out of an L2 crate."
+    },
+    {
+      "subject": "crates/cobre-io/src/output/policy/records.rs::StateFamily (line 52) and EntitySlot::family (line 89)",
+      "why": "The typed state-family enum that retired the untyped `entity_type: u8` dictionary, with `code` / `from_code` as the only crossing between the wire byte and the typed value, and the duplicate constant in the checkpoint module gone.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — 'CD-010 · untyped `entity_type: u8` state-family dictionary — RETIRE' and its `## Do not re-raise` bullets"
+    },
+    {
+      "subject": "crates/cobre-io/src/output/policy/codec.rs:490-660 — the hand-written FlatBuffers reader (`field_data_offset`, `field_pos`, `follow_uoffset`, `read_f64_vector`, `read_u8_vector`, `read_u32_vector`, `read_string`)",
+      "why": "Reading a policy checkpoint means parsing a file that may be truncated, from an older schema version, or simply wrong, and every accessor here is written to survive that: `checked_add` on every offset arithmetic, a slice `get` rather than an index for the string body, `Option` rather than panic on any out-of-range read, and an explicit forward-compatibility rule that a vtable slot past the table end is an absent field rather than an error. That fallibility is why hand-writing the reader is defensible against the `flatbuffers` runtime table accessors, and it pairs with the deliberate decision recorded at crates/cobre-io/Cargo.toml:21-25 not to make `flatc` a build-time dependency. Note only that the write side does use the real `flatbuffers` builder, so the read/write asymmetry is intentional rather than an oversight."
+    },
+    {
+      "subject": "crates/cobre-io/src/output — zero traits, zero newtypes, zero `Box<dyn Trait>` across 23,242 raw lines",
+      "why": "A grep for tuple-struct newtypes and for trait declarations over the whole output path returns nothing. The fourteen entity-family write-record types and their batch builders are plain structs and plain functions, with no dispatch layer interposed to make them look uniform. Given how often a writer family of this size grows a speculative `OutputWriter` trait, the absence is worth protecting.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Cleared (recorded so a future audit does not re-raise)', which already names the entity-family writers/extractors as positive references rather than debt"
+    },
+    {
+      "subject": "docs/design/reserved-seams-and-deferred-debt.md — reserved-seam register, checked before every candidate above",
+      "why": "Rule-6 sweep result, recorded so the merge can see it was done: the register holds exactly three entries (`StudySetup.transit_bucket_topology`, `LipschitzConfig` with its enclosing `UpperBoundEvaluationConfig`, and the cobre-comm shared-memory trait hierarchy) and none anchors inside sub-station D's paths. The two sanctioned-but-out-of-scope items the prior register adds for this station, the hydro filling penalties and `historical_years`, are both cobre-core anchors. No candidate above names a ratified seam, and none re-raises CD-010, CD-026, CD-031 or the noted-not-raised `simulation_writer.rs` file size."
+    }
+  ],
+  "_needsHuman": [
+    "Is `ParquetWriterConfig` intended as a supported public knob for third-party library consumers of cobre-io, or an internal constant set frozen deliberately when the `exports.compression` input key was retired — the answer decides between deleting the type and documenting it as pinned, and the two fixes point in opposite directions.",
+    "Do the `-> bwd_setup_ms` / `-> fwd_setup_ms` doc arrows on the two unread `IterationRecord` fields record an intended wiring that was never finished, in which case the fix is to populate slots 8 and 11 from them, or stale docs on fields that should simply go."
+  ]
+}

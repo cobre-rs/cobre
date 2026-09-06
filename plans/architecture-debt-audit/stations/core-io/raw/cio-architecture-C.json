@@ -1,0 +1,257 @@
+{
+  "station": "core-io",
+  "subStation": "C",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "architecture",
+  "candidates": [
+    {
+      "title": "Entity referential and filling invariants are implemented twice — cobre-io Layer 3/5a and cobre-core `SystemBuilder::build` — with the cobre-core copy unreachable through the only production build path",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "validate_referential_integrity",
+          "line": 30
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_line_references",
+          "line": 95
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/hydro.rs",
+          "symbol": "check_filling_guards",
+          "line": 328
+        },
+        {
+          "path": "crates/cobre-io/src/error.rs",
+          "symbol": "LoadError",
+          "line": 65
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn \"fn validate_line_refs\\|fn validate_hydro_refs\\|fn validate_thermal_refs\\|fn validate_pumping_station_refs\\|fn validate_contract_refs\\|fn validate_ncs_refs\" crates/cobre-core/src/system/validate.rs && echo --- && grep -rn \"fn check_line_references\\|fn check_hydro_references\\|fn check_thermal_references\\|fn check_pumping_references\\|fn check_contract_references\\|fn check_ncs_references\" crates/cobre-io/src/validation/referential.rs && echo --- && grep -n 'entry_stage_id.is_none()' crates/cobre-core/src/system/validate.rs crates/cobre-io/src/validation/semantic/hydro.rs && echo --- && grep -n 'validate_referential_integrity(&data\\|ctx.into_result()?\\|SystemBuilder::new()' crates/cobre-io/src/pipeline.rs && echo --- && grep -rn 'CrossReferenceError' crates/ --include='*.rs' | grep -v 'cobre-io/src/error.rs'",
+        "output": "crates/cobre-core/src/system/validate.rs:131:fn validate_line_refs(\ncrates/cobre-core/src/system/validate.rs:158:fn validate_hydro_refs(\ncrates/cobre-core/src/system/validate.rs:189:fn validate_thermal_refs(\ncrates/cobre-core/src/system/validate.rs:207:fn validate_pumping_station_refs(\ncrates/cobre-core/src/system/validate.rs:244:fn validate_contract_refs(\ncrates/cobre-core/src/system/validate.rs:262:fn validate_ncs_refs(\n---\ncrates/cobre-io/src/validation/referential.rs:95:fn check_line_references(data: &ParsedData, ctx: &mut ValidationContext, bus_ids: &HashSet<i32>) {\ncrates/cobre-io/src/validation/referential.rs:126:fn check_hydro_references(\ncrates/cobre-io/src/validation/referential.rs:181:fn check_thermal_references(\ncrates/cobre-io/src/validation/referential.rs:204:fn check_ncs_references(\ncrates/cobre-io/src/validation/referential.rs:242:fn check_pumping_references(\ncrates/cobre-io/src/validation/referential.rs:290:fn check_contract_references(\n---\ncrates/cobre-core/src/system/validate.rs:301:            if hydro.entry_stage_id.is_none() {\ncrates/cobre-io/src/validation/semantic/hydro.rs:335:        if hydro.filling.is_some() && hydro.entry_stage_id.is_none() {\n---\ncrates/cobre-io/src/pipeline.rs:86:    validate_referential_integrity(&data, &mut ctx);\ncrates/cobre-io/src/pipeline.rs:99:    ctx.into_result()?;\ncrates/cobre-io/src/pipeline.rs:248:    let system = SystemBuilder::new()\n---\ncrates/cobre-python/src/io.rs:19://! | `LoadError::CrossReferenceError`    | `ValidationError` (`ValueError`) |\ncrates/cobre-python/src/io.rs:55:        LoadError::CrossReferenceError { .. } => \"CrossReferenceError\",\ncrates/cobre-python/src/errors.rs:240:            | LoadError::CrossReferenceError { .. }",
+        "reading": "Six entity cross-reference rules exist in matched pairs, one per crate, and the predicates coincide: cobre-core `validate_line_refs` checks `line.source_bus_id`/`target_bus_id` against the bus registry, cobre-io `check_line_references` checks the same two fields against the same set. The filling rules coincide literally: `hydro.entry_stage_id.is_none()` under a present `filling`, and `filling.start_stage_id >= entry`, appear in both crates. `crates/cobre-io/src/pipeline.rs` is the only production `SystemBuilder::build` site in the workspace and it runs at :248, after `ctx.into_result()?` at :99 has already aborted on the cobre-io copy — so for every rule cobre-io duplicates, the cobre-core copy can only fire for a directly-constructed builder (tests and doctests), and a divergence between the two copies is invisible. The split ownership also shows in the error taxonomy: `LoadError::CrossReferenceError` (crates/cobre-io/src/error.rs:65) has zero production producers workspace-wide (the only non-test matches are two cobre-python consumers), because the referential layer routes its findings through `ValidationContext` into `ConstraintError` instead. Scope note: the cobre-core anchors belong to sub-station A; this candidate is filed on its cobre-io half."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Name one owner per invariant class. The cross-reference and filling predicates are paradigm-neutral entity invariants, so either they live beside the entity in cobre-core and cobre-io's Layer 3 delegates to them, or cobre-io stays the sole owner and the cobre-core builder copies are deleted as unreachable — but not both, and the choice should be recorded once rather than settled per rule. Whichever direction is chosen, the diagnostic carrier has to follow it: today one side emits a structured ValidationError::InvalidReference and the other a formatted string, and cobre-io's own LoadError::CrossReferenceError variant is bypassed by its only would-be producer. If the consolidation moves rules down into cobre-core, keep the moved set strictly paradigm-neutral — a hydro-cascade or stage-horizon rule carried into L0 would trip the first conflicts trigger. Ancillary to the fix, not part of it: CrossReferenceError either gains the producer the consolidation implies or is retired with its two cobre-python match arms.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The bound-override rule family is split across two validation layers by entity family, and the two halves disagree on both `ErrorKind` and duplicate-key granularity for the same defect",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_generic_constraint_bounds_validity",
+          "line": 787
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/block_bounds.rs",
+          "symbol": "check_bound_block_id_range",
+          "line": 100
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/block_bounds.rs",
+          "symbol": "check_duplicate_bound_rows",
+          "line": 224
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_ncs_bounds_and_factors",
+          "line": 925
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '798,812p;884,896p' crates/cobre-io/src/validation/referential.rs && echo '--- block_bounds ---' && sed -n '200,207p;366,374p' crates/cobre-io/src/validation/semantic/block_bounds.rs && echo '--- key type ---' && grep -n 'type DuplicateRowKey' crates/cobre-io/src/validation/semantic/block_bounds.rs",
+        "output": "798:            && let Some(&n_blocks) = stage_block_counts.get(&row.stage_id)\n800:            #[allow(clippy::cast_sign_loss)]\n802:            if blk < 0 || blk_usize >= n_blocks {\n803:                ctx.add_error(\n804:                        ErrorKind::InvalidValue,\n805:                        \"constraints/generic_constraint_bounds.parquet\",\n808:  \"GenericConstraintBoundsRow[{i}] has block_id={blk} but Stage {} has only {n_blocks} block(s) (valid range: 0..{n_blocks})\",\n884:    for (i, row) in data.generic_constraint_bounds.iter().enumerate() {\n885:        let key = (row.constraint_id, row.stage_id, row.block_id);\n886:        if !seen_keys.insert(key) {\n888:                ErrorKind::DuplicateId,\n--- block_bounds ---\n200:        ctx.add_error(\n201:            ErrorKind::BusinessRuleViolation,\n205:  \"{family} {entity_id}{group_message}: {row_label} row at stage_id={stage_id} has \\\n206:                 block_id={b} but stage {stage_id} declares only {k} block(s) \\\n370:            ErrorKind::DuplicateId,\n--- key type ---\n351:type DuplicateRowKey = (i32, Option<i32>, i32, Option<i32>, &'static str);",
+        "reading": "Two rules of the bound-override family are implemented twice. The block-id-range rule appears in Layer 5a `block_bounds.rs` for six families as `ErrorKind::BusinessRuleViolation`, and again in Layer 3 `referential.rs` for the seventh family (generic constraint bounds) as `ErrorKind::InvalidValue` — the same user defect, classified two ways. The duplicate-row rule diverges further than classification: `block_bounds.rs` keys per column, `(entity, group, stage, block, column)` per the `DuplicateRowKey` alias at :351, and its own doc states that two rows setting disjoint columns for the same (entity, stage, block) are legitimate sparse input; `referential.rs` keys per row, `(constraint_id, stage_id, block_id)`, so the identical deck shape is rejected for generic constraint bounds and accepted for the other six. `check_ncs_bounds_and_factors` places the eighth family's rules in Layer 3 as well, including a pure value check (`available_generation_mw < 0.0` as `InvalidValue`), which the module's own header at :1-8 scopes to cross-entity references only."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the bound-override family one home and one rule set. The natural landing zone is the Layer 5a module that already models the family generically: extend its per-family descriptor table to cover generic constraint bounds and NCS bounds, and delete the Layer 3 copies, leaving Layer 3 with the dangling-id checks that its own header claims. Settle the duplicate-key semantics deliberately as part of the move — per-column or per-row — rather than letting the family a deck happens to use decide, and pick one ErrorKind for the block-id-range defect across all eight families. The NCS negative-value check moves to the semantic layer with the rest of the family's value rules.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "An out-of-horizon `stage_id` on a bound-override row is a hard error for two families and a silent drop for the other five",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/thermal.rs",
+          "symbol": "check_thermal_bounds_override_stage_range",
+          "line": 973
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/block_bounds.rs",
+          "line": 98
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_ncs_bounds_and_factors",
+          "line": 944
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'not a valid study stage\\|outside the study horizon' crates/cobre-io/src/validation --include='*.rs' | grep -v '///' && echo '--- 5a disclaims the stage axis ---' && sed -n '96,99p' crates/cobre-io/src/validation/semantic/block_bounds.rs && echo '--- the resolver drops the row ---' && grep -n 'let Some(&stage_idx) = stage_index.get(&row.stage_id) else {' -A2 crates/cobre-io/src/resolution/bounds.rs",
+        "output": "crates/cobre-io/src/validation/referential.rs:950:  \"NcsBoundsRow[{i}] has invalid stage_id {} (not a valid study stage)\",\ncrates/cobre-io/src/validation/referential.rs:986:  \"NcsFactorEntry[{i}] has invalid stage_id {} (not a valid study stage)\",\ncrates/cobre-io/src/validation/semantic/hydro.rs:295:  \"{entity_str}: filling.start_stage_id ({}) is not a valid study stage ID\",\ncrates/cobre-io/src/validation/semantic/thermal.rs:991:                     outside the study horizon [0, {}); per-stage thermal \\\n--- 5a disclaims the stage axis ---\n/// A row whose `stage_id` is not a study stage is skipped without a finding —\n/// that is a stage-axis defect this rule does not own.\n--- the resolver drops the row ---\n428:        let Some(&stage_idx) = stage_index.get(&row.stage_id) else {\n429-            continue;\n430-        };\n(the same three-line skip repeats at :504, :545, :583, :621, plus block_slot at :675)",
+        "reading": "A stage-axis rule for bound-override rows exists for exactly two of the seven families: `thermal_bounds` (Layer 5a, `BusinessRuleViolation`) and `ncs_bounds` (Layer 3, `InvalidReference`). The block-axis rule in `block_bounds.rs` explicitly declines to own the stage axis in its own doc at :98-99. Downstream, `crates/cobre-io/src/resolution/bounds.rs` `continue`s past any row whose `stage_id` is absent from `stage_index`, at five stage-level sites and once inside `block_slot` at :675. So for `hydro_bounds`, `line_bounds`, `pumping_bounds`, `contract_bounds` and `hydro_unit_group_bounds` a row naming a stage outside the study is discarded with no diagnostic from any layer, while the identical mistake on a thermal or NCS row is a hard load failure. Scope note: resolution/bounds.rs is sub-station B's path and is cited as the downstream mechanism only; the missing rule is in sub-station C's validation modules."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the stage axis the same table-driven treatment the block axis already has, so one rule covers every bound family instead of two families having bespoke rules and five having none. It belongs beside the block-axis rule in the Layer 5a family module, keyed off the same per-family descriptor and the same study-stage set, and it should reuse the crate's stage resolver rather than a fresh id-non-negative scan. Retire the thermal-only and NCS-only copies onto it so the classification stops depending on which family the deck touched. The resolver's tolerant skip stays as it is: it is correct precisely because the load has already been rejected before it runs.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The config admission rules are enforced only as a side effect of an accessor, and every cobre-io caller discards the resulting error on a premise the Layer-2 gate does not satisfy",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/config/mod.rs",
+          "symbol": "validate_scenario_source_cfg",
+          "line": 260
+        },
+        {
+          "path": "crates/cobre-io/src/config/mod.rs",
+          "symbol": "validate_openings_cfg",
+          "line": 236
+        },
+        {
+          "path": "crates/cobre-io/src/config/mod.rs",
+          "symbol": "validate_config",
+          "line": 159
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/scenarios.rs",
+          "symbol": "check_external_scheme_has_files",
+          "line": 462
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'validate_scenario_source_cfg\\|validate_openings_cfg' crates/ --include='*.rs' && echo '--- the whole Layer-2 config gate ---' && sed -n '159,177p' crates/cobre-io/src/config/mod.rs && echo '--- every cobre-io caller swallows it ---' && grep -rn -A3 'training_scenario_source(Path::new\\|simulation_scenario_source(Path::new' crates/cobre-io/src --include='*.rs' | grep -E 'else \\{|\\.ok\\(\\)' && echo '--- the stated premise ---' && grep -rn 'Config is Layer-2-validated' crates/cobre-io/src --include='*.rs'",
+        "output": "crates/cobre-io/src/config/mod.rs:227:    validate_scenario_source_cfg(&source, section, path)?;\ncrates/cobre-io/src/config/mod.rs:228:    validate_openings_cfg(r.openings.as_ref(), section, path)?;\ncrates/cobre-io/src/config/mod.rs:236:fn validate_openings_cfg(\ncrates/cobre-io/src/config/mod.rs:260:fn validate_scenario_source_cfg(\n--- the whole Layer-2 config gate ---\n160:    if config.resolve_forward_passes().is_none() {\n168:    if config.training.stopping_rules.is_none() {\n--- every cobre-io caller swallows it ---\ncrates/cobre-io/src/validation/semantic/season.rs-256-    else {\ncrates/cobre-io/src/validation/semantic/stages.rs-300-    else {\ncrates/cobre-io/src/validation/semantic/stages.rs-644-    else {\ncrates/cobre-io/src/validation/semantic/stages.rs-774-        .ok();\ncrates/cobre-io/src/validation/semantic/scenarios.rs-275-    else {\ncrates/cobre-io/src/validation/semantic/scenarios.rs-285-    else {\ncrates/cobre-io/src/validation/semantic/scenarios.rs-463-    else {\ncrates/cobre-io/src/validation/semantic/scenarios.rs-469-    else {\ncrates/cobre-io/src/validation/semantic/scenarios.rs-551-    else {\n--- the stated premise ---\ncrates/cobre-io/src/validation/semantic/scenarios.rs:459:    // Config is Layer-2-validated, so these reads do not fail in practice.",
+        "reading": "Five config admission rules — historical-scheme restricted to the inflow class, seed required once any class leaves in-sample, `openings` only under `training`, historical year range ordered, `historical_years` only with a historical class — live in `validate_scenario_source_cfg` / `validate_openings_cfg`, whose only caller is `convert_scenario_source_config` at :227-228, itself reachable only from the two `Config::*_scenario_source` accessors. The Layer-2 gate `validate_config` checks exactly two other things and never resolves a scenario source, so the comment at scenarios.rs:459 asserting these reads cannot fail is not underwritten by anything. Every one of the nine cobre-io call sites discards the error with a let-else return or `.ok()`. The consequence is inverted enforcement: an invalid scenario-source config does not fail the load, it silently switches off the rules that read it — `check_external_scheme_has_files` returns before doing any work rather than reporting either the config defect or the missing external files. Rejection happens only later and elsewhere, at `crates/cobre-sddp/src/setup/mod.rs:385`, for callers that get that far."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Move the admission decision to the point where the config is admitted, not to whoever happens to read it. Resolve both scenario sources once inside the Layer-2 config gate, report their failures into the validation context alongside every other layer's findings, and hand the already-resolved values to the semantic rules so those rules take a resolved value rather than a fallible accessor. The accessors then become infallible reads of an already-admitted config and the nine let-else arms disappear with the fallibility that motivated them. This is the 0a admission gate applied to the block that exists today: an unsupported combination becomes a rejection, never a silent ignore. Distinct from the registered three-representation item — nothing here is about Config versus the downstream params projections, only about where Config's own rules are enforced.",
+      "alignmentHint": "advances-0a",
+      "partIRef": "I.3-7"
+    },
+    {
+      "title": "The input-file registry is four hand-maintained parallel lists joined by position, guarded only by a length assertion",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "manifest_fields_mut",
+          "line": 398
+        },
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "FileManifest",
+          "line": 40
+        },
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "validate_structure",
+          "line": 359
+        },
+        {
+          "path": "crates/cobre-io/src/validation/schema.rs",
+          "symbol": "ParsedData",
+          "line": 67
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'zip(manifest_fields_mut' crates/cobre-io/src/validation/structural.rs && sed -n '395,398p' crates/cobre-io/src/validation/structural.rs && echo '--- the only guard ---' && sed -n '612,623p' crates/cobre-io/src/validation/structural.rs && echo '--- registry sizes ---' && grep -c 'FileEntry {' crates/cobre-io/src/validation/structural.rs && grep -c 'pub [a-z_]*: bool,' crates/cobre-io/src/validation/structural.rs",
+        "output": "376:    for (entry, present) in FILE_ENTRIES.iter().zip(manifest_fields_mut(&mut manifest)) {\n395:/// Returns mutable references to every `bool` field of [`FileManifest`] in the\n396:/// same order as [`FILE_ENTRIES`] — `validate_structure` zips the two positionally,\n397:/// so a divergence here silently misassigns presence flags.\n398:fn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 43] {\n--- the only guard ---\n612:    #[test]\n613:    fn test_structural_manifest_fields_count() {\n614:        // validate_structure zips FILE_ENTRIES with manifest_fields_mut positionally;\n615:        // the invariant is that the two stay the same length, not any specific count.\n617:        let fields = manifest_fields_mut(&mut manifest);\n618:        assert_eq!(\n619:            FILE_ENTRIES.len(),\n620:            fields.len(),\n621:            \"FILE_ENTRIES and manifest_fields_mut must return the same length\"\n622:        );\n623:    }\n--- registry sizes ---\n44\n43",
+        "reading": "One input file is spelled in four places that must agree by hand: its path string in `FILE_ENTRIES` (43 entries, plus the one `struct FileEntry` declaration the count of 44 includes), its `bool` field on `FileManifest` (43 fields), its slot in the fixed-length 43-element mutable-reference array, and its path string again plus its field on `ParsedData` in `validation/schema.rs`. `validate_structure` joins the first and third by position, and the code itself states the failure mode at :397: a divergence silently misassigns presence flags. The only test guarding the join asserts equal length, by its own comment, so swapping two same-arity entries — two optional files in the same directory, say — leaves the assertion green while `validate_schema` reads the wrong file's presence flag and parses or skips the wrong file."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Collapse the parallel lists to one keyed registry so a file is declared once and looked up by name rather than by ordinal. The manifest becomes a lookup keyed on the registry's own entry identity instead of a 43-field struct plus a 43-slot array, which removes the positional join and the hand-kept field order along with it. If the flat struct is worth keeping for its named-field ergonomics, the length assertion has to be replaced by one that actually pins the pairing, so a reordering fails the test rather than silently misassigning. The registry is also the place where the schema-export list and the parsed-data bundle should be derived from rather than restated, since all three enumerate the same set. Beyond the immediate fragility, a v1/v2 case-format shim has to describe two file sets, and doubling a four-way hand-join is a poor starting position for it.",
+      "alignmentHint": "advances-1"
+    },
+    {
+      "title": "The foreign-key and study-stage idioms are open-coded across the validation layer while a table-driven precedent for the same shape already exists in the same station",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_scenario_references",
+          "line": 366
+        },
+        {
+          "path": "crates/cobre-io/src/validation/referential.rs",
+          "symbol": "check_bounds_references",
+          "line": 529
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/block_bounds.rs",
+          "symbol": "FamilyMeta",
+          "line": 25
+        }
+      ],
+      "evidence": {
+        "command": "grep -c 'references non-existent' crates/cobre-io/src/validation/referential.rs && awk '/^fn |^pub\\(crate\\) fn /{fn=$0} /references non-existent/{print fn}' crates/cobre-io/src/validation/referential.rs | awk -F'fn ' '{print $2}' | awk -F'(' '{print $1}' | sort | uniq -c | sort -rn && echo '--- the precedent ---' && sed -n '25,30p' crates/cobre-io/src/validation/semantic/block_bounds.rs && echo '--- study-stage predicate copies ---' && grep -rn 'filter(|s| s.id >= 0)' crates/cobre-io/src/validation --include='*.rs' | wc -l && grep -rn 'filter(|s| s.id >= 0)' crates/cobre-io/src/validation --include='*.rs' | awk -F: '{print $1}' | sort -u | wc -l && grep -n 'pub fn from_study_stage_ids\\|pub fn study_stage_ids' crates/cobre-io/src/stage_resolve.rs",
+        "output": "48\n      9 check_scenario_references\n      8 check_bounds_references\n      7 validate_variable_ref_entity\n      4 check_penalty_override_references\n      3 check_pumping_references\n      3 check_hydro_references\n      3 check_extension_references\n      2 check_ncs_references\n      2 check_ncs_bounds_and_factors\n      2 check_load_factor_references\n      2 check_line_references\n      1 check_thermal_references\n      1 check_contract_references\n--- the precedent ---\n25:struct FamilyMeta {\n26:    family: &'static str,\n27:    entity_label: &'static str,\n28:    row_label: &'static str,\n29:    file: &'static str,\n30:}\n--- study-stage predicate copies ---\n20\n11\ncrates/cobre-io/src/stage_resolve.rs:31:    pub fn from_study_stage_ids(ids: &[i32]) -> Self {\ncrates/cobre-io/src/stage_resolve.rs:53:    pub fn study_stage_ids(&self) -> &[i32] {",
+        "reading": "The check-and-emit shape for a dangling reference — index the rows, test membership in an id set, push an `InvalidReference` entry whose message reads \"<RowType>[i] references non-existent <Entity> <id> via field '<field>'\" — is written out 48 times in one file, spread over 13 functions; the shape is fixed enough that the module header at :22-24 prints it as a literal message template. The same station already solved the same problem the other way: `block_bounds.rs` carries the per-family constants in a `FamilyMeta` table and passes them to two shared emit helpers, so its six families cost one loop each rather than one hand-written block each. The same asymmetry holds for the study-stage set: 20 copies of the raw non-negative-id predicate across 11 validation modules, while `StageIdResolver` in the same crate declares itself the owner of the study-stage ids and is constructed independently at four further validation sites. Scope note: stage_resolve.rs is sub-station B's path and is cited only as the existing owner the validation modules bypass."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Align the referential module to the pattern its sibling already proves rather than propagating the open-coded one. A descriptor carrying the row label, source file, target entity name and field name, plus one emit helper taking a descriptor and an id set, collapses the bulk of the 48 blocks and makes the message template a single definition instead of a header comment describing 48 copies. Separately, derive the study-stage set and its stage-to-block-count map once at the entry to the validation pipeline and pass them alongside the parsed data, so the rules read one definition of a study stage instead of restating the pre-study-negative-id convention in each module. Both are behaviour-preserving as long as the emitted message text and ordering are pinned first; the diagnostics are user-facing and several tests match on their wording.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The semantic layer's rule registry is a prose table with no binding to code, and it has already drifted",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/semantic/mod.rs",
+          "line": 105
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/mod.rs",
+          "symbol": "validate_semantic_stages_penalties_scenarios",
+          "line": 188
+        },
+        {
+          "path": "crates/cobre-io/src/config/simulation.rs",
+          "symbol": "SimulationConfig",
+          "line": 16
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'sampling_scheme' crates/cobre-io/src/validation/semantic/mod.rs && echo '--- implementation search ---' && grep -rn 'sampling_scheme' crates/cobre-io/src/validation/semantic/*.rs crates/cobre-io/src/validation/*.rs | grep -v 'mod.rs:105' ; echo '(no other match)' && echo '--- the field is rejected as unknown ---' && sed -n '1429,1432p;1443,1447p' crates/cobre-io/src/config/mod.rs && echo '--- the table does mark retirements ---' && grep -c 'retired — number never reused' crates/cobre-io/src/validation/semantic/mod.rs",
+        "output": "105://! |26  | `simulation.sampling_scheme.type` must be a known scheme string          | `config.json`                                  | `InvalidValue`           |\n--- implementation search ---\n(no other match)\n--- the field is rejected as unknown ---\n1429:    /// `simulation.sampling_scheme` (dead field) is now rejected because\n1430:    /// `SimulationConfig` uses `deny_unknown_fields`. Old case dirs must remove\n1431:    /// this key before loading.\n1443:            matches!(\n1444:                err,\n1445:                LoadError::ParseError { .. } | LoadError::SchemaError { .. }\n1446:            ),\n1447:            \"expected parse/schema error for unknown 'sampling_scheme' field, got: {err:?}\"\n--- the table does mark retirements ---\n8",
+        "reading": "The only index of the numbered semantic rules is the doc table in `semantic/mod.rs`, and nothing links a table row to the function that implements it: rules live in twelve sibling modules, are wired through two hand-maintained dispatch lists, and are described in a third place. Row 26 shows the drift that costs: it claims a live rule validating `simulation.sampling_scheme.type`, but that field no longer exists on `SimulationConfig` and `deny_unknown_fields` rejects it at parse time, as the config test at :1433 pins; grepping the whole validation tree for the field returns only the table row itself. The table is otherwise actively curated — eight rows carry an explicit retirement marker — so row 26 is drift, not a convention for retired entries. `dimensional.rs` keeps a fourth, separately numbered table for its own seven rules, so the numbering namespace is per-module by accident rather than by design."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Bind rule identity to code so the registry cannot drift silently. The cheapest version keeps the table but attaches each rule number to its implementing function as a doc anchor, so a removed rule leaves a dangling reference the doc build notices. A stronger version drops the hand-maintained dispatch lists in favour of one table of rule entries the dispatcher iterates, which makes the number, the function and the registry one declaration. Either way row 26 needs a decision now — reinstate the rule for whatever replaced the field, or mark it retired the way the other eight are — and the per-module numbering namespaces should be stated as such rather than left to be inferred.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/config/training.rs:531",
+      "why": "Ratified reserved seam, not dead config: LipschitzConfig and its enclosing UpperBoundEvaluationConfig at :509 are loaded, schema-exported and unconsumed by design, reserving the vertex-based inner-approximation seam. Recorded here so no candidate in this envelope reads as raising it.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — reserved-seam register, `LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`; prior-register.md sanctioned list"
+    },
+    {
+      "subject": "crates/cobre-io/src/config/policy.rs:53 (BoundaryPolicy.source_stage)",
+      "why": "Stage-addressed boundary source with no node selector is already on the deferred-debt register with a named trigger, so this station cites it rather than re-recording it.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — deferred-debt register, Boundary-policy source-node; prior-register.md `## Registered and open`"
+    },
+    {
+      "subject": "crates/cobre-io/src/config/training.rs and crates/cobre-io/src/config/simulation.rs — the deny_unknown_fields reject tests",
+      "why": "The unknown-field and unknown-variant reject tests are the load-bearing guard that stands in for a version snapshot of the retired input spellings; they are not redundant coverage. The rule-26 drift finding in this envelope relies on exactly one of them.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — Retired input spellings (recorded as retired, not deferred); prior-register.md `## Do not re-raise`"
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/block_bounds.rs:25 (FamilyMeta) with check_row at :175 and check_row_columns at :353",
+      "why": "The reference implementation for a multi-family rule in this crate: per-family constants in a table, one shared predicate-and-emit helper, message differences carried as data. It is the pattern the referential module should be aligned to, and it should not be flattened in any consolidation."
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/mod.rs:141 (ValidationContext) and :232 (into_result)",
+      "why": "The collect-all-then-fail contract is what lets one load report every defect in a deck instead of one per run, and every layer honours it. The candidates in this envelope are about which rules run and where they live, never about weakening this."
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/structural.rs:322 (REMOVED_FILES) and its use in validate_structure at :360",
+      "why": "A withdrawn input file present in a case is rejected with a message naming its migration, never accepted and ignored. This is the exact counter-pattern to the silent bound-row drop raised above, and it is the right default for the loader."
+    }
+  ],
+  "_needsHuman": [
+    "ErrorKind::default_severity (crates/cobre-io/src/validation/mod.rs:95) declares a severity per diagnostic kind but has no production consumer — severity is decided by whether a call site picks add_error or add_warning, and one site disagrees with the declared default (add_warning with ErrorKind::BusinessRuleViolation at crates/cobre-io/src/validation/semantic/season.rs:176); whether the kind or the call site owns severity is an owner call, not something the tree settles.",
+    "For the duplicated entity invariants, the direction of consolidation is an ownership decision between the cobre-core and cobre-io owners: delete the unreachable builder copies, or make cobre-core the single owner and have cobre-io delegate — this envelope evidences the duplication but does not pick.",
+    "Whether the generic-constraint-bounds duplicate-key rule is intentionally stricter than the six-family rule (per row rather than per column) or is an unnoticed divergence needs the rule's author; the two doc comments each assert their own semantics without acknowledging the other."
+  ]
+}

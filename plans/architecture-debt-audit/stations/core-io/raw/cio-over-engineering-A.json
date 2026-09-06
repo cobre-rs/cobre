@@ -1,0 +1,184 @@
+{
+  "station": "core-io",
+  "subStation": "A",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "The whole resolved per-(NCS, stage) penalty axis has no reader: ResolvedPenalties::ncs_penalties is called only from tests while the LP objective reads the entity-level curtailment cost, so the declared penalty_overrides_ncs stage override is resolved and dropped",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ncs_penalties",
+          "line": 274
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ncs_penalties_mut",
+          "line": 310
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "NcsStagePenalties",
+          "line": 125
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/penalties.rs",
+          "symbol": "ResolvedPenalties",
+          "line": 175
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'ncs_penalties(' crates/ --include='*.rs'; grep -n '#\\[cfg(test)\\]' crates/cobre-core/src/model/resolved/penalties.rs crates/cobre-io/src/resolution/penalties.rs; sed -n '1136p' crates/cobre-sddp/src/lp/builder/columns.rs; grep -rn 'penalties\\.bus_penalties\\|penalties\\.line_penalties\\|penalties\\.hydro_penalties' crates/cobre-sddp/src --include='*.rs' | head -3",
+        "output": "crates/cobre-core/src/model/resolved/penalties.rs:274:    pub fn ncs_penalties(&self, ncs_index: usize, stage_index: usize) -> NcsStagePenalties {\ncrates/cobre-core/src/model/resolved/penalties.rs:416:        assert!((table.ncs_penalties(0, 2).curtailment_cost - 50.0).abs() < f64::EPSILON);\ncrates/cobre-io/src/resolution/penalties.rs:856:            (result.ncs_penalties(0, 0).curtailment_cost - 10.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:860:            (result.ncs_penalties(0, 2).curtailment_cost - 999.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:864:            (result.ncs_penalties(0, 3).curtailment_cost - 10.0).abs() < f64::EPSILON,\ncrates/cobre-io/src/resolution/penalties.rs:421:#[cfg(test)]\ncrates/cobre-core/src/model/resolved/penalties.rs:328:#[cfg(test)]\n            bufs.objective[col] = -ncs.curtailment_cost * block_hours;\ncrates/cobre-sddp/src/lp/builder/columns.rs:347:        let hp = ctx.resolved.penalties.hydro_penalties(h_idx, stage_idx);\ncrates/cobre-sddp/src/lp/builder/columns.rs:687:        let lp = ctx.resolved.penalties.line_penalties(l_idx, stage_idx);\ncrates/cobre-sddp/src/lp/builder/columns.rs:722:        let bp = ctx.resolved.penalties.bus_penalties(b_idx, stage_idx);",
+        "reading": "Every remaining call of the read accessor `ncs_penalties` sits past the `#[cfg(test)]` marker of its file (cobre-core line 416 is past 328; cobre-io lines 856-864 are past 421), so there is no production reader. Its three sibling accessors on the same struct each have production call sites in the LP column builder (hydro at :347, line at :687, bus at :722). The NCS objective coefficient at columns.rs:1136 is built from `ncs.curtailment_cost` on the `NonControllableSource` entity, which is stage-invariant, not from the resolved per-stage cell. cobre-io still populates the axis through `ncs_penalties_mut` (resolution/penalties.rs:292 and :387), including the per-stage override read from the optional user file `constraints/penalty_overrides_ncs.parquet` (constraints/mod.rs:229, resolution/penalties.rs:380-390), so a declared stage-varying NCS curtailment cost is parsed, validated, resolved, stored on `System` and then never consulted."
+      },
+      "proposedSeverity": "A",
+      "fixShape": "Decide the axis one way and make the code say so. Either wire it: have the NCS column builder take its objective coefficient from the resolved per-(ncs, stage) cell the way the hydro, line and bus column builders already take theirs, which makes the declared stage override effective and puts all four penalty families on one read path. Or retire it: drop the NCS arm from the resolved penalty table, drop the accessor pair, drop the resolver arm that fills it, and make the loader reject a non-empty penalty_overrides_ncs file with a typed error instead of accepting rows it will ignore, matching the project's own admission-gate principle that an unsupported combination is a rejection and never a silent ignore. Whichever way it goes, the choice belongs in the register with an owner, because today the same field name means a live stage-varying value for three families and an inert one for the fourth.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "NetworkTopology and its three companion records are a fully unconsumed derived structure: built at System construction, carried on System, serialized into the MPI broadcast payload, re-exported at the crate root, and referenced nowhere outside cobre-core",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "NetworkTopology",
+          "line": 59
+        },
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "build",
+          "line": 77
+        },
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "line": 91
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "line": 87
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "network",
+          "line": 365
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'NetworkTopology\\|BusGenerators\\|BusLineConnection\\|BusLoads\\|\\.network()' crates/ --include='*.rs' | grep -v '^crates/cobre-core/' | wc -l; grep -rn '\\.network()' crates/ --include='*.rs'; grep -n 'network: NetworkTopology\\|pub fn network' crates/cobre-core/src/system/mod.rs; grep -n 'let _ = buses' crates/cobre-core/src/topology/network.rs; grep -rn 'NetworkTopology' docs/ ARCHITECTURE.md CHANGELOG.md plans/architecture-debt-audit/BACKLOG.md | wc -l",
+        "output": "0\ncrates/cobre-core/tests/integration.rs:324:    let network = system.network();\ncrates/cobre-core/tests/integration.rs:378:    let network = system.network();\ncrates/cobre-core/tests/integration.rs:400:    let network = system.network();\ncrates/cobre-core/src/system/mod.rs:970:        let connections = system.network().bus_lines(EntityId(0));\ncrates/cobre-core/src/system/mod.rs:87:    network: NetworkTopology,\ncrates/cobre-core/src/system/mod.rs:158:    network: NetworkTopology,\ncrates/cobre-core/src/system/mod.rs:365:    pub fn network(&self) -> &NetworkTopology {\ncrates/cobre-core/src/topology/network.rs:91:        let _ = buses;\n0",
+        "reading": "The first count is zero: no file outside crates/cobre-core mentions `NetworkTopology`, `BusGenerators`, `BusLineConnection`, `BusLoads`, or calls `System::network()` anywhere in the workspace, cobre-python included. The only readers are cobre-core's own integration binary and one inline unit test. The field at system/mod.rs:87 carries no serde(skip), unlike the seven lookup-index fields immediately above it, and it is repeated in the deserialize mirror at :158, so the structure rides every postcard `System` broadcast that cobre-io's serialize_system produces. `NetworkTopology::build` takes a `buses` slice it immediately discards at network.rs:91 under a TODO naming a validation error that no code constructs. The last count is zero: the type is named in no design document, in ARCHITECTURE.md, in CHANGELOG.md or in the audit BACKLOG, so it is neither a registered reserved seam nor registered debt."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give it an owner and a consuming milestone or delete it, which is the register's own admission rule for an inert surface. The plausible owner is the reserved power-flow vertical, since bus-to-line, bus-to-generator and bus-to-load adjacency is exactly what a network formulation would pull; if that is the intent, record it in the reserved-seam register with that owner and the first-consumer condition, and say there that it is on the System broadcast wire so the cost of keeping it is visible. If no such consumer is committed, remove the module, the System field, the matching slot in the deserialize mirror, the crate-root re-exports and the accessor, and move the adjacency assertions in the integration binary to whatever survives; note that the field sits in a positional postcard layout, so the removal has to change the mirror struct and the field order in lockstep. Independently of that decision, the discarded buses parameter and its TODO should go, since the disconnected-bus check it points at is a validation-layer concern and the error variant it names is itself unconstructed.",
+      "alignmentHint": "neutral",
+      "partIRef": "I.3-1"
+    },
+    {
+      "title": "Two of the seven ValidationError variants are constructed nowhere in the workspace, and both carry a doc comment attributing them to a cobre-io validation path that uses a different error vocabulary",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/error.rs",
+          "symbol": "ValidationError",
+          "line": 23
+        },
+        {
+          "path": "crates/cobre-core/src/error.rs",
+          "line": 65
+        },
+        {
+          "path": "crates/cobre-core/src/error.rs",
+          "line": 72
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'DisconnectedBus\\|InvalidPenalty' crates/ --include='*.rs'; sed -n '62,64p;69,71p' crates/cobre-core/src/error.rs; grep -n 'pub enum ErrorKind' crates/cobre-io/src/validation/mod.rs",
+        "output": "crates/cobre-core/src/error.rs:65:    DisconnectedBus {\ncrates/cobre-core/src/error.rs:72:    InvalidPenalty {\ncrates/cobre-core/src/error.rs:121:            Self::DisconnectedBus { bus_id } => {\ncrates/cobre-core/src/error.rs:127:            Self::InvalidPenalty {\ncrates/cobre-core/src/error.rs:196:        let err = ValidationError::DisconnectedBus {\ncrates/cobre-core/src/topology/network.rs:90:        // TODO: use `buses` for disconnected-bus validation (ValidationError::DisconnectedBus)\n    /// A bus has no connections (no lines, generators, or loads).\n    ///\n    /// Emitted by `cobre-io` validation.\n    /// Entity-level penalty value is invalid (e.g., negative cost).\n    ///\n    /// Emitted by `cobre-io` validation.\ncrates/cobre-io/src/validation/mod.rs:56:pub enum ErrorKind {",
+        "reading": "Across the whole workspace the only occurrences of the two variants are their declaration, their Display arm, one construction inside error.rs's own test module at :196, and a TODO comment. No production site constructs either, and `InvalidPenalty` is not even constructed in a test. The doc comments on both claim cobre-io emits them, but cobre-io's validation layer raises its own `ErrorKind` enum, so the claim describes a producer that does not exist. The five remaining variants are all constructed in cobre-core's own builder and validate modules."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Remove the two never-constructed variants together with their Display arms, the test that only exists to construct one of them, and the TODO that promises one of them; the enum then describes exactly the failures the builder can report. If the disconnected-bus check is genuinely wanted, it belongs in the validation layer that already has a code for it rather than as a reserved variant on the construction error, and the false attribution line should go either way, since it invites a maintainer to look for a cobre-io producer that never existed.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "WelfordAccumulator ships a symmetric population-statistics half that no production caller wants: five of its nine methods have no production call site anywhere in the workspace",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "WelfordAccumulator",
+          "line": 6
+        },
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "variance",
+          "line": 49
+        },
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "std_dev",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "sample_variance",
+          "line": 73
+        },
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "ci_95_half_width",
+          "line": 96
+        },
+        {
+          "path": "crates/cobre-core/src/stats/welford.rs",
+          "symbol": "count",
+          "line": 37
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '\\.variance()\\|\\.std_dev()\\|\\.ci_95_half_width()\\|\\.sample_variance()\\|\\.sample_std_dev()\\|\\.sample_ci_95_half_width()\\|\\.count()' crates/ --include='*.rs' | grep -i 'welford\\|acc\\.\\|self\\.'; grep -n 'cfg(test)' crates/cobre-cli/src/progress.rs | head -1",
+        "output": "crates/cobre-core/src/stats/welford.rs:62:        self.variance().sqrt()\ncrates/cobre-core/src/stats/welford.rs:89:        self.sample_variance().sqrt()\ncrates/cobre-core/src/stats/welford.rs:102:            1.96 * self.std_dev() / count_f64.sqrt()\ncrates/cobre-core/src/stats/welford.rs:117:            1.96 * self.sample_std_dev() / count_f64.sqrt()\ncrates/cobre-core/src/stats/welford.rs:147:            (acc.variance() - 4.0).abs() < 1e-10,\ncrates/cobre-core/src/stats/welford.rs:152:            (acc.std_dev() - 2.0).abs() < 1e-10,\ncrates/cobre-core/src/stats/welford.rs:173:            acc.ci_95_half_width(),\ncrates/cobre-core/src/stats/welford.rs:193:        assert_eq!(acc.count(), 0, \"count must be 0 before any updates\");\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:195:                    welford.sample_std_dev(),\ncrates/cobre-sddp/src/training/forward/stats_aggregation.rs:196:                    welford.sample_ci_95_half_width(),\ncrates/cobre-cli/src/progress.rs:1021:            (acc.std_dev() - expected_std).abs() < 1e-6,\ncrates/cobre-cli/src/progress.rs:550:#[cfg(test)]",
+        "reading": "The only production consumer of the accumulator is the forward-pass statistics aggregator, and it calls new, update, mean, sample_std_dev and sample_ci_95_half_width. Every call of count, variance, std_dev, ci_95_half_width and sample_variance is either internal to welford.rs (std_dev delegating to variance, ci_95_half_width to std_dev, sample_std_dev to sample_variance) or inside a test module: welford.rs's own tests, and cobre-cli's progress tests, whose module starts at line 550 and so contains the line 1021 call. The similarly named hits in the SDDP convergence monitor are a struct field and a different type's accessor, not this one."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Keep the arm the single consumer uses and drop the mirrored one. Remove the population variance, population standard deviation, population confidence half-width and the sample variance accessor, keeping sample standard deviation and sample confidence half-width as the surface the aggregator reads, and fold their internal delegation into the two survivors. The count accessor goes with them unless a reader appears. The tests that assert the deleted accessors should be rewritten against the survivors on the same known dataset so the numerical check is not lost, and the cobre-cli progress test should assert the sample statistic it can actually get. If instead the owner wants the population arm kept as a general utility, it needs the same treatment every other inert surface in this workspace gets: an owner and a first-consumer condition in the register, not silent symmetry.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-core/src/model/resolved/penalties.rs::HydroStagePenalties (line 37), storage_violation_below_cost (line 46) and filling_target_violation_cost (line 48)",
+      "why": "Checked first under the reserved-seam rule and left out of the candidate list: both penalties are consumed at filling stages by the SDDP column builder and are unconsumed only for ordinary hydros whose storage bounds are hard, so the 'always zero / unwired' reading the mirror already corrected is not repeated here.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Verified NOT reserved' (the hydro storage_violation_below_cost / filling_target_violation_cost paragraph); prior-register.md 'Hydro storage_violation_below_cost / filling_target_violation_cost penalties — KEEP (consumed, not reserved)'"
+    },
+    {
+      "subject": "crates/cobre-core/src/model/scenario.rs::ScenarioSource (line 109), field historical_years (line 125)",
+      "why": "Checked first under the reserved-seam rule and left out of the candidate list: the field is threaded into historical-window discovery and read by the historical sampler, so the older inert-field reading predates the wiring and is not re-raised.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Verified NOT reserved' (the historical_years paragraph); prior-register.md '`historical_years` on `ScenarioSource` — KEEP (consumed, not reserved)'"
+    },
+    {
+      "subject": "crates/cobre-core/src/constraints/training_event.rs::TrainingEvent (line 164) and the System / Stage paradigm surfaces at crates/cobre-core/src/system/mod.rs::System and crates/cobre-core/src/model/temporal.rs::Stage",
+      "why": "Recorded as already-registered rather than re-discovered: the training-event vocabulary in an L0 crate and the stochastic/risk configuration on System and Stage are open Milestone-1 purification targets with live anchors, so this pass adds no new over-engineering finding on them.",
+      "sanctionedBy": "prior-register.md 'Phase-1 purification targets' (Milestone 1 — training_event out of cobre-core; Milestone 1 — stochastic off System / Stage); partI-handoff.json dispositions I.3-1 (sharpen) and I.3-2 (keep)"
+    },
+    {
+      "subject": "crates/cobre-core public field surface (whole crate)",
+      "why": "A sweep of every pub struct field declared in cobre-core against production lines across every crate found exactly one field with no production reader outside the crate, BusLineConnection.is_source, and it belongs to the one unconsumed family already raised. No inert Option config field, no speculative widening field, nothing needing a reserved-seam judgment. For an L0 data model that is the strongest possible result on this lens."
+    },
+    {
+      "subject": "crates/cobre-core/src/model/temporal/stage_key.rs — StageId (line 25), StudyPos (line 32), CalendarMonth (line 41), month_of (line 55)",
+      "why": "A three-newtype abstraction that earned its second consumer before it was built, not speculative generality: StageId keys the parameter and productivity override tables in cobre-sddp, StudyPos keys the reference-volume resolver in cobre-io and the energy-conversion builder in cobre-sddp, and month_of feeds the evaporation month lookup, each with a regression test pinning the domain-id-versus-position distinction. Worth protecting under the pull-don't-push rule."
+    },
+    {
+      "subject": "crates/cobre-core — absence of the #[allow(dead_code)] symmetry class and of unused genericity",
+      "why": "A grep of every allow attribute in the crate returns only numeric-cast and refactor-decision lints plus one struct-field-names rationale; there is no dead_code allow anywhere, so the sanctioned 'kept for symmetry' class that exists in other crates has no instance here. The crate also carries almost no generic parameters, and the one generic helper, sort_canonical, takes closure extractors instead of a trait bound, so the unused-BuildHasher-genericity shape has no foothold."
+    },
+    {
+      "subject": "crates/cobre-core/src/commissioning.rs — commissioning_active (line 13), filling_phase (line 50), hydro_operating_active (line 79)",
+      "why": "Three small total functions that are the single owner of the commissioning and filling-phase decision for every equipment family, each with a truth-table test and each consumed outside the crate. The thin hydro_operating_active wrapper is a named predicate over filling_phase rather than a forwarding newtype, and it removes a repeated matches! at its call sites."
+    }
+  ],
+  "_needsHuman": [
+    "The NCS resolved-penalty axis needs an owner decision on direction: wiring the accessor makes a per-stage NCS curtailment override effective for the first time and will move objective coefficients on any deck that ships penalty_overrides_ncs, whereas retiring the axis means declaring that file's curtailment_cost column retired and rejecting it, and only the input-contract owner can choose which of those the case format is supposed to mean.",
+    "Whether NetworkTopology is the intended adjacency seam for the reserved power-flow vertical, in which case it should enter the reserved-seam register with that owner and a first-consumer condition, or whether it is residue to delete, is an owner call this pass cannot settle from the tree alone."
+  ]
+}

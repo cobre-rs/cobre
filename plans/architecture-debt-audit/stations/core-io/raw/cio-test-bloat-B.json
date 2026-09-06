@@ -1,0 +1,247 @@
+{
+  "station": "core-io",
+  "subStation": "B",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "The input path has no shared test-support home: 39 throwaway fixture helpers are copied verbatim across 20 files (18x write_json, 16x write_parquet, 5x make_global)",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/constraints/bounds.rs",
+          "symbol": "write_parquet",
+          "line": 1029
+        },
+        {
+          "path": "crates/cobre-io/src/system/buses.rs",
+          "symbol": "make_global",
+          "line": 284
+        },
+        {
+          "path": "crates/cobre-io/src/system/buses.rs",
+          "symbol": "write_json",
+          "line": 277
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/mod.rs",
+          "symbol": "test_support",
+          "line": 153
+        },
+        {
+          "path": "crates/cobre-io/tests/helpers/mod.rs",
+          "symbol": "write_file",
+          "line": 95
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'fn write_parquet(' --include='*.rs' crates/cobre-io/src | while IFS=: read -r f l rest; do printf '%s %s:%s\\n' \"$(sed -n \"${l},$((l+7))p\" \"$f\" | sed 's/^ *//' | md5sum | cut -c1-12)\" \"$f\" \"$l\"; done | sort | uniq -c -w13   ;   then the same over 'fn make_global()' with a 36-line window   ;   then: grep -rn 'mod test_support' --include='*.rs' crates/cobre-io/src",
+        "output": "     16 d3d05f9fa1c2 crates/cobre-io/src/constraints/bounds.rs:1029\n(all 16 write_parquet bodies collapse to ONE md5 group)\n\nb8d5df16f8ba crates/cobre-io/src/system/mod.rs:111\nb8d5df16f8ba crates/cobre-io/src/system/buses.rs:284\nb8d5df16f8ba crates/cobre-io/src/system/lines.rs:275\nb8d5df16f8ba crates/cobre-io/src/system/non_controllable.rs:255\nb8d5df16f8ba crates/cobre-io/src/system/hydros.rs:1002\n(all 5 make_global bodies, 36 lines each, collapse to ONE md5 group)\n\nwrite_json: 18 definitions of `fn write_json(content: &str) -> NamedTempFile`; 16 byte-identical (md5 76ac66bbd2a9), 2 near-variants that only swap .unwrap() for .expect() (crates/cobre-io/src/constraints/generic.rs:1757, crates/cobre-io/src/extensions/scalar_parameters.rs:524)\n\ncrates/cobre-io/src/validation/semantic/mod.rs:153:mod test_support;   <- the crate's ONLY shared test-support module, and it serves the validation path, not the input path",
+        "reading": "Three fixture helpers are copied verbatim across the whole sub-station B surface with zero variation: every one of the 16 write_parquet bodies hashes to the same md5, and every one of the 5 make_global bodies hashes to the same md5 over a 36-line window. The crate already demonstrates both fixes one directory over: validation/semantic/test_support.rs is a #[cfg(test)] sibling module shared by 14 validation modules, and tests/helpers/mod.rs is the shared harness for the integration binaries. The input path uses neither. The blast radius is concrete and not hypothetical: make_global builds a GlobalPenaltyDefaults whose `hydro` field is a HydroPenalties struct literal with 16 f64 fields (grep -c 'pub .*: f64' over the HydroPenalties declaration in crates/cobre-core/src/entities/hydro.rs returns 16), so adding one penalty field to that L0 struct forces five identical edits in five files before cobre-io compiles. docs/design/testing-architecture.md section 3.1 item 4 names cobre-sddp's O(1) fixture field-add builder (crates/cobre-sddp/tests/common/builders.rs, whose own module doc at line 6 describes the `..Default::default()` spread that makes it O(1)) as one of the five things the suite does well; the cobre-io input path is the O(n) counter-example to the yardstick's own named strength, and section 3.2 ranks fixture/test-support fragmentation third by leverage. write_parquet sites span three in-scope directories: constraints/ (bounds.rs:1029, generic_bounds.rs:237, hydro_unit_group_bounds.rs:240, penalty_overrides.rs:856), extensions/ (fpha_hyperplanes.rs:266, hydro_energy_productivity.rs:330, hydro_geometry.rs:257, tailrace_curves.rs:419) and scenarios/ (annual_component.rs:261, ar_coefficients.rs:207, external.rs:425, inflow_history.rs:220, inflow_stats.rs:191, load_stats.rs:176, noise_openings.rs:350, non_controllable_stats.rs:144)."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the cobre-io input path the same shared test-support home the validation path already has: one #[cfg(test)] sibling module (the natural spelling is a crate-level src/test_support.rs declared once in lib.rs behind #[cfg(test)], pub(crate) so system/, scenarios/, extensions/, constraints/ and resolution/ can all reach it) owning write_json, write_parquet and a GlobalPenaltyDefaults builder. Build the penalty fixture the way cobre-sddp's tests/common/builders.rs does rather than as a full struct literal, so that a new penalty field costs one edit instead of five: give GlobalPenaltyDefaults and HydroPenalties a test-only Default and have the fixture spread `..Default::default()`, overriding only the fields a given test actually reads. Then delete the 39 copies. Keep the two write_json variants' .expect() messages only if a test asserts on them; otherwise collapse them onto the shared helper too. This is a test-only change with no production edit and no coverage change: every deleted body is byte-identical to the survivor, which is what the md5 grouping proves.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "test_bus_ordering_invariance is strictly subsumed by test_full_case_ordering_invariance: same two fixtures, same two load_case calls, same final System-equality assertion",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/tests/invariance.rs",
+          "symbol": "test_bus_ordering_invariance",
+          "line": 174
+        },
+        {
+          "path": "crates/cobre-io/tests/invariance.rs",
+          "symbol": "test_full_case_ordering_invariance",
+          "line": 273
+        },
+        {
+          "path": "crates/cobre-io/tests/invariance.rs",
+          "symbol": "make_shuffled_multi_entity_case",
+          "line": 25
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '173,232p;226,313p' crates/cobre-io/tests/invariance.rs",
+        "output": "fn test_bus_ordering_invariance() {\n    let canonical_dir = TempDir::new().unwrap();\n    helpers::make_multi_entity_case(&canonical_dir);\n    let shuffled_dir = TempDir::new().unwrap();\n    make_shuffled_multi_entity_case(&shuffled_dir);\n    let canonical = load_case(canonical_dir.path())...\n    let shuffled = load_case(shuffled_dir.path())...\n    assert_eq!(canonical.n_buses(), shuffled.n_buses(), ...);\n    ... canonical_bus1.name == shuffled_bus1.name ...\n    ... canonical_bus2.name == shuffled_bus2.name ...\n    // `==` skips the HashMap indices and compares the sorted entity vecs.\n    assert_eq!(canonical, shuffled, \"Systems from canonical and shuffled bus orderings must be equal\");\n}\n\nfn test_full_case_ordering_invariance() {\n    let canonical_dir = TempDir::new().unwrap();\n    helpers::make_multi_entity_case(&canonical_dir);\n    let shuffled_dir = TempDir::new().unwrap();\n    make_shuffled_multi_entity_case(&shuffled_dir);\n    let canonical = load_case(canonical_dir.path())...\n    let shuffled = load_case(shuffled_dir.path())...\n    assert_eq!(canonical, shuffled, \"Systems built from canonical and fully-shuffled input must be structurally equal\");\n    ... canonical_bus1.name == shuffled_bus1.name ...\n    assert_eq!(canonical.n_hydros(), shuffled.n_hydros(), ...);\n    assert_eq!(canonical.n_stages(), shuffled.n_stages(), ...);\n}",
+        "reading": "The two tests are built from the identical pair of fixture builders (helpers::make_multi_entity_case and the file-local make_shuffled_multi_entity_case at line 25) and each loads both directories, so their inputs are the same values. Both then assert `assert_eq!(canonical, shuffled)` on the whole System. Every other assertion in test_bus_ordering_invariance -- n_buses equality, bus(EntityId(1)).name equality, bus(EntityId(2)).name equality -- is a projection of two values the test has just asserted equal, so it is implied by the System equality that both tests already make. The file's own comment at the assertion (\"`==` skips the HashMap indices and compares the sorted entity vecs\") states that the equality is the whole contract. Net effect: four load_case calls over four temp case directories where two suffice. Note the third test is NOT subsumed and must be kept: test_stage_ordering_invariance (line 227) asserts `canonical_first.id == 0` and `shuffled_first.id == 0`, an absolute claim about canonical stage order that System-to-System equality cannot express. The doc comment on make_shuffled_multi_entity_case (line 22-24) records that 'Only buses and stages have >1 entity, so only those are meaningfully reordered; lines, hydros, and thermals are single-entity no-ops' -- so the bus-specific test adds no entity coverage the full-case test lacks either."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete test_bus_ordering_invariance and keep test_full_case_ordering_invariance, which already makes the same System-equality assertion over the same inputs and additionally checks n_hydros and n_stages. Keep test_stage_ordering_invariance unchanged: its stages[0].id == 0 assertions pin canonical order absolutely, which the equality assertion does not. If the reviewer wants the bus-specific naming preserved for discoverability, fold the two surviving bus-name assertions into test_full_case_ordering_invariance rather than keeping a second test that re-runs the fixture and the loader. This removes one integration test and two load_case invocations with no loss of asserted contract.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Unit-test homing in the input path is a coin flip: seven inline modules run 1021-2603 test lines against the section 5.1 extraction threshold, while the single extracted sibling sits in the same directory as a 578-line inline module",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/constraints/generic.rs",
+          "symbol": "tests",
+          "line": 1740
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/estimation.rs",
+          "symbol": "tests",
+          "line": 1170
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/correlation.rs",
+          "symbol": "tests",
+          "line": 404
+        },
+        {
+          "path": "crates/cobre-io/src/resolution/bounds.rs",
+          "symbol": "tests",
+          "line": 827
+        },
+        {
+          "path": "crates/cobre-io/src/system/hydros.rs",
+          "symbol": "tests",
+          "line": 981
+        },
+        {
+          "path": "crates/cobre-io/src/stages.rs",
+          "symbol": "tests",
+          "line": 1240
+        }
+      ],
+      "evidence": {
+        "command": "for f in <the 8 files>; do l=$(grep -n '^#\\[cfg(test)\\]' \"$f\" | tail -1 | cut -d: -f1); t=$(wc -l < \"$f\"); n=$(grep -c '^\\s*#\\[test\\]' \"$f\"); printf '%-58s mod_tests_at=%-6s total=%-6s testLOC=%-6s tests=%s\\n' \"$f\" \"$l\" \"$t\" \"$((t-l+1))\" \"$n\"; done",
+        "output": "crates/cobre-io/src/constraints/generic.rs                 mod_tests_at=1740   total=4342   testLOC=2603   tests=104\ncrates/cobre-io/src/resolution/bounds.rs                   mod_tests_at=827    total=2552   testLOC=1726   tests=36\ncrates/cobre-io/src/system/hydros.rs                       mod_tests_at=981    total=2579   testLOC=1599   tests=40\ncrates/cobre-io/src/stages.rs                              mod_tests_at=1240   total=2795   testLOC=1556   tests=50\ncrates/cobre-io/src/constraints/bounds.rs                  mod_tests_at=1010   total=2473   testLOC=1464   tests=49\ncrates/cobre-io/src/extensions/production_models.rs        mod_tests_at=901    total=2060   testLOC=1160   tests=40\ncrates/cobre-io/src/initial_conditions.rs                  mod_tests_at=590    total=1610   testLOC=1021   tests=39\ncrates/cobre-io/src/scenarios/correlation.rs               mod_tests_at=404    total=981    testLOC=578    tests=16\n\ngrep -n 'mod tests' crates/cobre-io/src/scenarios/estimation.rs  ->  1169:#[cfg(test)] / 1170:mod tests;   (sibling file crates/cobre-io/src/scenarios/estimation/tests.rs, 2758 lines, 65 #[test] fns)",
+        "reading": "docs/design/testing-architecture.md section 5.1 asks for one deterministic homing rule -- inline below roughly 500 test-LOC or 40 test fns, extracted to a sibling tests.rs above it -- and section 3.2 item 4 records the inline-giant-versus-extracted-sibling asymmetry as a ranked sustainability problem, naming cobre-sddp anchors. This is the same defect instantiated in the cobre-io input path, which the doc does not anchor. Seven in-scope files exceed the threshold by 2x to 5x and stay inline; constraints/generic.rs is the extreme, where 2603 of 4342 lines (60% of the file) are the test module and the production code a reader is looking for occupies the first 1739. Exactly one module in the whole sub-station B surface extracts, and the asymmetry is intra-directory rather than merely cross-directory: scenarios/estimation.rs extracts a 2758-line module to scenarios/estimation/tests.rs while its sibling scenarios/correlation.rs, in the same directory, keeps 578 test lines inline. A contributor opening crates/cobre-io/src/scenarios/ sees both conventions side by side with nothing to distinguish them. Inventory cross-check: plans/architecture-debt-audit/stations/core-io/inventory.json records crates/cobre-io/src/scenarios/estimation as linesRaw 2758 / linesNonTest 0 with the note 'scenarios/estimation holds only the sibling tests.rs (whole-file test under the loc-stats rule)', and the cobre-io crate as linesRaw 104066 against linesNonTest 45915 -- a 2.27 raw-to-non-test ratio."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Pick the threshold once and apply it mechanically across the input path rather than per author. Adopt the section 5.1 numbers as written (roughly 500 test-LOC or 40 test fns), extract the seven over-threshold modules to sibling tests.rs files following the shape scenarios/estimation.rs already uses -- `#[cfg(test)] mod tests;` in the parent, the module body moved verbatim into <module>/tests.rs with the crate-inner allow attributes carried along as module-inner attributes -- and leave everything under the threshold inline. Do the extraction with git mv-equivalent whole-block moves so blame survives. Sequence it after the shared test-support module from the fixture-duplication candidate lands, so the extracted files import the shared helpers instead of carrying their private copies into the new files. Record the chosen threshold somewhere enforceable (a scripts/ci check over test-LOC per file) so the rule stops being a judgment call, which is what section 5.1 asks for.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The three seasonal-stats parsers carry the same six-test template written out three times, down to the shuffle vectors in the order-invariance test",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/scenarios/inflow_stats.rs",
+          "symbol": "tests",
+          "line": 165
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/load_stats.rs",
+          "symbol": "tests",
+          "line": 148
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/non_controllable_stats.rs",
+          "symbol": "tests",
+          "line": 116
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/non_controllable_stats.rs",
+          "symbol": "make_batch",
+          "line": 153
+        },
+        {
+          "path": "crates/cobre-io/src/scenarios/load_stats.rs",
+          "symbol": "make_batch",
+          "line": 185
+        }
+      ],
+      "evidence": {
+        "command": "paste <(grep -o 'fn test_[a-z0-9_]*' inflow_stats.tests) <(grep -o 'fn test_[a-z0-9_]*' load_stats.tests) <(grep -o 'fn test_[a-z0-9_]*' non_controllable_stats.tests) | column -t   ;   grep -n 'fn make_batch(' crates/cobre-io/src/scenarios/{inflow_stats,load_stats,non_controllable_stats}.rs",
+        "output": "fn test_valid_4_rows_sorted_by_hydro_stage  fn test_valid_4_rows_sorted_by_bus_stage  fn test_valid_4_rows_sorted_by_ncs_stage\nfn test_missing_mean_m3s_column             fn test_zero_std_mw_is_accepted           fn test_zero_std_is_accepted\nfn test_negative_std_m3s                    fn test_negative_std_mw                   fn test_negative_std\nfn test_nan_mean_m3s                        fn test_nan_mean_mw                       fn test_nan_mean\nfn test_empty_parquet_returns_empty_vec     fn test_missing_mean_mw_column            fn test_mean_out_of_range\nfn test_declaration_order_invariance        fn test_empty_parquet_returns_empty_vec   fn test_missing_mean_column\n                                            fn test_declaration_order_invariance      fn test_empty_parquet_returns_empty_vec\n                                                                                      fn test_declaration_order_invariance\n\ncrates/cobre-io/src/scenarios/load_stats.rs:185:    fn make_batch(bus_ids: &[i32], stage_ids: &[i32], means: &[f64], stds: &[f64]) -> RecordBatch\ncrates/cobre-io/src/scenarios/non_controllable_stats.rs:153:    fn make_batch(ncs_ids: &[i32], stage_ids: &[i32], means: &[f64], stds: &[f64]) -> RecordBatch\n\nbodies of test_empty_parquet_returns_empty_vec, verbatim:\n  hydro_geometry.rs:506 / inflow_stats.rs:311 / non_controllable_stats.rs:305\n    let batch = make_batch(&[], &[], &[], &[]);\n    let tmp = write_parquet(&batch);\n    let rows = parse_<x>(tmp.path()).unwrap();\n    assert!(rows.is_empty());\n\nbodies of test_declaration_order_invariance, verbatim in inflow_stats.rs:318 and non_controllable_stats.rs:312:\n    let batch_asc  = make_batch(&[1,1,5,5], &[0,1,0,1], <4 means>, <4 stds>);\n    let batch_desc = make_batch(&[5,5,1,1], &[1,0,1,0], <same values reversed>, <same values reversed>);",
+        "reading": "Three parsers over the identical four-column (entity_id, stage_id, mean, std) Parquet shape carry the same test template: valid-4-rows-sorted, negative-std reject, NaN-mean reject, missing-mean-column reject, empty-Parquet-returns-empty, declaration-order invariance. The make_batch signatures are the same four-slice shape with only the first parameter renamed (bus_ids / ncs_ids / hydro ids), and the order-invariance tests use literally the same index and shuffle vectors -- &[1,1,5,5] with &[0,1,0,1] against &[5,5,1,1] with &[1,0,1,0]. The three inline modules total 606 raw test lines (183 + 200 + 223 by the mod_tests_at measurement). The divergence between them is not deliberate coverage: inflow_stats has 6 tests, load_stats 7, non_controllable_stats 8, and the extra tests are not a superset of a common core -- test_mean_out_of_range exists only in the NCS parser and test_missing_mean_<unit>_column is spelled three different ways -- so the template has already drifted, which is the failure mode a copied test block produces. This candidate is about the triplicated test template only. Whether the three production parsers should themselves collapse onto one generic four-column stats reader is an architecture-lens question for the sibling worker, not a test-bloat claim, and this fix shape does not depend on that answering yes."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Lift the shared four-column stats fixture into the shared test-support module from the first candidate -- one make_stats_batch(id_column_name, ids, stage_ids, means, stds) that takes the id column's name as an argument -- and drive the six common cases from a single table-driven or macro-generated block parameterized by (parse fn, id column name, unit suffix), so a new stats parser inherits the whole template instead of copying it. Reconcile the drift while doing it: decide whether mean-out-of-range and zero-std-accepted belong to all three parsers or only to the ones whose units make them meaningful, and give the missing-column test one spelling. Keep each parser's genuinely unit-specific assertions (the m3s versus mw field names in error messages) as per-parser cases on top of the shared template. Do not collapse the three declaration-order-invariance tests into one: each pins the hard determinism rule for a distinct parser and the per-parser pinning is the point.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "test_serialized_size_reasonable asserts an undocumented magic threshold that pins no contract and belongs to no test tier",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/broadcast.rs",
+          "symbol": "test_serialized_size_reasonable",
+          "line": 581
+        }
+      ],
+      "evidence": {
+        "command": "sed -n '580,586p' crates/cobre-io/src/broadcast.rs ; grep -n '1024\\|size budget\\|payload size' crates/cobre-io/src/broadcast.rs",
+        "output": "    #[test]\n    fn test_serialized_size_reasonable() {\n        let bus = minimal_bus(1);\n        let system = SystemBuilder::new().buses(vec![bus]).build().unwrap();\n        let bytes = serialize_system(&system).unwrap();\n        assert!(bytes.len() < 1024);\n    }\n\ncrates/cobre-io/src/broadcast.rs:585:        assert!(bytes.len() < 1024);",
+        "reading": "The literal 1024 occurs exactly once in the file, inside the assertion itself. There is no const, no doc comment and no stated wire-size budget anywhere in the module -- the module doc (lines 1-35) covers the postcard-versus-bincode rule and the tag-free mirror types, and says nothing about payload size. The test name asserts that a size is 'reasonable', which is not a contract a reader can check the code against, and the assertion has no owner: nothing else in the crate would have to change if the number were 512 or 65536. Measured against the tier decision rule in docs/design/testing-architecture.md section 5.3, it fits no tier -- it proves no local contract (unit), quantifies over nothing (property), counts no rows or columns (LP-structural), compares against no hand-derived value (analytical), asserts no end result (behavioral) and pins no bytes (golden). The four tests above it in the same module (round_trip_minimal_system at 422, round_trip_populated_system at 436, round_trip_generic_constraint_bound_ref at 471, round_trip_anticipated_thermal_system at 524) plus the two corrupted/empty-bytes rejects at 563 and 572 already cover the serialize/deserialize contract this module owns. Ambiguity worth flagging rather than resolving: if the intent was a real MPI broadcast size guard, then a one-bus System is the wrong subject -- the payload that matters is a full-deck System -- and the threshold should be a named const with a stated budget. Either reading makes the test as written wrong; they differ only in what replaces it."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the test. The postcard round-trip and rejection tests in the same module already pin every contract broadcast.rs owns, and a bare inequality against an unowned literal cannot fail for any reason a maintainer would want to hear about. If the owner confirms a wire-size budget is genuinely intended, replace it instead of deleting: name the budget as a documented const in the module, state in the module doc what the budget protects (MPI eager-versus-rendezvous threshold, or a rank-0 memory bound), and assert against a realistic multi-entity System rather than a single bus, so the assertion can actually fail when the encoding regresses.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Six input-path integration binaries each re-declare mod helpers, recompiling the 312-line shared harness six times against the one-binary-per-crate target",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/tests/integration.rs",
+          "symbol": "helpers",
+          "line": 10
+        },
+        {
+          "path": "crates/cobre-io/tests/invariance.rs",
+          "symbol": "helpers",
+          "line": 14
+        },
+        {
+          "path": "crates/cobre-io/tests/resolver_builder_index_alignment.rs",
+          "symbol": "helpers",
+          "line": 18
+        },
+        {
+          "path": "crates/cobre-io/tests/post_study_stages.rs",
+          "symbol": "helpers",
+          "line": 17
+        },
+        {
+          "path": "crates/cobre-io/tests/load_case_productivity_resolution.rs",
+          "symbol": "helpers",
+          "line": 9
+        },
+        {
+          "path": "crates/cobre-io/tests/load_case_scalar_parameters.rs",
+          "symbol": "helpers",
+          "line": 5
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn '^mod helpers' crates/cobre-io/tests/*.rs ; find crates/cobre-io/tests -maxdepth 1 -name '*.rs' | wc -l ; wc -l crates/cobre-io/tests/helpers/mod.rs ; grep -n 'cobre-solver' crates/cobre-io/Cargo.toml",
+        "output": "crates/cobre-io/tests/invariance.rs:14:mod helpers;\ncrates/cobre-io/tests/load_case_productivity_resolution.rs:9:mod helpers;\ncrates/cobre-io/tests/load_case_scalar_parameters.rs:5:mod helpers;\ncrates/cobre-io/tests/integration.rs:10:mod helpers;\ncrates/cobre-io/tests/post_study_stages.rs:17:mod helpers;\ncrates/cobre-io/tests/resolver_builder_index_alignment.rs:18:mod helpers;\n\n12   (integration binaries in crates/cobre-io/tests)\n312 crates/cobre-io/tests/helpers/mod.rs\n\n(no cobre-solver line in crates/cobre-io/Cargo.toml)",
+        "reading": "Cargo compiles one executable per tests/*.rs file, so each of the six input-path binaries is its own crate: helpers/mod.rs is compiled six times and the cobre-io rlib plus arrow and parquet are linked six times, and Cargo runs the resulting integration binaries sequentially. docs/design/testing-architecture.md section 5.1 sets one integration binary per crate as the target and gives the #[path]-submodule mechanism for getting there without rewriting test bodies; these six are the exact shape that mechanism targets, since they already share a single helpers module and differ only in subject. Two of them are small enough that a separate binary is hard to justify on any grounds -- load_case_scalar_parameters.rs is 136 lines and load_case_productivity_resolution.rs is 199. Stated honestly, the amplifier section 5.1 names as dominant does not apply here: cobre-io has no cobre-solver dependency, so no C++ solver is statically linked into these binaries. The cost mechanism is the arrow/parquet plus cobre-io rlib re-link times six and the sequential run, not the solver link, which is why this is a C and not the priority Layer 1 target. Scope note: the twelve tests/*.rs binaries include six that are not input-path and belong to sibling sub-stations (flatbuffers_schema_conformance.rs, metadata_back_compat.rs, policy_checkpoint_date_consistency.rs for D; defaults_cascade.rs for C's config surface; genericity_gate.rs and clean_break_no_deprecated_fallbacks.rs are source-scanning gates). Only the six that declare mod helpers are claimed here."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Consolidate the six input-path binaries into one domain binary using the #[path]-submodule mechanism section 5.1 specifies: a new tests/load_case.rs root that declares mod helpers once and then includes each current file as a #[path] submodule, with each file's own `mod helpers;` line removed and its bare `helpers::` references rewritten to `crate::helpers::`. Per section 5.1 the per-file inner allow attributes ride along unchanged inside the module body and free items with colliding leaf names stay namespaced under their submodule, so the edit is mechanical and does not touch a single test body. Leave the six non-input-path binaries to their owning sub-stations rather than doing a whole-crate consolidation from this lens.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/stage_resolve.rs:88 (the inline tests module over StageIdResolver)",
+      "why": "The density the rest of the input path should be measured against: 73 test lines and three tests covering an 87-line production module, with no fixture helper at all. stage_id_resolver_round_trips_and_rejects pins non-contiguous, negative and 1-based stage-id decks in one test; stage_id_resolver_index_map_matches_resolve pins the two accessors against each other rather than against literals; unresolved_stage_id_error_names_file_value_and_declared_set asserts the error names the file, the offending value and the declared set. No tautology, no copied helper, no magic threshold.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.3 -- the cheapest-sufficient-tier decision rule; all three are unit-tier and prove local contracts"
+    },
+    {
+      "subject": "The 18 test_declaration_order_invariance tests across the input-path parsers",
+      "why": "Not duplication and must not be collapsed by a dedup pass. Declaration-order invariance is a CLAUDE.md hard rule, and each copy pins it for a distinct parser over that parser's own input shape. This is the contract-pinning property the yardstick calls the single best thing about the suite, applied per parser.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 3.1 item 2 (contract-pinning: every invariant tied to a named regression test) and section 3.1 item 3 (determinism discipline); CLAUDE.md hard rule 'Declaration-order invariance'"
+    },
+    {
+      "subject": "crates/cobre-io/src/post_study_stages.rs:235 inline tests versus crates/cobre-io/tests/post_study_stages.rs",
+      "why": "A real unit/integration split rather than the same assertions run twice. The inline module's 7 tests exercise parse_post_study_stages directly on a temp JSON file; the 1414-line binary's 37 tests exercise the same subject through load_case and the built System, covering tiling classes, commissioning windows and multi-violation diagnostics that the parser cannot see. Neither level re-runs the other's assertions.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 2.1 -- the healthy-pyramid invariant (unit tests outnumber integration tests by roughly an order of magnitude)"
+    },
+    {
+      "subject": "crates/cobre-io/src/constraints/bounds.rs:1010 and crates/cobre-io/src/resolution/bounds.rs:827",
+      "why": "Checked for double coverage and found none: the two bound-layer test modules share zero test-function names (49 versus 36; `comm -12` over the sorted name lists is empty). Whatever the architecture lens concludes about duplicated bound-resolution rules in production, the tests are not testing the same rule twice.",
+      "sanctionedBy": "measured directly: comm -12 over the two sorted `fn test_*` name lists returns nothing"
+    },
+    {
+      "subject": "crates/cobre-io/src/scenarios/estimation.rs:1169-1170 and its sibling crates/cobre-io/src/scenarios/estimation/tests.rs",
+      "why": "The one place in the input path that already follows the target homing rule, and the template the seven over-threshold inline modules should be migrated to: `#[cfg(test)] mod tests;` in the parent, the 2758-line body in a sibling file carrying its own crate-inner allow attributes and its own local builders. It is cited as the model in the homing candidate, not as a defect.",
+      "sanctionedBy": "docs/design/testing-architecture.md section 5.1 -- 'extracted to a sibling tests.rs above it'"
+    }
+  ],
+  "_needsHuman": [
+    "The homing threshold in docs/design/testing-architecture.md section 5.1 (roughly 500 test-LOC or 40 test fns) is stated in a document whose own header marks it 'Proposal -- target standard, not yet implemented', so the owner must ratify the number before the seven-module extraction can be scheduled or gated in CI; the candidate's evidence (2x-5x over) holds under any threshold in that neighbourhood, but the fix's scope does not.",
+    "Whether the three seasonal-stats test templates should collapse onto one shared parameterized block or stay written out per parser is partly a project-preference call: the same per-parser explicitness that makes the 18 order-invariance tests correct could be the reason the stats template was copied, and only the owner can say which side of that line the other five cases fall on."
+  ]
+}

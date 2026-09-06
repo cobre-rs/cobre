@@ -1,0 +1,261 @@
+{
+  "station": "core-io",
+  "subStation": "A",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "test-bloat",
+  "candidates": [
+    {
+      "title": "Six independent all-same-value `HydroPenalties` test fixtures inside cobre-core, one per test module, each re-enumerating all 16 fields",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/entities/hydro.rs",
+          "symbol": "HydroPenalties",
+          "line": 58
+        },
+        {
+          "path": "crates/cobre-core/src/entities/hydro.rs",
+          "symbol": "penalties_all",
+          "line": 296
+        },
+        {
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "zero_penalties",
+          "line": 511
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "line": 636
+        },
+        {
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "line": 145
+        },
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "line": 235
+        },
+        {
+          "path": "crates/cobre-core/tests/integration.rs",
+          "symbol": "zero_hydro_penalties",
+          "line": 19
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn \"fn zero_penalties\\|fn zero_hydro_penalties\\|fn penalties_all\\|let zero_penalties = HydroPenalties {\" crates/cobre-core/src crates/cobre-core/tests; sed -n '56,58p' crates/cobre-core/src/entities/hydro.rs; sed -n '/^pub struct HydroPenalties/,/^}/p' crates/cobre-core/src/entities/hydro.rs | grep -c '    pub '",
+        "output": "crates/cobre-core/src/topology/cascade.rs:145:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/src/topology/network.rs:235:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/tests/integration.rs:19:fn zero_hydro_penalties() -> HydroPenalties {\ncrates/cobre-core/src/system/mod.rs:636:        let zero_penalties = HydroPenalties {\ncrates/cobre-core/src/system/builder.rs:511:    pub(super) fn zero_penalties() -> HydroPenalties {\ncrates/cobre-core/src/entities/hydro.rs:296:    fn penalties_all(v: f64) -> HydroPenalties {\n#[derive(Debug, Clone, Copy, PartialEq)]\n#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\npub struct HydroPenalties {\n16",
+        "reading": "Six fixture sites in the sub-station build the same uniform-value `HydroPenalties`. The struct has 16 `pub f64` fields and derives only Debug/Clone/Copy/PartialEq (no `Default`), so each site must spell out all 16 fields and a 17th penalty field is a compile break at all six at once. One of the six (`system/builder.rs:511`) was already made `pub(super)` to be shared, and its sibling `system/mod.rs:636` still open-codes its own copy anyway, which shows the sharing intent exists but has no home. The same fixture shape escapes the crate: `grep -rlE \"fn [a-z_]*penalties[a-z_]*\\([^)]*\\) -> HydroPenalties\" crates/ --include='*.rs' | sed 's|/src/.*||;s|/tests/.*||' | sort | uniq -c` reports 3 files in cobre-core, 10 in cobre-io and 19 in cobre-sddp, all declaring their own fixture for a type cobre-core owns."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Give the type one shareable fixture where the type lives. Two composable moves: derive or hand-write `Default` for `HydroPenalties` so a fixture can write only the fields a test actually cares about and spread the rest, and expose a single uniform-value constructor from cobre-core behind the `test-support` feature the crate already declares (it currently gates exactly one item, `Hydro::declare_mirror_unit_group`), so cobre-io's and cobre-sddp's test modules can reach it as a dev-dependency feature instead of re-declaring it. Then delete the five in-crate duplicates and let the sibling crates migrate opportunistically. Do not introduce a separate test-support crate; the testing yardstick explicitly rejects that in favour of the feature the crate already has.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "The entity fixture-builder family (make_bus / make_line / make_thermal / make_ncs / make_group / make_hydro / make_contract / make_pumping_station) is copy-pasted across five test sites in cobre-core",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/topology/network.rs",
+          "symbol": "make_line",
+          "line": 218
+        },
+        {
+          "path": "crates/cobre-core/src/system/mod.rs",
+          "symbol": "make_line",
+          "line": 619
+        },
+        {
+          "path": "crates/cobre-core/tests/integration.rs",
+          "symbol": "make_line",
+          "line": 53
+        },
+        {
+          "path": "crates/cobre-core/src/system/builder.rs",
+          "symbol": "line",
+          "line": 649
+        },
+        {
+          "path": "crates/cobre-core/src/topology/cascade.rs",
+          "symbol": "make_hydro",
+          "line": 144
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'fn make_bus\\|fn make_line\\|fn make_thermal\\|fn make_ncs\\|fn make_group' crates/cobre-core/src crates/cobre-core/tests && diff <(sed -n '218,232p' crates/cobre-core/src/topology/network.rs) <(sed -n '619,633p' crates/cobre-core/src/system/mod.rs)",
+        "output": "crates/cobre-core/src/topology/network.rs:208:    fn make_bus(id: i32) -> Bus {\ncrates/cobre-core/src/topology/network.rs:218:    fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/src/topology/network.rs:285:    fn make_thermal(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/src/topology/network.rs:300:    fn make_ncs(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/topology/network.rs:329:    fn make_group(id: i32, bus_id: i32) -> HydroUnitGroup {\ncrates/cobre-core/tests/integration.rs:40:fn make_bus(id: i32) -> cobre_core::Bus {\ncrates/cobre-core/tests/integration.rs:53:fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/tests/integration.rs:102:fn make_group(id: i32, bus_id: i32) -> HydroUnitGroup {\ncrates/cobre-core/tests/integration.rs:114:fn make_thermal(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/tests/integration.rs:165:fn make_ncs(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/system/mod.rs:609:    fn make_bus(id: i32) -> Bus {\ncrates/cobre-core/src/system/mod.rs:619:    fn make_line(id: i32, source_bus_id: i32, target_bus_id: i32) -> Line {\ncrates/cobre-core/src/system/mod.rs:691:    fn make_thermal_on_bus(id: i32, bus_id: i32) -> Thermal {\ncrates/cobre-core/src/system/mod.rs:707:    fn make_thermal(id: i32) -> Thermal {\ncrates/cobre-core/src/system/mod.rs:755:    fn make_ncs_on_bus(id: i32, bus_id: i32) -> NonControllableSource {\ncrates/cobre-core/src/system/mod.rs:769:    fn make_ncs(id: i32) -> NonControllableSource {\n4c4\n<             name: String::new(),\n---\n>             name: format!(\"line-{id}\"),",
+        "reading": "The same builder family is declared in `topology/network.rs`, `system/mod.rs`, `tests/integration.rs`, `topology/cascade.rs` (make_hydro only) and twice inside `system/builder.rs` under the names `bus`/`line`/`hydro`/`thermal`/`ncs`/`contract`/`pumping`. The diff proves they are copies rather than differently-purposed fixtures: the 15-line `make_line` bodies at `topology/network.rs:218` and `system/mod.rs:619` differ in exactly one line, the name string. `system/builder.rs` alone declares `fn bus` twice (lines 498 and 636) in two sibling test modules of one file. Each entity struct in this crate is a plain field-per-line record, so adding a field to `Line` or `Bus` requires editing every one of these copies."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Hoist one entity-builder family into cobre-core behind the existing `test-support` feature, next to the entities it constructs, parameterised on the axes the current copies actually vary (id, bus id, operational date, name) and defaulting the rest, so a field addition is an O(1) edit rather than an O(sites) one. Have the five in-crate sites and `tests/integration.rs` call it, and drop the local copies. Keep the per-test specialisation that genuinely differs (the deficit segments the integration deck needs, the date-varying overloads `system/builder.rs` uses for canonical-order tests) as thin wrappers over the shared builder rather than as forks of it.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`training_event.rs` carries a 463-line inline test module over a data enum with zero methods; every test echoes literals it just wrote or asserts a derived Debug is non-empty",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "make_all_variants",
+          "line": 485
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_construct",
+          "line": 623
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_clone",
+          "line": 633
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "all_variants_debug_non_empty",
+          "line": 641
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "forward_pass_complete_fields_accessible",
+          "line": 649
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/training_event.rs",
+          "symbol": "stage_row_selection_record_fields_accessible",
+          "line": 914
+        }
+      ],
+      "evidence": {
+        "command": "grep -c 'impl ' crates/cobre-core/src/constraints/training_event.rs; grep -n '#\\[cfg(test)\\]' crates/cobre-core/src/constraints/training_event.rs; wc -l < crates/cobre-core/src/constraints/training_event.rs; grep -c '#\\[test\\]' crates/cobre-core/src/constraints/training_event.rs",
+        "output": "0\n476:#[cfg(test)]\n938\n15",
+        "reading": "The file declares zero `impl` blocks, so `TrainingEvent` and its payload structs have no behaviour to test; the test module runs from line 476 to the end of a 938-line file, i.e. 463 lines and 49% of the file for 15 tests. Eight of the 15 are named `*_fields_accessible` and their bodies destructure a variant built two lines earlier and assert each binding equals the literal just written. `all_variants_clone` asserts `format!(\"{cloned:?}\")` is non-empty and `all_variants_debug_non_empty` asserts the same for the original, both exercising only the `#[derive(Clone, Debug)]` the compiler generated. The one test that looks like a contract, `all_variants_construct`, asserts `variants.len() == 16` with the message \"expected exactly 16 TrainingEvent variants\", but `make_all_variants` is a hand-written `vec![]` with no exhaustive match over the enum, so adding a 17th variant compiles and leaves the assert green. It pins the fixture's length, not the enum's arity."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Delete the field-echo and derived-trait tests outright; they assert nothing a compile does not already guarantee. If the intent behind `all_variants_construct` is worth keeping, replace it with something that actually fails on an enum change: an exhaustive `match` over a `TrainingEvent` value in the test that has no wildcard arm, so a new variant is a compile error at the fixture. Everything the emitting side genuinely depends on belongs in a test next to the emitter, not next to the plain data enum. Note the separate, already-registered question of whether this file belongs in an L0 crate at all: the mirror carries that as a Milestone-1 target and this candidate does not restate it, but shrinking the module by half makes the eventual relocation carry less dead weight.",
+      "alignmentHint": "advances-1"
+    },
+    {
+      "title": "Ad-hoc per-struct bit comparators in `resolved/bounds.rs` with nothing enforcing field exhaustiveness, where the testing yardstick calls for one shared comparator",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "opt_f64_bits_eq",
+          "line": 1883
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "hydro_stage_bounds_bits_eq",
+          "line": 1891
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "hydro_block_bounds_bits_eq",
+          "line": 1898
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "thermal_block_bounds_bits_eq",
+          "line": 1911
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "line_bounds_bits_eq",
+          "line": 1916
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "pumping_bounds_bits_eq",
+          "line": 1921
+        },
+        {
+          "path": "crates/cobre-core/src/model/resolved/bounds.rs",
+          "symbol": "contract_bounds_bits_eq",
+          "line": 1926
+        }
+      ],
+      "evidence": {
+        "command": "grep -n 'fn opt_f64_bits_eq\\|fn hydro_stage_bounds_bits_eq\\|fn hydro_block_bounds_bits_eq\\|fn thermal_block_bounds_bits_eq\\|fn line_bounds_bits_eq\\|fn pumping_bounds_bits_eq\\|fn contract_bounds_bits_eq' crates/cobre-core/src/model/resolved/bounds.rs",
+        "output": "1883:    fn opt_f64_bits_eq(a: Option<f64>, b: Option<f64>) -> bool {\n1891:    fn hydro_stage_bounds_bits_eq(a: &HydroStageBounds, b: &HydroStageBounds) -> bool {\n1898:    fn hydro_block_bounds_bits_eq(a: &HydroBlockBounds, b: &HydroBlockBounds) -> bool {\n1911:    fn thermal_block_bounds_bits_eq(a: &ThermalBlockBounds, b: &ThermalBlockBounds) -> bool {\n1916:    fn line_bounds_bits_eq(a: &LineBlockBounds, b: &LineBlockBounds) -> bool {\n1921:    fn pumping_bounds_bits_eq(a: &PumpingBlockBounds, b: &PumpingBlockBounds) -> bool {\n1926:    fn contract_bounds_bits_eq(a: &ContractBlockBounds, b: &ContractBlockBounds) -> bool {",
+        "reading": "Six struct-specific bit comparators plus one Option helper are hand-written inside one inline test module, each an explicit `a.field.to_bits() == b.field.to_bits()` chain per field. I checked exhaustiveness at the baseline and it holds today: `HydroStageBounds` has 4 fields and its comparator covers 4, `HydroBlockBounds` has 10 and its comparator covers 10, `ThermalBlockBounds` has 2 and covers 2. The debt is that nothing keeps it that way. A field added to any of these bounds structs compiles cleanly and is simply never compared, silently narrowing a bit-exactness assertion in the crate that owns the declaration-order-invariance hard rule. The only other `*_bits_eq` family in the workspace is in `crates/cobre-solver/tests/clp_determinism.rs`, so no shared comparator surface exists for either to reuse."
+      },
+      "proposedSeverity": "B",
+      "fixShape": "Make the comparators exhaustive by construction rather than by review: destructure both sides with a full field pattern that has no `..` rest, so adding a field to a bounds struct fails to compile until the comparator names it. Then hoist the generic pieces, the scalar and `Option<f64>` bit comparison, into cobre-core's `test-support` surface as the shared exact-equality comparator the testing yardstick asks for, leaving only the per-struct field lists local. That also gives the solver crate's determinism harness one comparator to depend on instead of its own copy.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Tests that exercise derived `PartialEq`, `Clone`, `Copy` and `Hash` rather than any code the crate wrote, scattered across `entities/` and `entity_id.rs`",
+      "anchors": [
+        {
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_equality",
+          "line": 61
+        },
+        {
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_copy",
+          "line": 70
+        },
+        {
+          "path": "crates/cobre-core/src/entity_id.rs",
+          "symbol": "test_hash_consistency",
+          "line": 78
+        },
+        {
+          "path": "crates/cobre-core/src/entities/bus.rs",
+          "symbol": "test_bus_equality",
+          "line": 86
+        },
+        {
+          "path": "crates/cobre-core/src/entities/energy_contract.rs",
+          "symbol": "test_contract_type_equality",
+          "line": 87
+        },
+        {
+          "path": "crates/cobre-core/src/entities/pumping_station.rs",
+          "symbol": "test_pumping_station_construction",
+          "line": 44
+        },
+        {
+          "path": "crates/cobre-core/src/model/scenario.rs",
+          "symbol": "annual_component_partial_eq_clone",
+          "line": 1166
+        },
+        {
+          "path": "crates/cobre-core/src/constraints/initial_conditions.rs",
+          "symbol": "test_hydro_storage_clone",
+          "line": 254
+        }
+      ],
+      "evidence": {
+        "command": "grep -nE 'fn (test_equality|test_copy|test_hash_consistency|test_bus_equality|test_contract_type_equality|test_pumping_station_construction|annual_component_partial_eq_clone|test_hydro_storage_clone)\\(\\)' crates/cobre-core/src/entity_id.rs crates/cobre-core/src/entities/bus.rs crates/cobre-core/src/entities/energy_contract.rs crates/cobre-core/src/entities/pumping_station.rs crates/cobre-core/src/model/scenario.rs crates/cobre-core/src/constraints/initial_conditions.rs",
+        "output": "crates/cobre-core/src/entities/bus.rs:86:    fn test_bus_equality() {\ncrates/cobre-core/src/entity_id.rs:61:    fn test_equality() {\ncrates/cobre-core/src/entity_id.rs:70:    fn test_copy() {\ncrates/cobre-core/src/entity_id.rs:78:    fn test_hash_consistency() {\ncrates/cobre-core/src/constraints/initial_conditions.rs:254:    fn test_hydro_storage_clone() {\ncrates/cobre-core/src/model/scenario.rs:1166:    fn annual_component_partial_eq_clone() {\ncrates/cobre-core/src/entities/pumping_station.rs:44:    fn test_pumping_station_construction() {\ncrates/cobre-core/src/entities/energy_contract.rs:87:    fn test_contract_type_equality() {",
+        "reading": "I read each of these eight bodies. `test_equality` builds `EntityId(1)` twice and asserts they are equal; `test_copy` assigns an `EntityId` to a second binding and asserts equality; `test_hash_consistency` hashes `EntityId(99)` twice with `DefaultHasher` and asserts the two digests match, which tests the standard library's hasher determinism rather than anything in this crate. `test_bus_equality`, `test_hydro_storage_clone` and `annual_component_partial_eq_clone` each clone a value and assert the clone equals the original. `test_contract_type_equality` asserts `ContractType::Import == ContractType::Import` and `!= ContractType::Export` on a fieldless enum. `test_pumping_station_construction` is the entire test module of its file and asserts each of the ten fields equals the literal written on the line above. None of these types has a hand-written `PartialEq`, `Clone`, `Copy` or `Hash`; the impls are all derived, so every one of these assertions is guaranteed by codegen. I deliberately left the serde and postcard round-trip tests in these same modules out of this candidate: they touch a real wire path even where the derive is plain."
+      },
+      "proposedSeverity": "C",
+      "fixShape": "Delete the tests whose assertions are discharged by the derive. Where a test module would then be empty, as in `entities/pumping_station.rs`, delete the module rather than inventing a replacement; that entity is plain data covered end to end by the builder and integration tests. Where a construction test is doing real work in one assertion and echoing literals in the rest, keep the one assertion and drop the echo. Treat this as opportunistic cleanup on files already being touched rather than a sweep of its own, and pair it with a homing convention so new plain-data types do not attract the same pattern.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-core/src/system/builder.rs:938 (`build_canonical_order_invariant_under_input_permutation`)",
+      "why": "The order-invariance hard rule is guarded by a real property test, not by examples: nine entity collections are independently `prop_shuffle`d through `SystemBuilder::build()` and the canonical projection is compared. It carries its own power self-check, asserting `expected.is_sorted()` on every precomputed expectation before comparing, so a mistake in the expectation cannot mask a sort bug. This is exactly the proptest expansion the testing yardstick asks for and the only proptest site in the crate.",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.9 (\"Expand proptest ... to cover the declaration-order-invariance and reduction-order invariants directly (permute → assert identical bits)\") and §3.1 item 3 (\"a gate proves it exercises the condition it guards\")"
+    },
+    {
+      "subject": "crates/cobre-core/src/constraints/generic_constraint.rs:758 (`test_variable_ref_postcard_discriminant_pin`) and :1121 (`non_controllable_curtailment_discriminant_is_19`)",
+      "why": "Not bloat, and not a duplicate of a const. `VariableRef` declares 24 variants with zero explicit discriminants (`sed -n '/pub enum VariableRef/,/^}/p' ... | grep -c '= [0-9]'` returns 0), so the postcard wire byte is purely positional and these two tests are the only thing pinning it. Pinning index 19 catches any insertion at or before it, and the second test pins 0x14 through 0x17 above it, so the pair covers the mid-enum-insertion failure mode across the whole enum.",
+      "sanctionedBy": "CLAUDE.md hard rule \"Never delete or weaken a load-bearing correctness contract\"; the register's analogous \"Retired input spellings — the reject tests are load-bearing, not bloat\" entry in plans/architecture-debt-audit/stations/core-io/prior-register.md"
+    },
+    {
+      "subject": "crates/cobre-core/tests/infra_genericity.rs (`infra_genericity_gate`)",
+      "why": "A 41-line integration binary that shells out to `scripts/ci/check-infra-genericity.sh` and asserts a clean exit, so the L0 paradigm-neutrality rule is enforced by `cargo test` and not only by a CI job. Small, single-purpose, and explicitly kept as a positive by the station's prior register.",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — \"Infra-genericity gate scans output/policy/ ... Disposition: RETIRE the exemption claim; KEEP the two in-crate oracles as positives\""
+    },
+    {
+      "subject": "crates/cobre-core/src/entities/hydro.rs:276 (`#[cfg(any(test, feature = \"test-support\"))]`) and crates/cobre-core/Cargo.toml:29 (`test-support = []`)",
+      "why": "The mechanism the three fixture-duplication candidates need already exists and is wired correctly: the feature is declared, documented as \"Must NOT be enabled in production builds\", gated with the `any(test, feature = ...)` idiom, and enabled for the crate's own tests through the self-referential dev-dependency at Cargo.toml:39. It currently gates exactly one helper, so the fixes above are an extension of a working seam rather than new machinery.",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.2 (\"Keep the `test-support` cargo-feature mechanism the repo already uses ... do not introduce a dedicated test crate\")"
+    }
+  ],
+  "_needsHuman": [
+    "The fix shapes for the `HydroPenalties` fixture, the entity-builder family and the bit comparators all land in cobre-core's `test-support` surface, but the document that names that landing zone is marked \"Status: Proposal — target standard, not yet implemented\", so an owner needs to confirm the surface is sanctioned before three candidates are scheduled against it.",
+    "`tests/integration.rs:180` and `:447` assert whole-`System` `PartialEq` under two hand-picked orderings while the proptest at `system/builder.rs:938` asserts only the canonical id projection under random shuffles; I could not determine whether the stronger-assertion-at-two-orderings and weaker-assertion-at-many-orderings split is deliberate layering or drift, so I did not raise it as overlap."
+  ]
+}

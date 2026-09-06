@@ -1,0 +1,141 @@
+{
+  "station": "core-io",
+  "subStation": "C",
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "lens": "over-engineering",
+  "candidates": [
+    {
+      "title": "Two `#[allow(dead_code)]` attributes on `ParsedData` carry rationales naming consumers that do not exist: `penalties` is genuinely never read, `scalar_parameters` is read and the allow is stale",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/schema.rs",
+          "symbol": "ParsedData",
+          "line": 74
+        },
+        {
+          "path": "crates/cobre-io/src/validation/schema.rs",
+          "symbol": "ParsedData",
+          "line": 113
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn 'data\\.penalties' crates/ --include='*.rs' | wc -l; grep -n 'data\\.scalar_parameters' crates/cobre-io/src/pipeline.rs; sed -n '70,75p;110,114p' crates/cobre-io/src/validation/schema.rs",
+        "output": "0\n96:    validate_scalar_parameters(&data.scalar_parameters, &data.hydros, n_stages, &mut ctx);\n244:        scalar_parameters: data.scalar_parameters,\n    /// `penalties.json`.\n    // Rationale: the per-entity parsers embed these defaults for resolution, but the\n    // Layer 5 penalty-ordering check needs the original global values; retaining the\n    // parsed field here avoids re-reading `penalties.json` when that check runs.\n    #[allow(dead_code)]\n    pub(crate) penalties: GlobalPenaltyDefaults,\n    // Rationale: the field is populated by the schema-validation layer for the expression-resolution\n    // step that substitutes `@name` sigils in constraint expressions; removing it would discard\n    // the parsed data and require re-parsing from disk at that step.\n    #[allow(dead_code)]\n    pub(crate) scalar_parameters: Vec<ScalarParameter>,",
+        "reading": "`data.penalties` has zero references workspace-wide, so the field at schema.rs:75 is dead in fact; its rationale names the Layer 5 penalty-ordering check, but that check (`scenarios::check_penalty_ordering` reached through `validate_semantic_stages_penalties_scenarios`) reads the per-entity `hydro.penalties` at crates/cobre-io/src/validation/semantic/scenarios.rs:179, and the only value the parsers receive is the local `sentinel` built at crates/cobre-io/src/validation/schema.rs:273 — nothing re-reads penalties.json, so the stated saving does not exist. The mirror case is the reverse: `scalar_parameters` IS read at crates/cobre-io/src/pipeline.rs:96 and moved at :244, so the `#[allow(dead_code)]` at schema.rs:113 suppresses a lint that would not fire. Both attributes therefore misdescribe the tree, and the mirror's `#[allow(...)]` census classifies every `dead_code` allow as a reserved seam whose comment names a future reader, which neither of these is."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Split the two by fact. For `penalties`, decide the field's fate rather than annotating it: either delete the field and its construction at schema.rs:669 (the sentinel already carries every value any parser needs), or, if the global defaults genuinely belong in the bundle for a future check, register it as a reserved seam in the mirror with an owner and a consuming milestone, and rewrite the comment to name the reader that will land instead of asserting one that already exists. For `scalar_parameters`, delete the `#[allow(dead_code)]` outright and let the comment shrink to the one fact worth keeping, since the field is a live consumer of the pipeline's own call. Whichever way `penalties` goes, the four `ParsedData` literal constructors in the test modules (validation/dimensional.rs, validation/productivity_resolution.rs, validation/semantic/test_support.rs, validation/semantic/travel_time.rs) are the full blast radius.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`ErrorKind::default_severity` is a public severity classification with zero callers, and it already disagrees with the call sites it purports to describe",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/mod.rs",
+          "symbol": "default_severity",
+          "line": 95
+        },
+        {
+          "path": "crates/cobre-io/src/validation/semantic/season.rs",
+          "line": 177
+        }
+      ],
+      "evidence": {
+        "command": "grep -rnw 'default_severity' crates/ --include='*.rs'; grep -rn -A1 'ctx.add_warning(' crates/cobre-io/src --include='*.rs' | grep -oP 'ErrorKind::\\K[A-Za-z]+' | sort | uniq -c",
+        "output": "crates/cobre-io/src/validation/mod.rs:95:    pub fn default_severity(self) -> Severity {\ncrates/cobre-io/src/validation/mod.rs:420:        assert_eq!(ErrorKind::FileNotFound.default_severity(), Severity::Error);\ncrates/cobre-io/src/validation/mod.rs:421:        assert_eq!(ErrorKind::ParseError.default_severity(), Severity::Error);\ncrates/cobre-io/src/validation/mod.rs:423:            ErrorKind::UnusedEntity.default_severity(),\ncrates/cobre-io/src/validation/mod.rs:427:            ErrorKind::ModelQuality.default_severity(),\n      1 BusinessRuleViolation\n     25 ModelQuality\n      1 SemanticAmbiguity\n      7 UnusedEntity",
+        "reading": "The only references to `default_severity` anywhere in crates/ are its own declaration and the four assertions of its own unit test at validation/mod.rs:419-429; it is the single symbol in the whole sub-station that a per-symbol external-reference sweep found with no reference outside its declaring file. Severity is instead chosen explicitly at every diagnostic site by calling `add_error` (validation/mod.rs:157) or `add_warning` (:174), so the method is a second, never-consulted classification of the fifteen `ErrorKind` variants. It has already drifted from the sites: `default_severity` maps every kind except UnusedEntity / ModelQuality / SemanticAmbiguity to `Severity::Error`, yet one live call site emits `BusinessRuleViolation` as a warning at crates/cobre-io/src/validation/semantic/season.rs:175-177. Because nothing reads the method, that disagreement is invisible and cannot fail anything."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Delete the method and its tautological unit test, leaving `add_error` / `add_warning` as the single owner of severity. If a per-kind default is actually wanted, invert the direction instead of deleting: make the table the one that decides, by routing every diagnostic through a single `add` entry point that consults the kind, and turn the `season.rs` warning into a deliberate documented override rather than a silent divergence. Either way the classification should exist once. Blast radius is the two items in validation/mod.rs plus, in the second shape only, the roughly thirty-three `add_warning` call sites across validation/semantic/.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "`FileManifest` presence tracking is three hand-maintained 43-element lists zipped positionally, with a hand-rolled `[&mut bool; 43]` reflection helper and only a length guard",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "FileManifest",
+          "line": 40
+        },
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "FILE_ENTRIES",
+          "line": 143
+        },
+        {
+          "path": "crates/cobre-io/src/validation/structural.rs",
+          "symbol": "manifest_fields_mut",
+          "line": 398
+        }
+      ],
+      "evidence": {
+        "command": "grep -c 'FileEntry {' crates/cobre-io/src/validation/structural.rs; grep -c '&mut m\\.' crates/cobre-io/src/validation/structural.rs; grep -c 'pub [a-z_]*: bool,' crates/cobre-io/src/validation/structural.rs; sed -n '376p;396,398p;614,622p' crates/cobre-io/src/validation/structural.rs",
+        "output": "44\n43\n43\n    for (entry, present) in FILE_ENTRIES.iter().zip(manifest_fields_mut(&mut manifest)) {\n/// same order as [`FILE_ENTRIES`] — `validate_structure` zips the two positionally,\n/// so a divergence here silently misassigns presence flags.\nfn manifest_fields_mut(m: &mut FileManifest) -> [&mut bool; 43] {\n        // validate_structure zips FILE_ENTRIES with manifest_fields_mut positionally;\n        // the invariant is that the two stay the same length, not any specific count.\n        let mut manifest = FileManifest::default();\n        let fields = manifest_fields_mut(&mut manifest);\n        assert_eq!(\n            FILE_ENTRIES.len(),\n            fields.len(),\n            \"FILE_ENTRIES and manifest_fields_mut must return the same length\"\n        );",
+        "reading": "Three lists describe the same 43 input files and must stay in the same order: 43 `pub bool` fields on `FileManifest`, 43 `FileEntry` rows in `FILE_ENTRIES` (the 44th match is the struct declaration itself), and 43 `&mut m.<field>` entries returned by `manifest_fields_mut`. `validate_structure` at :376 joins lists two and three by position. The helper's own doc at :396-397 states the hazard — a divergence silently misassigns presence flags — and the only guard, the test at :614-622, compares lengths and says so in its own comment: the invariant is length, not order. Since 38 of the 43 rows are optional, swapping any two of them keeps both the length test and the eight-missing-required-files test green while every downstream presence check reads the wrong file's flag. The middle list buys nothing on its own: it exists solely so a struct of named bools can be iterated, which is hand-rolled reflection rather than a data structure."
+      },
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "fixShape": "Collapse the three lists to one by making the file table the single declaration and deriving both the storage and the accessors from it. The shape that keeps the named, type-checked reads the 34 call sites in validation/schema.rs depend on is a single ordered table of files paired with an enum key, with the manifest holding one flag array indexed by that key and named accessor methods generated alongside it, so adding a file is one edit and a mis-order is a compile error rather than a silent misassignment. A lighter variant that keeps the struct as-is is to make the zip key on the path string instead of position, so the table drives assignment by name and `manifest_fields_mut` disappears. Either way the change is behaviour-neutral for a correctly ordered tree; blast radius is structural.rs plus the 38 manifest reads in validation/schema.rs. This is a distinct site from the cut-projection gather axes the mirror's Cleared section records as having no unfixed positional-zip sibling.",
+      "alignmentHint": "neutral"
+    },
+    {
+      "title": "Three hand-written `Deserialize` impls in `config/` reimplement what `#[derive(Deserialize)]` already produces, each duplicating its accepted-value list",
+      "anchors": [
+        {
+          "path": "crates/cobre-io/src/config/estimation.rs",
+          "symbol": "OrderSelectionMethod",
+          "line": 41
+        },
+        {
+          "path": "crates/cobre-io/src/config/scenario_source.rs",
+          "symbol": "RawSamplingScheme",
+          "line": 84
+        },
+        {
+          "path": "crates/cobre-io/src/config/training.rs",
+          "symbol": "StoppingMode",
+          "line": 117
+        }
+      ],
+      "evidence": {
+        "command": "grep -rn \"impl<'de> .*Deserialize<'de> for\" crates/cobre-io/src/config/; sed -n '12,15p' crates/cobre-io/src/config/policy.rs; sed -n '962,966p' crates/cobre-io/src/system/hydros.rs",
+        "output": "crates/cobre-io/src/config/scenario_source.rs:84:impl<'de> Deserialize<'de> for RawSamplingScheme {\ncrates/cobre-io/src/config/estimation.rs:41:impl<'de> serde::Deserialize<'de> for OrderSelectionMethod {\ncrates/cobre-io/src/config/training.rs:117:impl<'de> Deserialize<'de> for StoppingMode {\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = \"snake_case\")]\n#[cfg_attr(feature = \"schema\", derive(schemars::JsonSchema))]\npub enum PolicyMode {\n///\n/// Mirrors the implementation in `config/mod.rs`. `serde_json` error messages follow\n/// patterns such as:\n/// - `\"unknown variant 'foo', expected one of …\"`\n/// - `\"missing field 'xyz' at line 1 column 2\"`",
+        "reading": "All three are unit-variant enums carrying `#[serde(rename_all = \"snake_case\")]` whose hand-written impl does exactly one thing: deserialize a `String`, match the snake_case spellings, and return `unknown_variant(other, &[..])`. That is the derive's own behaviour — `PolicyMode` at config/policy.rs:15 is the structural twin in the same directory and derives it, and the crate documents the derived message shape it relies on at system/hydros.rs:965 (`unknown variant 'foo', expected one of …`), which is what `extract_field_from_serde_msg` at config/mod.rs:129-133 keys on. So the requirement the three tests pin (`unknown_scheme_is_rejected_naming_accepted_set`, `unknown_stopping_mode_is_rejected_naming_accepted_set`, `order_selection_unknown_variant_lists_pacf_annual` in config/mod.rs) is met by the derive without the impl. The cost is that each accepted-value list is now written twice per enum, in the match arms and again in the slice passed to `unknown_variant`, plus a third time in the doc comment, with nothing tying them together. The commit that introduced them (fa667340, promoting six bare-string discriminators to real serde enums) records no reason for hand-writing rather than deriving."
+      },
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "fixShape": "Replace each hand-written impl with `Deserialize` in the existing derive list, leaving `rename_all` and the doc comments as the single spelling declaration, and keep the three accepted-set rejection tests exactly as they are so the change is proved behaviour-preserving rather than asserted. One honest difference has to be checked before landing it: the hand-written version accepts only a bare JSON string, while the derived one also accepts serde's single-key-map form for a unit variant, so if narrowing to strings was the unstated intent, the right fix is the opposite direction — keep one impl, document the narrowing in a single clause, and delete the other two by deriving them, rather than leaving three undocumented copies. Blast radius is the three declaring files.",
+      "alignmentHint": "neutral"
+    }
+  ],
+  "positives": [
+    {
+      "subject": "crates/cobre-io/src/config/training.rs:531 and crates/cobre-io/src/config/training.rs:509",
+      "why": "Ratified reserved seam, not dead config: `LipschitzConfig` and its enclosing `UpperBoundEvaluationConfig` are loaded, schema-exported (schemas/config.schema.json:1421) and round-trip through `config.json → upper_bound_evaluation` (crates/cobre-io/src/config/mod.rs:81) with no cobre-sddp reader, which is exactly the registered state. Recorded here rather than as a candidate; the mirror itself already notes this is the register's strongest removal candidate if the decision goes against wiring it.",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — reserved-seam register, `LipschitzConfig.mode` and its enclosing `UpperBoundEvaluationConfig`; also plans/architecture-debt-audit/stations/core-io/prior-register.md, Sanctioned reserved seams"
+    },
+    {
+      "subject": "crates/cobre-io/src/schema.rs::generate_schemas",
+      "why": "The headline over-engineering probe resolves clean. One owner declares all eighteen input-file schemas in a single vec; the two consumers (crates/cobre-cli/src/commands/schema.rs:64 and crates/cobre-python/src/schema.rs:43) are thin pass-throughs with no second list; `ls schemas/ | wc -l` is 18, matching the vec exactly; and the eighteen entries are precisely the eighteen hand-authored JSON files in `FILE_ENTRIES`, with no gap and no orphan. The infallible-looking `Result` is required, not defensive clutter, since the crate forbids `.unwrap()` in library code."
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/semantic/thermal.rs:484 (`DeliveryClasses::leading_in_study`)",
+      "why": "The sanctioned `#[allow(dead_code)]` class done correctly, and the contrast that makes candidate one legible: the attribute is paired with a rationale naming both a real present reader (a `debug_assert_eq!` in `classify_deliveries` that compiles out in release, which is why the field reads as dead) and the future rule that will consume it. Nothing here is asserted that the tree does not support."
+    },
+    {
+      "subject": "crates/cobre-io/src/validation/schema.rs:716 (`parse_or_error`) and crates/cobre-io/src/validation/schema.rs:732 (`optional_or_error`)",
+      "why": "Correctly scoped genericity, not speculative generality: two small helpers absorb the parse-or-collect and present-or-default shape across roughly forty file loads in one function, every type parameter is used, and there is no unused `BuildHasher`-style parameter of the OD-007 kind anywhere in the sub-station."
+    },
+    {
+      "subject": "crates/cobre-io (the `schema` Cargo feature's off configuration)",
+      "why": "The 129 `feature = \"schema\"` sites are not rotting. `CARGO_TARGET_DIR=<scratch> cargo check -p cobre-io --no-default-features` finished with exit code 0 at the baseline, so the gate that no CI job exercises still compiles."
+    }
+  ],
+  "_needsHuman": [
+    "Both entry-point crates pin `cobre-io` with `features = [\"schema\"]` and every CI job lists `schema` in NON_SOLVER_FEATURES, so no build in the repo ever compiles the off-state of the 129-site feature gate; whether that optional-dependency seam still earns its keep is an owner call, because cobre-io is a published crate whose external consumers are not visible from here.",
+    "The rustdoc table at crates/cobre-io/src/schema.rs:50-69 restates all eighteen schema filenames and their source files with nothing comparing it to the vec below it, and the unit test at :262-276 asserts only thirteen of the eighteen names are present; whether that gap deserves a gate or is acceptable doc-only duplication needs the owner.",
+    "`crates/cobre-io/src/validation/semantic/season.rs:175-177` emits `ErrorKind::BusinessRuleViolation` as a warning while the module rule table (validation/semantic/mod.rs, Layer 5b rule 31) prints it as `BusinessRuleViolation` with no warning marker; deciding whether the rule is meant to be advisory or blocking is a domain call, not an over-engineering one."
+  ]
+}

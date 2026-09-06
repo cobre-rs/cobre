@@ -1,0 +1,975 @@
+{
+  "_needsHuman": [
+    {
+      "lens": "architecture",
+      "note": "Is output/schemas.rs intended as the sole owner of every output Arrow schema, or only of the simulation and training families, with the nine schemas in stochastic.rs, hydro_models.rs and dictionary.rs deliberately kept local to their writers? The severity of the coverage gap depends on which was intended."
+    },
+    {
+      "lens": "architecture",
+      "note": "Under Milestone 0a's 'shared output orchestration in cobre-io', is the training-output Parquet vocabulary (cuts_*, forward/backward timings, gap_percent) meant to stay engine-shaped at L2 as an accepted cost, or to become engine-supplied? The layering brief forbids 'an engine-specific output tree hard-wired in the CLI instead of orchestrated here', which reads as sanctioning engine-shaped output in cobre-io, but Part-I item 6 treats the same coupling in output/policy as leakage."
+    },
+    {
+      "lens": "architecture",
+      "note": "Is re-running into a non-empty output directory a supported workflow? crates/cobre-io/src/output/policy/checkpoint.rs performs no directory clean and read_sorted_bin_files (codec.rs:1387) accepts every *.bin present with no reconciliation against the manifest's num_stages or graph manifest; cobre-sddp's loader does check state_dimension, num_stages, pool count and graph identity, so no defect is claimed here — but which crate owns artifact self-consistency needs an owner answer, given that cobre-io already enforces date and transit-bucket monotonicity invariants in validate_checkpoint_dates."
+    },
+    {
+      "lens": "architecture",
+      "note": "crates/cobre-io/src/lib.rs:99 re-exports serialize_checkpoint_manifest and deserialize_checkpoint_manifest by reaching past output/policy/mod.rs's own facade, which re-exports the other six codec entry points. Deliberate, or an oversight when the manifest codec landed?"
+    },
+    {
+      "lens": "perf",
+      "note": "Whether `SimulationOutput.partitions_written` is meant to remain a supported public surface for consumers outside this workspace, since it is `pub` and re-exported from the crate root at crates/cobre-io/src/lib.rs:117 — that answer decides whether the fix for the accumulation candidate is deletion or an opt-in diagnostic."
+    },
+    {
+      "lens": "perf",
+      "note": "Whether the policy serializers are deliberately kept as standalone owning-buffer entry points for external callers, which would constrain the fix shape for the checkpoint buffer copy to adding write-through entry points rather than changing the existing signatures."
+    },
+    {
+      "lens": "over-engineering",
+      "note": "Is `ParquetWriterConfig` intended as a supported public knob for third-party library consumers of cobre-io, or an internal constant set frozen deliberately when the `exports.compression` input key was retired — the answer decides between deleting the type and documenting it as pinned, and the two fixes point in opposite directions."
+    },
+    {
+      "lens": "over-engineering",
+      "note": "Do the `-> bwd_setup_ms` / `-> fwd_setup_ms` doc arrows on the two unread `IterationRecord` fields record an intended wiring that was never finished, in which case the fix is to populate slots 8 and 11 from them, or stale docs on fields that should simply go."
+    },
+    {
+      "lens": "test-bloat",
+      "note": "Whether the double-pinned field counts in `schemas.rs` are deliberate belt-and-braces for a published output wire contract or accidental drift; if deliberate, the owner should say which of the two sites is the intended registry so the other can be reduced rather than both kept."
+    },
+    {
+      "lens": "test-bloat",
+      "note": "Whether `output/policy/mod.rs` hosts the codec and checkpoint tests deliberately, because they are meant to exercise only the crate-public re-export surface, or incidentally; the 21 codec-only tests reach `serialize_*`/`deserialize_*` through `use super::*` and would resolve equally well beside `codec.rs`, but a deliberate re-export-surface intent would change the fix shape from relocation to leaving them in place."
+    },
+    {
+      "lens": "test-bloat",
+      "note": "Whether cobre-io should gain its own `test-support` feature to share output fixtures with its twelve integration binaries, or whether an internal `#[cfg(test)]` fixture module under `output/` is sufficient; the answer decides the landing zone for both fixture-duplication candidates and is a crate-surface decision beyond this sub-station."
+    }
+  ],
+  "baseline": "a136840d4f2ea137f685f0af6dac04254b983b60",
+  "candidates": [
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 1,
+          "path": "crates/cobre-io/src/output/atomic.rs",
+          "symbol": "write_bytes_atomic"
+        },
+        {
+          "line": 205,
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs",
+          "symbol": "write_policy_checkpoint"
+        },
+        {
+          "line": 242,
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs"
+        },
+        {
+          "line": 148,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "write_entities_csv"
+        },
+        {
+          "line": 256,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "write_variables_csv"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-01",
+      "evidence": {
+        "command": "grep -n 'use ' crates/cobre-io/src/output/policy/checkpoint.rs | head -20; echo \"--- fs::write in checkpoint ---\"; grep -c 'std::fs::write' crates/cobre-io/src/output/policy/checkpoint.rs; echo \"--- atomic users ---\"; grep -rln 'write_parquet_atomic\\|write_bytes_atomic\\|write_json_atomic' crates/cobre-io/src/output/",
+        "output": "8:use std::collections::BTreeMap;\n9:use std::path::Path;\n11:use chrono::NaiveDate;\n13:use super::super::error::OutputError;\n14:use super::codec::{\n19:use super::records::{\n--- fs::write in checkpoint ---\n4\n--- atomic users ---\ncrates/cobre-io/src/output/atomic.rs\ncrates/cobre-io/src/output/provenance.rs\ncrates/cobre-io/src/output/hydro_models.rs\ncrates/cobre-io/src/output/scaling_report.rs\ncrates/cobre-io/src/output/fixed_delivery.rs\ncrates/cobre-io/src/output/solver_stats_writer.rs\ncrates/cobre-io/src/output/generic_constraints_echo.rs\ncrates/cobre-io/src/output/manifest.rs\ncrates/cobre-io/src/output/dictionary.rs\ncrates/cobre-io/src/output/training_writer.rs\ncrates/cobre-io/src/output/stochastic.rs\ncrates/cobre-io/src/output/simulation_writer.rs\n\n(companion run) grep -n 'csv::Writer::from_path\\|write_bytes_atomic\\|write_parquet_atomic' crates/cobre-io/src/output/dictionary.rs ->\n17:use crate::output::atomic::{write_bytes_atomic, write_parquet_atomic};\n136:    write_bytes_atomic(path.join(\"codes.json\").as_path(), json_str.as_bytes())\n148:    let mut wtr = csv::Writer::from_path(&file_path)\n256:    let mut wtr = csv::Writer::from_path(&file_path)\n1336:    write_parquet_atomic(&parquet_path, &batch, config)",
+        "reading": "atomic.rs's module doc opens 'Single owner of the write-side crash-safety contract: write to {path}.tmp, flush explicitly (never via Drop), then rename', and twelve of the thirteen writer modules import it. output/policy/checkpoint.rs imports nothing from it and uses four bare std::fs::write calls — one per cuts/*.bin, basis/*.bin, states/*.bin and, at :242, manifest.bin itself, the file whose own inline comment at :241 calls it 'the commit signal'. A non-atomic write of the commit signal is the one file in the artifact that most needs the tmp-then-rename discipline. dictionary.rs is a partial bypass in the same spirit: codes.json goes through write_bytes_atomic and bounds.parquet through write_parquet_atomic, while entities.csv (:148) and variables.csv (:256) are written by csv::Writer::from_path directly onto the final name, so an interrupted write leaves a truncated file in place of the previous good one."
+      },
+      "fixShape": "Route every remaining output write through output/atomic.rs. For the policy artifact, serialize each payload to bytes as it already does and hand the buffer to write_bytes_atomic instead of std::fs::write, keeping manifest.bin last so the commit-signal ordering is unchanged; the artifact then gains the property its design already assumes, namely that a manifest.bin visible under the final name is a complete manifest.bin. For the two dictionary CSVs, build the record set into an in-memory buffer with the csv writer and hand that buffer to write_bytes_atomic, which also removes the two open-coded flush paths. Byte content is unchanged in every case, so no output baseline moves.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "atomic.rs declares itself sole owner of the write-side crash-safety contract, but the policy checkpoint and two dictionary CSVs bypass it entirely"
+    },
+    {
+      "alignmentHint": "advances-0a",
+      "anchors": [
+        {
+          "line": 6,
+          "path": "crates/cobre-io/src/output/mod.rs"
+        },
+        {
+          "line": 166,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "write_results"
+        },
+        {
+          "line": 29,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "write_training_results"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-05",
+      "evidence": {
+        "command": "grep -rhn '^pub fn write_[a-z_]*(' crates/cobre-io/src/output/*.rs crates/cobre-io/src/output/policy/*.rs | sed 's/.*fn \\(write_[a-z_]*\\).*/\\1/' | sort -u | tr '\\n' ' '; echo; echo \"count:\"; grep -rhn '^pub fn write_[a-z_]*(' crates/cobre-io/src/output/*.rs crates/cobre-io/src/output/policy/*.rs | wc -l",
+        "output": "write_correlation_json write_dictionaries write_evaporation_models write_fitting_report write_fixed_delivery write_fpha_deviation_points write_fpha_hyperplanes write_generic_constraint_echo write_hydro_model_summary write_inflow_annual_component write_inflow_ar_coefficients write_inflow_seasonal_stats write_load_seasonal_stats write_noise_openings write_paths write_policy_checkpoint write_provenance_report write_results write_row_selection_records write_scaling_report write_scenario_summary write_simulation_metadata write_simulation_results write_simulation_solver_stats write_solver_stats write_training_metadata write_training_results \ncount:\n27\n\n(companion run) crates/cobre-io/src/output/mod.rs:6-8 reads: 'The top-level entry point is [`write_results`], which mirrors [`crate::load_case`]: it accepts aggregate result types and writes all output artifacts to the specified directory.'\n(companion run) crates/cobre-cli/src/commands/run/outputs.rs imports and calls write_checkpoint, write_training_results, write_fpha_hyperplanes, write_evaporation_models, write_fpha_deviation_points, write_generic_constraint_echo, write_fixed_delivery, write_solver_stats, write_row_selection_records, write_simulation_results, write_simulation_solver_stats, write_paths, write_scenario_summary directly",
+        "reading": "write_results at results_writer.rs:166 calls write_training_results and write_simulation_results only; transitively that reaches write_dictionaries, write_training_metadata and write_simulation_metadata, five of the 27 public write entry points in the directory. Everything else — the simulation entity partitions, paths.parquet, scenario_summary, both solver-stats tables, row selection, the three hydro-model tables, the generic-constraint echo, fixed deliveries, the five stochastic tables, the scaling and provenance reports and the policy checkpoint — is sequenced by the caller. The mod.rs doc's claim that write_results 'writes all output artifacts' and mirrors load_case is therefore false at the baseline, and the real sequence lives in crates/cobre-cli/src/commands/run/outputs.rs with a hand-kept twin in crates/cobre-python/src/run.rs, which the CLI file itself acknowledges in comments of the form 'mirror on the Python side: write_evaporation_models_if_any'.",
+        "reading_note": "unused"
+      },
+      "fixShape": "This is the cobre-io-side owner shape for CD-025 rather than a new duplication finding, and it should attach to that entry's fix shape. Two things belong in cobre-io: first, correct the contract statement now — either write_results genuinely orchestrates the full artifact set, or the mod.rs doc and the function name stop claiming it does, because a false ownership claim in the module doc is what lets the CLI/Python twin drift unnoticed. Second, when Milestone 0a lands shared output orchestration in cobre-io, the landing zone is this function: it takes the full aggregate of produced artifacts and owns the write order, leaving cobre-cli and cobre-python with one call each instead of two hand-mirrored sequences. Do not introduce an output-writer trait for one engine; the aggregate struct plus one function is enough and avoids the one-consumer-abstraction trigger.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "write_results is documented as the top-level output entry point mirroring load_case, but reaches 5 of the crate's 27 output writers, so cobre-io publishes an aggregate contract it does not honour"
+    },
+    {
+      "alignmentHint": "advances-0a",
+      "anchors": [
+        {
+          "line": 1,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "costs_schema"
+        },
+        {
+          "line": 222,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "variables_csv_schemas"
+        },
+        {
+          "line": 1346,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "one_spelling_per_axis_across_every_output_schema"
+        },
+        {
+          "line": 460,
+          "path": "crates/cobre-io/src/output/stochastic.rs",
+          "symbol": "noise_openings_schema"
+        },
+        {
+          "line": 94,
+          "path": "crates/cobre-io/src/output/hydro_models.rs",
+          "symbol": "fpha_hyperplanes_schema"
+        },
+        {
+          "line": 1340,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "bounds_schema"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-00",
+      "evidence": {
+        "command": "python3 - <<'EOF'\nimport re,subprocess\ndecl=subprocess.run([\"grep\",\"-rhno\",r\"fn [a-z_]*_schema() -> Schema\",\"crates/cobre-io/src/output/schemas.rs\",\"crates/cobre-io/src/output/stochastic.rs\",\"crates/cobre-io/src/output/hydro_models.rs\",\"crates/cobre-io/src/output/dictionary.rs\"],capture_output=True,text=True).stdout\nnames={m.group(1) for m in re.finditer(r\"fn ([a-z_]*_schema)\\(\\)\",decl)}\ncsv=open(\"crates/cobre-io/src/output/dictionary.rs\").read()\nblock=csv.split(\"fn variables_csv_schemas()\")[1].split(\"\\n}\")[0]\nlisted={m.group(1) for m in re.finditer(r\"([a-z_]*_schema)\\(\\)\",block)}\nprint(\"declared:\",len(names))\nprint(\"in variables_csv_schemas:\",len(listed))\nprint(\"NOT documented in variables.csv:\",sorted(names-listed))\nEOF",
+        "output": "declared: 34\nin variables_csv_schemas: 22\nNOT documented in variables.csv: ['anticipated_lanes_schema', 'bounds_schema', 'evaporation_models_schema', 'fixed_delivery_schema', 'fpha_deviation_points_schema', 'fpha_hyperplanes_schema', 'generic_constraint_echo_schema', 'inflow_annual_component_schema', 'inflow_ar_coefficients_schema', 'inflow_seasonal_stats_schema', 'load_seasonal_stats_schema', 'noise_openings_schema']\n\n(companion run) python3 over the gate's own list: gate covers: 21\n(companion run) grep -rn '^\\(pub(crate) \\)\\?fn [a-z_]*_schema() -> Schema' crates/cobre-io/src/output/*.rs | wc -l -> 34, of which 25 are in schemas.rs, 3 in hydro_models.rs, 5 in stochastic.rs, 1 in dictionary.rs",
+        "reading": "schemas.rs opens with '//! Arrow schema definitions for all Parquet output files' yet 9 of the 34 output schemas are declared privately in three sibling writers. Two independent hand-maintained enumerations then claim family-wide reach and miss the same set: write_variables_csv's doc says 'one row per column across every output schema' but variables_csv_schemas lists 22 of 34, and the gate test named one_spelling_per_axis_across_every_output_schema lists 21 of 34 while its own comment asserts 'a later file cannot reintroduce a variant without failing this one test'. All 12 undocumented schemas back files that actually ship: write_noise_openings / write_inflow_* / write_load_seasonal_stats are called from crates/cobre-sddp/src/policy/orchestration.rs, write_fpha_* / write_evaporation_models / write_fixed_delivery / write_generic_constraint_echo from crates/cobre-cli/src/commands/run/outputs.rs and crates/cobre-python/src/run.rs, anticipated_lanes from simulation_writer.rs:910, and bounds.parquet is written by dictionary.rs itself at :1336 — its own columns are absent from the variables.csv it writes in the same directory."
+      },
+      "fixShape": "Give the output-schema family one owner and derive both consumers from it. Move the nine sibling-declared schemas into output/schemas.rs alongside the twenty-five already there, then replace the three hand-maintained lists with a single crate-internal table that pairs each output file's relative path with its schema function. variables.csv, the axis-spelling gate and the field-count test all iterate that one table, so a new output file is documented and gated by construction and omitting it is a compile error rather than a silent gap. Keep the per-writer batch builders where they are; only the schema declaration and the enumeration move.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "The output Arrow-schema family has no single owner: 34 schemas across 4 modules, and both the shipped data dictionary and the axis-spelling gate enumerate a hand-maintained subset"
+    },
+    {
+      "alignmentHint": "advances-0a",
+      "anchors": [
+        {
+          "line": 365,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "convergence_schema"
+        },
+        {
+          "line": 398,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "iteration_timing_schema"
+        },
+        {
+          "line": 516,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "row_selection_schema"
+        },
+        {
+          "line": 80,
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "IterationRecord"
+        },
+        {
+          "line": 79,
+          "path": "scripts/ci/check-infra-genericity.sh"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-02",
+      "evidence": {
+        "command": "printf 'cuts_added cut_selection_ms cut_sync_ms cuts_active CutSelection\\n' | grep -Eo '\\bCut\\b|\\bcut\\b|CutSelection[[:alnum:]_]*' ; echo \"exit=$?\"; echo \"--- gate run ---\"; bash scripts/ci/check-infra-genericity.sh; echo \"gate_exit=$?\"",
+        "output": "CutSelection\nexit=0\n--- gate run ---\nOK: no algorithm-specific vocabulary found in infrastructure crates.\ngate_exit=0\n\n(companion run) grep -n 'Field::new(\"' crates/cobre-io/src/output/schemas.rs | grep -E 'cut|forward|backward|iteration|lower_bound|upper_bound|gap_percent|lp_solves|retry|basis|simplex|phase|lazy_scoring|mpi_allreduce|state_exchange|scenarios_processed' | wc -l -> 45\n(companion run) grep -c 'Field::new(\"' crates/cobre-io/src/output/schemas.rs -> 237",
+        "reading": "45 of the 237 output columns declared in schemas.rs are training-loop vocabulary: convergence_schema (:365) carries cuts_added / cuts_removed / cuts_active / time_forward_ms / time_backward_ms / forward_passes / lower_bound / upper_bound / gap_percent, iteration_timing_schema (:398) carries forward_wall_ms / backward_wall_ms / cut_selection_ms / cut_sync_ms / cut_batch_build_ms / bwd_* / fwd_* / lazy_scoring_ms, and row_selection_schema (:516) writes training/cut_selection/iterations.parquet with five cuts_* columns. The mirror struct IterationRecord in output/mod.rs carries 38 such fields. The gate pattern at check-infra-genericity.sh:79 alternates \\\\bCut\\\\b and \\\\bcut\\\\b, and the printf probe shows that of cuts_added, cut_selection_ms, cut_sync_ms and cuts_active none matches — only the CamelCase CutSelection form does — so the gate exits 0 over exactly this surface. The recorded I.3-6 surviving claim in partI-handoff.json covers PolicyCutRecord, StageCutsPayload and the StageCuts root table, that is only the FlatBuffers value-function format; this larger Parquet surface in the same crate is not in that disposition and is not in any other Part-I row."
+      },
+      "fixShape": "Record this as the second half of Part-I item 6 rather than fixing it now, and do not build a generic output-schema trait for one engine — that would trip the one-consumer-abstraction trigger. The roadmap-consistent shape under Milestone 0a is that cobre-io keeps the mechanics it is good at (atomic write, Parquet properties, Hive partitioning, the dictionary) while the row type and its column list are supplied by the engine that produces them, so a second engine brings its own convergence-equivalent table instead of reusing SDDP's column names. Until the second engine exists, the concrete step is to widen the I.3-6 disposition to name convergence_schema, iteration_timing_schema, rank_timing_schema, row_selection_schema and IterationRecord, and to note that the lexical oracle cannot cover them because snake_case cuts_* and cut_*_ms evade its word-boundary pattern.",
+      "lens": "architecture",
+      "partIRef": "I.3-6",
+      "proposedSeverity": "B",
+      "title": "The training-loop vocabulary is baked into the L2 output schema surface as on-disk column names, a coupling the genericity oracle structurally cannot see and no Part-I item names"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 567,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "new"
+        },
+        {
+          "line": 708,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "write_scenario"
+        },
+        {
+          "line": 676,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "write_partition"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-04",
+      "evidence": {
+        "command": "sed -n '556,566p;586,600p;686,700p' crates/cobre-io/src/output/simulation_writer.rs",
+        "output": "impl SimulationParquetWriter {\n    /// Create a new writer targeting `output_dir`.\n    ///\n    /// Creates the `simulation/` subdirectory and one entity subdirectory per\n    /// entity type with a non-zero count.\n...\n        std::fs::create_dir_all(sim_dir.join(\"costs\"))\n            .map_err(|e| OutputError::io(sim_dir.join(\"costs\"), e))?;\n\n        if system.n_hydros() > 0 {\n            std::fs::create_dir_all(sim_dir.join(\"hydros\"))\n...\n        std::fs::create_dir_all(&part_dir).map_err(|e| OutputError::io(&part_dir, e))?;\n        let file_path = part_dir.join(\"data.parquet\");\n        write_parquet_atomic(&file_path, batch, &self.config)?;\n...\n    /// Write one scenario's results to Hive-partitioned Parquet files.\n    ///\n    /// Entity types with empty Vecs (zero entities in the system) are skipped\n    /// entirely — no directory is created and no file is written.\n\n(companion run) grep -n 'self.write_partition(' crates/cobre-io/src/output/simulation_writer.rs -> 14 call sites at :728 :739 :761 :772 :784 :795 :806 :817 :839 :849 :859 :868 :889 :910, matching the 14 create_dir_all sites in new() at :587-651",
+        "reading": "The entity-family list is written twice in one file with two different predicates. new() gates directory creation on system-shaped predicates (system.n_hydros() > 0, system.n_lines() > 0, a declares_travel_time arc scan, a declares_post_study scan); write_scenario gates the actual write on payload-shaped predicates (result.stages.iter().any(|s| !s.hydros.is_empty()) and siblings). Because write_partition at :687 calls create_dir_all on the full partition path, it already creates the entity directory itself, so every create_dir_all in new() is redundant with the write path and observable only in the case where a family is declared by the system but no scenario ever produces a row — which is exactly the case write_scenario's doc at :696-697 promises cannot leave a directory behind. The two doc comments state incompatible contracts about the same output-tree property, and nothing binds the two predicate sets together. This is the 'second owner inside the file' that prior-register.md requires before a candidate may go beyond CD-021's noted-not-raised size observation; it is not CD-026, which concerned the write-partition tail and is resolved.",
+        "reading_note": "unused"
+      },
+      "fixShape": "Make one place own the entity-family table. Declare each family once as a row pairing its directory subpath, its system-side predicate, its schema and its batch builder, then have new() iterate that table for directory creation and write_scenario iterate the same table for the per-family write, so the two predicates become one and a fourteenth family is one row rather than three edits. If keeping both predicates is deliberate — the system predicate reserving a directory so a downstream reader can distinguish an empty family from an absent one — then delete the contradicting sentence in write_scenario's doc and state the reservation rule where new() creates the directories, and add a test pinning which families may appear empty. Either resolution is byte-neutral for a run in which every declared family produces rows.",
+      "lens": "architecture",
+      "proposedSeverity": "B",
+      "title": "SimulationParquetWriter answers \"which entity families does this run emit\" twice, with different inputs and contradicting doc comments, inside one file"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 144,
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_date32"
+        },
+        {
+          "line": 451,
+          "path": "crates/cobre-io/src/output/stochastic.rs",
+          "symbol": "ensure_parent_dir"
+        },
+        {
+          "line": 84,
+          "path": "crates/cobre-io/src/output/fixed_delivery.rs",
+          "symbol": "write_fixed_delivery"
+        },
+        {
+          "line": 25,
+          "path": "crates/cobre-io/src/output/scaling_report.rs",
+          "symbol": "write_scaling_report"
+        },
+        {
+          "line": 27,
+          "path": "crates/cobre-io/src/output/provenance.rs",
+          "symbol": "write_provenance_report"
+        }
+      ],
+      "candidateRef": "cio-architecture-D-03",
+      "evidence": {
+        "command": "grep -rn 'ensure_parent_dir' crates/cobre-io/src/ | grep -v '^crates/cobre-io/src/output/stochastic.rs' ; echo \"--- defn ---\"; grep -rn 'fn ensure_parent_dir' crates/cobre-io/src/",
+        "output": "crates/cobre-io/src/output/generic_constraints_echo.rs:20:use crate::output::stochastic::ensure_parent_dir;\ncrates/cobre-io/src/output/generic_constraints_echo.rs:104:    ensure_parent_dir(path)?;\ncrates/cobre-io/src/output/hydro_models.rs:39:use crate::output::stochastic::ensure_parent_dir;\ncrates/cobre-io/src/output/hydro_models.rs:86:    ensure_parent_dir(path)?;\ncrates/cobre-io/src/output/hydro_models.rs:205:    ensure_parent_dir(path)?;\ncrates/cobre-io/src/output/hydro_models.rs:303:    ensure_parent_dir(path)?;\ncrates/cobre-io/src/output/hydro_models.rs:375:    ensure_parent_dir(path)?;\ncrates/cobre-io/src/output/fixed_delivery.rs:24:use crate::output::stochastic::ensure_parent_dir;\ncrates/cobre-io/src/output/fixed_delivery.rs:84:    ensure_parent_dir(&path)?;\n--- defn ---\ncrates/cobre-io/src/output/stochastic.rs:451:pub(crate) fn ensure_parent_dir(path: &Path)  -> Result<(), OutputError> {\n\n(companion run) grep -rn -A3 'ensure_parent_dir(&\\?path)?;' crates/cobre-io/src/output/*.rs | grep -c 'write_parquet_atomic' -> 10\n(companion run) scaling_report.rs:25 and provenance.rs:27 each open-code `if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| OutputError::io(parent, e))?; }`, the exact body of ensure_parent_dir at stochastic.rs:452-454",
+        "reading": "parquet_helpers.rs is the read side's answer to per-parser open-coding: six typed extract helpers, crate-internal, imported by every Parquet parser. The write side has no equivalent module. Its single shared helper, ensure_parent_dir, lives inside output/stochastic.rs — a domain writer that emits inflow and load statistics — and three unrelated modules import it across that domain boundary, while scaling_report.rs and provenance.rs re-open-code its three-line body rather than reaching into stochastic.rs. Downstream of it the same four-line prologue (ensure_parent_dir, ParquetWriterConfig::default, build_<x>_batch, write_parquet_atomic) appears ten times across four modules. This is not the CD-026 case: that was the create-dir/write/push tail inside simulation_writer.rs, already collapsed onto write_partition, and the per-entity batch builders it leaves alone are a different shape from this cross-module prologue.",
+        "reading_note": "unused"
+      },
+      "fixShape": "Add a write-side counterpart to parquet_helpers.rs beside output/atomic.rs, so the directory has one owner for the mechanics of getting a batch onto disk. Move ensure_parent_dir there out of the stochastic domain writer, fold the two open-coded copies in scaling_report.rs and provenance.rs onto it, and add one helper that takes a target path and a RecordBatch and performs the ensure-parent / default-config / atomic-write sequence, so the ten prologues collapse to one call each and the domain writers keep only their batch builders. No batch builder signature changes and no output byte changes.",
+      "lens": "architecture",
+      "mechanism": "not a perf claim",
+      "proposedSeverity": "C",
+      "title": "The write path has no helper module answering to parquet_helpers.rs: its one shared helper is homed inside a domain writer, two modules re-open-code it, and the identical write prologue repeats ten times"
+    },
+    {
+      "alignmentHint": "advances-0a",
+      "anchors": [
+        {
+          "line": 68,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "write_dictionaries"
+        },
+        {
+          "line": 71,
+          "path": "crates/cobre-io/src/output/dictionary.rs"
+        },
+        {
+          "line": 16,
+          "path": "crates/cobre-io/src/output/dictionary.rs"
+        },
+        {
+          "line": 43,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "write_training_results"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-03",
+      "evidence": {
+        "command": "grep -n 'use crate::Config;\\|^pub fn write_dictionaries\\|^    _config: &Config,' crates/cobre-io/src/output/dictionary.rs; grep -rn '\\bwrite_dictionaries\\b' crates/ --include='*.rs' | grep -v '^crates/cobre-io/'; echo \"(external-consumer grep exit $?)\"",
+        "output": "16:use crate::Config;\n68:pub fn write_dictionaries(\n71:    _config: &Config,\n(external-consumer grep exit 1)",
+        "reading": "The parameter is spelled `_config`, the compiler-sanctioned marker for declared-and-never-read, and the file's sole `use crate::Config` exists only to name that unread parameter's type. The body calls four helpers, none of which is given the config: `write_codes_json(path)`, `write_entities_csv(path, system)`, `write_variables_csv(path)` and `write_bounds_parquet(path, system, &ParquetWriterConfig::default())`. The one caller, `write_training_results` at results_writer.rs:43, holds and forwards a `&Config` purely to satisfy the signature. The second grep shows zero consumers of `write_dictionaries` outside cobre-io, so the parameter is not preserved for an external caller either, even though the function is `pub` and re-exported at the crate root through output/mod.rs:34 and lib.rs:120. Per the partI-handoff disposition for I.3-7, `cobre_io::Config` is the SDDP-shaped config surface the roadmap wants off the engine-neutral path; carrying it unread into an output writer is that coupling at its cheapest to remove. Sub-station C owns the `Config.training` fragment itself; this candidate touches only a consumer of the type in the output path."
+      },
+      "fixShape": "Drop the third parameter from `write_dictionaries`, drop the now-unneeded `use crate::Config` from the dictionary module, and drop the forwarded argument at the single call site in the training results writer. Then check whether that caller still needs its own `&Config` for anything else before narrowing its signature too. This is the smallest available step of the Milestone-0a direction for the output path: writers keyed on `System` and on writer-local settings rather than on the engine's study config, so a second engine's output orchestration can reuse them without inheriting an SDDP-shaped config type. If the parameter was a placeholder for dictionary content that should vary with config, name which content and wire it or open a ticket; an underscore-prefixed study config in a public signature records neither.",
+      "lens": "over-engineering",
+      "partIRef": "I.3-7",
+      "proposedSeverity": "C",
+      "title": "`write_dictionaries` takes the whole SDDP-shaped study `Config` and never reads it, coupling a `System`-only writer to the engine config type for nothing"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 227,
+          "path": "crates/cobre-io/src/output/manifest.rs",
+          "symbol": "default_bounds"
+        },
+        {
+          "line": 220,
+          "path": "crates/cobre-io/src/output/manifest.rs",
+          "symbol": "default_upper_bound_kind"
+        },
+        {
+          "line": 47,
+          "path": "crates/cobre-io/src/output/mod.rs"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-04",
+      "evidence": {
+        "command": "grep -rn '\\bdefault_bounds\\b\\|\\bdefault_upper_bound_kind\\b' crates/ --include='*.rs'",
+        "output": "crates/cobre-io/src/output/mod.rs:47:    default_bounds, get_hostname, now_iso8601, read_simulation_metadata, read_training_metadata,\ncrates/cobre-io/src/output/manifest.rs:214:    #[serde(default = \"default_upper_bound_kind\")]\ncrates/cobre-io/src/output/manifest.rs:220:pub fn default_upper_bound_kind() -> String {\ncrates/cobre-io/src/output/manifest.rs:227:pub fn default_bounds() -> MetadataBounds {\ncrates/cobre-io/src/output/manifest.rs:232:        final_upper_bound_kind: default_upper_bound_kind(),\ncrates/cobre-io/src/output/manifest.rs:412:    #[serde(default = \"default_bounds\")]",
+        "reading": "Both functions exist solely to satisfy a `#[serde(default = \"...\")]` attribute on a field in their own file: `default_upper_bound_kind` for `MetadataBounds.final_upper_bound_kind` at manifest.rs:214, `default_bounds` for `TrainingMetadata.bounds` at manifest.rs:412. Serde resolves such a path against the surrounding module, so a private `fn` suffices in both cases and `pub` buys nothing. `default_bounds` goes further and is re-exported through output/mod.rs:47 into the crate root, making `cobre_io::default_bounds` published API; a per-symbol count of out-of-crate references across the whole output re-export list put it at zero, alongside `TrainingParquetWriter` and `write_dictionaries`. This is the OD-002 shape in miniature: `pub` on an item with no external caller silences the dead-code lint and ships a surface nobody asked for, here for a deserialization implementation detail that need not be part of the crate's contract."
+      },
+      "fixShape": "Make both functions private to the manifest module and remove `default_bounds` from the output module's re-export list and from the crate-root re-export in lib.rs. Verify the `schema` feature's export path does not name either function before narrowing, since a schemars-visible helper would change the committed schemas and CI diffs them. While in that re-export list, re-check the other two zero-external-consumer entries: `TrainingParquetWriter` and `write_dictionaries` are both used inside cobre-io by the results writer, so unlike these two they are defensible as a deliberate library surface and the call is the owner's rather than an automatic narrowing.",
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "title": "`default_bounds` and `default_upper_bound_kind` are serde-attribute helpers published as crate-root public API with no consumer anywhere"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 140,
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "IterationRecord"
+        },
+        {
+          "line": 149,
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "IterationRecord"
+        },
+        {
+          "line": 258,
+          "path": "crates/cobre-io/src/output/training_writer.rs",
+          "symbol": "build_iteration_timing_batch"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-01",
+      "evidence": {
+        "command": "grep -rn '\\.time_bwd_setup_ms\\b\\|\\.time_fwd_setup_ms\\b' crates/ --include='*.rs'; echo \"(exit $?)\"; grep -n 'timings\\[8\\]\\|timings\\[11\\]' crates/cobre-io/src/output/training_writer.rs; sed -n '517,530p' crates/cobre-sddp/src/training/training_output.rs",
+        "output": "(exit 1)\n258:        bwd_setup_ms.append_value(rec.timings[8] as i64);\n261:        fwd_setup_ms.append_value(rec.timings[11] as i64);\n\n    for record in convergence_records {\n        let mut timings = [0_u64; WORKER_TIMING_SLOT_COUNT];\n        timings[2] = record.time_cut_selection_ms;\n        timings[3] = record.time_mpi_allreduce_ms;\n        timings[4] = record.time_cut_sync_ms;\n        timings[5] = record.time_lower_bound_ms;\n        timings[6] = record.time_state_exchange_ms;\n        timings[7] = record.time_cut_batch_build_ms;\n        timings[9] = record.time_bwd_load_imbalance_ms;\n        timings[10] = record.time_bwd_scheduling_overhead_ms;\n        timings[12] = record.time_fwd_load_imbalance_ms;\n        timings[13] = record.time_fwd_scheduling_overhead_ms;\n        timings[14] = record.time_overhead_ms;",
+        "reading": "A workspace-wide grep for a field read of either name returns nothing (exit 1). Every other `time_*` field on `IterationRecord` has a reader: eleven are copied into the `WorkerTimingRecord` slot array by the loop at cobre-sddp training_output.rs:517-530, and `time_forward_wall_ms` / `time_backward_wall_ms` are read by the rank aggregate at training_output.rs:450-451 while `time_forward_ms` / `time_backward_ms` / `time_total_ms` are read by `build_convergence_batch` at training_writer.rs:185-187. Slots 8 and 11 are conspicuously skipped in that loop; the `bwd_setup_ms` / `fwd_setup_ms` Parquet columns are filled from `rec.timings[8]` / `rec.timings[11]` (training_writer.rs:258,261), which the per-worker path populates from `WorkerPhaseTimings` at training_output.rs:505-508, never from `IterationRecord`. The two fields are therefore populated at training_output.rs:234,237 and read by nobody. `IterationRecord` derives only `Debug, Clone` (output/mod.rs:75), so there is no serde escape hatch. Their doc comments nonetheless assert the mapping, 'Backward thread-pool setup time (ms) -> `bwd_setup_ms`' and 'Forward thread-pool setup time (ms) -> `fwd_setup_ms`', a promise the writer does not keep, which is exactly the contract the struct-level doc at output/mod.rs:72-74 tells a reader to trust."
+      },
+      "fixShape": "Confirm with the training owner whether the two setup timings were meant to travel on the per-iteration record as well as the per-worker record. If not, delete both fields from `IterationRecord`, delete the two producer assignments in the cobre-sddp training-output builder, and delete the two zero-initialisers each in the cobre-io training writer, results writer, convergence reader and output-module tests plus the cobre-cli summary fixture; the struct-level doc saying a `time_*` field's arrow names its column then becomes true of every remaining field. If the wiring was intended, the fix is the opposite direction: have the slot-array loop write slots 8 and 11 from these fields the way it already writes slots 2 through 14, and add a test asserting the two columns are non-zero for a run that recorded setup time.",
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "title": "`IterationRecord.time_bwd_setup_ms` and `time_fwd_setup_ms` are write-only public fields whose doc arrows promise a Parquet column the writer feeds from a different source"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 24,
+          "path": "crates/cobre-io/src/output/parquet_config.rs",
+          "symbol": "ParquetWriterConfig"
+        },
+        {
+          "line": 38,
+          "path": "crates/cobre-io/src/output/parquet_config.rs",
+          "symbol": "Default"
+        },
+        {
+          "line": 112,
+          "path": "crates/cobre-io/src/output/atomic.rs",
+          "symbol": "write_parquet_atomic"
+        },
+        {
+          "line": 76,
+          "path": "crates/cobre-io/src/output/dictionary.rs"
+        },
+        {
+          "line": 132,
+          "path": "crates/cobre-io/src/output/stochastic.rs"
+        },
+        {
+          "line": 87,
+          "path": "crates/cobre-io/src/output/hydro_models.rs"
+        },
+        {
+          "line": 15,
+          "path": "crates/cobre-io/src/config/exports.rs",
+          "symbol": "ExportsConfig"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-00",
+      "evidence": {
+        "command": "grep -rn 'ParquetWriterConfig *{' crates/ --include='*.rs'; echo \"--- field mutations ---\"; grep -rn '\\.compression *=\\|\\.row_group_size *=\\|\\.dictionary_encoding *=' crates/ --include='*.rs'; echo \"--- default() count by file ---\"; grep -rn 'ParquetWriterConfig::default()' crates/ --include='*.rs' | awk -F: '{print $1}' | sort | uniq -c | sort -rn",
+        "output": "crates/cobre-io/src/output/parquet_config.rs:24:pub struct ParquetWriterConfig {\ncrates/cobre-io/src/output/parquet_config.rs:38:impl Default for ParquetWriterConfig {\n--- field mutations ---\ncrates/cobre-io/src/output/parquet_config.rs:90:        cloned.row_group_size = 50_000;\n--- default() count by file ---\n     19 crates/cobre-io/src/output/simulation_writer.rs\n     13 crates/cobre-io/src/output/training_writer.rs\n      8 crates/cobre-io/src/output/dictionary.rs\n      5 crates/cobre-io/src/output/stochastic.rs\n      5 crates/cobre-io/src/output/parquet_config.rs\n      3 crates/cobre-io/src/output/hydro_models.rs\n      2 crates/cobre-sddp/tests/right_boundary_output.rs\n      2 crates/cobre-sddp/tests/hydro_sim.rs\n      2 crates/cobre-python/src/run.rs\n      2 crates/cobre-io/tests/integration.rs\n      1 crates/cobre-sddp/tests/simulation_integration.rs\n      1 crates/cobre-io/src/output/solver_stats_writer.rs\n      1 crates/cobre-io/src/output/schemas.rs\n      1 crates/cobre-io/src/output/results_writer.rs\n      1 crates/cobre-io/src/output/generic_constraints_echo.rs\n      1 crates/cobre-io/src/output/fixed_delivery.rs\n      1 crates/cobre-cli/src/commands/run/simulation.rs\n      1 crates/cobre-cli/src/commands/run/outputs.rs",
+        "reading": "The struct-literal grep returns only the declaration and the `Default` impl: nowhere in the workspace is a `ParquetWriterConfig` built with non-default fields, and the only field assignment anywhere is `cloned.row_group_size = 50_000` inside the type's own clone-independence test at parquet_config.rs:90. All 65 remaining uses are `ParquetWriterConfig::default()`, including both cobre-cli sites (run/outputs.rs:146, run/simulation.rs:77) and both cobre-python sites (run.rs:512, run.rs:679). The surface is also internally inconsistent: `write_parquet_atomic` (atomic.rs:112), `TrainingParquetWriter::new`, `SimulationParquetWriter::new` and `write_bounds_parquet` take it as a parameter, while 13 production writer functions (dictionary.rs:76, stochastic.rs:132/176/220/266/444, hydro_models.rs:87/206/304, solver_stats_writer.rs:252, fixed_delivery.rs:85, generic_constraints_echo.rs:105) construct their own local default and could not honour a caller's choice even if one existed. The user-facing route to these three settings was deliberately closed: the `exports.compression` key is now a rejected unknown field under `ExportsConfig`'s `deny_unknown_fields` (config/exports.rs:9-14), so no CLI or Python entry point can reach the knob. This is speculative generality by the brief's own test, a seam with no present consumer of its variability, and it is not a reserved seam: the mirror's reserved-seam register holds exactly three entries (`StudySetup.transit_bucket_topology`, `LipschitzConfig`, the cobre-comm shared-memory hierarchy) and none is in the output path. The claim is about the ParquetWriterConfig struct and its threading, not about the retired `exports.compression` spelling or its reject test; the mirror entry 'Retired input spellings' guards that test and is not re-raised here."
+      },
+      "fixShape": "Decide first whether Parquet compression, row-group size and dictionary encoding are a supported knob for third-party library consumers of cobre-io or a frozen internal constant set; the retired `exports.compression` input key argues for frozen. If frozen: fold the three values into constants owned by the single place that consumes them, `write_parquet_atomic`, drop the parameter from the four signatures that carry it and the two writer-struct fields that store it, delete the 13 local default constructions, and record in the module doc that the Parquet encoding is pinned so output bytes stay comparable across runs. If it is meant to stay a knob: make it one, giving every writer the caller's value instead of a locally rebuilt default and giving the CLI and Python paths a way to supply a non-default value; shipping half-threaded always-default plumbing is the worst of both. Either way the blast radius is bounded and named: five cobre-io signatures, the TrainingParquetWriter and SimulationParquetWriter fields, 13 in-function defaults, two cobre-cli call sites, two cobre-python call sites, and four test binaries in cobre-io and cobre-sddp that name the type.",
+      "lens": "over-engineering",
+      "proposedSeverity": "B",
+      "title": "`ParquetWriterConfig` is a configurability surface no shipped caller can vary: never constructed except via `Default`, and half the writers rebuild the default locally instead of accepting the parameter"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 575,
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "read_f32_vector_as_f64"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-02",
+      "evidence": {
+        "command": "grep -rn 'read_f32_vector_as_f64' crates/ --include='*.rs'; grep -c 'float32' crates/cobre-io/schemas/policy.fbs; sed -n '570,576p' crates/cobre-io/src/output/policy/codec.rs",
+        "output": "crates/cobre-io/src/output/policy/codec.rs:575:fn read_f32_vector_as_f64(buf: &[u8], vec_pos: usize) -> Option<Vec<f64>> {\n0\n/// Read a `f32` vector stored at `vec_pos` and return its elements as `f64`.\n// Rationale: the f32 vector reader is the symmetric counterpart to `read_f64_vector`; retaining\n// it keeps the codec complete against the full FlatBuffers type palette and avoids re-deriving\n// the safe byte-level parsing pattern from scratch when an f32 field is added to the schema.\n#[allow(dead_code)]\nfn read_f32_vector_as_f64(buf: &[u8], vec_pos: usize) -> Option<Vec<f64>> {\n    let len = read_u32_le(buf, vec_pos)? as usize;",
+        "reading": "The symbol resolves exactly once in the whole workspace, at its own declaration: no production caller, no test caller, no re-export. The schema it claims to mirror contains zero `float32` fields, so the hypothetical it reserves against has never arrived. It is the only `#[allow(dead_code)]` in the entire sub-station D scope; a grep for dead_code and unused allows over output/, pipeline.rs, report.rs and parquet_helpers.rs returns this one hit. It fits neither sanctioned class in the mirror's `#[allow(...)]` census: the reserved-seam class requires a comment naming what will consume the item once a specific reader lands, and 'when an f32 field is added to the schema' names no owner and no landing reader; the symmetry-or-test-retention class requires the item to be exercised by unit tests, and no test touches it. It is the same shape as the already-executed OD-004 removal, whose 'rounds out the visit's identity' rationale was judged completeness narration rather than a milestone."
+      },
+      "fixShape": "Delete the function and its `#[allow(dead_code)]`. The byte-level reading pattern it claims to preserve is not at risk of being lost: `read_f64_vector`, `read_u32_vector` and `read_u8_vector` sit immediately beside it and demonstrate the identical bounds-checked shape, so a future f32 field costs one obvious copy of a neighbour rather than a rediscovery. If the owner would rather keep a reserved reader, the entry it needs is an owner plus the concrete schema change that activates it, recorded in the reserved-seam register the way the three existing seams are; a rationale comment alone is not that entry. This candidate is orthogonal to the Part-I I.3-6 disposition already recorded for these files, whose surviving claim is the persisting cut vocabulary (`PolicyCutRecord`, `StageCutsPayload`, the `StageCuts` root table), not this helper.",
+      "lens": "over-engineering",
+      "partIRef": "I.3-6",
+      "proposedSeverity": "C",
+      "title": "`read_f32_vector_as_f64` is a dead codec reader kept by a completeness rationale, with no caller, no test and no f32 field in the schema it mirrors"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 47,
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline"
+        },
+        {
+          "line": 57,
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline_with_report"
+        },
+        {
+          "line": 73,
+          "path": "crates/cobre-io/src/pipeline.rs",
+          "symbol": "run_pipeline_with_artifacts"
+        }
+      ],
+      "candidateRef": "cio-over-engineering-D-05",
+      "evidence": {
+        "command": "grep -rn 'fn run_pipeline\\|run_pipeline(\\|run_pipeline_with_report(\\|run_pipeline_with_artifacts(' crates/ --include='*.rs'",
+        "output": "crates/cobre-io/src/lib.rs:235:    pipeline::run_pipeline(path)\ncrates/cobre-io/src/lib.rs:252:    pipeline::run_pipeline_with_artifacts(path).map(|(loaded, _report)| loaded)\ncrates/cobre-io/src/lib.rs:266:    pipeline::run_pipeline_with_report(path)\ncrates/cobre-io/src/lib.rs:285:    pipeline::run_pipeline_with_artifacts(path)\ncrates/cobre-io/src/pipeline.rs:47:pub(crate) fn run_pipeline(path: &Path) -> Result<System, LoadError> {\ncrates/cobre-io/src/pipeline.rs:48:    run_pipeline_with_report(path).map(|(system, _report)| system)\ncrates/cobre-io/src/pipeline.rs:57:pub(crate) fn run_pipeline_with_report(\ncrates/cobre-io/src/pipeline.rs:60:    run_pipeline_with_artifacts(path).map(|(loaded, report)| (loaded.system, report))\ncrates/cobre-io/src/pipeline.rs:73:pub(crate) fn run_pipeline_with_artifacts(",
+        "reading": "`run_pipeline_with_artifacts` is the only function in the module that does work; `run_pipeline` (body: one `.map` discarding the report) and `run_pipeline_with_report` (body: one `.map` projecting `LoadedCase` to its `System` field) are pure adapters, and each has exactly one caller. That caller is itself a one-line adapter in lib.rs: `load_case` calls `run_pipeline`, `validate_case` calls `run_pipeline_with_report`. So `cobre_io::load_case`, the crate's headline entry point and the one every integration test uses, reaches the pipeline through three consecutive pass-throughs, two of which exist only to be called once from another pass-through. The four public entry points in lib.rs are each justified by a distinct return shape; the private layer beneath them re-derives two of those four shapes a second time. This is the OD-005 pass-through shape, differing only in being `pub(crate)` rather than `pub`."
+      },
+      "fixShape": "Collapse the module to its one working function and let the four public entry points in lib.rs do their own projection directly: the system-only loader maps away both the artifacts and the report, the artifacts loader maps away the report, the report loader maps the loaded case to its system, and the full entry point forwards unchanged. Keep the module doc's pointer about which public entry point returns warnings, restated against the public names rather than the private ones. The change is mechanical, touches only lib.rs and pipeline.rs, and leaves every public signature and every caller outside the crate untouched.",
+      "lens": "over-engineering",
+      "proposedSeverity": "C",
+      "title": "Two of the three functions in `pipeline.rs` are pure one-caller adapters, so the crate's main load entry point crosses three forwarding hops before any work happens"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 284,
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "serialize_stage_cuts"
+        },
+        {
+          "line": 220,
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs",
+          "symbol": "write_policy_checkpoint"
+        }
+      ],
+      "candidateRef": "cio-perf-D-04",
+      "evidence": {
+        "command": "grep -n 'finished_data().to_vec()' crates/cobre-io/src/output/policy/codec.rs; grep -n 'let buf = serialize_\\|let manifest_buf = serialize_\\|std::fs::write' crates/cobre-io/src/output/policy/checkpoint.rs",
+        "output": "284:    builder.finished_data().to_vec()\n333:    builder.finished_data().to_vec()\n365:    builder.finished_data().to_vec()\n455:    builder.finished_data().to_vec()\n220:        let buf = serialize_stage_cuts(payload);\n221:        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n226:        let buf = serialize_stage_basis(record);\n227:        std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n236:            let buf = serialize_stage_states(payload);\n237:            std::fs::write(&file_path, &buf).map_err(|e| OutputError::io(&file_path, e))?;\n238:    let manifest_buf = serialize_checkpoint_manifest(metadata);\n244:    std::fs::write(&manifest_path, &manifest_buf)",
+        "reading": "All four serializers end by copying the builder's finished bytes into a new owned vector. In every one of the four production call sites the returned vector's entire lifetime is the next line: it is borrowed as a slice by `std::fs::write` and dropped. A workspace grep for the four serializer names outside the codec finds only the crate re-exports, this checkpoint module, and test code, so no production caller needs the owned buffer for anything else.",
+        "reading_note": null
+      },
+      "fixShape": "Let the write path consume the builder's bytes without an intervening owned copy: either give the checkpoint writer serialize-and-write entry points that hand the builder's finished slice straight to the file write, or have the serializers surrender the builder's own buffer instead of copying out of it. Keep the current owning signatures available if external callers need a standalone buffer, so the copy is paid only by callers that genuinely want ownership rather than by the one production path that writes and drops. This is orthogonal to the disposition already recorded for this directory in the Part-I handoff, which concerns the persisted format's cut vocabulary, not its buffer handling.",
+      "lens": "perf",
+      "mechanism": "A full redundant copy plus a second heap allocation of the whole serialized artifact, once per cut pool, once per stage basis, once per stage states file, and once for the manifest. The serialized cut payload is the largest artifact a training run produces — its size is the product of pool count, cuts per pool and state dimension — so the copy transiently doubles the peak memory held for that payload and does a memcpy of it, purely to change ownership of bytes the builder already holds contiguously. Once per run per artifact, not per iteration; the reason to record it is the size of the payload, not the frequency.",
+      "partIRef": "I.3-6",
+      "proposedSeverity": "C",
+      "title": "Every policy artifact is copied out of the FlatBuffers builder into a fresh `Vec` that exists only to be handed to `fs::write`"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 1076,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "build_costs_batch"
+        },
+        {
+          "line": 22,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "costs_schema"
+        },
+        {
+          "line": 115,
+          "path": "crates/cobre-io/src/output/atomic.rs",
+          "symbol": "write_parquet_atomic"
+        }
+      ],
+      "candidateRef": "cio-perf-D-02",
+      "evidence": {
+        "command": "grep -c 'let schema = Arc::new(.*_schema())' crates/cobre-io/src/output/simulation_writer.rs; sed -n '115,119p' crates/cobre-io/src/output/atomic.rs; python3 - <<'EOF'\nimport re\nsrc=open('crates/cobre-io/src/output/schemas.rs').read().split('#[cfg(test)]')[0]\nwant={'costs_schema','hydros_schema','hydro_bus_generation_schema','thermals_schema','exchanges_schema','buses_schema','pumping_stations_schema','contracts_schema','non_controllables_schema','inflow_lags_schema','in_transit_schema','transit_seed_schema','generic_violations_schema','anticipated_lanes_schema'}\ntot=0\nfor p in re.split(r'\\n(?=(?:pub\\(crate\\) )?fn )', src):\n    m=re.match(r'(?:pub\\(crate\\) )?fn (\\w+)', p)\n    if m and m.group(1) in want:\n        tot += p.count('Field::new') + (3 if 'simulation_row_prefix()' in p else 0)\nprint('Field::new constructions per fully populated scenario:', tot)\nEOF",
+        "output": "14\n    let props = WriterProperties::builder()\n        .set_compression(config.compression)\n        .set_max_row_group_row_count(Some(config.row_group_size))\n        .set_dictionary_enabled(config.dictionary_encoding)\n        .build();\nField::new constructions per fully populated scenario:  177",
+        "reading": "Each of the fourteen `build_*_batch` functions in `simulation_writer.rs` opens with `let schema = Arc::new(<entity>_schema());`, and each `*_schema()` in `schemas.rs` constructs its `Field` list from scratch (`costs_schema` at crates/cobre-io/src/output/schemas.rs:22-53 builds twenty-nine of them). Summing the fourteen schemas `write_scenario` can reach gives 177 `Field::new` calls, each carrying a fresh heap-allocated column-name `String`, for one fully populated scenario. Separately, `write_parquet_atomic` builds a fresh `WriterProperties` from the caller's already-resolved `ParquetWriterConfig` on every file it writes, and `write_partition` calls it once per partition per scenario. The schemas and the properties are functions of nothing that varies between scenarios.",
+        "reading_note": null
+      },
+      "fixShape": "Give each output schema a single lazily initialized shared instance that the batch builders clone the handle of rather than the contents, so the field list and its column-name strings are constructed once per process instead of once per scenario. For the writer properties, resolve them once where the `ParquetWriterConfig` is already stored on the writer and pass the resolved value into the atomic write helper, rather than rebuilding them from the same config inside every file write. Both changes are byte-neutral by construction because neither the schema contents nor the properties depend on anything per-scenario, and the existing schema-shape tests already pin the field lists.",
+      "lens": "perf",
+      "mechanism": "A run-invariant constant reconstructed on the per-scenario path. `write_scenario` runs once per simulation scenario on the I/O drain thread, and each call rebuilds up to fourteen Arrow schemas (177 field-name string allocations plus the enclosing field vectors and `Arc`s) and fourteen `WriterProperties` values whose contents are fixed for the run. Deck-independent reason: scenario count is a study parameter that scales into the thousands, so the number of times the identical constant is rebuilt scales with it while the value never changes. This is not setup-time recomputation, which the project rule permits; it is repeated inside the per-scenario write loop. The absolute cost is small next to the Parquet encode and the file syscalls each partition also pays, which is why this is graded local quality rather than real debt.",
+      "proposedSeverity": "C",
+      "title": "Every per-scenario partition write rebuilds a run-invariant Arrow schema and a run-invariant Parquet `WriterProperties`"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 690,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs",
+          "symbol": "write_partition"
+        },
+        {
+          "line": 372,
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "SimulationOutput"
+        },
+        {
+          "line": 431,
+          "path": "crates/cobre-io/src/output/mod.rs",
+          "symbol": "merge"
+        }
+      ],
+      "candidateRef": "cio-perf-D-01",
+      "evidence": {
+        "command": "grep -rn 'partitions_written' crates/cobre-io/src/output/simulation_writer.rs crates/cobre-io/src/output/mod.rs crates/cobre-cli/src/commands/run/simulation.rs | grep -v 'assert\\|vec!\\[' ; echo '-- occurrences of \"partition\" in the metadata module:'; grep -c 'partition' crates/cobre-io/src/output/manifest.rs",
+        "output": "crates/cobre-io/src/output/mod.rs:372:    pub partitions_written: Vec<String>,\ncrates/cobre-io/src/output/mod.rs:431:        let mut partitions_written: Vec<String> = outputs\ncrates/cobre-io/src/output/mod.rs:433:            .flat_map(|o| o.partitions_written.iter().cloned())\ncrates/cobre-io/src/output/mod.rs:435:        partitions_written.sort();\ncrates/cobre-io/src/output/mod.rs:446:            partitions_written,\ncrates/cobre-cli/src/commands/run/simulation.rs:305:    let local_paths_bytes = local.partitions_written.join(\"\\n\").into_bytes();\ncrates/cobre-cli/src/commands/run/simulation.rs:357:        partitions_written: all_partitions,\ncrates/cobre-io/src/output/simulation_writer.rs:545:    partitions_written: Vec<String>,\ncrates/cobre-io/src/output/simulation_writer.rs:690:        self.partitions_written\n-- occurrences of \"partition\" in the metadata module:\n0",
+        "reading": "`write_partition` pushes a freshly formatted path string (`format!(\"simulation/{subpath}/{suffix}/data.parquet\")` at crates/cobre-io/src/output/simulation_writer.rs:691) on every partition write, and `write_scenario` writes up to fourteen partitions per scenario. The strings are retained on the writer for the entire simulation, moved into `SimulationOutput` at `finalize` (crates/cobre-io/src/output/simulation_writer.rs:941), cloned and sorted again in `merge` (crates/cobre-io/src/output/mod.rs:431-435), and in the distributed CLI joined into one byte buffer and allgathered so every rank materializes every rank's paths (crates/cobre-cli/src/commands/run/simulation.rs:305-350). The final `grep -c` shows the word 'partition' does not occur anywhere in the metadata module, so `SimulationMetadata` — the struct `write_simulation_results` serializes to `simulation/metadata.json` — has no field to receive the list. Outside these sites the only references in the workspace are test fixtures and assertions.",
+        "reading_note": null
+      },
+      "fixShape": "Decide first whether any consumer still needs the partition inventory; the evidence says none does. If it is genuinely unused, replace the retained path list with the count the manifest and the progress reporting actually need, which removes the per-partition allocation, the merge clone-and-sort, and the MPI allgatherv together. If the inventory must survive as a diagnostic, make it opt-in behind an explicit flag so a production run does not pay for it, and have the writer emit it as a file at finalize time rather than retaining it across the whole simulation and gathering it across ranks. Either way the field is part of a public re-exported type, so the change has to be coordinated with the CLI merge helper that currently gathers it.",
+      "lens": "perf",
+      "mechanism": "Per-partition heap allocation plus unbounded retention on the per-scenario write path. `write_scenario` is invoked once per simulation scenario from a dedicated drain thread (crates/cobre-cli/src/commands/run/simulation.rs:83-86), so the retained string count grows as scenarios times populated entity types and the writer's memory grows monotonically for the whole simulation. The cost is then paid a second and third time: `merge` clones and sorts the full list, and the distributed path turns it into an MPI allgatherv whose payload and per-rank receive buffer both scale with the same product multiplied by the rank count. None of that work reaches an output file, so every allocation, the collective, and the sort are unrecovered. Per-scenario on the accumulation side, once-per-run on the merge and collective side.",
+      "proposedSeverity": "B",
+      "title": "`SimulationParquetWriter` accumulates one heap `String` per written partition for the whole run, and the merged result reaches no output file"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 28,
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "SolverStatsRow"
+        },
+        {
+          "line": 66,
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "SolverStatsRow"
+        },
+        {
+          "line": 185,
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "build_retry_histogram_batch"
+        }
+      ],
+      "candidateRef": "cio-perf-D-00",
+      "evidence": {
+        "command": "grep -n 'pub phase: String\\|pub retry_level_histogram: Vec<u64>' crates/cobre-io/src/output/solver_stats_writer.rs; grep -n \"pub phase: &'static str\" crates/cobre-sddp/src/solver_stats.rs; grep -n 'phase: phase.to_string()\\|retry_level_histogram: delta.retry_level_histogram.clone()' crates/cobre-sddp/src/solver_stats.rs",
+        "output": "28:    pub phase: String,\n66:    pub retry_level_histogram: Vec<u64>,\n232:    pub phase: &'static str,\n293:        phase: phase.to_string(),\n310:        retry_level_histogram: delta.retry_level_histogram.clone(),",
+        "reading": "The producer's log entry deliberately stores `phase` as `&'static str` and its own doc at crates/cobre-sddp/src/solver_stats.rs:231-232 states the reason is 'to avoid per-entry heap allocation on the hot push path'. The cobre-io row DTO declares the same field as an owned `String`, so the conversion at crates/cobre-sddp/src/solver_stats.rs:293 must call `to_string()` once per log entry, reinstating exactly the allocation the producer avoided. The sibling field forces a second per-row allocation: `retry_level_histogram` is cloned per row at :310 into a fixed-length backend vector, and `build_retry_histogram_batch` (crates/cobre-io/src/output/solver_stats_writer.rs:185-201) immediately folds every one of those clones into a `BTreeMap` accumulator, so the per-row vector is materialized only to be summed away.",
+        "reading_note": null
+      },
+      "fixShape": "Change the row's phase field to a borrowed or enumerated phase so the closed vocabulary travels without an allocation, and let the row reference the producer's histogram rather than owning a copy of it, since the writer's only use of it is to fold it into the aggregation map. If a borrow is undesirable across the crate boundary, the alternative shape is to have the writer accept the producer's log slice directly and do the phase-name and histogram handling internally, which removes the intermediate `Vec<SolverStatsRow>` entirely. Either shape must keep the row type usable from the Python binding path, which constructs the same rows, so the field-type change has to be made in cobre-io, cobre-sddp's conversion helper, the CLI output writer and the Python run module together.",
+      "lens": "perf",
+      "mechanism": "Two heap allocations per statistics row, driven by the DTO's owned-field shape rather than by any consumer need. `phase` is drawn from a closed four-value vocabulary the type's own doc enumerates ('forward', 'backward', 'lower_bound', 'simulation'), so a `&'static str` or a small enum would carry it without allocating; `retry_level_histogram` is a fixed-length per-backend counter vector that the only consumer aggregates into a map. The conversion is a bulk once-per-run pass over the whole training log, not a per-iteration write, but the log's row count is the product of three study dimensions (iterations x stages x openings, further multiplied by ranks and workers), so the allocation count and the peak memory of the duplicated `Vec<SolverStatsRow>` grow multiplicatively with study size rather than being bounded by a constant. Deck-independent: no deck makes the row count constant, and the duplicated log coexists with the original log in memory at the moment of conversion.",
+      "proposedSeverity": "B",
+      "title": "`SolverStatsRow` owns a heap `String` phase and a heap `Vec<u64>` histogram per row, undoing the producer's explicit `&'static str` no-allocation choice"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 88,
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "build_iterations_columns"
+        }
+      ],
+      "candidateRef": "cio-perf-D-03",
+      "evidence": {
+        "command": "for f in crates/cobre-io/src/output/simulation_writer.rs crates/cobre-io/src/output/training_writer.rs crates/cobre-io/src/output/stochastic.rs crates/cobre-io/src/output/hydro_models.rs crates/cobre-io/src/output/solver_stats_writer.rs; do echo \"$(basename $f) collect=$(sed -n '1,/^#\\[cfg(test)\\]/p' $f | grep -c 'collect::<Vec') builders=$(sed -n '1,/^#\\[cfg(test)\\]/p' $f | grep -c 'Builder::with_capacity')\"; done",
+        "output": "simulation_writer.rs collect=0 builders=183\ntraining_writer.rs collect=0 builders=44\nstochastic.rs collect=0 builders=21\nhydro_models.rs collect=0 builders=25\nsolver_stats_writer.rs collect=18 builders=2",
+        "reading": "Counting only production code (the scan stops at the inline test module), every other Parquet writer in the crate builds its columns exclusively through `Builder::with_capacity` and per-row `append_value`, with zero intermediate collects. `build_iterations_columns` is the sole exception: eighteen of its nineteen columns are built as `Int32Array::from(rows.iter().map(...).collect::<Vec<Option<i32>>>())` and its unsigned and float siblings (crates/cobre-io/src/output/solver_stats_writer.rs:90-154), so each column allocates a full-length intermediate vector that the Arrow constructor then copies into its own buffer. Only the string phase column uses the builder idiom the rest of the crate uses.",
+        "reading_note": null
+      },
+      "fixShape": "Rewrite the column construction to the idiom the other four writers already use: allocate one typed Arrow builder per column with the row count as its capacity, then walk the row slice once appending each column's value or null in the same loop. That removes the eighteen intermediate vectors and the duplicate copy, and it makes the writer read the same way as its siblings so a future column addition follows one pattern rather than two. The existing round-trip tests in the same file pin the column set and types, so the change is verifiable without a new test.",
+      "lens": "perf",
+      "mechanism": "Eighteen transient full-length vector allocations plus a second copy of every value, where the sibling writers do one pass straight into the Arrow buffer. The row count is the length of the training solver-stats log, which grows with iterations times stages times openings, so both the transient allocation volume and the transient peak memory grow with study size. The path is once-per-run at the end of training and again at the end of simulation, so this is a memory-peak and redundant-copy cost rather than a steady-state one; it is graded local quality because the parquet encode on the same call dominates. The value of raising it is the asymmetry: the cheaper shape is already the crate's universal idiom, so aligning this one writer is a mechanical change with an in-crate precedent, not a new technique.",
+      "proposedSeverity": "C",
+      "title": "`solver_stats_writer` is the only Parquet writer in the crate that materializes an intermediate `Vec` per column instead of appending into a pre-sized Arrow builder"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 278,
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_config"
+        },
+        {
+          "line": 276,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_config"
+        },
+        {
+          "line": 321,
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_output_context"
+        },
+        {
+          "line": 331,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_output_context"
+        },
+        {
+          "line": 272,
+          "path": "crates/cobre-io/src/output/convergence_reader.rs",
+          "symbol": "make_system"
+        },
+        {
+          "line": 270,
+          "path": "crates/cobre-io/src/output/results_writer.rs",
+          "symbol": "make_system"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-00",
+      "evidence": {
+        "command": "git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-io/src/output/convergence_reader.rs | sed -n '278,320p' | md5sum; git show a136840d4f2ea137f685f0af6dac04254b983b60:crates/cobre-io/src/output/results_writer.rs | sed -n '276,318p' | md5sum; diff <(sed -n '321,344p' crates/cobre-io/src/output/convergence_reader.rs) <(sed -n '331,354p' crates/cobre-io/src/output/results_writer.rs)",
+        "output": "a0a5e282fc95629f4ff82b9f85ed2045  -\na0a5e282fc95629f4ff82b9f85ed2045  -\n2c2\n<         use crate::output::DistributionInfo;\n---\n>         use super::super::manifest::DistributionInfo;",
+        "reading": "The two `make_config()` bodies (43 lines each) hash identically at the pinned baseline, so they are byte-for-byte the same fixture. The two 24-line `make_output_context()` bodies differ on exactly one line, and only in how the same `DistributionInfo` type is spelled in a local `use`. `make_system()` (6 lines) is likewise identical. Total duplicated fixture surface between two files in the same directory is roughly 73 lines."
+      },
+      "fixShape": "Hoist the three fixtures to a single owner shared by the `output/` inline test modules and have both files call it. The natural home is a `#[cfg(test)]` fixture module under `output/` (a sibling `output/test_fixtures.rs` declared once from `output/mod.rs`, following the `validation/semantic/test_support.rs` precedent already established in this crate), or, if the fixtures are wanted by the crate's integration binaries too, a `test-support`-gated surface on cobre-io mirroring the `test-support` feature cobre-core already exposes. Keep the small value differences the two call sites actually need as arguments rather than forking the body again. Do not merge the two test modules themselves; only the fixture construction moves.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "title": "Byte-identical 73-line fixture block (`make_config` / `make_output_context` / `make_system`) copy-pasted between two sibling inline test modules in `output/`"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 1380,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_listed_schema_column_has_a_nonempty_description"
+        },
+        {
+          "line": 3193,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "new_energy_columns_have_descriptions"
+        },
+        {
+          "line": 3226,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_hydros_schema_column_has_description"
+        },
+        {
+          "line": 3239,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "every_hydro_bus_generation_schema_column_has_description"
+        },
+        {
+          "line": 222,
+          "path": "crates/cobre-io/src/output/dictionary.rs",
+          "symbol": "variables_csv_schemas"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-05",
+      "evidence": {
+        "command": "sed -n '222,228p' crates/cobre-io/src/output/dictionary.rs; for c in equivalent_productivity_mw_per_m3s accumulated_productivity_mw_per_m3s incremental_inflow_energy_mw stored_energy_initial_mwh stored_energy_final_mwh; do printf '%-40s ' \"$c\"; awk '/pub\\(crate\\) fn hydros_schema/,/^}/' crates/cobre-io/src/output/schemas.rs | grep -c \"\\\"$c\\\"\"; done",
+        "output": "fn variables_csv_schemas() -> Vec<(&'static str, Schema)> {\n    vec![\n        (\"costs\", costs_schema()),\n        (\"hydros\", hydros_schema()),\n        (\"hydro_bus_generation\", hydro_bus_generation_schema()),\n        (\"thermals\", thermals_schema()),\n        (\"exchanges\", exchanges_schema()),\nequivalent_productivity_mw_per_m3s       1\naccumulated_productivity_mw_per_m3s      1\nincremental_inflow_energy_mw             1\nstored_energy_initial_mwh                1\nstored_energy_final_mwh                  1",
+        "reading": "`every_listed_schema_column_has_a_nonempty_description` iterates `variables_csv_schemas()` and asserts `!description_for(file, field).is_empty()` for every column of every listed schema. `variables_csv_schemas()` lists `(\"hydros\", hydros_schema())` and `(\"hydro_bus_generation\", hydro_bus_generation_schema())`, so the two per-schema description tests at lines 3226 and 3239 iterate a subset of the same pairs with the same assertion. All five columns checked by `new_energy_columns_have_descriptions` are declared in `hydros_schema()`, so that test is a five-element subset of the same sweep. None of the three can fail while the exhaustive test passes. `bounds_hydro_id_column_has_a_description` at line 3168 is NOT subsumed — `\"bounds\"` is absent from `variables_csv_schemas()` — and must be kept."
+      },
+      "fixShape": "Delete the three subsumed tests and rely on the exhaustive sweep, which is the stronger gate because a new column added to any listed schema fails it automatically while a per-schema test has to be remembered and written. Keep `bounds_hydro_id_column_has_a_description` and `new_energy_columns_have_units`: the first covers a table the sweep does not list, and the second asserts specific unit strings rather than mere non-emptiness, which is a different property. If the intent behind the three was to pin those particular columns by name rather than to re-check non-emptiness, convert them into the unit-style assertion instead of deleting, so the pin survives and the redundancy does not.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "title": "Three `dictionary.rs` description tests are strict subsets of the exhaustive description test in the same module"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 142,
+          "path": "crates/cobre-io/src/output/fixed_delivery.rs",
+          "symbol": "read_batch"
+        },
+        {
+          "line": 227,
+          "path": "crates/cobre-io/src/output/generic_constraints_echo.rs",
+          "symbol": "read_batch"
+        },
+        {
+          "line": 328,
+          "path": "crates/cobre-io/src/output/solver_stats_writer.rs",
+          "symbol": "read_parquet"
+        },
+        {
+          "line": 2653,
+          "path": "crates/cobre-io/src/output/simulation_writer.rs"
+        },
+        {
+          "line": 851,
+          "path": "crates/cobre-io/src/output/stochastic.rs"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-03",
+      "evidence": {
+        "command": "grep -rc 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/output/*.rs | grep -v ':0'; grep -r 'ParquetRecordBatchReaderBuilder::try_new' crates/cobre-io/src/output/ | wc -l; diff <(sed -n '142,147p' crates/cobre-io/src/output/fixed_delivery.rs) <(sed -n '227,232p' crates/cobre-io/src/output/generic_constraints_echo.rs)",
+        "output": "convergence_reader.rs:2\nfixed_delivery.rs:1\ngeneric_constraints_echo.rs:2\nsolver_stats_writer.rs:4\ntraining_writer.rs:9\nhydro_models.rs:3\ndictionary.rs:6\nstochastic.rs:7\nresults_writer.rs:3\nsimulation_writer.rs:12\n49\n(no output — files identical)",
+        "reading": "49 total sites; the two in `convergence_reader.rs` (lines 45 and 97) are production, so 47 are test-side across nine files, all above each file's `#[cfg(test)]` line (verified per file, e.g. `dictionary.rs` sites at 2412-2945 against its test module at 1354). `fixed_delivery.rs::read_batch` and `generic_constraints_echo.rs::read_batch` diff empty, so they are byte-identical; `solver_stats_writer.rs::read_parquet` is the same four-line body under a different name. A further 34 sites carry an in-function `use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;` re-import rather than a module-level one."
+      },
+      "fixShape": "Give the `output/` test surface one read-back helper with a single agreed name, alongside the fixture module the first candidate calls for, and have the nine modules import it instead of re-deriving open-file / build-reader / take-first-batch per test. Fold the 34 in-function imports up to the test module's own import block while doing so. Note the shape asymmetry to resolve at the same time: three files chose a named helper and six inlined the step, which is the same intra-directory homing coin-flip the yardstick names. Production `convergence_reader.rs` already owns a real reader, so this touches only test code and asserts nothing new.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "title": "The Parquet read-back step is open-coded 47 times across nine `output/` inline test modules, including three helpers with the same body under two names"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 37,
+          "path": "crates/cobre-io/src/output/policy/mod.rs",
+          "symbol": "tests"
+        },
+        {
+          "line": 1420,
+          "path": "crates/cobre-io/src/output/policy/codec.rs",
+          "symbol": "tests"
+        },
+        {
+          "path": "crates/cobre-io/src/output/policy/checkpoint.rs",
+          "symbol": "read_policy_checkpoint"
+        },
+        {
+          "line": 433,
+          "path": "crates/cobre-io/src/output/policy/records.rs",
+          "symbol": "tests"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-01",
+      "evidence": {
+        "command": "grep -n '#\\[cfg(test)\\]' crates/cobre-io/src/output/policy/mod.rs; wc -l crates/cobre-io/src/output/policy/*.rs; for f in codec checkpoint records; do printf '%-12s #[test]=%s\\n' \"$f\" \"$(grep -c '#\\[test\\]' crates/cobre-io/src/output/policy/$f.rs)\"; done",
+        "output": "30:#[cfg(test)]\n  317 crates/cobre-io/src/output/policy/checkpoint.rs\n 1467 crates/cobre-io/src/output/policy/codec.rs\n 1344 crates/cobre-io/src/output/policy/mod.rs\n  470 crates/cobre-io/src/output/policy/records.rs\ncodec        #[test]=1\ncheckpoint   #[test]=0\nrecords      #[test]=3",
+        "reading": "The production body of `policy/mod.rs` ends at line 28 (module doc, three `pub mod` lines, four `pub use` blocks); the `#[cfg(test)]` attribute is at line 30 and the module body runs to line 1344, so 1315 of 1344 lines are test. A classifier over the 37 parsed `#[test]` bodies (matching calls to `serialize_*`/`deserialize_*` versus `write_policy_checkpoint`/`read_policy_checkpoint`) reports 21 codec-only, 15 checkpoint-only, 0 mixed, 1 neither. Meanwhile `codec.rs` (1467 lines) carries 1 inline test and `checkpoint.rs` (317 lines) carries none. The tests are homed two module levels away from the code they exercise, in the one file in the directory with no production logic."
+      },
+      "fixShape": "Move each test to the submodule it exercises: the 21 serialize/deserialize tests become an extracted sibling `codec` test module, the 15 write/read-checkpoint tests become a `checkpoint` test module, and the shared record fixtures (`make_cut_record`, `chain_manifest`, `make_metadata`, `make_stage_cuts_payload`, `make_basis_record`, `sample_manifest`) go to one fixture module both import. Leave in `policy/mod.rs` only tests that genuinely assert the composed round trip across all three submodules, if any survive that classification. Apply the yardstick's single homing rule at the same time: above the extraction threshold the module goes to a sibling file, so this lands as `codec/tests.rs` and `checkpoint/tests.rs` rather than as three more giant inline modules. This is a pure relocation, so the migration invariant is unchanged test-function count.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "partIRef": "I.3-6",
+      "proposedSeverity": "B",
+      "title": "`output/policy/mod.rs` is a 29-line re-export shim carrying a 1315-line inline test module whose 36 tests target the three submodules, which themselves are nearly untested"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 1282,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "all_schema_functions_return_valid_schemas"
+        },
+        {
+          "line": 852,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "thermals_schema_field_count"
+        },
+        {
+          "line": 593,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "costs_schema_field_count_and_names"
+        },
+        {
+          "line": 1160,
+          "path": "crates/cobre-io/src/output/schemas.rs",
+          "symbol": "rank_timing_schema_field_count"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-04",
+      "evidence": {
+        "command": "python3 - <<'EOF'  # parse the umbrella `expected` table, parse every per-schema `fields().len(), N` assert, intersect\n… (regex over crates/cobre-io/src/output/schemas.rs)\nEOF",
+        "output": "umbrella entries: 20\nper-schema count asserts: 21\n\nfield counts pinned in BOTH the per-schema test and the umbrella table:\n  buses_schema_field_count                             -> umbrella (\"buses\", 12)\n  contracts_schema_field_count                         -> umbrella (\"contracts\", 10)\n  costs_schema_field_count_and_names                   -> umbrella (\"costs\", 29)\n  exchanges_schema_field_count                         -> umbrella (\"exchanges\", 13)\n  generic_constraint_echo_schema_field_count_and_names -> umbrella (\"generic_constraint_echo\", 13)\n  generic_violations_schema_field_count                -> umbrella (\"generic_violations\", 7)\n  hydro_bus_generation_schema_field_count_and_names    -> umbrella (\"hydro_bus_generation\", 9)\n  hydros_schema_field_count_and_names                  -> umbrella (\"hydros\", 37)\n  inflow_lags_schema_field_count                       -> umbrella (\"inflow_lags\", 6)\n  iteration_timing_schema_field_count                  -> umbrella (\"iteration_timing\", 19)\n  non_controllables_schema_field_count                 -> umbrella (\"non_controllables\", 12)\n  pumping_stations_schema_field_count                  -> umbrella (\"pumping_stations\", 11)\n  rank_timing_schema_field_count                       -> umbrella (\"rank_timing\", 8)\n  thermals_schema_field_count                          -> umbrella (\"thermals\", 12)\ntotal double-pinned: 14\n\nnot double-pinned: [('transit_seed_schema_field_count', '5'), …]",
+        "reading": "`all_schema_functions_return_valid_schemas` (line 1282) holds a twenty-row `expected: &[(&str, usize)]` table asserting the field count of every output schema. Fourteen of those counts are asserted a second time by a dedicated per-schema test with the identical literal. Seven of those fourteen are count-only tests whose whole body is that one assertion (`thermals_schema_field_count` and its six siblings at lines 852-1160), so they add no assertion the umbrella does not already make. Adding a column therefore requires two coordinated magic-number edits and produces two failures naming one cause. `transit_seed_schema_field_count` is the one count-only test not in the umbrella table."
+      },
+      "fixShape": "Pick one registry for field counts. The umbrella table is the better owner because it is exhaustive and a new schema cannot be added without appearing there, so the seven count-only per-schema tests collapse into it, and `transit_seed` gains the umbrella row it is currently missing. Where a per-schema test also pins the full column-name vector, drop only its redundant length assertion — the name vector already implies the count and, unlike the count, actually pins the output wire contract against a rename. The end state is one count per schema in one table plus name-vector pins per schema, with no number maintained in two places.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "proposedSeverity": "C",
+      "title": "Fourteen output-schema field counts are pinned twice in `schemas.rs`, once in a per-schema test and again in the umbrella test's expected table"
+    },
+    {
+      "alignmentHint": "neutral",
+      "anchors": [
+        {
+          "line": 13,
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_int32"
+        },
+        {
+          "line": 144,
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_required_date32"
+        },
+        {
+          "line": 92,
+          "path": "crates/cobre-io/src/parquet_helpers.rs",
+          "symbol": "extract_optional_float64"
+        }
+      ],
+      "candidateRef": "cio-test-bloat-D-02",
+      "evidence": {
+        "command": "grep -c '#\\[cfg(test)\\]' crates/cobre-io/src/parquet_helpers.rs; grep -n '^pub(crate) fn' crates/cobre-io/src/parquet_helpers.rs; grep -rln 'crate::parquet_helpers' crates/cobre-io/src/ | wc -l",
+        "output": "0\n13:pub(crate) fn extract_required_int32<'a>(\n40:pub(crate) fn extract_required_float64<'a>(\n67:pub(crate) fn extract_optional_int32<'a>(\n92:pub(crate) fn extract_optional_float64<'a>(\n117:pub(crate) fn extract_required_uint32<'a>(\n144:pub(crate) fn extract_required_date32<'a>(\n16",
+        "reading": "Zero `#[cfg(test)]` modules, which matches the inventory's `linesRaw: 166` equalling `linesNonTest: 166` for this file. Six extractors, each with a missing-column arm and a wrong-Arrow-type arm, so twelve error branches that build a user-facing `LoadError::SchemaError` message naming the column and the required type. Sixteen modules import from it. No test names any extractor directly: the only workspace mention outside the file is a doc comment in `crates/cobre-io/tests/clean_break_no_deprecated_fallbacks.rs:8` referring to removed aliased variants."
+      },
+      "fixShape": "Add one inline test module to `parquet_helpers.rs` that builds a small in-memory `RecordBatch` and asserts, per extractor, the happy path, the missing-column message and the wrong-type message, so the parse-error contract is pinned once at its owner instead of being re-asserted incidentally in sixteen consumer test modules. This is the counterpart to the duplication findings: the same consolidation that removes redundant assertions elsewhere depends on the shared helper carrying its own contract test. Scope note for the merge: the consumers are all sub-station B modules, so only the helper-side test belongs to this sub-station.",
+      "lens": "test-bloat",
+      "mechanism": "",
+      "proposedSeverity": "B",
+      "title": "`parquet_helpers.rs`, the crate's most reused extraction module, has zero direct tests while all twelve of its error branches are only reachable transitively"
+    }
+  ],
+  "lenses": {
+    "cio-architecture-D": 6,
+    "cio-over-engineering-D": 6,
+    "cio-perf-D": 5,
+    "cio-test-bloat-D": 6
+  },
+  "positives": [
+    {
+      "lens": "architecture",
+      "sanctionedBy": "in-tree module doc, crates/cobre-io/src/output/atomic.rs:1-9",
+      "subject": "crates/cobre-io/src/output/atomic.rs",
+      "why": "The tmp-write / explicit-flush / rename contract is stated once, in one module, and its doc explains why the flush cannot be left to Drop — Drop::drop cannot return an error, so a drop-flush swallows ENOSPC on the buffered tail and the rename installs a truncated file. The rationale is pinned by a test that drives a failing writer (flush_error_propagates_and_leaves_no_target_file), and the redundant-looking flush after ArrowWriter::into_inner carries an explicit do-not-remove-without-re-verifying note. Twelve of thirteen writer modules import it. This is the model the two bypasses above should be pulled back to."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "cited as the dedup precedent in the sub-station D probe list",
+      "subject": "crates/cobre-io/src/parquet_helpers.rs:13-166",
+      "why": "The read-side dedup precedent the sub-station D brief names: six typed extract helpers (required and optional int32/float64, uint32, date32) each producing the same SchemaError shape with the column name and the observed Arrow type. It is the right size — small, crate-internal, no trait, no generics — and is exactly the pattern the write path lacks."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "prior-register.md — 'CD-026 · write_scenario 12x write-partition repeat — RETIRE'",
+      "subject": "crates/cobre-io/src/output/simulation_writer.rs::write_partition (line 676)",
+      "why": "CD-026 is genuinely resolved: one helper owns the create-dir / write / push tail that all fourteen entity families share, and its doc says so. Not re-raised."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "prior-register.md — 'CD-010 · untyped entity_type: u8 state-family dictionary — RETIRE'",
+      "subject": "crates/cobre-io/src/output/policy/records.rs::StateFamily (line 52) and EntitySlot::family (line 89)",
+      "why": "CD-010 is genuinely resolved: the typed enum mirrors EntityType in schemas/policy.fbs, the reader goes through family() rather than a raw byte, and the duplicated const in checkpoint.rs is gone. The residual value-space overlap with dictionary.rs's OUTPUT_ENTITY_* codes was re-checked in this sweep and no value crosses between the two tables. Not re-raised."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "in-tree rationale comment, crates/cobre-io/src/output/manifest.rs:528-530",
+      "subject": "crates/cobre-io/src/output/manifest.rs::write_json_atomic (line 527)",
+      "why": "A name that shadows atomic.rs::write_json_atomic but is not a duplicate: it serializes locally only to keep the ManifestError variant its callers match on, then delegates the crash-safe write to write_bytes_atomic, and an inline comment states exactly that division with the byte-identity guarantee. This is the correct shape for a module that needs its own error variant without forking the write contract."
+    },
+    {
+      "lens": "architecture",
+      "sanctionedBy": "in-tree doc, crates/cobre-io/src/output/policy/records.rs:305-311",
+      "subject": "crates/cobre-io/src/output/policy/records.rs::CheckpointManifest (line 312)",
+      "why": "The manifest separates a paradigm-neutral core (format_version, cobre_version, created_at, num_stages, the graph manifest) from a namespaced ProducerBlock holding the training algorithm's own recorded state, and its doc states the reason: a reader that does not know the producer can still read the core from the core's own vocabulary. That split is the shape the rest of the output path's engine-vocabulary problem should be resolved toward, and it should be protected rather than flattened."
+    },
+    {
+      "lens": "perf",
+      "sanctionedBy": "crates/cobre-io/src/output/simulation_writer.rs::write_scenario_does_not_materialize_flat_vecs (line 3283)",
+      "subject": "crates/cobre-io/src/output/simulation_writer.rs::write_scenario (line 708) and its fourteen batch builders",
+      "why": "The per-scenario write path never materializes a flat intermediate row vector: it counts the rows first with a cheap length sum, sizes every Arrow column builder with that count, then feeds a flat-mapped iterator over the stage records straight into the builders. This is the correct shape for the hottest output path in the crate, it is the idiom the rest of the writers follow, and the property is pinned by a named regression test rather than left to convention."
+    },
+    {
+      "lens": "perf",
+      "sanctionedBy": "crates/cobre-io/src/parquet_helpers.rs module doc (line 1) — the single owner of the typed-downcast logic",
+      "subject": "crates/cobre-io/src/parquet_helpers.rs::extract_required_date32 and its five siblings (lines 13-166)",
+      "why": "Every extractor returns a borrowed reference to the typed Arrow array rather than copying or collecting the column, so the read path performs one downcast per column and no per-row or per-column data copy. The error construction that does allocate is confined to the failure branches behind closures, so the success path allocates nothing."
+    },
+    {
+      "lens": "perf",
+      "sanctionedBy": "crates/cobre-io/src/output/policy/codec.rs:240-247 (the `estimated` computation feeding `FlatBufferBuilder::with_capacity`)",
+      "subject": "crates/cobre-io/src/output/policy/codec.rs::serialize_stage_cuts (line 240) and its three sibling serializers",
+      "why": "Each serializer computes a capacity estimate from the payload's own dimensions (cut count, state dimension, manifest length, string lengths) and pre-sizes the FlatBuffers builder with it, so the builder does not regrow while writing the largest artifact of a training run. The estimate is derived, not a magic constant, so it tracks the payload shape rather than a guessed deck size."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-io/src/parquet_helpers.rs:13-160 — the six `extract_required_*` / `extract_optional_*` helpers",
+      "why": "One owner for the column-lookup, typed-downcast and `SchemaError` message shape, covering Int32, Float64, UInt32 and Date32 in required and optional forms. Every helper reports the missing column and the wrong-type case with the same wording and the same path, so a schema error reads identically whichever parser raised it. This is the dedup precedent the station measures the writers against, and it is not itself over-parameterized: the four types are four real Arrow types, not a speculative palette."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-io/src/output/atomic.rs — `tmp_path`, `write_bytes_atomic`, `write_json_atomic`, `write_parquet_atomic`",
+      "why": "Single owner of the write-to-tmp, flush, rename contract for the whole output path, with the one non-obvious fact stated once in the module doc and nowhere else: `Drop::drop` cannot return an error, so a drop-flush would let a truncated file be renamed into place with no error surfaced. The extra explicit flush after `ArrowWriter::into_inner` even carries the pin telling a future reader not to remove it without re-checking the parquet version in Cargo.lock. This is a correctness contract documented at the right altitude, not defensive bloat."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-io/src/output/provenance.rs::read_provenance_report and ::write_provenance_report, crates/cobre-io/src/output/scaling_report.rs::write_scaling_report, crates/cobre-io/src/output/hydro_models.rs::read_hydro_model_summary",
+      "why": "The one place in sub-station D where a generic parameter is load-bearing rather than over-parameterization. Taking `&impl Serialize` and `T: DeserializeOwned` is what lets the provenance, scaling and hydro-model report structs live in the calling algorithm crate, which is how the output path satisfies the infrastructure-genericity hard rule; each doc says so explicitly. The OD-007 test does not apply here: the point is not polymorphism across many callers but keeping an engine type out of an L2 crate."
+    },
+    {
+      "lens": "over-engineering",
+      "sanctionedBy": "plans/architecture-debt-audit/stations/core-io/prior-register.md — 'CD-010 · untyped `entity_type: u8` state-family dictionary — RETIRE' and its `## Do not re-raise` bullets",
+      "subject": "crates/cobre-io/src/output/policy/records.rs::StateFamily (line 52) and EntitySlot::family (line 89)",
+      "why": "The typed state-family enum that retired the untyped `entity_type: u8` dictionary, with `code` / `from_code` as the only crossing between the wire byte and the typed value, and the duplicate constant in the checkpoint module gone."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "crates/cobre-io/src/output/policy/codec.rs:490-660 — the hand-written FlatBuffers reader (`field_data_offset`, `field_pos`, `follow_uoffset`, `read_f64_vector`, `read_u8_vector`, `read_u32_vector`, `read_string`)",
+      "why": "Reading a policy checkpoint means parsing a file that may be truncated, from an older schema version, or simply wrong, and every accessor here is written to survive that: `checked_add` on every offset arithmetic, a slice `get` rather than an index for the string body, `Option` rather than panic on any out-of-range read, and an explicit forward-compatibility rule that a vtable slot past the table end is an absent field rather than an error. That fallibility is why hand-writing the reader is defensible against the `flatbuffers` runtime table accessors, and it pairs with the deliberate decision recorded at crates/cobre-io/Cargo.toml:21-25 not to make `flatc` a build-time dependency. Note only that the write side does use the real `flatbuffers` builder, so the read/write asymmetry is intentional rather than an oversight."
+    },
+    {
+      "lens": "over-engineering",
+      "sanctionedBy": "docs/design/reserved-seams-and-deferred-debt.md — 'Cleared (recorded so a future audit does not re-raise)', which already names the entity-family writers/extractors as positive references rather than debt",
+      "subject": "crates/cobre-io/src/output — zero traits, zero newtypes, zero `Box<dyn Trait>` across 23,242 raw lines",
+      "why": "A grep for tuple-struct newtypes and for trait declarations over the whole output path returns nothing. The fourteen entity-family write-record types and their batch builders are plain structs and plain functions, with no dispatch layer interposed to make them look uniform. Given how often a writer family of this size grows a speculative `OutputWriter` trait, the absence is worth protecting."
+    },
+    {
+      "lens": "over-engineering",
+      "subject": "docs/design/reserved-seams-and-deferred-debt.md — reserved-seam register, checked before every candidate above",
+      "why": "Rule-6 sweep result, recorded so the merge can see it was done: the register holds exactly three entries (`StudySetup.transit_bucket_topology`, `LipschitzConfig` with its enclosing `UpperBoundEvaluationConfig`, and the cobre-comm shared-memory trait hierarchy) and none anchors inside sub-station D's paths. The two sanctioned-but-out-of-scope items the prior register adds for this station, the hydro filling penalties and `historical_years`, are both cobre-core anchors. No candidate above names a ratified seam, and none re-raises CD-010, CD-026, CD-031 or the noted-not-raised `simulation_writer.rs` file size."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "docs/design/testing-architecture.md §3.1 item 4 (\"O(1) fixture field-add builder\")",
+      "subject": "crates/cobre-io/src/output/manifest.rs:571 (`make_training_metadata`) and :635 (`make_simulation_metadata`)",
+      "why": "The metadata test module uses one fixture builder per type and reaches every variant through functional-update syntax at seven call sites (`..make_training_metadata()` at :864, :895, :977, :1062, :1091; `..make_simulation_metadata()` at :730, :760), so adding a field to `TrainingMetadata` costs one edit rather than seven. This is the O(1) fixture field-add pattern the yardstick names as a strength, already practised inside sub-station D — it is the model the two duplicated-fixture candidates above should be aligned to, not an instance of the problem."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "docs/design/testing-architecture.md §3.1 item 2 (contract-pinning) — the fixture is the pin, and the `*_omits_new_keys` tests are its power self-check",
+      "subject": "crates/cobre-io/tests/metadata_back_compat.rs:1-24 and its `legacy_*_fixture_omits_new_keys` tests (:167, :191)",
+      "why": "The legacy fixtures are hand-frozen JSON literals with the reason recorded in the file header — a struct-serialized fixture carries every field and so could never catch a field accidentally made required — and two further tests guard the fixtures themselves against acquiring the new keys. A self-guarding fixture whose deliberate non-reuse is justified in place; the test-bloat lens must not propose folding these into a shared builder."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "prior-register.md — CD-010 RETIRE entry (the typed `StateFamily` enum and `EntitySlot::family` are the resolved state these tests pin)",
+      "subject": "crates/cobre-io/src/output/policy/codec.rs::deserialize_rejects_buffer_without_cbvf_identifier (line 1428) and crates/cobre-io/src/output/policy/records.rs::state_family_codes_match_policy_fbs_entity_type (line 437)",
+      "why": "Both are load-bearing wire-format pins, not bloat: the first proves a pre-0.14 buffer without the file identifier is rejected before any field is decoded, the second pins the four `StateFamily` discriminants against `schemas/policy.fbs`. They are the surviving inline tests in the two submodules and must move with their code, never be dropped, if the homing candidate above is acted on."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "prior-register.md — \"Retired input spellings\" KEEP entry names this file as part of the load-bearing guard set",
+      "subject": "crates/cobre-io/tests/flatbuffers_schema_conformance.rs (whole file, gated `#![cfg(feature = \"flatc-conformance\")]` at line 18)",
+      "why": "The gate is not dormant. CI enables the feature and installs the compiler it needs, so the flatc cross-check genuinely runs in automation rather than being local-dev-only as the Cargo.toml comment alone might suggest. Verified by `grep -rn 'flatc' .github/workflows/`: `NON_SOLVER_FEATURES` at ci.yml:32 includes `flatc-conformance`, and an \"Install flatc (FlatBuffers compiler)\" step appears at ci.yml:107, :200 and :489. Its 1341 lines are an executing conformance gate, not unrun weight."
+    },
+    {
+      "lens": "test-bloat",
+      "sanctionedBy": "docs/design/testing-architecture.md §5.2 (\"A uniform `test-support` feature convention (not a dedicated test crate)\")",
+      "subject": "crates/cobre-core/src/entities/hydro.rs::declare_mirror_unit_group (line 277, behind `#[cfg(any(test, feature = \"test-support\"))]`)",
+      "why": "The cross-crate sharing mechanism the yardstick prescribes exists and is genuinely consumed from sub-station D: cobre-io declares the dev-dependency with the feature on (crates/cobre-io/Cargo.toml:44) and calls the symbol from `output/simulation_writer.rs:2095` and `output/dictionary.rs:1445`, among roughly a hundred workspace call sites. The seam is proven and available — it is the landing zone the fixture-consolidation candidates should extend, not a mechanism that needs inventing."
+    }
+  ],
+  "station": "core-io",
+  "subStation": "D"
+}

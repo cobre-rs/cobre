@@ -18,12 +18,17 @@ evaluation writes exactly two tracked surfaces: the ID-free mirror
 (`plans/architecture-debt-audit/`, tracked on the evaluation branch so its work
 sessions carry git evidence); no crate, docs, script, CI or schema file is touched
 (amends the Status bullet above).
-Perf calibration bound: TBD s (median of 3 timed runs after one warm-up, layout `4t`,
-deck `~/git/cobre-bridge/example/cobre_reduzido_2`; filled by the calibration run).
-Only that deck at 4 workers is sanctioned: `--threads 4` (`4t`) or
-`mpiexec -n 2 … --threads 2` (`2x2`). A run past 3x this bound is killed and its
-claim tagged `UNMEASURED`; reasons are `timeout-3x`, `unexercised-path`,
-`mpi-unavailable`. Perf fix-shapes stay byte-neutral.
+Protocol bound: 234.781 s (median of 3 timed runs after one warm-up, layout `4t`,
+deck `~/git/cobre-bridge/example/cobre_reduzido_2`; measured 2026-09-06 at the
+pinned baseline on the profiling-profile binary — see `measurements/CAL/`).
+Protocol bound (enumerated): 32.589 s (layout `2t`, deck
+`~/git/cobre-bridge/example/cobre-mar-26-rv2-reduced`, owner-limited to two workers;
+see `measurements/CAL-ENUM/`).
+Only those decks at those worker budgets are sanctioned: `--threads 4` (`4t`) or
+`mpiexec -n 2 … --threads 2` (`2x2`) on the sampled deck, `--threads 2` (`2t`) on
+the enumerated deck. A run past 3x its bound is killed and its claim tagged
+`UNMEASURED`; reasons are `timeout-3x`, `unexercised-path`, `mpi-unavailable`.
+Perf fix-shapes stay byte-neutral.
 
 ## Milestones
 

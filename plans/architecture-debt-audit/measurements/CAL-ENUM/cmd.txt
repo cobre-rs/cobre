@@ -1,0 +1,13 @@
+taskset
+-c
+0,2
+/home/rogerio/git/cobre-wt-e01-5/target/profiling/cobre
+run
+/tmp/perf-run-CAL-ENUM-mjcH1R/deck
+--output
+/tmp/perf-run-CAL-ENUM-mjcH1R/out
+--threads
+2
+--comm-backend
+local
+--quiet

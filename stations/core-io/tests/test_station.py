@@ -219,3 +219,145 @@ class CleanTreeTests(sc.StationCase):
         untracked = sh("git status --porcelain --untracked-files=all").splitlines()
         for line in untracked:
             self.assertTrue(line.startswith("?? plans/architecture-debt-audit/"), line)
+
+
+OWNED_PART_I = {"I.3-1", "I.3-2", "I.3-3", "I.3-4", "I.3-6", "I.3-7"}
+PHASES = {"0a", "0b", "1"}
+
+
+def validate_partI_envelope(env: dict) -> list[str]:
+    """Structural validation of partI-handoff.json; every failure names the offending partIRef."""
+    bad: list[str] = []
+    base = env.get("baseline", "")
+    refs = [d.get("partIRef") for d in env.get("dispositions", [])]
+    if sorted(refs) != sorted(OWNED_PART_I):
+        bad.append(f"owned set mismatch: {sorted(refs)} != {sorted(OWNED_PART_I)}")
+    for d in env.get("dispositions", []):
+        ref, disp = d.get("partIRef", "?"), d.get("disposition")
+        if disp not in ("keep", "retire", "sharpen"):
+            bad.append(f"{ref}: bad disposition {disp!r}")
+        if disp in ("retire", "sharpen") and not str(d.get("changedSinceV012", "")).strip():
+            bad.append(f"{ref}: {disp} without changedSinceV012")
+        if disp == "sharpen":
+            claim = str(d.get("survivingClaim", "")).strip()
+            if not claim:
+                bad.append(f"{ref}: sharpen without survivingClaim")
+            elif claim == str(d.get("v012Title", "")).strip():
+                bad.append(f"{ref}: survivingClaim is not narrower than the v0.12 title")
+        if disp == "retire" and not d.get("resolvingCommit"):
+            bad.append(f"{ref}: retire without resolvingCommit")
+        if d.get("proposedPhase") not in PHASES:
+            bad.append(f"{ref}: bad proposedPhase {d.get('proposedPhase')!r}")
+        if not str(d.get("alignmentDestination", "")).strip():
+            bad.append(f"{ref}: no alignmentDestination")
+        anchor = d.get("baselineAnchor") or {}
+        path, symbol = anchor.get("path"), anchor.get("symbol")
+        if not path or subprocess.run(["git", "show", f"{base}:{path}"], cwd=sc.REPO, capture_output=True).returncode:
+            bad.append(f"{ref}: anchor path does not resolve at {base[:12]}: {path}")
+        elif symbol and not sc.anchor_exists(f"`{path}::{symbol}`"):
+            bad.append(f"{ref}: symbol {symbol} unresolved in {path}")
+    handoffs = env.get("handoffs", [])
+    if len(handoffs) != 2:
+        bad.append(f"expected exactly 2 out-of-station handoffs for I.3-7, found {len(handoffs)}")
+    for h in handoffs:
+        ref = f"handoff {h.get('partIRef')}/{h.get('owningStation')}"
+        anchor = h.get("baselineAnchor") or {}
+        if not sc.anchor_exists(f"`{anchor.get('path')}::{anchor.get('symbol')}`"):
+            bad.append(f"{ref}: anchor unresolved {anchor}")
+        if h.get("proposedPhase") not in PHASES:
+            bad.append(f"{ref}: bad proposedPhase")
+        if not str(h.get("alignmentDestination", "")).strip():
+            bad.append(f"{ref}: no alignmentDestination")
+    return bad
+
+
+class PartIHandoffTests(sc.StationCase):
+    SLUG = "core-io"
+    SECTION_TITLE = "core-io"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = sc.load_json(sc.STATIONS / cls.SLUG / "partI-handoff.json")
+        cls.by_ref = {d["partIRef"]: d for d in cls.env["dispositions"]}
+
+    def test_envelope_validates(self):
+        self.assertEqual(validate_partI_envelope(self.env), [])
+
+    def test_contains_exactly_the_owned_items(self):
+        self.assertEqual(set(self.by_ref), OWNED_PART_I)
+        self.assertEqual(len(self.env["dispositions"]), 6)
+        self.assertEqual(self.env["baseline"], backlog_parse.parse_baseline(backlog_parse.read_register(sc.BACKLOG)))
+
+    def test_each_disposition_is_keep_retire_or_sharpen_with_the_required_evidence(self):
+        for ref, d in self.by_ref.items():
+            with self.subTest(ref=ref):
+                self.assertIn(d["disposition"], ("keep", "retire", "sharpen"))
+                anchor = d["baselineAnchor"]
+                if d["disposition"] == "retire":
+                    sha = d.get("resolvingCommit", "")
+                    self.assertEqual(subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=sc.REPO).returncode, 0, ref)
+                else:
+                    self.assertTrue(sc.anchor_exists(f"`{anchor['path']}::{anchor['symbol']}`"), anchor)
+                    self.assertEqual(anchor["line"], self._decl_line(anchor["path"], anchor["symbol"]))
+                self.assertIn("Epic 9", d["alignmentDestination"])
+
+    @staticmethod
+    def _decl_line(path: str, symbol: str) -> int:
+        pattern = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?(async\s+)?(fn|struct|enum|trait|type|const|static|mod|impl)\s+" + re.escape(symbol) + r"\b")
+        for i, line in enumerate((sc.REPO / path).read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.match(line):
+                return i
+        return -1
+
+    def test_item_3_rename_is_sharpened_not_rejected(self):
+        d = self.by_ref["I.3-3"]
+        self.assertEqual(d["disposition"], "sharpen")
+        self.assertEqual(d["baselineAnchor"]["path"], "crates/cobre-core/src/model/horizon.rs")
+        self.assertEqual(d["baselineAnchor"]["symbol"], "HorizonGraph")
+        self.assertIn("PolicyGraph", d["changedSinceV012"])
+        self.assertEqual(d["forwardBackwardHits"], 0)
+        self.assertIn("horizon.rs:23", d["survivingClaim"])
+        self.assertIn("horizon.rs:26-27", d["survivingClaim"])
+        self.assertIn("system/mod.rs:92", d["survivingClaim"])
+
+    def test_item_6_oracle_is_recorded_with_its_reach_limits(self):
+        d = self.by_ref["I.3-6"]
+        self.assertEqual(d["disposition"], "sharpen")
+        self.assertEqual(d["oracle"]["exit"], 0)
+        self.assertIn("check-infra-genericity.sh:74 EXCLUDED_FILES=()", d["oracle"]["excludedFiles"])
+        self.assertEqual(len(d["oracle"]["reachLimits"]), 2)
+        for needle in ("records.rs:98", "records.rs:176", "policy.fbs:140"):
+            self.assertIn(needle, d["survivingClaim"])
+
+    def test_item_1_is_sharpened_with_the_widened_surface(self):
+        d = self.by_ref["I.3-1"]
+        self.assertEqual(d["disposition"], "sharpen")
+        for f in ("inflow_history", "external_scenarios", "external_load_scenarios", "external_ncs_scenarios"):
+            self.assertIn(f, d["wideningFields"])
+            self.assertIn(f, d["changedSinceV012"])
+        self.assertIn("system/mod.rs:111-117", d["changedSinceV012"])
+        self.assertIn("125-131", d["changedSinceV012"])
+
+    def test_item_7_is_split_by_crate_ownership(self):
+        d = self.by_ref["I.3-7"]
+        self.assertEqual(d["owningStation"], "core-io")
+        self.assertEqual((d["baselineAnchor"]["path"], d["baselineAnchor"]["symbol"]), ("crates/cobre-io/src/config/mod.rs", "Config"))
+        self.assertTrue(d["field"].startswith("training"))
+        handoffs = {h["owningStation"]: h for h in self.env["handoffs"]}
+        self.assertEqual(set(handoffs), {"sddp", "cli"})
+        self.assertEqual((handoffs["sddp"]["baselineAnchor"]["path"], handoffs["sddp"]["baselineAnchor"]["symbol"]),
+                         ("crates/cobre-sddp/src/setup/params.rs", "from_config"))
+        self.assertEqual((handoffs["cli"]["baselineAnchor"]["path"], handoffs["cli"]["baselineAnchor"]["symbol"]),
+                         ("crates/cobre-cli/src/commands/broadcast.rs", "BroadcastConfig"))
+        self.assertEqual(handoffs["cli"]["baselineAnchor"]["visibility"], "pub(crate)")
+        for h in handoffs.values():
+            self.assertEqual(h["partIRef"], "I.3-7")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--validate-partI":
+        failures = validate_partI_envelope(sc.load_json(sc.STATIONS / "core-io" / "partI-handoff.json"))
+        for f in failures:
+            print("FAIL", f)
+        sys.exit(1 if failures else 0)
+    unittest.main()
